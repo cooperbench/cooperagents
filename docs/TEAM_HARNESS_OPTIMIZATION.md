@@ -378,7 +378,9 @@ Front at four stages:
 4. After Iteration 18 (p99 axis): Coop → Coordinator → Board Best-of-2 + Coordinator → Board Best-of-2.
 
 Figures: `docs/pareto_qwen14.png` (final front, p99 axis, per-run points
-included), `docs/durations_qwen14.png` (per-task completion time ECDF).
+included), `docs/front_progression_qwen14.png` (front at the four stages,
+recomputed retroactively on the p99 axis), `docs/durations_qwen14.png`
+(per-task completion time ECDF).
 
 ## 7. Findings
 
