@@ -37,3 +37,12 @@ Environment: temperature pinned via `COOPER_TEMPERATURE=0` (in
 (`<name>-a/-b/-c`). Selector fast-path is opt-in via
 `COOPER_SELECT_FASTPATH=1` (default OFF; it confounded sweeps when
 unconditional).
+
+## Per-iteration reproduction
+
+`scripts/repro/reproduce_iteration.sh <1-20>` prints the exact measurement
+commands for each report iteration (add `--run` to execute);
+`scripts/repro/dispatched_jobs.txt` holds the verbatim job lines harvested
+from the fleet queues. Lines the script marks "(reconstructed)" were run
+locally rather than dispatched, so their flags are reassembled from the
+program record rather than a queue file.
