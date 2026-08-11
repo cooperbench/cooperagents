@@ -160,6 +160,127 @@ class TeamSpec:
     Coordination via a shared invariant communicated agent→agent at runtime,
     rather than partitioning the work up front (which can't be done — see
     decompose / Round 7)."""
+    behavioral_gate: bool = False
+    """Q10: use the BEHAVIORAL merge gate (syntax + agents' published checks +
+    fail-fast repo tests) instead of syntax-only to decide whether the merged
+    tree needs the repair agent — textually-clean 3-way merges can be
+    semantically broken (measured: q5g 13.3 vs Q5 15.7)."""
+    repair_step_limit: int = 25
+    """Step cap for the Q5 merge-repair agent — repair is a focused job and must
+    not wander (observed: one uncapped repair pass ran 44 minutes)."""
+    repair_integrator: bool = False
+    """Q5 (qwen program): in the no-seed mechanical-merge tail, health-check the
+    merged tree (AST/build); if the merge demonstrably broke it (conflict
+    markers, partial hunks), run ONE repair agent in the merged container with a
+    focused reconcile-both-features brief. Repair cost is paid ONLY on
+    demonstrated breakage — parallel wall-clock is preserved on clean merges."""
+    git_share: bool = False
+    """TK-git: a live shared git remote for parallel agents (the coop+git cell
+    of the CooperBench team-harness ablation). A bare repository on a shared
+    docker volume; a harness thread pushes each agent's working tree to a
+    per-agent branch every ~45s (via `git stash create`, leaving the agent's
+    tree and history untouched); the poller fetches teammate branches into each
+    agent's repo and reports changed files with the exact commands to view or
+    take teammate code. System-prompt billing included (TK3 result)."""
+    coordinator: bool = False
+    """C2: a live monitor thread over the parallel agents — mechanical
+    triggers (loop / stall / collision) decide WHEN to intervene, an LLM
+    composes the nudge text, injection rides the pushed team_poller channel.
+    Max 3 nudges/agent; offline-safe static fallbacks."""
+    focused_repair: bool = False
+    """R2: the harness gathers the merge-damage EVIDENCE (reject hunks,
+    conflict-marker locations, failing check output, failing test tail) and
+    puts it in the repair brief — converting the 9B's repair job from
+    find-then-fix to fix-only. Same seam philosophy as every mechanism that
+    worked: harness does the finding, model does the fixing."""
+    repair_time_limit: int | None = None
+    """TK9f: wall-clock cap (seconds) for the merge-repair agent. A TIME cap
+    bounds the wandering tail (worst observed: 44 min) without starving typical
+    repairs the way the 25-step cap did (Q5f regression)."""
+    apply_chain_merge: bool = False
+    """TK8: bypass the 3-way-first merge and use the pure apply-chain (Q5's
+    original, best-measured base 15.7): visible .rej/marker damage routes more
+    pairs through repair, which the 9B CAN fix — vs 3-way's silent semantic
+    breakage, which it can't (q5g 13.4)."""
+    team_roles: bool = False
+    """Complete-Team cell (CooperBench team-harness analogue): lead/member role
+    asymmetry + shared scratchpad volume at /workspace/shared mounted in every
+    agent container (matching CooperBench's ``scratchpad_mount_args``). The
+    member exports its diff to the scratchpad; the LEAD applies it and the
+    lead's final tree is the team submission — no harness-side mechanical
+    merge, repair, or selection. Use with coop_tools + task_board and a
+    scratchpad volume in the env factory."""
+    claim_mode: bool = False
+    """TK6 (allocation axis): shared-objective coop — the harness seeds the
+    board with one UNCLAIMED task per feature (full spec in the task), gives
+    every agent the whole objective, and agents divide the work themselves via
+    task_claim. Tests SELF-partitioning at runtime (vs Round 7's failed
+    planner-imposed partitioning). Use with coop_tools + task_board."""
+    allow_spawn_tool: bool = False
+    """TK7 (allocation axis): spawn_helper as a mini-swe tool — the agent
+    recruits a helper in a fresh container on a self-described subtask; the
+    helper's diff joins the merge. Capped by max_agents."""
+    task_board: bool = False
+    """TK4: shared task-board tools (task_create/update/list on the TeamBus)
+    exposed to mini-swe with fair system-prompt billing + a status protocol;
+    board deltas are pushed via the live-awareness poller."""
+    wait_protocol: bool = False
+    """TK5: blocking request/response — send_message gains wait:true (reply
+    returned in the same tool output, 60s timeout), billed in the system
+    prompt for use when an agent needs an agreed name BEFORE proceeding."""
+    tool_protocol: bool = False
+    """TK3 (toolkit program): make the OFFERED send_message tool fairly
+    advertised instead of buried — equal billing in the SYSTEM prompt (with a
+    worked example) plus a first-action protocol instruction in the brief. The
+    model still chooses whether/how to use it (unlike TK1, where the harness
+    performs the exchange itself). Tests whether Q4's zero tool uses were prompt
+    salience (bash-mandating system template) or capability."""
+    contract_first: bool = False
+    """TK1/Q6 (toolkit program): before parallel agents start, the harness makes
+    ONE planner call that reads both specs and writes the shared interface
+    contract (exact public names/signatures/locations); it is injected into
+    every agent's brief as a constraint. Harness-PUSHED coordination — the 9B
+    lesson is that offered tools go unused (Q4: 0 send_message calls)."""
+    live_awareness: bool = False
+    """TK2/Q9 (toolkit program): a harness-side poller injects a one-line
+    '[team] agentX is currently editing: ...' note into each agent's context
+    whenever a TEAMMATE's changed-file set changes (via the vendored agent's
+    team_poller hook). Passive fs_mirror-style awareness: no tool calls, no
+    agent initiative, near-zero token cost (emits only on change)."""
+    coop_tools: bool = False
+    """Q4 (qwen program): run the feature agents CONCURRENTLY (own containers,
+    no seeding) with a bus-backed `send_message` tool — the CooperBench
+    team-harness shape (explicit runtime coordination) inside the unified
+    harness. Incoming messages are drained into the agent's observations each
+    step. Use with seed_prior=False; the no-seed integration tail merges."""
+    temperature: float | None = None
+    """Sampling temperature override for the worker's model calls (None = the
+    profile default, e.g. COOPER_TEMPERATURE). Set per-attempt by best-of-N."""
+    diversity_temperature: float | None = None
+    """Q3 (qwen program): with best_of_n > 1, attempts after the first sample at
+    this temperature instead of the pinned one — attempt 1 keeps the greedy
+    reproducible floor, later attempts add the candidate DIVERSITY that
+    mechanical selection needs (Q2 found temp-0 attempts usually converge)."""
+    do_no_harm: bool = False
+    """Q1 (qwen program — regression gate at the integration seam): after each
+    sequential agent, the harness runs a MECHANICAL health check on the agent's
+    tree (language-appropriate compile/syntax check of the repo). If the tree was
+    healthy when the agent started and is broken after, the agent's delta is
+    DISCARDED and the next agent seeds from the last healthy state. Targets the
+    dominant small-model team failure diagnosed on qwen-14: a later agent
+    syntactically/behaviorally corrupting code an earlier agent (or solo) had
+    working (tiktoken: solo PASS -> team SyntaxError). Purely mechanical — no
+    LLM calls, no agent-authored checks (unlike C1); the team layer filters
+    agent output using an observed signal, the agent loop is untouched."""
+    adaptive: bool = False
+    """Runtime-adaptive topology selection (let the work decide sequential vs parallel):
+    run all features in PARALLEL from base (own containers, each publishing an invariant
+    check), then probe the merge. If the branches merge cleanly (no git-apply conflict and
+    all published checks stay green) → KEEP the parallel result (fast path). If they
+    collide → the work was coupled → FALL BACK to the sequential build-on-prior handoff for
+    the remaining features (safe path), reusing the first branch. The conflict signal is the
+    decision, so it never pays the ex-ante write-set-prediction tax (Round 7) — it commits to
+    parallel only when parallel demonstrably worked."""
     decompose: bool = False
     """G1+G2+G3 (separability-aware orchestration): instead of a fixed
     one-agent-per-feature map, a PLANNER re-cuts the objective into a dependency

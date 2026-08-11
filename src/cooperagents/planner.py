@@ -53,6 +53,96 @@ Return ONLY JSON:
  "rationale": "<one sentence: how the write-sets are disjoint>"}}"""
 
 
+_TOPOLOGY_PROMPT = """You are the PLANNER of a team of agents. Decide HOW to structure the work — the
+execution topology — for the objective below. This is domain-general: the subtasks may be code, research,
+analysis, writing, data processing, anything.
+
+Choose the topology by reasoning about the relationships between subtasks, NOT about any specific tool:
+- INDEPENDENT subtasks (neither needs the other's output, they don't contend for the same resource) →
+  run them in PARALLEL (no dependency edges).
+- A subtask that NEEDS another's result (input/interface/decision) → add a dependency edge so it runs
+  AFTER its prerequisite (SEQUENTIAL ordering along that edge).
+- When several independent subtasks must be combined/reconciled at the end → add a final CONSOLIDATION
+  subtask that depends on all of them (PARALLEL-THEN-SEQUENTIAL / fan-in).
+- Mix freely: the result is a dependency DAG. A chain = fully sequential; no edges = fully parallel;
+  a diamond = parallel-then-join. Prefer the MOST parallel structure that respects real dependencies.
+- Use at most {max_subtasks} subtasks.
+
+## Objective
+{work}
+
+Return ONLY JSON:
+{{"topology": "parallel" | "sequential" | "pipeline" | "hybrid",
+  "rationale": "<one sentence: why this structure, in terms of subtask dependencies>",
+  "subtasks": [
+    {{"id": "t1", "task": "<self-contained instruction for this agent>", "depends_on": []}},
+    ...
+  ]}}"""
+
+
+def plan_topology(
+    work: str,
+    *,
+    max_subtasks: int = 4,
+    model: str | None = None,
+    base_url: str | None = None,
+    api_key: str | None = None,
+    complete_fn: Callable[[str], str] | None = None,
+) -> tuple[list[SubTask], str, str]:
+    """General, domain-agnostic topology planner: an AGENT decides sequential vs
+    parallel vs pipeline vs hybrid by reasoning about subtask dependencies, and
+    returns (subtasks, topology_label, rationale). Never raises — on any failure
+    returns a single-subtask sequential plan (the safe default).
+
+    The returned DAG (subtasks + ``depends_on``) is the general topology: a chain
+    is sequential, no edges is parallel, a fan-in is parallel-then-sequential.
+    """
+    if complete_fn is None:
+        complete_fn = _default_planner_complete(model, base_url, api_key)
+        if complete_fn is None:
+            return [SubTask(id="t1", task=work)], "sequential", "fallback: planner unavailable"
+    try:
+        raw = complete_fn(_TOPOLOGY_PROMPT.format(work=work[:8000], max_subtasks=max_subtasks))
+        data = _parse_json(raw)
+        subs = _validate(data.get("subtasks", []), [], max_subtasks)
+        if subs is None:
+            return [SubTask(id="t1", task=work)], "sequential", "fallback: invalid plan"
+        topo = str(data.get("topology", "")) or _infer_topology(subs)
+        return subs, topo, str(data.get("rationale", ""))
+    except Exception:  # noqa: BLE001 - any planner error → safe single-subtask default
+        return [SubTask(id="t1", task=work)], "sequential", "fallback: planner error"
+
+
+def _infer_topology(subs: list[SubTask]) -> str:
+    edges = sum(len(s.depends_on) for s in subs)
+    if len(subs) <= 1:
+        return "sequential"
+    if edges == 0:
+        return "parallel"
+    # a chain (each node has <=1 dep, forms a line) vs a fan-in
+    if any(len(s.depends_on) >= 2 for s in subs):
+        return "pipeline"
+    return "sequential" if edges >= len(subs) - 1 else "hybrid"
+
+
+def _default_planner_complete(model, base_url, api_key) -> Callable[[str], str] | None:
+    try:
+        from openai import OpenAI
+
+        m = str(model or os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-5.5-hao"))
+        b = str(base_url or os.getenv("AZURE_OPENAI_BASE_URL") or os.getenv("OPENAI_BASE_URL") or "")
+        k = str(api_key or os.getenv("AZURE_OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY") or "")
+        client = OpenAI(base_url=b, api_key=k)
+
+        def complete(prompt: str) -> str:
+            resp = client.chat.completions.create(model=m, messages=[{"role": "user", "content": prompt}], max_completion_tokens=2000)
+            return resp.choices[0].message.content or ""
+
+        return complete
+    except Exception:  # noqa: BLE001 - no creds / no lib
+        return None
+
+
 def _validate(raw: list, feature_ids: list[int], max_subtasks: int) -> list[SubTask] | None:
     if not isinstance(raw, list) or not raw:
         return None
@@ -164,4 +254,4 @@ def ancestors(sub: SubTask, by_id: dict[str, SubTask]) -> list[str]:
     return seen
 
 
-__all__ = ["plan_decomposition", "fallback_plan", "topo_levels", "ancestors"]
+__all__ = ["plan_decomposition", "plan_topology", "fallback_plan", "topo_levels", "ancestors"]

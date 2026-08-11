@@ -326,6 +326,16 @@ class DefaultAgent:
         outputs = []
         for action in actions:
             tool_name = action.get("tool_name", "bash")
+            handler = getattr(self, "tool_handlers", {}).get(tool_name)
+            if handler is not None:
+                # Generic registered-tool dispatch (TK4 task board etc.): the
+                # harness wires host-side handlers; output goes back as a
+                # normal observation.
+                try:
+                    outputs.append(handler(action))
+                except Exception as e:  # noqa: BLE001 - a tool bug must not kill the agent
+                    outputs.append({"output": f"tool {tool_name} failed: {e}", "returncode": 1, "exception_info": ""})
+                continue
             if tool_name == "send_message" and self.comm:
                 # Defensive: supported for legacy callers that still
                 # register send_message as a tool.

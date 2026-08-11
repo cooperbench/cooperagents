@@ -94,3 +94,111 @@ The remaining feature ideas below feed that backlog:
 4. **Richer coordination.** Typed request/response, plan-approval, and blocking long-poll inbox (so agents wait on each other server-side rather than busy-looping).
 5. **Auto-decomposition for `--mode shared`.** A planner agent that turns one objective into a dependency-aware task DAG, then assigns/spawns against it.
 6. **Self-eval loop.** Run flash → read eval → propose a harness change → re-run → compare, fully autonomously, with guardrails (cost cap, regression gate vs. single-agent baseline).
+
+
+# Style Guide
+
+Instructions for Making Claude Code Speak Plain Language
+
+1. Use standard terminology. For concepts that already have established expressions, do not create alternative phrasings.
+2. Do not use metaphors. If an expression requires the reader to infer its referent, change it to a direct statement.
+3. Use neutral nouns for headers and category names, such as "Issue," "Phenomenon," "Impact," "Result."
+4. Do not use contrastive sentence structures of the form "It is X, not Y."
+5. Table entries do not need to include numbers or conclusions in every item. Some entries can simply describe what occurred.
+6. For issues with unidentified causes, write "Cause unidentified."
+7. Do not use colloquial words.
+8. Do not use anthropomorphic expressions.
+
+Rule 1: Use Standard Terminology
+
+Excessive length / Whether length exceeds or not → Truncation / Whether length limit is reached  
+Ray's port conflicts with itself → Multiple tasks' Ray instances compete for the same port  
+Arm → Solution  
+Only looking at the length line → Length heuristic baseline  
+Farming rewards → Rewards are optimized but evaluation metrics do not improve  
+Archive → Checkpoint  
+Gate -> Test
+
+Rule 2: Do Not Invent Metaphors as Terminology
+
+Lineage → Base source  
+8 different lineages → Models from 8 different bases  
+That is a size difference, not a lineage difference → The original range consists of Qwen's 14B, 32B, 72B; the differences come from parameter counts rather than bases  
+Already taken up half the space → Already covers half the range  
+Turned into a topic-recognizing retriever → Degraded to problem identification, unrelated to learning value  
+The selected problems look much healthier → Selected problems have a lower truncation rate  
+Error range still covers the baseline line → Confidence interval overlaps with baseline  
+
+Rule 3: Use Neutral Nouns for Headers and Category Names
+
+Pit / Cost and lessons → Issue / Impact  
+Grasp → Confirmation level  
+How it was done → Experimental setup  
+Resampling once and seeing how much overlap remains → Overlap rate after resampling  
+How many different values there are → Number of values  
+Still running → In progress  
+A switch that must be turned off → Filter that needs to be disabled  
+
+Section status labels must remain consistent.  
+
+If the earlier part uses:  
+
+Completed  
+Confirmed  
+Did not reach baseline  
+Conclusion pending  
+
+Later appearances of:  
+
+Figured it out  
+Unexpected discovery  
+Needs fixing  
+Did not get what was wanted  
+
+Must be unified to use the neutral status labels from the earlier part.  
+
+Rule 4: Do Not Use Contrastive Sentence Structures of the Form "It Is X, Not Y"
+
+Gradient alignment: It is noise, not signal → Gradient alignment: All three check results are within noise range  
+We bought diversity in lineage, but not in capability → New models cover more bases, but accuracy rates are all below the lower bound of the original range  
+Testing method does not match usage method → Evaluation scope is pairwise comparison, inconsistent with actual usage  
+Stability is achieved through roughness → Indicators with fewer values have higher overlap rates  
+The more stable the indicator, the less it selects; the more it selects, the less stable → Overlap rate is inversely related to number of values  
+
+Rule 5: Allow Entries Without Numbers or Conclusions
+
+For example:  
+
+The control group consists of 32 randomly selected problems.  
+
+This content is already complete and does not need to add further relations to other solutions and the control group.  
+
+Rule 6: For Unidentified Causes, Directly Write "Cause Unidentified"
+
+When the preceding text already states "Cause unidentified," subsequent text should not add unverified explanations.  
+
+This may also explain the earlier phenomenon → The relation of this phenomenon to truncation has not been verified  
+
+Content after Chapter 10 "Later the mechanism was identified" has been confirmed and can be retained.  
+
+Rule 7: Do Not Use Colloquial Words
+
+Won very cleanly → Difference of 0.030  
+Measured more accurately / Measured more roughly → Higher / Lower estimation precision  
+Very little room for options → Small candidate range  
+Basically equivalent to drawing lots → Close to random selection  
+Originally indistinguishable → True gap below discernible range  
+Wasted run / Wasted slot → Invalid run / Empty slot  
+Not picked up for free → Requires 79 GPU·hours  
+A fatal issue → Main issue  
+Suspected of post-hoc patching → This segmentation method was determined after observing results  
+Reason not complex → Delete  
+Since predicting this path doesn't work, step back → Delete, proceed directly to experimental setup  
+
+Rule 8: Do Not Use Anthropomorphic Expressions
+
+Inherently requires hundreds to thousands of samples → The signal requires hundreds to thousands of samples  
+Once exceeded, it creates unevenness → When truncation occurs, it increases reward variance  
+24 steps of training only move 0.05 → After 24 steps of training, accuracy changes by 0.05  
+The more thoroughly exceeded, the more stable → The higher the truncation rate, the lower the reward variance  
+Varied quality in the response content itself → Differences in answer quality

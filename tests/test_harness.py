@@ -433,6 +433,39 @@ def test_decompose_injects_ownership_writeset():
     assert res.metrics["n_subtasks"] == 2
 
 
+def test_decompose_guarded_merge_runs_integrator_repair():
+    # Loss-free parallelism: decompose + preserve_invariants → subtasks publish checks
+    # and a guarded-merge integrator repairs any feature the merge broke.
+    from cooperagents.types import SubTask
+
+    def planner(specs, objective):
+        return (
+            [
+                SubTask(id="a", task="feature 1", owns=["m.py: foo()"], features=[1]),
+                SubTask(id="b", task="feature 2", owns=["m.py: bar()"], features=[2]),
+            ],
+            "parallel",
+        )
+
+    spec = TeamSpec(
+        run_id="rgm",
+        repo="demo_task",
+        task_id=1,
+        features=[1, 2],
+        assignments=[
+            Assignment(agent_id="agent1", role="lead", feature_id=1, task="feature 1"),
+            Assignment(agent_id="agent2", role="member", feature_id=2, task="feature 2"),
+        ],
+        decompose=True,
+        preserve_invariants=True,
+    )
+    res = UnifiedHarness(bus=InMemoryBus("rgm")).run(spec, env_factory=lambda _id: LocalEnv.fresh(), llm=DemoPolicy(), planner=planner)
+    assert res.metrics["guarded_merge"] is True
+    assert "integrator" in res.seeds  # guarded-merge repair agent ran
+    a = " ".join(m["content"] for m in res.seeds["a"].messages)
+    assert ".cb_checks/f1.py" in a  # branch published its invariant
+
+
 def test_decompose_default_planner_falls_back_offline():
     # With no planner injected and no API creds, plan_decomposition falls back to
     # one-subtask-per-feature (fully parallel) rather than crashing.
@@ -496,6 +529,63 @@ def test_strip_for_submission_removes_scratch_checks():
     assert ".cb_checks/f1.py" not in out  # scratch check removed before grading
 
 
+def test_adaptive_keeps_parallel_when_branches_dont_conflict():
+    # Adaptive: agents touch different files (NOTES_agent1 vs NOTES_agent2) → branches
+    # merge cleanly → keep the parallel result (fast path), topology=parallel.
+    spec = TeamSpec(
+        run_id="rad",
+        repo="demo_task",
+        task_id=1,
+        features=[1, 2],
+        assignments=[
+            Assignment(agent_id="agent1", role="lead", feature_id=1, task="feature 1"),
+            Assignment(agent_id="agent2", role="member", feature_id=2, task="feature 2"),
+        ],
+        adaptive=True,
+    )
+    res = UnifiedHarness(bus=InMemoryBus("rad")).run(spec, env_factory=lambda _id: LocalEnv.fresh(), llm=DemoPolicy())
+    assert res.metrics["adaptive"] is True
+    assert res.metrics["topology"] == "parallel"
+    assert res.metrics["conflict"] is False
+    assert res.integrated is not None
+    # both branches present in the merged result (disjoint files compose)
+    assert "NOTES_agent1.md" in res.integrated.patch and "NOTES_agent2.md" in res.integrated.patch
+
+
+def test_adaptive_falls_back_to_sequential_on_conflict():
+    # Force a conflict: both agents write the SAME file → δ2 won't apply onto δ1 →
+    # adaptive detects the collision and falls back to the sequential handoff.
+    from cooperagents.llm import Action
+
+    class SameFilePolicy:
+        def __init__(self):
+            self.n = {}
+
+        def decide(self, *, agent_id, role, messages, tools):
+            i = self.n.get(agent_id, 0)
+            self.n[agent_id] = i + 1
+            if i == 0:
+                # each agent writes the SAME path with different content → overlap
+                return Action(tool="write_file", args={"path": "SHARED.md", "content": f"from {agent_id}\nline2\nline3\n"})
+            return Action(tool="finish")
+
+    spec = TeamSpec(
+        run_id="rad2",
+        repo="demo_task",
+        task_id=1,
+        features=[1, 2],
+        assignments=[
+            Assignment(agent_id="agent1", role="lead", feature_id=1, task="feature 1"),
+            Assignment(agent_id="agent2", role="member", feature_id=2, task="feature 2"),
+        ],
+        adaptive=True,
+    )
+    res = UnifiedHarness(bus=InMemoryBus("rad2")).run(spec, env_factory=lambda _id: LocalEnv.fresh(), llm=SameFilePolicy())
+    assert res.metrics["topology"] == "sequential-fallback"
+    assert res.metrics["conflict"] is True
+    assert res.integrated is not None
+
+
 def test_verify_fix_skipped_for_single_agent():
     spec = TeamSpec(
         run_id="rvf2",
@@ -520,3 +610,360 @@ def test_llm_factory_used_per_agent():
     res = _harness("r6").run(_features_spec("r6", max_agents=2), env_factory=lambda _id: LocalEnv.fresh(), llm_factory=factory)
     assert ("agent1", "lead") in seen and ("agent2", "member") in seen
     assert all(r.status == "submitted" for r in res.seeds.values())
+
+
+def _q1_spec(run_id, *, do_no_harm):
+    return TeamSpec(
+        run_id=run_id,
+        repo="demo_task",
+        task_id=1,
+        features=[1, 2],
+        assignments=[
+            Assignment(agent_id="agent1", role="lead", feature_id=1, task="f1"),
+            Assignment(agent_id="agent2", role="member", feature_id=2, task="f2"),
+        ],
+        shared_workspace=True,
+        do_no_harm=do_no_harm,
+    )
+
+
+def _q1_llm():
+    return ScriptedLLM(
+        {
+            "agent1": [Action(tool="write_file", args={"path": "ok.py", "content": "X = 1\n"}), Action(tool="finish")],
+            "agent2": [Action(tool="write_file", args={"path": "broken.py", "content": "def f(:\n"}), Action(tool="finish")],
+        }
+    )
+
+
+def test_do_no_harm_gate_discards_tree_breaking_agent():
+    # Q1: agent2 leaves the tree syntax-broken; the gate discards its delta so
+    # the integrated diff keeps the last healthy state (agent1's work only).
+    res = UnifiedHarness(bus=InMemoryBus("rq1")).run(
+        _q1_spec("rq1", do_no_harm=True), env_factory=lambda _id: LocalEnv.fresh(), llm=_q1_llm()
+    )
+    assert res.metrics.get("do_no_harm_discards") == ["agent2"]
+    assert "ok.py" in res.integrated.patch
+    assert "broken.py" not in res.integrated.patch
+
+
+def test_do_no_harm_off_keeps_breaking_delta():
+    # Control: without the gate the broken file ships in the integrated diff.
+    res = UnifiedHarness(bus=InMemoryBus("rq0")).run(
+        _q1_spec("rq0", do_no_harm=False), env_factory=lambda _id: LocalEnv.fresh(), llm=_q1_llm()
+    )
+    assert "broken.py" in res.integrated.patch
+    assert "do_no_harm_discards" not in res.metrics
+
+
+def test_coop_tools_runs_agents_concurrently_and_merges():
+    # Q4: with coop_tools + no-seed, both agents run in parallel from base and
+    # the standard no-seed tail merges their independent patches.
+    spec = TeamSpec(
+        run_id="rq4",
+        repo="demo_task",
+        task_id=1,
+        features=[1, 2],
+        assignments=[
+            Assignment(agent_id="agent1", role="lead", feature_id=1, task="f1"),
+            Assignment(agent_id="agent2", role="member", feature_id=2, task="f2"),
+        ],
+        shared_workspace=True,
+        seed_prior=False,
+        coop_tools=True,
+    )
+    res = UnifiedHarness(bus=InMemoryBus("rq4")).run(spec, env_factory=lambda _id: LocalEnv.fresh(), llm=DemoPolicy())
+    assert set(res.seeds) == {"agent1", "agent2"}
+    assert "NOTES_agent1.md" in res.integrated.patch
+    assert "NOTES_agent2.md" in res.integrated.patch
+    # the coop preamble told each agent about its teammate
+    a1 = " ".join(m["content"] for m in res.seeds["agent1"].messages)
+    assert "TEAMMATES" in a1
+
+
+def test_repair_integrator_runs_only_when_merge_broken():
+    # Q5: two no-seed agents produce colliding edits that leave the merged tree
+    # syntax-broken; the health gate detects it and a repair agent runs.
+    spec = TeamSpec(
+        run_id="rq5",
+        repo="demo_task",
+        task_id=1,
+        features=[1, 2],
+        assignments=[
+            Assignment(agent_id="agent1", role="lead", feature_id=1, task="f1"),
+            Assignment(agent_id="agent2", role="member", feature_id=2, task="f2"),
+        ],
+        shared_workspace=True,
+        seed_prior=False,
+        coop_tools=True,
+        repair_integrator=True,
+    )
+    llm = ScriptedLLM(
+        {
+            "agent1": [Action(tool="write_file", args={"path": "mod.py", "content": "X = 1\n"}), Action(tool="finish")],
+            # agent2 writes a broken file that the mechanical merge will keep
+            "agent2": [Action(tool="write_file", args={"path": "bad.py", "content": "def f(:\n"}), Action(tool="finish")],
+            "integrator": [Action(tool="write_file", args={"path": "bad.py", "content": "def f():\n    return 1\n"}), Action(tool="finish")],
+        }
+    )
+    res = UnifiedHarness(bus=InMemoryBus("rq5")).run(spec, env_factory=lambda _id: LocalEnv.fresh(), llm=llm)
+    assert "integrator" in res.seeds  # gate fired -> repair ran
+    assert "def f():" in res.integrated.patch  # repaired content shipped
+
+
+def test_repair_integrator_skipped_when_merge_clean():
+    spec = TeamSpec(
+        run_id="rq5c",
+        repo="demo_task",
+        task_id=1,
+        features=[1, 2],
+        assignments=[
+            Assignment(agent_id="agent1", role="lead", feature_id=1, task="f1"),
+            Assignment(agent_id="agent2", role="member", feature_id=2, task="f2"),
+        ],
+        shared_workspace=True,
+        seed_prior=False,
+        coop_tools=True,
+        repair_integrator=True,
+    )
+    llm = ScriptedLLM(
+        {
+            "agent1": [Action(tool="write_file", args={"path": "a.py", "content": "A = 1\n"}), Action(tool="finish")],
+            "agent2": [Action(tool="write_file", args={"path": "b.py", "content": "B = 2\n"}), Action(tool="finish")],
+        }
+    )
+    res = UnifiedHarness(bus=InMemoryBus("rq5c")).run(spec, env_factory=lambda _id: LocalEnv.fresh(), llm=llm)
+    assert "integrator" not in res.seeds  # clean merge -> no repair cost
+    assert "a.py" in res.integrated.patch and "b.py" in res.integrated.patch
+
+
+def test_no_seed_merge_conflict_falls_back_and_repairs():
+    # Q5.1: both agents create the SAME file with different content -> genuine
+    # 3-way conflict -> fallback apply-chain -> health gate -> repair agent.
+    spec = TeamSpec(
+        run_id="rq51",
+        repo="demo_task",
+        task_id=1,
+        features=[1, 2],
+        assignments=[
+            Assignment(agent_id="agent1", role="lead", feature_id=1, task="f1"),
+            Assignment(agent_id="agent2", role="member", feature_id=2, task="f2"),
+        ],
+        shared_workspace=True,
+        seed_prior=False,
+        coop_tools=True,
+        repair_integrator=True,
+    )
+    llm = ScriptedLLM(
+        {
+            "agent1": [Action(tool="write_file", args={"path": "shared.py", "content": "MODE = 'alpha'\n"}), Action(tool="finish")],
+            "agent2": [Action(tool="write_file", args={"path": "shared.py", "content": "def f(:\n"}), Action(tool="finish")],
+            "integrator": [Action(tool="write_file", args={"path": "shared.py", "content": "MODE = 'alpha'\ndef f():\n    return MODE\n"}), Action(tool="finish")],
+        }
+    )
+    res = UnifiedHarness(bus=InMemoryBus("rq51")).run(spec, env_factory=lambda _id: LocalEnv.fresh(), llm=llm)
+    assert "integrator" in res.seeds
+    assert "def f():" in res.integrated.patch
+
+
+def test_coop_preserve_invariants_publishes_check_instruction():
+    # Q8: parallel agents are told to publish acceptance checks for selection.
+    spec = TeamSpec(
+        run_id="rq8",
+        repo="demo_task",
+        task_id=1,
+        features=[1, 2],
+        assignments=[
+            Assignment(agent_id="agent1", role="lead", feature_id=1, task="f1"),
+            Assignment(agent_id="agent2", role="member", feature_id=2, task="f2"),
+        ],
+        shared_workspace=True,
+        seed_prior=False,
+        coop_tools=True,
+        preserve_invariants=True,
+    )
+    res = UnifiedHarness(bus=InMemoryBus("rq8")).run(spec, env_factory=lambda _id: LocalEnv.fresh(), llm=DemoPolicy())
+    a1 = " ".join(m["content"] for m in res.seeds["agent1"].messages)
+    assert "PUBLISH YOUR ACCEPTANCE CHECK" in a1
+    assert ".cb_checks/f1.py" in a1
+
+
+def test_teammate_poller_emits_only_on_change():
+    from cooperagents.harness import _TeammatePoller
+
+    e1, e2 = LocalEnv.fresh(), LocalEnv.fresh()
+    try:
+        poller = _TeammatePoller("agent1", {"agent1": e1, "agent2": e2})
+        assert poller.poll() == ""  # clean teammate tree -> silence
+        e2.write_file("widget.py", "W = 1\n")
+        note = poller.poll()
+        assert "agent2" in note and "widget.py" in note
+        assert poller.poll() == ""  # unchanged -> silence again
+        e2.write_file("other.py", "O = 2\n")
+        assert "other.py" in poller.poll()
+    finally:
+        e1.cleanup()
+        e2.cleanup()
+
+
+def test_coop_toolkit_flags_offline_safe():
+    # contract_first without creds silently no-ops; live_awareness wires without error.
+    spec = TeamSpec(
+        run_id="rtk",
+        repo="demo_task",
+        task_id=1,
+        features=[1, 2],
+        assignments=[
+            Assignment(agent_id="agent1", role="lead", feature_id=1, task="f1"),
+            Assignment(agent_id="agent2", role="member", feature_id=2, task="f2"),
+        ],
+        shared_workspace=True,
+        seed_prior=False,
+        coop_tools=True,
+        contract_first=True,
+        live_awareness=True,
+    )
+    res = UnifiedHarness(bus=InMemoryBus("rtk")).run(spec, env_factory=lambda _id: LocalEnv.fresh(), llm=DemoPolicy())
+    assert set(res.seeds) == {"agent1", "agent2"}
+    assert "NOTES_agent1.md" in res.integrated.patch and "NOTES_agent2.md" in res.integrated.patch
+
+
+def test_tool_protocol_injects_first_action_instruction():
+    # TK3: coop agents get the coordination-protocol brief naming their teammate.
+    spec = TeamSpec(
+        run_id="rtk3",
+        repo="demo_task",
+        task_id=1,
+        features=[1, 2],
+        assignments=[
+            Assignment(agent_id="agent1", role="lead", feature_id=1, task="f1"),
+            Assignment(agent_id="agent2", role="member", feature_id=2, task="f2"),
+        ],
+        shared_workspace=True,
+        seed_prior=False,
+        coop_tools=True,
+        tool_protocol=True,
+    )
+    res = UnifiedHarness(bus=InMemoryBus("rtk3")).run(spec, env_factory=lambda _id: LocalEnv.fresh(), llm=DemoPolicy())
+    a1 = " ".join(m["content"] for m in res.seeds["agent1"].messages)
+    assert "COORDINATION PROTOCOL" in a1 and "agent2" in a1
+
+
+def test_claim_mode_seeds_board_and_briefs_allocation():
+    spec = TeamSpec(
+        run_id="rtk6",
+        repo="demo_task",
+        task_id=1,
+        features=[1, 2],
+        assignments=[
+            Assignment(agent_id="agent1", role="lead", feature_id=1, task="## Feature 1\nf1\n\n## Feature 2\nf2"),
+            Assignment(agent_id="agent2", role="member", feature_id=2, task="## Feature 1\nf1\n\n## Feature 2\nf2"),
+        ],
+        shared_workspace=True,
+        seed_prior=False,
+        coop_tools=True,
+        task_board=True,
+        claim_mode=True,
+    )
+    bus = InMemoryBus("rtk6")
+    res = UnifiedHarness(bus=bus).run(spec, env_factory=lambda _id: LocalEnv.fresh(), llm=DemoPolicy())
+    seeded = [t for t in bus.list_tasks() if t.get("created_by") == "harness"]
+    assert len(seeded) == 2 and all(not t.get("owner") for t in seeded)  # seeded, unclaimed by demo policy
+    a1 = " ".join(m["content"] for m in res.seeds["agent1"].messages)
+    assert "WORK ALLOCATION" in a1
+
+
+def test_spawn_tool_launches_helper_and_merges_patch():
+    from cooperagents.workers.mini_swe_worker import TaskBoard  # noqa: F401
+
+    spec = TeamSpec(
+        run_id="rtk7",
+        repo="demo_task",
+        task_id=1,
+        features=[1, 2],
+        assignments=[
+            Assignment(agent_id="agent1", role="lead", feature_id=1, task="f1"),
+            Assignment(agent_id="agent2", role="member", feature_id=2, task="f2"),
+        ],
+        shared_workspace=True,
+        seed_prior=False,
+        coop_tools=True,
+        allow_spawn_tool=True,
+        max_agents=3,
+    )
+    # builtin DemoPolicy path doesn't call the tool; assert the run completes
+    # with spawn wiring enabled and no helpers spawned.
+    res = UnifiedHarness(bus=InMemoryBus("rtk7")).run(spec, env_factory=lambda _id: LocalEnv.fresh(), llm=DemoPolicy())
+    assert set(res.seeds) == {"agent1", "agent2"}
+
+
+def test_coordinator_detects_loops_and_nudges():
+    from cooperagents.harness import _Coordinator
+
+    class FakeAgent:
+        messages = [
+            {"role": "assistant", "tool_calls": [{"function": {"arguments": '{"command": "sed -i 47d mux.go"}'}}]}
+        ] * 7
+
+    e1 = LocalEnv.fresh()
+    try:
+        c = _Coordinator({"agent1": e1})
+        c.register("agent1", FakeAgent())
+        kind = c._detect("agent1", FakeAgent())
+        assert kind == "LOOP"
+        nudge = c._compose("LOOP", FakeAgent())
+        assert nudge  # static fallback offline
+        c._queues["agent1"].append(f"[coordinator] {nudge}")
+        drained = c.drain("agent1")
+        assert drained and "[coordinator]" in drained[0]
+        assert c.drain("agent1") == []
+    finally:
+        e1.cleanup()
+
+
+def test_coordinator_flag_runs_end_to_end_offline():
+    spec = TeamSpec(
+        run_id="rc2",
+        repo="demo_task",
+        task_id=1,
+        features=[1, 2],
+        assignments=[
+            Assignment(agent_id="agent1", role="lead", feature_id=1, task="f1"),
+            Assignment(agent_id="agent2", role="member", feature_id=2, task="f2"),
+        ],
+        shared_workspace=True,
+        seed_prior=False,
+        coop_tools=True,
+        coordinator=True,
+    )
+    res = UnifiedHarness(bus=InMemoryBus("rc2")).run(spec, env_factory=lambda _id: LocalEnv.fresh(), llm=DemoPolicy())
+    assert set(res.seeds) == {"agent1", "agent2"}
+    assert "coordinator_events" in res.metrics  # recorded (empty for fast demo runs)
+
+
+def test_team_roles_uses_lead_tree_as_submission():
+    # Complete-Team cell: role blocks injected; the lead's diff IS the
+    # integrated patch (no mechanical merge of member patches).
+    spec = TeamSpec(
+        run_id="rtr",
+        repo="demo_task",
+        task_id=1,
+        features=[1, 2],
+        assignments=[
+            Assignment(agent_id="agent1", role="lead", feature_id=1, task="f1"),
+            Assignment(agent_id="agent2", role="member", feature_id=2, task="f2"),
+        ],
+        shared_workspace=True,
+        seed_prior=False,
+        coop_tools=True,
+        team_roles=True,
+    )
+    res = UnifiedHarness(bus=InMemoryBus("rtr")).run(spec, env_factory=lambda _id: LocalEnv.fresh(), llm=DemoPolicy())
+    assert set(res.seeds) == {"agent1", "agent2"}
+    a1 = " ".join(m["content"] for m in res.seeds["agent1"].messages)
+    a2 = " ".join(m["content"] for m in res.seeds["agent2"].messages)
+    assert "ROLE — TEAM LEAD" in a1 and "/workspace/shared" in a1
+    assert "ROLE — TEAM MEMBER" in a2 and "agent2.patch" in a2
+    # lead-only submission: agent2's demo file must NOT be in the integrated patch
+    assert "NOTES_agent1.md" in res.integrated.patch
+    assert "NOTES_agent2.md" not in res.integrated.patch

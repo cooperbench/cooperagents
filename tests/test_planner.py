@@ -75,6 +75,39 @@ def test_validate_drops_forward_and_unknown_edges():
     assert a.depends_on == []  # forward edge to b (order 1) and unknown zzz both dropped
 
 
+def test_plan_topology_general_agent_decision():
+    # General, domain-agnostic: the AGENT picks parallel / sequential / pipeline.
+    from cooperagents.planner import plan_topology, topo_levels
+
+    def chooser(label, subs):
+        return lambda _p: json.dumps({"topology": label, "rationale": "r", "subtasks": subs})
+
+    par = chooser("parallel", [{"id": "a", "task": "A", "depends_on": []}, {"id": "b", "task": "B", "depends_on": []}])
+    seq = chooser("sequential", [{"id": "a", "task": "A", "depends_on": []}, {"id": "b", "task": "B", "depends_on": ["a"]}])
+    pipe = chooser(
+        "pipeline",
+        [
+            {"id": "a", "task": "A", "depends_on": []},
+            {"id": "b", "task": "B", "depends_on": []},
+            {"id": "c", "task": "C", "depends_on": ["a", "b"]},
+        ],
+    )
+
+    s, topo, _ = plan_topology("obj", complete_fn=par)
+    assert topo == "parallel" and [sorted(x.id for x in lv) for lv in topo_levels(s)] == [["a", "b"]]
+    s, topo, _ = plan_topology("obj", complete_fn=seq)
+    assert topo == "sequential" and [[x.id for x in lv] for lv in topo_levels(s)] == [["a"], ["b"]]
+    s, topo, _ = plan_topology("obj", complete_fn=pipe)
+    assert topo == "pipeline" and [sorted(x.id for x in lv) for lv in topo_levels(s)] == [["a", "b"], ["c"]]
+
+
+def test_plan_topology_falls_back_to_sequential_single():
+    from cooperagents.planner import plan_topology
+
+    subs, topo, rationale = plan_topology("do the thing", complete_fn=lambda _p: "not json")
+    assert len(subs) == 1 and topo == "sequential" and "fallback" in rationale
+
+
 def test_topo_levels_and_ancestors():
     subs = [
         SubTask(id="a", task="A"),

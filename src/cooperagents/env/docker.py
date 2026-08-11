@@ -20,19 +20,32 @@ CONTAINER_REPO = "/workspace/repo"
 
 
 class DockerEnv(Environment):
-    def __init__(self, image: str, *, name: str | None = None, keepalive: str = "4h") -> None:
+    def __init__(self, image: str, *, name: str | None = None, keepalive: str = "4h", volumes: list[str] | None = None) -> None:
         self.image = image
         self.repo_path = CONTAINER_REPO
         self.name = name or f"ca-{uuid.uuid4().hex[:10]}"
-        subprocess.run(
-            ["docker", "run", "-d", "--name", self.name, "--entrypoint", "", image, "sleep", keepalive],
-            check=True,
-            capture_output=True,
-        )
+        base = ["docker", "run", "-d", "--name", self.name, "--entrypoint", ""]
+        for v in volumes or []:
+            base += ["-v", v]
+        tail = [image, "sleep", keepalive]
+        first = subprocess.run([*base, *tail], capture_output=True, text=True)
+        if first.returncode != 0:
+            # Many CooperBench images are arm64-only with no amd64 manifest; on an
+            # amd64 host docker auto-selects the host platform and fails. Retry under
+            # arm64 emulation (binfmt) so the image still runs. Native (multi-arch)
+            # images take the fast first path and never pay the emulation cost.
+            if "platform" in first.stderr.lower() or "manifest" in first.stderr.lower():
+                subprocess.run(
+                    [*base, "--platform", "linux/arm64", *tail],
+                    check=True,
+                    capture_output=True,
+                )
+            else:
+                raise subprocess.CalledProcessError(first.returncode, first.args, first.stdout, first.stderr)
         # CooperBench images ship the repo at /workspace/repo already; for any
         # other image, make sure the dir exists so `docker exec -w` succeeds.
         subprocess.run(
-            ["docker", "exec", self.name, "bash", "-lc", f"mkdir -p {self.repo_path}"],
+            ["docker", "exec", self.name, "bash", "-c", f"mkdir -p {self.repo_path}"],
             check=False,
             capture_output=True,
         )
@@ -44,8 +57,20 @@ class DockerEnv(Environment):
 
     def execute(self, command: str, *, timeout: int = 60) -> ExecResult:
         try:
+            # Non-login shell: a login shell (-l) sources /etc/profile which
+            # RESETS PATH, hiding image-provided toolchains from the agent
+            # (e.g. /usr/local/go/bin in the go-chi images — the agent then
+            # cannot build/test its own code and ships broken patches).
+            if len(command) < 100_000:
+                argv, stdin = ["docker", "exec", "-w", self.repo_path, self.name, "bash", "-c", command], None
+            else:
+                # A single argv element is capped at ~128KB (MAX_ARG_STRLEN);
+                # giant commands (e.g. an agent writing a whole file via one
+                # heredoc) must be streamed over stdin instead.
+                argv, stdin = ["docker", "exec", "-i", "-w", self.repo_path, self.name, "bash", "-s"], command
             proc = subprocess.run(
-                ["docker", "exec", "-w", self.repo_path, self.name, "bash", "-lc", command],
+                argv,
+                input=stdin,
                 capture_output=True,
                 text=True,
                 timeout=timeout,

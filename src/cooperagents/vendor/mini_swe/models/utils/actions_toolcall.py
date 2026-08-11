@@ -42,13 +42,17 @@ SEND_MESSAGE_TOOL = {
                     "type": "string",
                     "description": "The message content to send",
                 },
+                "wait": {
+                    "type": "boolean",
+                    "description": "Wait up to 60s for the recipient's reply; it is returned in this tool's output",
+                },
             },
             "required": ["recipient", "content"],
         },
     },
 }
 
-KNOWN_TOOLS = {"bash", "send_message"}
+KNOWN_TOOLS = {"bash", "send_message", "task_create", "task_update", "task_list", "task_claim", "spawn_helper"}
 
 
 def parse_toolcall_actions(tool_calls: list, *, format_error_template: str) -> list[dict]:

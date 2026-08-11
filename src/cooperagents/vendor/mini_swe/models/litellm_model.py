@@ -51,7 +51,12 @@ class LitellmModel:
         litellm.exceptions.NotFoundError,
         litellm.exceptions.PermissionDeniedError,
         litellm.exceptions.ContextWindowExceededError,
-        litellm.exceptions.AuthenticationError,
+        # NOTE: AuthenticationError is intentionally NOT aborted. Azure/OpenAI
+        # endpoints intermittently return it under transient outages/quota blips
+        # (observed mid-run: a valid key started rejecting calls, then recovered).
+        # Aborting nuked agents after 1 step → empty patches → spurious fails.
+        # The retry cap (10, exp backoff 4-60s) survives blips; a truly bad key
+        # still terminates after the cap.
         KeyboardInterrupt,
     ]
 
