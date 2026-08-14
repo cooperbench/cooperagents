@@ -493,7 +493,7 @@ def _team_lead_block(members: list[Assignment]) -> str:
     The lead plans, assigns board tasks, implements its own feature, then
     MERGES member patches from the shared scratchpad — the lead's tree is
     what the team submits."""
-    names = ", ".join(f"{m.agent_id} (feature {m.feature_id})" for m in members)
+    names = ", ".join(f"{m.agent_id} (feature {m.feature_id})" if m.feature_id is not None else m.agent_id for m in members)
     patch_list = ", ".join(f"{_SCRATCHPAD}/{m.agent_id}.patch" for m in members)
     return (
         f"\n\nROLE — TEAM LEAD. Teammates working RIGHT NOW in parallel copies of this repo: {names}. "
@@ -515,9 +515,10 @@ def _team_lead_block(members: list[Assignment]) -> str:
 
 def _team_member_block(a: Assignment, lead: Assignment) -> str:
     """team_roles: member-role prompt block (CooperBench team-mode analogue)."""
+    lead_desc = f"{lead.agent_id} (feature {lead.feature_id})" if lead.feature_id is not None else lead.agent_id
     return (
-        f"\n\nROLE — TEAM MEMBER. You are {a.agent_id}. The team lead {lead.agent_id} "
-        f"(feature {lead.feature_id}) works in a parallel copy of this repo and merges the team result; "
+        f"\n\nROLE — TEAM MEMBER. You are {a.agent_id}. The team lead {lead_desc} "
+        "works in a parallel copy of this repo and merges the team result; "
         f"the team is graded on the LEAD's merged tree. A shared scratchpad directory {_SCRATCHPAD}/ is "
         "mounted in EVERY container; files there are not graded.\n"
         f"1. FIRST: read {_SCRATCHPAD}/PLAN.md if it exists and check the board (task_list) — they say "
@@ -836,7 +837,7 @@ class UnifiedHarness:
                     poller = _TeammatePoller(a.agent_id, coop_envs) if spec.task_board else None
                     if poller is not None:
                         poller.watch_board(bus)
-                    r = run_on_shared(env, a.agent_id, a.role, task, a.feature_id, poller=poller)
+                    r = run_on_shared(env, a.agent_id, a.role, task, a.feature_id, poller=poller, time_limit_s=spec.agent_time_limit)
                     return a.agent_id, r, strip_test_sections(env.git_diff())
                 if True:
                     mates = ", ".join(
@@ -907,7 +908,7 @@ class UnifiedHarness:
                         poller.watch_board(bus)
                     if poller is not None and coordinator is not None:
                         poller.watch_coordinator(coordinator)
-                    r = run_on_shared(env, a.agent_id, a.role, task, a.feature_id, poller=poller, monitor=coordinator)
+                    r = run_on_shared(env, a.agent_id, a.role, task, a.feature_id, poller=poller, monitor=coordinator, time_limit_s=spec.agent_time_limit)
 
                     return a.agent_id, r, strip_test_sections(env.git_diff())
                 return None  # unreachable

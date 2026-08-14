@@ -1,0 +1,688 @@
+diff --git a/args.c b/args.c
+new file mode 100644
+index 0000000..e53b6be
+--- /dev/null
++++ b/args.c
+@@ -0,0 +1,122 @@
++#include "args.h"
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++Args *args_init(void) {
++    Args *args = calloc(1, sizeof(Args));
++    if (!args) return NULL;
++    
++    args->update_delay = 4;
++    args->color = NULL;
++    args->message = NULL;
++    args->tty = NULL;
++    args->help_shown = false;
++    args->version_shown = false;
++    
++    return args;
++}
++
++void args_free(Args *args) {
++    if (args) {
++        free(args->color);
++        free(args->message);
++        free(args->tty);
++        free(args);
++    }
++}
++
++void args_print_help(void) {
++    printf(" Usage: cmatrix -[abBcfhlsmVxk] [-u delay] [-C color] [-t tty] [-M message]\n");
++    printf(" -a: Asynchronous scroll\n");
++    printf(" -b: Bold characters on\n");
++    printf(" -B: All bold characters (overrides -b)\n");
++    printf(" -c: Use Japanese characters as seen in the original matrix. Requires appropriate fonts\n");
++    printf(" -f: Force the linux $TERM type to be on\n");
++    printf(" -l: Linux mode (uses matrix console font)\n");
++    printf(" -L: Lock mode (can be closed from another terminal)\n");
++    printf(" -o: Use old-style scrolling\n");
++    printf(" -h: Print usage and exit\n");
++    printf(" -n: No bold characters (overrides -b and -B, default)\n");
++    printf(" -s: \"Screensaver\" mode, exits on first keystroke\n");
++    printf(" -x: X window mode, use if your xterm is using mtx.pcf\n");
++    printf(" -V: Print version information and exit\n");
++    printf(" -M [message]: Prints your message in the center of the screen. Overrides -L's default message.\n");
++    printf(" -u delay (0 - 10, default 4): Screen update delay\n");
++    printf(" -C [color]: Use this color for matrix (default green)\n");
++    printf(" -r: rainbow mode\n");
++    printf(" -m: lambda mode\n");
++    printf(" -k: Characters change while scrolling. (Works without -o opt.)\n");
++    printf(" -t [tty]: Set tty to use\n");
++}
++
++void args_print_version(void) {
++    printf("cmatrix version 1.0\n");
++}
++
++int args_parse(int argc, char **argv, Args *args) {
++    if (argc < 1) return 0;
++    
++    for (int i = 1; i < argc; i++) {
++        if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "-?") == 0) {
++            args->help_shown = true;
++            return 0;
++        }
++        if (strcmp(argv[i], "-V") == 0) {
++            args->version_shown = true;
++            return 0;
++        }
++        if (strcmp(argv[i], "-a") == 0) {
++            args->async_scroll = true;
++        } else if (strcmp(argv[i], "-b") == 0) {
++            args->bold_chars = true;
++        } else if (strcmp(argv[i], "-B") == 0) {
++            args->all_bold = true;
++        } else if (strcmp(argv[i], "-c") == 0) {
++            args->only_shadows = true;
++        } else if (strcmp(argv[i], "-f") == 0) {
++            args->force_term = true;
++        } else if (strcmp(argv[i], "-l") == 0) {
++            args->linux_mode = true;
++        } else if (strcmp(argv[i], "-L") == 0) {
++            args->lock_mode = true;
++        } else if (strcmp(argv[i], "-o") == 0) {
++            args->old_style = true;
++        } else if (strcmp(argv[i], "-n") == 0) {
++            args->no_bold = true;
++        } else if (strcmp(argv[i], "-s") == 0) {
++            args->screensaver = true;
++        } else if (strcmp(argv[i], "-x") == 0) {
++            args->x_window = true;
++        } else if (strcmp(argv[i], "-r") == 0) {
++            args->rainbow = true;
++        } else if (strcmp(argv[i], "-k") == 0) {
++            args->every_char_change = true;
++        } else if (strcmp(argv[i], "-M") == 0) {
++            if (i + 1 < argc) {
++                args->message = strdup(argv[++i]);
++            }
++        } else if (strcmp(argv[i], "-u") == 0) {
++            if (i + 1 < argc) {
++                args->update_delay = atoi(argv[++i]);
++                if (args->update_delay < 0 || args->update_delay > 10) {
++                    args->update_delay = 4;
++                }
++            }
++        } else if (strcmp(argv[i], "-C") == 0) {
++            if (i + 1 < argc) {
++                args->color = strdup(argv[++i]);
++            }
++        } else if (strcmp(argv[i], "-t") == 0) {
++            if (i + 1 < argc) {
++                args->tty = strdup(argv[++i]);
++            }
++        } else if (argv[i][0] == '-') {
++            // Unknown option
++            fprintf(stderr, "Unknown option: %s\n", argv[i]);
++            return 1;
++        }
++    }
++    
++    return 0;
++}
+diff --git a/args.h b/args.h
+new file mode 100644
+index 0000000..ff9b21d
+--- /dev/null
++++ b/args.h
+@@ -0,0 +1,37 @@
++#ifndef ARGS_H
++#define ARGS_H
++
++#include <stdbool.h>
++
++typedef struct {
++    bool async_scroll;
++    bool bold_chars;
++    bool all_bold;
++    bool force_term;
++    bool linux_mode;
++    bool old_style;
++    bool only_shadows;
++    bool lock_mode;
++    bool rainbow;
++    bool every_char_change;
++    bool no_bold;
++    bool screensaver;
++    bool lambda_mode;
++    bool x_window;
++    bool help;
++    bool version;
++    int update_delay;
++    char *color;
++    char *message;
++    char *tty;
++    bool help_shown;
++    bool version_shown;
++} Args;
++
++Args *args_init(void);
++void args_free(Args *args);
++int args_parse(int argc, char **argv, Args *args);
++void args_print_help(void);
++void args_print_version(void);
++
++#endif
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..9bdabda
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,7 @@
++#!/bin/bash
++set -e
++
++# Compile cmatrix
++gcc -o executable main.c args.c errors.c version.c -lm -lncurses -ltermcap
++
++echo "Build successful: ./executable"
+diff --git a/errors.c b/errors.c
+new file mode 100644
+index 0000000..584c04a
+--- /dev/null
++++ b/errors.c
+@@ -0,0 +1,21 @@
++#include "errors.h"
++#include <stdarg.h>
++#include <stdlib.h>
++
++void error_exit(const char *msg, ...) {
++    va_list args;
++    va_start(args, msg);
++    vfprintf(stderr, msg, args);
++    va_end(args);
++    fprintf(stderr, "\n");
++    exit(EXIT_FAILURE);
++}
++
++void error_exit_with_code(int code, const char *msg, ...) {
++    va_list args;
++    va_start(args, msg);
++    vfprintf(stderr, msg, args);
++    va_end(args);
++    fprintf(stderr, "\n");
++    exit(code);
++}
+diff --git a/errors.h b/errors.h
+new file mode 100644
+index 0000000..676fa4a
+--- /dev/null
++++ b/errors.h
+@@ -0,0 +1,12 @@
++#ifndef ERRORS_H
++#define ERRORS_H
++
++#include <stdio.h>
++
++#define EXIT_SUCCESS 0
++#define EXIT_FAILURE 1
++
++void error_exit(const char *msg, ...);
++void error_exit_with_code(int code, const char *msg, ...);
++
++#endif
+diff --git a/main.c b/main.c
+new file mode 100644
+index 0000000..a42b242
+--- /dev/null
++++ b/main.c
+@@ -0,0 +1,384 @@
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++#include <time.h>
++#include <termios.h>
++#include <sys/select.h>
++#include <ncurses.h>
++#include <locale.h>
++#include <ctype.h>
++#include "args.h"
++#include "errors.h"
++#include "version.h"
++
++#define MAX_COLS 256
++#define MAX_ROWS 256
++#define MAX_CHARS 256
++#define MAX_MESSAGE 256
++
++typedef struct {
++    char ch;
++    int x, y;
++    int color;
++    int bold;
++    int shadow;
++} CharCell;
++
++typedef struct {
++    CharCell *cells;
++    int cols, rows;
++    int char_count;
++    int async;
++    int speed;
++    int color;
++    int shadow_color;
++    int bold;
++    int all_bold;
++    int no_bold;
++    int rainbow;
++    int lambda;
++    int every_char_change;
++    int old_style;
++    int only_shadows;
++    char message[MAX_MESSAGE];
++    int message_x, message_y;
++    int tty;
++    int lock;
++    int screensaver;
++    int update_delay;
++} Matrix;
++
++static const char *ascii_chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;':\",./<>?";
++static const char *katakana_chars = "アァカサタナハマヤャラワガザダバパイィキシチニヒミリヰギジヂビピウゥクスツヌフムユュルグズブヅプエェケセテネヘメレヱゲゼデベペオォコソトノホモヨョロヲゴゾドボポヴッン";
++static const char *lambda_chars = "λΛ";
++
++static int get_char_index(const char *chars, int idx) {
++    if (idx < 0 || idx >= (int)strlen(chars)) return 0;
++    return idx % (int)strlen(chars);
++}
++
++static int random_char_index(const char *chars) {
++    return get_char_index(chars, rand() % (int)strlen(chars));
++}
++
++static int get_color_index(const char *chars, int idx) {
++    if (idx < 0 || idx >= (int)strlen(chars)) return 0;
++    return idx % (int)strlen(chars);
++}
++
++static int random_color_index(const char *chars) {
++    return get_color_index(chars, rand() % (int)strlen(chars));
++}
++
++static void init_matrix(Matrix *m, Args *args) {
++    m->cols = COLS;
++    m->rows = LINES;
++    m->cells = calloc(m->cols * m->rows, sizeof(CharCell));
++    m->char_count = 0;
++    m->async = args->async_scroll;
++    m->speed = args->update_delay;
++    m->color = args->color ? 1 : 0;
++    m->shadow_color = args->only_shadows ? 1 : 0;
++    m->bold = args->bold_chars;
++    m->all_bold = args->all_bold;
++    m->no_bold = args->no_bold;
++    m->rainbow = args->rainbow;
++    m->lambda = args->lambda_mode;
++    m->every_char_change = args->every_char_change;
++    m->old_style = args->old_style;
++    m->only_shadows = args->only_shadows;
++    m->message[0] = '\0';
++    if (args->message) {
++        strncpy(m->message, args->message, MAX_MESSAGE - 1);
++        m->message[MAX_MESSAGE - 1] = '\0';
++    }
++    m->tty = args->tty ? atoi(args->tty) : 0;
++    m->lock = args->lock_mode;
++    m->screensaver = args->screensaver;
++    m->update_delay = args->update_delay;
++}
++
++static void free_matrix(Matrix *m) {
++    if (m->cells) {
++        free(m->cells);
++        m->cells = NULL;
++    }
++}
++
++static void init_colors(void) {
++    if (has_colors()) {
++        start_color();
++        init_pair(1, COLOR_GREEN, COLOR_BLACK);
++        init_pair(2, COLOR_RED, COLOR_BLACK);
++        init_pair(3, COLOR_YELLOW, COLOR_BLACK);
++        init_pair(4, COLOR_BLUE, COLOR_BLACK);
++        init_pair(5, COLOR_MAGENTA, COLOR_BLACK);
++        init_pair(6, COLOR_CYAN, COLOR_BLACK);
++        init_pair(7, COLOR_WHITE, COLOR_BLACK);
++        init_pair(8, COLOR_BLACK, COLOR_BLACK);
++    }
++}
++
++static void clear_screen(void) {
++    clear();
++    refresh();
++}
++
++static void init_terminal(void) {
++    struct termios oldt, newt;
++    tcgetattr(STDIN_FILENO, &oldt);
++    newt = oldt;
++    newt.c_lflag &= ~(ECHO | ICANON);
++    tcsetattr(STDIN_FILENO, TCSANOW, &newt);
++}
++
++static void restore_terminal(struct termios *oldt) {
++    tcsetattr(STDIN_FILENO, TCSANOW, oldt);
++}
++
++static void set_linux_font(Args *args) {
++    if (args->linux_mode) {
++        setlocale(LC_ALL, "");
++        if (args->only_shadows) {
++            setlocale(LC_ALL, "");
++        }
++    }
++}
++
++static void print_message(Matrix *m) {
++    if (m->message[0] != '\0') {
++        int msg_len = strlen(m->message);
++        int msg_x = (COLS - msg_len) / 2;
++        int msg_y = (LINES - 1) / 2;
++        if (msg_x < 0) msg_x = 0;
++        if (msg_y < 0) msg_y = 0;
++        if (msg_y >= LINES) msg_y = LINES - 1;
++        mvprintw(msg_y, msg_x, "%s", m->message);
++        refresh();
++    }
++}
++
++static void draw_matrix(Matrix *m) {
++    int x, y, i;
++    int char_idx, color_idx;
++    
++    for (y = 0; y < m->rows; y++) {
++        for (x = 0; x < m->cols; x++) {
++            int idx = y * m->cols + x;
++            if (idx >= m->char_count) {
++                char_idx = random_char_index(m->lambda ? lambda_chars : (m->only_shadows ? ascii_chars : katakana_chars));
++                color_idx = random_color_index(ascii_chars);
++                m->cells[idx].ch = m->lambda ? lambda_chars[char_idx] : katakana_chars[char_idx];
++                m->cells[idx].x = x;
++                m->cells[idx].y = y;
++                m->cells[idx].color = color_idx;
++                m->cells[idx].bold = m->bold || m->all_bold;
++                m->cells[idx].shadow = m->only_shadows;
++                m->char_count++;
++            }
++            
++            CharCell *cell = &m->cells[idx];
++            int color = 0;
++            
++            if (m->rainbow) {
++                color = (y + x) % 8 + 1;
++            } else {
++                color = cell->color + 1;
++            }
++            
++            if (cell->bold && !m->no_bold) {
++                attron(A_BOLD);
++            }
++            
++            if (cell->shadow) {
++                mvprintw(cell->y, cell->x, " ");
++            }
++            
++            if (m->only_shadows) {
++                mvprintw(cell->y, cell->x, " ");
++            } else {
++                mvprintw(cell->y, cell->x, "%c", cell->ch);
++            }
++            
++            if (cell->bold && !m->no_bold) {
++                attroff(A_BOLD);
++            }
++            
++            attron(COLOR_PAIR(color));
++            if (cell->shadow) {
++                mvprintw(cell->y, cell->x, " ");
++            }
++            attroff(COLOR_PAIR(color));
++        }
++    }
++    
++    refresh();
++}
++
++static void update_matrix(Matrix *m) {
++    int x, y, i;
++    int char_idx, color_idx;
++    
++    for (y = 0; y < m->rows; y++) {
++        for (x = 0; x < m->cols; x++) {
++            int idx = y * m->cols + x;
++            if (idx >= m->char_count) {
++                char_idx = random_char_index(m->lambda ? lambda_chars : (m->only_shadows ? ascii_chars : katakana_chars));
++                color_idx = random_color_index(ascii_chars);
++                m->cells[idx].ch = m->lambda ? lambda_chars[char_idx] : katakana_chars[char_idx];
++                m->cells[idx].x = x;
++                m->cells[idx].y = y;
++                m->cells[idx].color = color_idx;
++                m->cells[idx].bold = m->bold || m->all_bold;
++                m->cells[idx].shadow = m->only_shadows;
++                m->char_count++;
++            }
++        }
++    }
++}
++
++static void handle_key(Matrix *m, int key) {
++    if (m->screensaver) {
++        return;
++    }
++    
++    switch (key) {
++        case 'a':
++            m->async = !m->async;
++            break;
++        case 'b':
++            m->bold = !m->bold;
++            break;
++        case 'B':
++            m->all_bold = 1;
++            m->bold = 1;
++            break;
++        case 'n':
++            m->no_bold = 1;
++            m->bold = 0;
++            m->all_bold = 0;
++            break;
++        case '0':
++        case '1':
++        case '2':
++        case '3':
++        case '4':
++        case '5':
++        case '6':
++        case '7':
++        case '8':
++        case '9':
++            m->update_delay = key - '0';
++            break;
++        case '!':
++            m->color = 1;
++            break;
++        case '@':
++            m->color = 0;
++            break;
++        case '#':
++            m->color = 2;
++            break;
++        case '$':
++            m->color = 3;
++            break;
++        case '%':
++            m->color = 4;
++            break;
++        case '^':
++            m->color = 5;
++            break;
++        case '&':
++            m->color = 6;
++            break;
++        case ')':
++            m->color = 7;
++            break;
++        case 'q':
++            endwin();
++            exit(0);
++            break;
++    }
++}
++
++int main(int argc, char **argv) {
++    Args *args = args_init();
++    if (!args) {
++        error_exit("Failed to initialize arguments");
++    }
++    
++    if (args_parse(argc, argv, args) != 0) {
++        args_free(args);
++        return EXIT_FAILURE;
++    }
++    
++    if (args->help_shown) {
++        args_print_help();
++        args_free(args);
++        return EXIT_SUCCESS;
++    }
++    
++    if (args->version_shown) {
++        version_print();
++        args_free(args);
++        return EXIT_SUCCESS;
++    }
++    
++    setlocale(LC_ALL, "");
++    init_colors();
++    init_terminal();
++    
++    Matrix m;
++    init_matrix(&m, args);
++    
++    struct termios oldt;
++    tcgetattr(STDIN_FILENO, &oldt);
++    
++    int key;
++    int running = 1;
++    
++    while (running) {
++        if (m.screensaver) {
++            key = getch();
++            if (key != -1) {
++                running = 0;
++            }
++        } else {
++            fd_set fds;
++            FD_ZERO(&fds);
++            FD_SET(STDIN_FILENO, &fds);
++            
++            struct timeval tv;
++            tv.tv_sec = 0;
++            tv.tv_usec = m.update_delay * 10000;
++            
++            if (select(STDIN_FILENO + 1, &fds, NULL, NULL, &tv) > 0) {
++                key = getch();
++                if (key != -1) {
++                    handle_key(&m, key);
++                }
++            }
++        }
++        
++        if (m.every_char_change) {
++            update_matrix(&m);
++        }
++        
++        draw_matrix(&m);
++        print_message(&m);
++        
++        if (m.screensaver) {
++            key = getch();
++            if (key != -1) {
++                running = 0;
++            }
++        }
++    }
++    
++    restore_terminal(&oldt);
++    free_matrix(&m);
++    args_free(args);
++    
++    return EXIT_SUCCESS;
++}
+diff --git a/patch.txt b/patch.txt
+new file mode 100644
+index 0000000..331461e
+--- /dev/null
++++ b/patch.txt
+@@ -0,0 +1,37 @@
++--- /tmp/original_main.c	2026-08-12 23:35:36.306964809 +0000
+++++ main.c	2026-08-12 23:31:06.420807500 +0000
++@@ -1,6 +1,6 @@
++-#include <cstdio.h>
++-#include <cstdlib.h>
++-#include <cstring.h>
+++#include <stdio.h>
+++#include <stdlib.h>
+++#include <string.h>
++ #include <unistd.h>
++ #include <time.h>
++ #include <termios.h>
++@@ -51,7 +51,7 @@
++ 
++ static const char *ascii_chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;':\",./<>?";
++ static const char *katakana_chars = "アァカサタナハマヤャラワガザダバパイィキシチニヒミリヰギジヂビピウゥクスツヌフムユュルグズブヅプエェケセテネヘメレヱゲゼデベペオォコソトノホモヨョロヲゴゾドボポヴッン";
++-static const char *lambda_chars = "λλ";
+++static const char *lambda_chars = "λΛ";
++ 
++ static int get_char_index(const char *chars, int idx) {
++     if (idx < 0 || idx >= (int)strlen(chars)) return 0;
++@@ -137,7 +137,7 @@
++     tcsetattr(STDIN_FILENO, TCSANOW, oldt);
++ }
++ 
++-static void set_linux_font(void) {
+++static void set_linux_font(Args *args) {
++     if (args->linux_mode) {
++         setlocale(LC_ALL, "");
++         if (args->only_shadows) {
++--- /tmp/original_version.c	2026-08-12 23:31:17.798022297 +0000
+++++ version.c	2026-08-12 23:30:59.399235738 +0000
++@@ -1,3 +1,4 @@
+++#include <stdio.h>
++ #include "version.h"
++ 
++ void version_print(void) {
+diff --git a/version.c b/version.c
+new file mode 100644
+index 0000000..4a44701
+--- /dev/null
++++ b/version.c
+@@ -0,0 +1,6 @@
++#include <stdio.h>
++#include "version.h"
++
++void version_print(void) {
++    printf("cmatrix version %s\n", CMATRIX_VERSION);
++}
+diff --git a/version.h b/version.h
+new file mode 100644
+index 0000000..7dad88c
+--- /dev/null
++++ b/version.h
+@@ -0,0 +1,8 @@
++#ifndef VERSION_H
++#define VERSION_H
++
++#define CMATRIX_VERSION "1.0"
++
++void version_print(void);
++
++#endif

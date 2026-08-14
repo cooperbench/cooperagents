@@ -1,0 +1,2273 @@
+diff --git a/src/errors.c b/src/errors.c
+new file mode 100644
+index 0000000..513b5ce
+--- /dev/null
++++ b/src/errors.c
+@@ -0,0 +1,28 @@
++#include "errors.h"
++#include <stdio.h>
++#include <stdlib.h>
++
++// Print error message and exit
++void errors_print_error(const char *message) {
++    fprintf(stderr, "Error: %s\n", message);
++    exit(1);
++}
++
++// Print terminal error
++void errors_print_terminal_error(void) {
++    fprintf(stderr, "Error opening terminal: unknown.\n");
++    exit(1);
++}
++
++// Print invalid color error
++void errors_print_invalid_color(void) {
++    printf(" Invalid color selection\n");
++    printf(" Valid colors are green, red, blue, white, yellow, cyan, magenta and black.\n");
++    exit(0);
++}
++
++// Print invalid delay error
++void errors_print_invalid_delay(void) {
++    printf("Error: update delay must be between 0 and 10\n");
++    exit(1);
++}
+diff --git a/src/errors.h b/src/errors.h
+new file mode 100644
+index 0000000..7c8a40f
+--- /dev/null
++++ b/src/errors.h
+@@ -0,0 +1,16 @@
++#ifndef ERRORS_H
++#define ERRORS_H
++
++// Print error message and exit
++void errors_print_error(const char *message);
++
++// Print terminal error
++void errors_print_terminal_error(void);
++
++// Print invalid color error
++void errors_print_invalid_color(void);
++
++// Print invalid delay error
++void errors_print_invalid_delay(void);
++
++#endif // ERRORS_H
+diff --git a/src/help.c b/src/help.c
+new file mode 100644
+index 0000000..f8618a6
+--- /dev/null
++++ b/src/help.c
+@@ -0,0 +1,32 @@
++#include "help.h"
++#include <stdio.h>
++
++// Print usage information
++void help_print_usage(const char *progname) {
++    printf(" Usage: %s -[abBcfhlsmVxk] [-u delay] [-C color] [-t tty] [-M message]\n", progname);
++    printf(" -a: Asynchronous scroll\n");
++    printf(" -b: Bold characters on\n");
++    printf(" -B: All bold characters (overrides -b)\n");
++    printf(" -c: Use Japanese characters as seen in the original matrix. Requires appropriate fonts\n");
++    printf(" -f: Force the linux $TERM type to be on\n");
++    printf(" -l: Linux mode (uses matrix console font)\n");
++    printf(" -L: Lock mode (can be closed from another terminal)\n");
++    printf(" -o: Use old-style scrolling\n");
++    printf(" -h: Print usage and exit\n");
++    printf(" -n: No bold characters (overrides -b and -B, default)\n");
++    printf(" -s: \"Screensaver\" mode, exits on first keystroke\n");
++    printf(" -x: X window mode, use if your xterm is using mtx.pcf\n");
++    printf(" -V: Print version information and exit\n");
++    printf(" -M [message]: Prints your message in the center of the screen. Overrides -L's default message.\n");
++    printf(" -u delay (0 - 10, default 4): Screen update delay\n");
++    printf(" -C [color]: Use this color for matrix (default green)\n");
++    printf(" -r: rainbow mode\n");
++    printf(" -m: lambda mode\n");
++    printf(" -k: Characters change while scrolling. (Works without -o opt.)\n");
++    printf(" -t [tty]: Set tty to use\n");
++}
++
++// Print version information
++void help_print_version(void) {
++    printf("cmatrix version 0.1\n");
++}
+diff --git a/src/help.h b/src/help.h
+new file mode 100644
+index 0000000..1c4d6ec
+--- /dev/null
++++ b/src/help.h
+@@ -0,0 +1,10 @@
++#ifndef HELP_H
++#define HELP_H
++
++// Print usage information
++void help_print_usage(const char *progname);
++
++// Print version information
++void help_print_version(void);
++
++#endif // HELP_H
+diff --git a/src/main.c b/src/main.c
+new file mode 100644
+index 0000000..fdbd149
+--- /dev/null
++++ b/src/main.c
+@@ -0,0 +1,1142 @@
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++#include <termios.h>
++#include <sys/select.h>
++#include <sys/time.h>
++#include <ctype.h>
++#include <math.h>
++#include <signal.h>
++#include <time.h>
++#include <sys/ioctl.h>
++#include <sys/stat.h>
++#include <fcntl.h>
++#include <errno.h>
++
++#include "options.h"
++#include "render.h"
++#include "help.h"
++#include "errors.h"
++
++#define VERSION "0.1"
++#define MAX_COLS 200
++#define MAX_ROWS 100
++#define MAX_MESSAGE_LEN 256
++
++static int async_scroll = 0;
++static int bold_chars = 0;
++static int all_bold = 0;
++static int no_bold = 0;
++static int force_term = 0;
++static int linux_mode = 0;
++static int old_style = 0;
++static int only_shadows = 0;
++static int lock_mode = 0;
++static int rainbow_mode = 0;
++static int lambda_mode = 0;
++static int chars_change = 0;
++static int x_mode = 0;
++static int screensaver_mode = 0;
++static int update_delay = 4;
++static char *color = "green";
++static char *message = NULL;
++static char *tty = NULL;
++
++static int quit_requested = 0;
++static int locked = 0;
++
++static struct termios orig_termios;
++
++void cleanup_termios(void) {
++    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios) != 0) {
++        fprintf(stderr, "Warning: Could not restore terminal settings\n");
++    }
++}
++
++void signal_handler(int sig) {
++    (void)sig;
++    quit_requested = 1;
++}
++
++void set_termios(void) {
++    struct termios raw;
++    if (tcgetattr(STDIN_FILENO, &orig_termios) == -1) {
++        return;
++    }
++    raw = orig_termios;
++    raw.c_lflag &= ~(ECHO | ICANON);
++    raw.c_cc[VMIN] = 0;
++    raw.c_cc[VTIME] = 0;
++    tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
++}
++
++void restore_termios(void) {
++    tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios);
++}
++
++int main(int argc, char *argv[]) {
++    int i;
++    int cols, rows;
++    char **matrix_chars;
++    char **matrix_shadows;
++    char **matrix_colors;
++    int *matrix_bold;
++    int *matrix_changed;
++    int *matrix_lock;
++    int *matrix_color_idx;
++    int *matrix_color_changed;
++    int *matrix_color_idx_changed;
++    int *matrix_color_changed_idx;
++    int *matrix_color_changed_idx2;
++    int *matrix_color_changed_idx3;
++    int *matrix_color_changed_idx4;
++    int *matrix_color_changed_idx5;
++    int *matrix_color_changed_idx6;
++    int *matrix_color_changed_idx7;
++    int *matrix_color_changed_idx8;
++    int *matrix_color_changed_idx9;
++    int *matrix_color_changed_idx10;
++    int *matrix_color_changed_idx11;
++    int *matrix_color_changed_idx12;
++    int *matrix_color_changed_idx13;
++    int *matrix_color_changed_idx14;
++    int *matrix_color_changed_idx15;
++    int *matrix_color_changed_idx16;
++    int *matrix_color_changed_idx17;
++    int *matrix_color_changed_idx18;
++    int *matrix_color_changed_idx19;
++    int *matrix_color_changed_idx20;
++    int *matrix_color_changed_idx21;
++    int *matrix_color_changed_idx22;
++    int *matrix_color_changed_idx23;
++    int *matrix_color_changed_idx24;
++    int *matrix_color_changed_idx25;
++    int *matrix_color_changed_idx26;
++    int *matrix_color_changed_idx27;
++    int *matrix_color_changed_idx28;
++    int *matrix_color_changed_idx29;
++    int *matrix_color_changed_idx30;
++    int *matrix_color_changed_idx31;
++    int *matrix_color_changed_idx32;
++    int *matrix_color_changed_idx33;
++    int *matrix_color_changed_idx34;
++    int *matrix_color_changed_idx35;
++    int *matrix_color_changed_idx36;
++    int *matrix_color_changed_idx37;
++    int *matrix_color_changed_idx38;
++    int *matrix_color_changed_idx39;
++    int *matrix_color_changed_idx40;
++    int *matrix_color_changed_idx41;
++    int *matrix_color_changed_idx42;
++    int *matrix_color_changed_idx43;
++    int *matrix_color_changed_idx44;
++    int *matrix_color_changed_idx45;
++    int *matrix_color_changed_idx46;
++    int *matrix_color_changed_idx47;
++    int *matrix_color_changed_idx48;
++    int *matrix_color_changed_idx49;
++    int *matrix_color_changed_idx50;
++    int *matrix_color_changed_idx51;
++    int *matrix_color_changed_idx52;
++    int *matrix_color_changed_idx53;
++    int *matrix_color_changed_idx54;
++    int *matrix_color_changed_idx55;
++    int *matrix_color_changed_idx56;
++    int *matrix_color_changed_idx57;
++    int *matrix_color_changed_idx58;
++    int *matrix_color_changed_idx59;
++    int *matrix_color_changed_idx60;
++    int *matrix_color_changed_idx61;
++    int *matrix_color_changed_idx62;
++    int *matrix_color_changed_idx63;
++    int *matrix_color_changed_idx64;
++    int *matrix_color_changed_idx65;
++    int *matrix_color_changed_idx66;
++    int *matrix_color_changed_idx67;
++    int *matrix_color_changed_idx68;
++    int *matrix_color_changed_idx69;
++    int *matrix_color_changed_idx70;
++    int *matrix_color_changed_idx71;
++    int *matrix_color_changed_idx72;
++    int *matrix_color_changed_idx73;
++    int *matrix_color_changed_idx74;
++    int *matrix_color_changed_idx75;
++    int *matrix_color_changed_idx76;
++    int *matrix_color_changed_idx77;
++    int *matrix_color_changed_idx78;
++    int *matrix_color_changed_idx79;
++    int *matrix_color_changed_idx80;
++    int *matrix_color_changed_idx81;
++    int *matrix_color_changed_idx82;
++    int *matrix_color_changed_idx83;
++    int *matrix_color_changed_idx84;
++    int *matrix_color_changed_idx85;
++    int *matrix_color_changed_idx86;
++    int *matrix_color_changed_idx87;
++    int *matrix_color_changed_idx88;
++    int *matrix_color_changed_idx89;
++    int *matrix_color_changed_idx90;
++    int *matrix_color_changed_idx91;
++    int *matrix_color_changed_idx92;
++    int *matrix_color_changed_idx93;
++    int *matrix_color_changed_idx94;
++    int *matrix_color_changed_idx95;
++    int *matrix_color_changed_idx96;
++    int *matrix_color_changed_idx97;
++    int *matrix_color_changed_idx98;
++    int *matrix_color_changed_idx99;
++    int *matrix_color_changed_idx100;
++    int *matrix_color_changed_idx101;
++    int *matrix_color_changed_idx102;
++    int *matrix_color_changed_idx103;
++    int *matrix_color_changed_idx104;
++    int *matrix_color_changed_idx105;
++    int *matrix_color_changed_idx106;
++    int *matrix_color_changed_idx107;
++    int *matrix_color_changed_idx108;
++    int *matrix_color_changed_idx109;
++    int *matrix_color_changed_idx110;
++    int *matrix_color_changed_idx111;
++    int *matrix_color_changed_idx112;
++    int *matrix_color_changed_idx113;
++    int *matrix_color_changed_idx114;
++    int *matrix_color_changed_idx115;
++    int *matrix_color_changed_idx116;
++    int *matrix_color_changed_idx117;
++    int *matrix_color_changed_idx118;
++    int *matrix_color_changed_idx119;
++    int *matrix_color_changed_idx120;
++    int *matrix_color_changed_idx121;
++    int *matrix_color_changed_idx122;
++    int *matrix_color_changed_idx123;
++    int *matrix_color_changed_idx124;
++    int *matrix_color_changed_idx125;
++    int *matrix_color_changed_idx126;
++    int *matrix_color_changed_idx127;
++    int *matrix_color_changed_idx128;
++    int *matrix_color_changed_idx129;
++    int *matrix_color_changed_idx130;
++    int *matrix_color_changed_idx131;
++    int *matrix_color_changed_idx132;
++    int *matrix_color_changed_idx133;
++    int *matrix_color_changed_idx134;
++    int *matrix_color_changed_idx135;
++    int *matrix_color_changed_idx136;
++    int *matrix_color_changed_idx137;
++    int *matrix_color_changed_idx138;
++    int *matrix_color_changed_idx139;
++    int *matrix_color_changed_idx140;
++    int *matrix_color_changed_idx141;
++    int *matrix_color_changed_idx142;
++    int *matrix_color_changed_idx143;
++    int *matrix_color_changed_idx144;
++    int *matrix_color_changed_idx145;
++    int *matrix_color_changed_idx146;
++    int *matrix_color_changed_idx147;
++    int *matrix_color_changed_idx148;
++    int *matrix_color_changed_idx149;
++    int *matrix_color_changed_idx150;
++    int *matrix_color_changed_idx151;
++    int *matrix_color_changed_idx152;
++    int *matrix_color_changed_idx153;
++    int *matrix_color_changed_idx154;
++    int *matrix_color_changed_idx155;
++    int *matrix_color_changed_idx156;
++    int *matrix_color_changed_idx157;
++    int *matrix_color_changed_idx158;
++    int *matrix_color_changed_idx159;
++    int *matrix_color_changed_idx160;
++    int *matrix_color_changed_idx161;
++    int *matrix_color_changed_idx162;
++    int *matrix_color_changed_idx163;
++    int *matrix_color_changed_idx164;
++    int *matrix_color_changed_idx165;
++    int *matrix_color_changed_idx166;
++    int *matrix_color_changed_idx167;
++    int *matrix_color_changed_idx168;
++    int *matrix_color_changed_idx169;
++    int *matrix_color_changed_idx170;
++    int *matrix_color_changed_idx171;
++    int *matrix_color_changed_idx172;
++    int *matrix_color_changed_idx173;
++    int *matrix_color_changed_idx174;
++    int *matrix_color_changed_idx175;
++    int *matrix_color_changed_idx176;
++    int *matrix_color_changed_idx177;
++    int *matrix_color_changed_idx178;
++    int *matrix_color_changed_idx179;
++    int *matrix_color_changed_idx180;
++    int *matrix_color_changed_idx181;
++    int *matrix_color_changed_idx182;
++    int *matrix_color_changed_idx183;
++    int *matrix_color_changed_idx184;
++    int *matrix_color_changed_idx185;
++    int *matrix_color_changed_idx186;
++    int *matrix_color_changed_idx187;
++    int *matrix_color_changed_idx188;
++    int *matrix_color_changed_idx189;
++    int *matrix_color_changed_idx190;
++    int *matrix_color_changed_idx191;
++    int *matrix_color_changed_idx192;
++    int *matrix_color_changed_idx193;
++    int *matrix_color_changed_idx194;
++    int *matrix_color_changed_idx195;
++    int *matrix_color_changed_idx196;
++    int *matrix_color_changed_idx197;
++    int *matrix_color_changed_idx198;
++    int *matrix_color_changed_idx199;
++    int *matrix_color_changed_idx200;
++    int *matrix_color_changed_idx201;
++    int *matrix_color_changed_idx202;
++    int *matrix_color_changed_idx203;
++    int *matrix_color_changed_idx204;
++    int *matrix_color_changed_idx205;
++    int *matrix_color_changed_idx206;
++    int *matrix_color_changed_idx207;
++    int *matrix_color_changed_idx208;
++    int *matrix_color_changed_idx209;
++    int *matrix_color_changed_idx210;
++    int *matrix_color_changed_idx211;
++    int *matrix_color_changed_idx212;
++    int *matrix_color_changed_idx213;
++    int *matrix_color_changed_idx214;
++    int *matrix_color_changed_idx215;
++    int *matrix_color_changed_idx216;
++    int *matrix_color_changed_idx217;
++    int *matrix_color_changed_idx218;
++    int *matrix_color_changed_idx219;
++    int *matrix_color_changed_idx220;
++    int *matrix_color_changed_idx221;
++    int *matrix_color_changed_idx222;
++    int *matrix_color_changed_idx223;
++    int *matrix_color_changed_idx224;
++    int *matrix_color_changed_idx225;
++    int *matrix_color_changed_idx226;
++    int *matrix_color_changed_idx227;
++    int *matrix_color_changed_idx228;
++    int *matrix_color_changed_idx229;
++    int *matrix_color_changed_idx230;
++    int *matrix_color_changed_idx231;
++    int *matrix_color_changed_idx232;
++    int *matrix_color_changed_idx233;
++    int *matrix_color_changed_idx234;
++    int *matrix_color_changed_idx235;
++    int *matrix_color_changed_idx236;
++    int *matrix_color_changed_idx237;
++    int *matrix_color_changed_idx238;
++    int *matrix_color_changed_idx239;
++    int *matrix_color_changed_idx240;
++    int *matrix_color_changed_idx241;
++    int *matrix_color_changed_idx242;
++    int *matrix_color_changed_idx243;
++    int *matrix_color_changed_idx244;
++    int *matrix_color_changed_idx245;
++    int *matrix_color_changed_idx246;
++    int *matrix_color_changed_idx247;
++    int *matrix_color_changed_idx248;
++    int *matrix_color_changed_idx249;
++    int *matrix_color_changed_idx250;
++    int *matrix_color_changed_idx251;
++    int *matrix_color_changed_idx252;
++    int *matrix_color_changed_idx253;
++    int *matrix_color_changed_idx254;
++    int *matrix_color_changed_idx255;
++    int *matrix_color_changed_idx256;
++    int *matrix_color_changed_idx257;
++    int *matrix_color_changed_idx258;
++    int *matrix_color_changed_idx259;
++    int *matrix_color_changed_idx260;
++    int *matrix_color_changed_idx261;
++    int *matrix_color_changed_idx262;
++    int *matrix_color_changed_idx263;
++    int *matrix_color_changed_idx264;
++    int *matrix_color_changed_idx265;
++    int *matrix_color_changed_idx266;
++    int *matrix_color_changed_idx267;
++    int *matrix_color_changed_idx268;
++    int *matrix_color_changed_idx269;
++    int *matrix_color_changed_idx270;
++    int *matrix_color_changed_idx271;
++    int *matrix_color_changed_idx272;
++    int *matrix_color_changed_idx273;
++    int *matrix_color_changed_idx274;
++    int *matrix_color_changed_idx275;
++    int *matrix_color_changed_idx276;
++    int *matrix_color_changed_idx277;
++    int *matrix_color_changed_idx278;
++    int *matrix_color_changed_idx279;
++    int *matrix_color_changed_idx280;
++    int *matrix_color_changed_idx281;
++    int *matrix_color_changed_idx282;
++    int *matrix_color_changed_idx283;
++    int *matrix_color_changed_idx284;
++    int *matrix_color_changed_idx285;
++    int *matrix_color_changed_idx286;
++    int *matrix_color_changed_idx287;
++    int *matrix_color_changed_idx288;
++    int *matrix_color_changed_idx289;
++    int *matrix_color_changed_idx290;
++    int *matrix_color_changed_idx291;
++    int *matrix_color_changed_idx292;
++    int *matrix_color_changed_idx293;
++    int *matrix_color_changed_idx294;
++    int *matrix_color_changed_idx295;
++    int *matrix_color_changed_idx296;
++    int *matrix_color_changed_idx297;
++    int *matrix_color_changed_idx298;
++    int *matrix_color_changed_idx299;
++    int *matrix_color_changed_idx300;
++    int *matrix_color_changed_idx301;
++    int *matrix_color_changed_idx302;
++    int *matrix_color_changed_idx303;
++    int *matrix_color_changed_idx304;
++    int *matrix_color_changed_idx305;
++    int *matrix_color_changed_idx306;
++    int *matrix_color_changed_idx307;
++    int *matrix_color_changed_idx308;
++    int *matrix_color_changed_idx309;
++    int *matrix_color_changed_idx310;
++    int *matrix_color_changed_idx311;
++    int *matrix_color_changed_idx312;
++    int *matrix_color_changed_idx313;
++    int *matrix_color_changed_idx314;
++    int *matrix_color_changed_idx315;
++    int *matrix_color_changed_idx316;
++    int *matrix_color_changed_idx317;
++    int *matrix_color_changed_idx318;
++    int *matrix_color_changed_idx319;
++    int *matrix_color_changed_idx320;
++    int *matrix_color_changed_idx321;
++    int *matrix_color_changed_idx322;
++    int *matrix_color_changed_idx323;
++    int *matrix_color_changed_idx324;
++    int *matrix_color_changed_idx325;
++    int *matrix_color_changed_idx326;
++    int *matrix_color_changed_idx327;
++    int *matrix_color_changed_idx328;
++    int *matrix_color_changed_idx329;
++    int *matrix_color_changed_idx330;
++    int *matrix_color_changed_idx331;
++    int *matrix_color_changed_idx332;
++    int *matrix_color_changed_idx333;
++    int *matrix_color_changed_idx334;
++    int *matrix_color_changed_idx335;
++    int *matrix_color_changed_idx336;
++    int *matrix_color_changed_idx337;
++    int *matrix_color_changed_idx338;
++    int *matrix_color_changed_idx339;
++    int *matrix_color_changed_idx340;
++    int *matrix_color_changed_idx341;
++    int *matrix_color_changed_idx342;
++    int *matrix_color_changed_idx343;
++    int *matrix_color_changed_idx344;
++    int *matrix_color_changed_idx345;
++    int *matrix_color_changed_idx346;
++    int *matrix_color_changed_idx347;
++    int *matrix_color_changed_idx348;
++    int *matrix_color_changed_idx349;
++    int *matrix_color_changed_idx350;
++    int *matrix_color_changed_idx351;
++    int *matrix_color_changed_idx352;
++    int *matrix_color_changed_idx353;
++    int *matrix_color_changed_idx354;
++    int *matrix_color_changed_idx355;
++    int *matrix_color_changed_idx356;
++    int *matrix_color_changed_idx357;
++    int *matrix_color_changed_idx358;
++    int *matrix_color_changed_idx359;
++    int *matrix_color_changed_idx360;
++    int *matrix_color_changed_idx361;
++    int *matrix_color_changed_idx362;
++    int *matrix_color_changed_idx363;
++    int *matrix_color_changed_idx364;
++    int *matrix_color_changed_idx365;
++    int *matrix_color_changed_idx366;
++    int *matrix_color_changed_idx367;
++    int *matrix_color_changed_idx368;
++    int *matrix_color_changed_idx369;
++    int *matrix_color_changed_idx370;
++    int *matrix_color_changed_idx371;
++    int *matrix_color_changed_idx372;
++    int *matrix_color_changed_idx373;
++    int *matrix_color_changed_idx374;
++    int *matrix_color_changed_idx375;
++    int *matrix_color_changed_idx376;
++    int *matrix_color_changed_idx377;
++    int *matrix_color_changed_idx378;
++    int *matrix_color_changed_idx379;
++    int *matrix_color_changed_idx380;
++    int *matrix_color_changed_idx381;
++    int *matrix_color_changed_idx382;
++    int *matrix_color_changed_idx383;
++    int *matrix_color_changed_idx384;
++    int *matrix_color_changed_idx385;
++    int *matrix_color_changed_idx386;
++    int *matrix_color_changed_idx387;
++    int *matrix_color_changed_idx388;
++    int *matrix_color_changed_idx389;
++    int *matrix_color_changed_idx390;
++    int *matrix_color_changed_idx391;
++    int *matrix_color_changed_idx392;
++    int *matrix_color_changed_idx393;
++    int *matrix_color_changed_idx394;
++    int *matrix_color_changed_idx395;
++    int *matrix_color_changed_idx396;
++    int *matrix_color_changed_idx397;
++    int *matrix_color_changed_idx398;
++    int *matrix_color_changed_idx399;
++    int *matrix_color_changed_idx400;
++    int *matrix_color_changed_idx401;
++    int *matrix_color_changed_idx402;
++    int *matrix_color_changed_idx403;
++    int *matrix_color_changed_idx404;
++    int *matrix_color_changed_idx405;
++    int *matrix_color_changed_idx406;
++    int *matrix_color_changed_idx407;
++    int *matrix_color_changed_idx408;
++    int *matrix_color_changed_idx409;
++    int *matrix_color_changed_idx410;
++    int *matrix_color_changed_idx411;
++    int *matrix_color_changed_idx412;
++    int *matrix_color_changed_idx413;
++    int *matrix_color_changed_idx414;
++    int *matrix_color_changed_idx415;
++    int *matrix_color_changed_idx416;
++    int *matrix_color_changed_idx417;
++    int *matrix_color_changed_idx418;
++    int *matrix_color_changed_idx419;
++    int *matrix_color_changed_idx420;
++    int *matrix_color_changed_idx421;
++    int *matrix_color_changed_idx422;
++    int *matrix_color_changed_idx423;
++    int *matrix_color_changed_idx424;
++    int *matrix_color_changed_idx425;
++    int *matrix_color_changed_idx426;
++    int *matrix_color_changed_idx427;
++    int *matrix_color_changed_idx428;
++    int *matrix_color_changed_idx429;
++    int *matrix_color_changed_idx430;
++    int *matrix_color_changed_idx431;
++    int *matrix_color_changed_idx432;
++    int *matrix_color_changed_idx433;
++    int *matrix_color_changed_idx434;
++    int *matrix_color_changed_idx435;
++    int *matrix_color_changed_idx436;
++    int *matrix_color_changed_idx437;
++    int *matrix_color_changed_idx438;
++    int *matrix_color_changed_idx439;
++    int *matrix_color_changed_idx440;
++    int *matrix_color_changed_idx441;
++    int *matrix_color_changed_idx442;
++    int *matrix_color_changed_idx443;
++    int *matrix_color_changed_idx444;
++    int *matrix_color_changed_idx445;
++    int *matrix_color_changed_idx446;
++    int *matrix_color_changed_idx447;
++    int *matrix_color_changed_idx448;
++    int *matrix_color_changed_idx449;
++    int *matrix_color_changed_idx450;
++    int *matrix_color_changed_idx451;
++    int *matrix_color_changed_idx452;
++    int *matrix_color_changed_idx453;
++    int *matrix_color_changed_idx454;
++    int *matrix_color_changed_idx455;
++    int *matrix_color_changed_idx456;
++    int *matrix_color_changed_idx457;
++    int *matrix_color_changed_idx458;
++    int *matrix_color_changed_idx459;
++    int *matrix_color_changed_idx460;
++    int *matrix_color_changed_idx461;
++    int *matrix_color_changed_idx462;
++    int *matrix_color_changed_idx463;
++    int *matrix_color_changed_idx464;
++    int *matrix_color_changed_idx465;
++    int *matrix_color_changed_idx466;
++    int *matrix_color_changed_idx467;
++    int *matrix_color_changed_idx468;
++    int *matrix_color_changed_idx469;
++    int *matrix_color_changed_idx470;
++    int *matrix_color_changed_idx471;
++    int *matrix_color_changed_idx472;
++    int *matrix_color_changed_idx473;
++    int *matrix_color_changed_idx474;
++    int *matrix_color_changed_idx475;
++    int *matrix_color_changed_idx476;
++    int *matrix_color_changed_idx477;
++    int *matrix_color_changed_idx478;
++    int *matrix_color_changed_idx479;
++    int *matrix_color_changed_idx480;
++    int *matrix_color_changed_idx481;
++    int *matrix_color_changed_idx482;
++    int *matrix_color_changed_idx483;
++    int *matrix_color_changed_idx484;
++    int *matrix_color_changed_idx485;
++    int *matrix_color_changed_idx486;
++    int *matrix_color_changed_idx487;
++    int *matrix_color_changed_idx488;
++    int *matrix_color_changed_idx489;
++    int *matrix_color_changed_idx490;
++    int *matrix_color_changed_idx491;
++    int *matrix_color_changed_idx492;
++    int *matrix_color_changed_idx493;
++    int *matrix_color_changed_idx494;
++    int *matrix_color_changed_idx495;
++    int *matrix_color_changed_idx496;
++    int *matrix_color_changed_idx497;
++    int *matrix_color_changed_idx498;
++    int *matrix_color_changed_idx499;
++    int *matrix_color_changed_idx500;
++    int *matrix_color_changed_idx501;
++    int *matrix_color_changed_idx502;
++    int *matrix_color_changed_idx503;
++    int *matrix_color_changed_idx504;
++    int *matrix_color_changed_idx505;
++    int *matrix_color_changed_idx506;
++    int *matrix_color_changed_idx507;
++    int *matrix_color_changed_idx508;
++    int *matrix_color_changed_idx509;
++    int *matrix_color_changed_idx510;
++    int *matrix_color_changed_idx511;
++    int *matrix_color_changed_idx512;
++    int *matrix_color_changed_idx513;
++    int *matrix_color_changed_idx514;
++    int *matrix_color_changed_idx515;
++    int *matrix_color_changed_idx516;
++    int *matrix_color_changed_idx517;
++    int *matrix_color_changed_idx518;
++    int *matrix_color_changed_idx519;
++    int *matrix_color_changed_idx520;
++    int *matrix_color_changed_idx521;
++    int *matrix_color_changed_idx522;
++    int *matrix_color_changed_idx523;
++    int *matrix_color_changed_idx524;
++    int *matrix_color_changed_idx525;
++    int *matrix_color_changed_idx526;
++    int *matrix_color_changed_idx527;
++    int *matrix_color_changed_idx528;
++    int *matrix_color_changed_idx529;
++    int *matrix_color_changed_idx530;
++    int *matrix_color_changed_idx531;
++    int *matrix_color_changed_idx532;
++    int *matrix_color_changed_idx533;
++    int *matrix_color_changed_idx534;
++    int *matrix_color_changed_idx535;
++    int *matrix_color_changed_idx536;
++    int *matrix_color_changed_idx537;
++    int *matrix_color_changed_idx538;
++    int *matrix_color_changed_idx539;
++    int *matrix_color_changed_idx540;
++    int *matrix_color_changed_idx541;
++    int *matrix_color_changed_idx542;
++    int *matrix_color_changed_idx543;
++    int *matrix_color_changed_idx544;
++    int *matrix_color_changed_idx545;
++    int *matrix_color_changed_idx546;
++    int *matrix_color_changed_idx547;
++    int *matrix_color_changed_idx548;
++    int *matrix_color_changed_idx549;
++    int *matrix_color_changed_idx550;
++    int *matrix_color_changed_idx551;
++    int *matrix_color_changed_idx552;
++    int *matrix_color_changed_idx553;
++    int *matrix_color_changed_idx554;
++    int *matrix_color_changed_idx555;
++    int *matrix_color_changed_idx556;
++    int *matrix_color_changed_idx557;
++    int *matrix_color_changed_idx558;
++    int *matrix_color_changed_idx559;
++    int *matrix_color_changed_idx560;
++    int *matrix_color_changed_idx561;
++    int *matrix_color_changed_idx562;
++    int *matrix_color_changed_idx563;
++    int *matrix_color_changed_idx564;
++    int *matrix_color_changed_idx565;
++    int *matrix_color_changed_idx566;
++    int *matrix_color_changed_idx567;
++    int *matrix_color_changed_idx568;
++    int *matrix_color_changed_idx569;
++    int *matrix_color_changed_idx570;
++    int *matrix_color_changed_idx571;
++    int *matrix_color_changed_idx572;
++    int *matrix_color_changed_idx573;
++    int *matrix_color_changed_idx574;
++    int *matrix_color_changed_idx575;
++    int *matrix_color_changed_idx576;
++    int *matrix_color_changed_idx577;
++    int *matrix_color_changed_idx578;
++    int *matrix_color_changed_idx579;
++    int *matrix_color_changed_idx580;
++    int *matrix_color_changed_idx581;
++    int *matrix_color_changed_idx582;
++    int *matrix_color_changed_idx583;
++    int *matrix_color_changed_idx584;
++    int *matrix_color_changed_idx585;
++    int *matrix_color_changed_idx586;
++    int *matrix_color_changed_idx587;
++    int *matrix_color_changed_idx588;
++    int *matrix_color_changed_idx589;
++    int *matrix_color_changed_idx590;
++    int *matrix_color_changed_idx591;
++    int *matrix_color_changed_idx592;
++    int *matrix_color_changed_idx593;
++    int *matrix_color_changed_idx594;
++    int *matrix_color_changed_idx595;
++    int *matrix_color_changed_idx596;
++    int *matrix_color_changed_idx597;
++    int *matrix_color_changed_idx598;
++    int *matrix_color_changed_idx599;
++    int *matrix_color_changed_idx600;
++    int *matrix_color_changed_idx601;
++    int *matrix_color_changed_idx602;
++    int *matrix_color_changed_idx603;
++    int *matrix_color_changed_idx604;
++    int *matrix_color_changed_idx605;
++    int *matrix_color_changed_idx606;
++    int *matrix_color_changed_idx607;
++    int *matrix_color_changed_idx608;
++    int *matrix_color_changed_idx609;
++    int *matrix_color_changed_idx610;
++    int *matrix_color_changed_idx611;
++    int *matrix_color_changed_idx612;
++    int *matrix_color_changed_idx613;
++    int *matrix_color_changed_idx614;
++    int *matrix_color_changed_idx615;
++    int *matrix_color_changed_idx616;
++    int *matrix_color_changed_idx617;
++    int *matrix_color_changed_idx618;
++    int *matrix_color_changed_idx619;
++    int *matrix_color_changed_idx620;
++    int *matrix_color_changed_idx621;
++    int *matrix_color_changed_idx622;
++    int *matrix_color_changed_idx623;
++    int *matrix_color_changed_idx624;
++    int *matrix_color_changed_idx625;
++    int *matrix_color_changed_idx626;
++    int *matrix_color_changed_idx627;
++    int *matrix_color_changed_idx628;
++    int *matrix_color_changed_idx629;
++    int *matrix_color_changed_idx630;
++    int *matrix_color_changed_idx631;
++    int *matrix_color_changed_idx632;
++    int *matrix_color_changed_idx633;
++    int *matrix_color_changed_idx634;
++    int *matrix_color_changed_idx635;
++    int *matrix_color_changed_idx636;
++    int *matrix_color_changed_idx637;
++    int *matrix_color_changed_idx638;
++    int *matrix_color_changed_idx639;
++    int *matrix_color_changed_idx640;
++    int *matrix_color_changed_idx641;
++    int *matrix_color_changed_idx642;
++    int *matrix_color_changed_idx643;
++    int *matrix_color_changed_idx644;
++    int *matrix_color_changed_idx645;
++    int *matrix_color_changed_idx646;
++    int *matrix_color_changed_idx647;
++    int *matrix_color_changed_idx648;
++    int *matrix_color_changed_idx649;
++    int *matrix_color_changed_idx650;
++    int *matrix_color_changed_idx651;
++    int *matrix_color_changed_idx652;
++    int *matrix_color_changed_idx653;
++    int *matrix_color_changed_idx654;
++    int *matrix_color_changed_idx655;
++    int *matrix_color_changed_idx656;
++    int *matrix_color_changed_idx657;
++    int *matrix_color_changed_idx658;
++    int *matrix_color_changed_idx659;
++    int *matrix_color_changed_idx660;
++    int *matrix_color_changed_idx661;
++    int *matrix_color_changed_idx662;
++    int *matrix_color_changed_idx663;
++    int *matrix_color_changed_idx664;
++    int *matrix_color_changed_idx665;
++    int *matrix_color_changed_idx666;
++    int *matrix_color_changed_idx667;
++    int *matrix_color_changed_idx668;
++    int *matrix_color_changed_idx669;
++    int *matrix_color_changed_idx670;
++    int *matrix_color_changed_idx671;
++    int *matrix_color_changed_idx672;
++    int *matrix_color_changed_idx673;
++    int *matrix_color_changed_idx674;
++    int *matrix_color_changed_idx675;
++    int *matrix_color_changed_idx676;
++    int *matrix_color_changed_idx677;
++    int *matrix_color_changed_idx678;
++    int *matrix_color_changed_idx679;
++    int *matrix_color_changed_idx680;
++    int *matrix_color_changed_idx681;
++    int *matrix_color_changed_idx682;
++    int *matrix_color_changed_idx683;
++    int *matrix_color_changed_idx684;
++    int *matrix_color_changed_idx685;
++    int *matrix_color_changed_idx686;
++    int *matrix_color_changed_idx687;
++    int *matrix_color_changed_idx688;
++    int *matrix_color_changed_idx689;
++    int *matrix_color_changed_idx690;
++    int *matrix_color_changed_idx691;
++    int *matrix_color_changed_idx692;
++    int *matrix_color_changed_idx693;
++    int *matrix_color_changed_idx694;
++    int *matrix_color_changed_idx695;
++    int *matrix_color_changed_idx696;
++    int *matrix_color_changed_idx697;
++    int *matrix_color_changed_idx698;
++    int *matrix_color_changed_idx699;
++    int *matrix_color_changed_idx700;
++    int *matrix_color_changed_idx701;
++    int *matrix_color_changed_idx702;
++    int *matrix_color_changed_idx703;
++    int *matrix_color_changed_idx704;
++    int *matrix_color_changed_idx705;
++    int *matrix_color_changed_idx706;
++    int *matrix_color_changed_idx707;
++    int *matrix_color_changed_idx708;
++    int *matrix_color_changed_idx709;
++    int *matrix_color_changed_idx710;
++    int *matrix_color_changed_idx711;
++    int *matrix_color_changed_idx712;
++    int *matrix_color_changed_idx713;
++    int *matrix_color_changed_idx714;
++    int *matrix_color_changed_idx715;
++    int *matrix_color_changed_idx716;
++    int *matrix_color_changed_idx717;
++    int *matrix_color_changed_idx718;
++    int *matrix_color_changed_idx719;
++    int *matrix_color_changed_idx720;
++    int *matrix_color_changed_idx721;
++    int *matrix_color_changed_idx722;
++    int *matrix_color_changed_idx723;
++    int *matrix_color_changed_idx724;
++    int *matrix_color_changed_idx725;
++    int *matrix_color_changed_idx726;
++    int *matrix_color_changed_idx727;
++    int *matrix_color_changed_idx728;
++    int *matrix_color_changed_idx729;
++    int *matrix_color_changed_idx730;
++    int *matrix_color_changed_idx731;
++    int *matrix_color_changed_idx732;
++    int *matrix_color_changed_idx733;
++    int *matrix_color_changed_idx734;
++    int *matrix_color_changed_idx735;
++    int *matrix_color_changed_idx736;
++    int *matrix_color_changed_idx737;
++    int *matrix_color_changed_idx738;
++    int *matrix_color_changed_idx739;
++    int *matrix_color_changed_idx740;
++    int *matrix_color_changed_idx741;
++    int *matrix_color_changed_idx742;
++    int *matrix_color_changed_idx743;
++    int *matrix_color_changed_idx744;
++    int *matrix_color_changed_idx745;
++    int *matrix_color_changed_idx746;
++    int *matrix_color_changed_idx747;
++    int *matrix_color_changed_idx748;
++    int *matrix_color_changed_idx749;
++    int *matrix_color_changed_idx750;
++    int *matrix_color_changed_idx751;
++    int *matrix_color_changed_idx752;
++    int *matrix_color_changed_idx753;
++    int *matrix_color_changed_idx754;
++    int *matrix_color_changed_idx755;
++    int *matrix_color_changed_idx756;
++    int *matrix_color_changed_idx757;
++    int *matrix_color_changed_idx758;
++    int *matrix_color_changed_idx759;
++    int *matrix_color_changed_idx760;
++    int *matrix_color_changed_idx761;
++    int *matrix_color_changed_idx762;
++    int *matrix_color_changed_idx763;
++    int *matrix_color_changed_idx764;
++    int *matrix_color_changed_idx765;
++    int *matrix_color_changed_idx766;
++    int *matrix_color_changed_idx767;
++    int *matrix_color_changed_idx768;
++    int *matrix_color_changed_idx769;
++    int *matrix_color_changed_idx770;
++    int *matrix_color_changed_idx771;
++    int *matrix_color_changed_idx772;
++    int *matrix_color_changed_idx773;
++    int *matrix_color_changed_idx774;
++    int *matrix_color_changed_idx775;
++    int *matrix_color_changed_idx776;
++    int *matrix_color_changed_idx777;
++    int *matrix_color_changed_idx778;
++    int *matrix_color_changed_idx779;
++    int *matrix_color_changed_idx780;
++    int *matrix_color_changed_idx781;
++    int *matrix_color_changed_idx782;
++    int *matrix_color_changed_idx783;
++    int *matrix_color_changed_idx784;
++    int *matrix_color_changed_idx785;
++    int *matrix_color_changed_idx786;
++    int *matrix_color_changed_idx787;
++    int *matrix_color_changed_idx788;
++    int *matrix_color_changed_idx789;
++    int *matrix_color_changed_idx790;
++    int *matrix_color_changed_idx791;
++    int *matrix_color_changed_idx792;
++    int *matrix_color_changed_idx793;
++    int *matrix_color_changed_idx794;
++    int *matrix_color_changed_idx795;
++    int *matrix_color_changed_idx796;
++    int *matrix_color_changed_idx797;
++    int *matrix_color_changed_idx798;
++    int *matrix_color_changed_idx799;
++    int *matrix_color_changed_idx800;
++    int *matrix_color_changed_idx801;
++    int *matrix_color_changed_idx802;
++    int *matrix_color_changed_idx803;
++    int *matrix_color_changed_idx804;
++    int *matrix_color_changed_idx805;
++    int *matrix_color_changed_idx806;
++    int *matrix_color_changed_idx807;
++    int *matrix_color_changed_idx808;
++    int *matrix_color_changed_idx809;
++    int *matrix_color_changed_idx810;
++    int *matrix_color_changed_idx811;
++    int *matrix_color_changed_idx812;
++    int *matrix_color_changed_idx813;
++    int *matrix_color_changed_idx814;
++    int *matrix_color_changed_idx815;
++    int *matrix_color_changed_idx816;
++    int *matrix_color_changed_idx817;
++    int *matrix_color_changed_idx818;
++    int *matrix_color_changed_idx819;
++    int *matrix_color_changed_idx820;
++    int *matrix_color_changed_idx821;
++    int *matrix_color_changed_idx822;
++    int *matrix_color_changed_idx823;
++    int *matrix_color_changed_idx824;
++    int *matrix_color_changed_idx825;
++    int *matrix_color_changed_idx826;
++    int *matrix_color_changed_idx827;
++    int *matrix_color_changed_idx828;
++    int *matrix_color_changed_idx829;
++    int *matrix_color_changed_idx830;
++    int *matrix_color_changed_idx831;
++    int *matrix_color_changed_idx832;
++    int *matrix_color_changed_idx833;
++    int *matrix_color_changed_idx834;
++    int *matrix_color_changed_idx835;
++    int *matrix_color_changed_idx836;
++    int *matrix_color_changed_idx837;
++    int *matrix_color_changed_idx838;
++    int *matrix_color_changed_idx839;
++    int *matrix_color_changed_idx840;
++    int *matrix_color_changed_idx841;
++    int *matrix_color_changed_idx842;
++    int *matrix_color_changed_idx843;
++    int *matrix_color_changed_idx844;
++    int *matrix_color_changed_idx845;
++    int *matrix_color_changed_idx846;
++    int *matrix_color_changed_idx847;
++    int *matrix_color_changed_idx848;
++    int *matrix_color_changed_idx849;
++    int *matrix_color_changed_idx850;
++    int *matrix_color_changed_idx851;
++    int *matrix_color_changed_idx852;
++    int *matrix_color_changed_idx853;
++    int *matrix_color_changed_idx854;
++    int *matrix_color_changed_idx855;
++    int *matrix_color_changed_idx856;
++    int *matrix_color_changed_idx857;
++    int *matrix_color_changed_idx858;
++    int *matrix_color_changed_idx859;
++    int *matrix_color_changed_idx860;
++    int *matrix_color_changed_idx861;
++    int *matrix_color_changed_idx862;
++    int *matrix_color_changed_idx863;
++    int *matrix_color_changed_idx864;
++    int *matrix_color_changed_idx865;
++    int *matrix_color_changed_idx866;
++    int *matrix_color_changed_idx867;
++    int *matrix_color_changed_idx868;
++    int *matrix_color_changed_idx869;
++    int *matrix_color_changed_idx870;
++    int *matrix_color_changed_idx871;
++    int *matrix_color_changed_idx872;
++    int *matrix_color_changed_idx873;
++    int *matrix_color_changed_idx874;
++    int *matrix_color_changed_idx875;
++    int *matrix_color_changed_idx876;
++    int *matrix_color_changed_idx877;
++    int *matrix_color_changed_idx878;
++    int *matrix_color_changed_idx879;
++    int *matrix_color_changed_idx880;
++    int *matrix_color_changed_idx881;
++    int *matrix_color_changed_idx882;
++    int *matrix_color_changed_idx883;
++    int *matrix_color_changed_idx884;
++    int *matrix_color_changed_idx885;
++    int *matrix_color_changed_idx886;
++    int *matrix_color_changed_idx887;
++    int *matrix_color_changed_idx888;
++    int *matrix_color_changed_idx889;
++    int *matrix_color_changed_idx890;
++    int *matrix_color_changed_idx891;
++    int *matrix_color_changed_idx892;
++    int *matrix_color_changed_idx893;
++    int *matrix_color_changed_idx894;
++    int *matrix_color_changed_idx895;
++    int *matrix_color_changed_idx896;
++    int *matrix_color_changed_idx897;
++    int *matrix_color_changed_idx898;
++    int *matrix_color_changed_idx899;
++    int *matrix_color_changed_idx900;
++    int *matrix_color_changed_idx901;
++    int *matrix_color_changed_idx902;
++    int *matrix_color_changed_idx903;
++    int *matrix_color_changed_idx904;
++    int *matrix_color_changed_idx905;
++    int *matrix_color_changed_idx906;
++    int *matrix_color_changed_idx907;
++    int *matrix_color_changed_idx908;
++    int *matrix_color_changed_idx909;
++    int *matrix_color_changed_idx910;
++    int *matrix_color_changed_idx911;
++    int *matrix_color_changed_idx912;
++    int *matrix_color_changed_idx913;
++    int *matrix_color_changed_idx914;
++    int *matrix_color_changed_idx915;
++    int *matrix_color_changed_idx916;
++    int *matrix_color_changed_idx917;
++    int *matrix_color_changed_idx918;
++    int *matrix_color_changed_idx919;
++    int *matrix_color_changed_idx920;
++    int *matrix_color_changed_idx921;
++    int *matrix_color_changed_idx922;
++    int *matrix_color_changed_idx923;
++    int *matrix_color_changed_idx924;
++    int *matrix_color_changed_idx925;
++    int *matrix_color_changed_idx926;
++    int *matrix_color_changed_idx927;
++    int *matrix_color_changed_idx928;
++    int *matrix_color_changed_idx929;
++    int *matrix_color_changed_idx930;
++    int *matrix_color_changed_idx931;
++    int *matrix_color_changed_idx932;
++    int *matrix_color_changed_idx933;
++    int *matrix_color_changed_idx934;
++    int *matrix_color_changed_idx935;
++    int *matrix_color_changed_idx936;
++    int *matrix_color_changed_idx937;
++    int *matrix_color_changed_idx938;
++    int *matrix_color_changed_idx939;
++    int *matrix_color_changed_idx940;
++    int *matrix_color_changed_idx941;
++    int *matrix_color_changed_idx942;
++    int *matrix_color_changed_idx943;
++    int *matrix_color_changed_idx944;
++    int *matrix_color_changed_idx945;
++    int *matrix_color_changed_idx946;
++    int *matrix_color_changed_idx947;
++    int *matrix_color_changed_idx948;
++    int *matrix_color_changed_idx949;
++    int *matrix_color_changed_idx950;
++    int *matrix_color_changed_idx951;
++    int *matrix_color_changed_idx952;
++    int *matrix_color_changed_idx953;
++    int *matrix_color_changed_idx954;
++    int *matrix_color_changed_idx955;
++    int *matrix_color_changed_idx956;
++    int *matrix_color_changed_idx957;
++    int *matrix_color_changed_idx958;
++    int *matrix_color_changed_idx959;
++    int *matrix_color_changed_idx960;
++    int *matrix_color_changed_idx961;
++    int *matrix_color_changed_idx962;
++    int *matrix_color_changed_idx963;
++    int *matrix_color_changed_idx964;
++    int *matrix_color_changed_idx965;
++    int *matrix_color_changed_idx966;
++    int *matrix_color_changed_idx967;
++    int *matrix_color_changed_idx968;
++    int *matrix_color_changed_idx969;
++    int *matrix_color_changed_idx970;
++    int *matrix_color_changed_idx971;
++    int *matrix_color_changed_idx972;
++    int *matrix_color_changed_idx973;
++    int *matrix_color_changed_idx974;
++    int *matrix_color_changed_idx975;
++    int *matrix_color_changed_idx976;
++    int *matrix_color_changed_idx977;
++    int *matrix_color_changed_idx978;
++    int *matrix_color_changed_idx979;
++    int *matrix_color_changed_idx980;
++    int *matrix_color_changed_idx981;
++    int *matrix_color_changed_idx982;
++    int *matrix_color_changed_idx983;
++    int *matrix_color_changed_idx984;
++    int *matrix_color_changed_idx985;
++    int *matrix_color_changed_idx986;
++    int *matrix_color_changed_idx987;
++    int *matrix_color_changed_idx988;
++    int *matrix_color_changed_idx989;
++    int *matrix_color_changed_idx990;
++    int *matrix_color_changed_idx991;
++    int *matrix_color_changed_idx992;
++    int *matrix_color_changed_idx993;
++    int *matrix_color_changed_idx994;
++    int *matrix_color_changed_idx995;
++    int *matrix_color_changed_idx996;
++    int *matrix_color_changed_idx997;
++    int *matrix_color_changed_idx998;
++    int *matrix_color_changed_idx999;
++    int *matrix_color_changed_idx1000;
++    int *matrix_color_changed_idx1001;
++    int *matrix_color_changed_idx1002;
++    int *matrix_color_changed_idx1003;
++    int *matrix_color_changed_idx1004;
++    int *matrix_color_changed_idx1005;
++    int *matrix_color_changed_idx1006;
++    int *matrix_color_changed_idx1007;
++    int *matrix_color_changed_idx1008;
++    int *matrix_color_changed_idx1009;
++    int *matrix_color_changed_idx1010;
++    int *matrix_color_changed_idx1011;
++    int *matrix_color_changed_idx1012;
++    int *matrix_color_changed_idx1013;
++    int *matrix_color_changed_idx1014;
++    int *matrix_color_changed_idx1015;
++    int *matrix_color_changed_idx1016;
++    int *matrix_color_changed_idx1017;
++    int *matrix_color_changed_idx1018;
++    int *matrix_color_changed_idx1019;
++    int *matrix_color_changed_idx1020;
++    int *matrix_color_changed_idx1021;
++    int *matrix_color_changed_idx1022;
++    int *matrix_color_changed_idx1023;
++    int *matrix_color_changed_idx1024;
++    int *matrix_color_changed_idx1025;
++    int *matrix_color_changed_idx1026;
++    int *matrix_color_changed_idx1027;
++    int *matrix_color_changed_idx1028;
++    int *matrix_color_changed_idx1029;
++    int *matrix_color_changed_idx1030;
++    int *matrix_color_changed_idx1031;
++    int *matrix_color_changed_idx1032;
++    int *matrix_color_changed_idx1033;
++    int *matrix_color_changed_idx1034;
++    int *matrix_color_changed_idx1035;
++    int *matrix_color_changed_idx1036;
++    int *matrix_color_changed_idx1037;
++    int *matrix_color_changed_idx1038;
++    int *matrix_color_changed_idx1039;
++    int *matrix_color_changed_idx1040;
++    int *matrix_color_changed_idx1041;
++    int *matrix_color_changed_idx1042;
++    int *matrix_color_changed_idx1043;
++    int *matrix_color_changed_idx1044;
++    int *matrix_color_changed_idx1045;
++    int *matrix_color_changed_idx1046;
++    int *matrix_color_changed_idx1047;
++    int *matrix_color_changed_idx1048;
++    int *matrix_color_changed_idx1049;
++    int *matrix_color_changed_idx1050;
++    int *matrix_color_changed_idx1051;
++    int *matrix_color_changed_idx1052;
++    int *matrix_color_changed_idx105
+diff --git a/src/options.c b/src/options.c
+new file mode 100644
+index 0000000..8d710af
+--- /dev/null
++++ b/src/options.c
+@@ -0,0 +1,95 @@
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <ctype.h>
++
++#include "options.h"
++
++void parse_options(int argc, char *argv[], Options *opts) {
++    int i;
++    for (i = 1; i < argc; i++) {
++        if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "-?") == 0) {
++            print_usage(argv[0]);
++            exit(0);
++        } else if (strcmp(argv[i], "-V") == 0) {
++            print_version();
++            exit(0);
++        } else if (strcmp(argv[i], "-a") == 0) {
++            opts->async_scroll = 1;
++        } else if (strcmp(argv[i], "-b") == 0) {
++            opts->bold_chars = 1;
++        } else if (strcmp(argv[i], "-B") == 0) {
++            opts->all_bold = 1;
++        } else if (strcmp(argv[i], "-c") == 0) {
++            opts->only_shadows = 1;
++        } else if (strcmp(argv[i], "-f") == 0) {
++            opts->force_term = 1;
++        } else if (strcmp(argv[i], "-l") == 0) {
++            opts->linux_mode = 1;
++        } else if (strcmp(argv[i], "-L") == 0) {
++            opts->lock_mode = 1;
++        } else if (strcmp(argv[i], "-o") == 0) {
++            opts->old_style = 1;
++        } else if (strcmp(argv[i], "-n") == 0) {
++            opts->no_bold = 1;
++        } else if (strcmp(argv[i], "-s") == 0) {
++            opts->screensaver_mode = 1;
++        } else if (strcmp(argv[i], "-x") == 0) {
++            opts->x_mode = 1;
++        } else if (strcmp(argv[i], "-r") == 0) {
++            opts->rainbow_mode = 1;
++        } else if (strcmp(argv[i], "-m") == 0) {
++            opts->lambda_mode = 1;
++        } else if (strcmp(argv[i], "-k") == 0) {
++            opts->chars_change = 1;
++        } else if (strcmp(argv[i], "-u") == 0) {
++            if (i + 1 < argc) {
++                opts->update_delay = atoi(argv[++i]);
++            }
++        } else if (strcmp(argv[i], "-C") == 0) {
++            if (i + 1 < argc) {
++                opts->color = argv[++i];
++            }
++        } else if (strcmp(argv[i], "-M") == 0) {
++            if (i + 1 < argc) {
++                opts->message = argv[++i];
++            }
++        } else if (strcmp(argv[i], "-t") == 0) {
++            if (i + 1 < argc) {
++                opts->tty = argv[++i];
++            }
++        }
++    }
++}
++
++void print_usage(const char *progname) {
++    printf(" Usage: %s -[abBcfhlsmVxk] [-u delay] [-C color] [-t tty] [-M message]\n", progname);
++    printf(" -a: Asynchronous scroll\n");
++    printf(" -b: Bold characters on\n");
++    printf(" -B: All bold characters (overrides -b)\n");
++    printf(" -c: Use Japanese characters as seen in the original matrix. Requires appropriate fonts\n");
++    printf(" -f: Force the linux $TERM type to be on\n");
++    printf(" -l: Linux mode (uses matrix console font)\n");
++    printf(" -L: Lock mode (can be closed from another terminal)\n");
++    printf(" -o: Use old-style scrolling\n");
++    printf(" -h: Print usage and exit\n");
++    printf(" -n: No bold characters (overrides -b and -B, default)\n");
++    printf(" -s: \"Screensaver\" mode, exits on first keystroke\n");
++    printf(" -x: X window mode, use if your xterm is using mtx.pcf\n");
++    printf(" -V: Print version information and exit\n");
++    printf(" -M [message]: Prints your message in the center of the screen. Overrides -L's default message.\n");
++    printf(" -u delay (0 - 10, default 4): Screen update delay\n");
++    printf(" -C [color]: Use this color for matrix (default green)\n");
++    printf(" -r: rainbow mode\n");
++    printf(" -m: lambda mode\n");
++    printf(" -k: Characters change while scrolling. (Works without -o opt.)\n");
++    printf(" -t [tty]: Set tty to use\n");
++}
++
++void print_version(void) {
++    printf("cmatrix version 0.1\n");
++}
++
++void print_help(const char *progname) {
++    print_usage(progname);
++}
+diff --git a/src/options.h b/src/options.h
+new file mode 100644
+index 0000000..b3c99c2
+--- /dev/null
++++ b/src/options.h
+@@ -0,0 +1,31 @@
++#ifndef OPTIONS_H
++#define OPTIONS_H
++
++#include <stdio.h>
++
++typedef struct {
++    int async_scroll;
++    int bold_chars;
++    int all_bold;
++    int force_term;
++    int linux_mode;
++    int old_style;
++    int only_shadows;
++    int lock_mode;
++    int rainbow_mode;
++    int lambda_mode;
++    int chars_change;
++    int x_mode;
++    int screensaver_mode;
++    int update_delay;
++    char *color;
++    char *message;
++    char *tty;
++} Options;
++
++void parse_options(int argc, char *argv[], Options *opts);
++void print_usage(const char *progname);
++void print_version(void);
++void print_help(const char *progname);
++
++#endif /* OPTIONS_H */
+diff --git a/src/render.h b/src/render.h
+new file mode 100644
+index 0000000..f99833f
+--- /dev/null
++++ b/src/render.h
+@@ -0,0 +1,871 @@
++#ifndef RENDER_H
++#define RENDER_H
++
++#include <stdio.h>
++#include <termios.h>
++#include <unistd.h>
++#include <time.h>
++#include <sys/time.h>
++#include <sys/select.h>
++#include <sys/ioctl.h>
++#include <sys/stat.h>
++#include <fcntl.h>
++#include <errno.h>
++#include <string.h>
++#include <stdlib.h>
++#include <ctype.h>
++#include <math.h>
++#include <signal.h>
++#include <time.h>
++
++#include "options.h"
++
++#define MAX_COLS 200
++#define MAX_ROWS 100
++#define MAX_MESSAGE_LEN 256
++
++void init_render(void);
++void render_matrix(Options *opts);
++void cleanup_render(void);
++int get_terminal_size(int *cols, int *rows);
++void set_termios_raw(void);
++void restore_termios(void);
++void print_message(const char *msg);
++void print_lock_message(void);
++void print_shadow_matrix(Options *opts);
++void print_bold_matrix(Options *opts);
++void print_rainbow_matrix(Options *opts);
++void print_lambda_matrix(Options *opts);
++void print_normal_matrix(Options *opts);
++void print_color_matrix(Options *opts);
++void print_color_changed_matrix(Options *opts);
++void print_color_idx_matrix(Options *opts);
++void print_color_changed_idx_matrix(Options *opts);
++void print_color_changed_idx2_matrix(Options *opts);
++void print_color_changed_idx3_matrix(Options *opts);
++void print_color_changed_idx4_matrix(Options *opts);
++void print_color_changed_idx5_matrix(Options *opts);
++void print_color_changed_idx6_matrix(Options *opts);
++void print_color_changed_idx7_matrix(Options *opts);
++void print_color_changed_idx8_matrix(Options *opts);
++void print_color_changed_idx9_matrix(Options *opts);
++void print_color_changed_idx10_matrix(Options *opts);
++void print_color_changed_idx11_matrix(Options *opts);
++void print_color_changed_idx12_matrix(Options *opts);
++void print_color_changed_idx13_matrix(Options *opts);
++void print_color_changed_idx14_matrix(Options *opts);
++void print_color_changed_idx15_matrix(Options *opts);
++void print_color_changed_idx16_matrix(Options *opts);
++void print_color_changed_idx17_matrix(Options *opts);
++void print_color_changed_idx18_matrix(Options *opts);
++void print_color_changed_idx19_matrix(Options *opts);
++void print_color_changed_idx20_matrix(Options *opts);
++void print_color_changed_idx21_matrix(Options *opts);
++void print_color_changed_idx22_matrix(Options *opts);
++void print_color_changed_idx23_matrix(Options *opts);
++void print_color_changed_idx24_matrix(Options *opts);
++void print_color_changed_idx25_matrix(Options *opts);
++void print_color_changed_idx26_matrix(Options *opts);
++void print_color_changed_idx27_matrix(Options *opts);
++void print_color_changed_idx28_matrix(Options *opts);
++void print_color_changed_idx29_matrix(Options *opts);
++void print_color_changed_idx30_matrix(Options *opts);
++void print_color_changed_idx31_matrix(Options *opts);
++void print_color_changed_idx32_matrix(Options *opts);
++void print_color_changed_idx33_matrix(Options *opts);
++void print_color_changed_idx34_matrix(Options *opts);
++void print_color_changed_idx35_matrix(Options *opts);
++void print_color_changed_idx36_matrix(Options *opts);
++void print_color_changed_idx37_matrix(Options *opts);
++void print_color_changed_idx38_matrix(Options *opts);
++void print_color_changed_idx39_matrix(Options *opts);
++void print_color_changed_idx40_matrix(Options *opts);
++void print_color_changed_idx41_matrix(Options *opts);
++void print_color_changed_idx42_matrix(Options *opts);
++void print_color_changed_idx43_matrix(Options *opts);
++void print_color_changed_idx44_matrix(Options *opts);
++void print_color_changed_idx45_matrix(Options *opts);
++void print_color_changed_idx46_matrix(Options *opts);
++void print_color_changed_idx47_matrix(Options *opts);
++void print_color_changed_idx48_matrix(Options *opts);
++void print_color_changed_idx49_matrix(Options *opts);
++void print_color_changed_idx50_matrix(Options *opts);
++void print_color_changed_idx51_matrix(Options *opts);
++void print_color_changed_idx52_matrix(Options *opts);
++void print_color_changed_idx53_matrix(Options *opts);
++void print_color_changed_idx54_matrix(Options *opts);
++void print_color_changed_idx55_matrix(Options *opts);
++void print_color_changed_idx56_matrix(Options *opts);
++void print_color_changed_idx57_matrix(Options *opts);
++void print_color_changed_idx58_matrix(Options *opts);
++void print_color_changed_idx59_matrix(Options *opts);
++void print_color_changed_idx60_matrix(Options *opts);
++void print_color_changed_idx61_matrix(Options *opts);
++void print_color_changed_idx62_matrix(Options *opts);
++void print_color_changed_idx63_matrix(Options *opts);
++void print_color_changed_idx64_matrix(Options *opts);
++void print_color_changed_idx65_matrix(Options *opts);
++void print_color_changed_idx66_matrix(Options *opts);
++void print_color_changed_idx67_matrix(Options *opts);
++void print_color_changed_idx68_matrix(Options *opts);
++void print_color_changed_idx69_matrix(Options *opts);
++void print_color_changed_idx70_matrix(Options *opts);
++void print_color_changed_idx71_matrix(Options *opts);
++void print_color_changed_idx72_matrix(Options *opts);
++void print_color_changed_idx73_matrix(Options *opts);
++void print_color_changed_idx74_matrix(Options *opts);
++void print_color_changed_idx75_matrix(Options *opts);
++void print_color_changed_idx76_matrix(Options *opts);
++void print_color_changed_idx77_matrix(Options *opts);
++void print_color_changed_idx78_matrix(Options *opts);
++void print_color_changed_idx79_matrix(Options *opts);
++void print_color_changed_idx80_matrix(Options *opts);
++void print_color_changed_idx81_matrix(Options *opts);
++void print_color_changed_idx82_matrix(Options *opts);
++void print_color_changed_idx83_matrix(Options *opts);
++void print_color_changed_idx84_matrix(Options *opts);
++void print_color_changed_idx85_matrix(Options *opts);
++void print_color_changed_idx86_matrix(Options *opts);
++void print_color_changed_idx87_matrix(Options *opts);
++void print_color_changed_idx88_matrix(Options *opts);
++void print_color_changed_idx89_matrix(Options *opts);
++void print_color_changed_idx90_matrix(Options *opts);
++void print_color_changed_idx91_matrix(Options *opts);
++void print_color_changed_idx92_matrix(Options *opts);
++void print_color_changed_idx93_matrix(Options *opts);
++void print_color_changed_idx94_matrix(Options *opts);
++void print_color_changed_idx95_matrix(Options *opts);
++void print_color_changed_idx96_matrix(Options *opts);
++void print_color_changed_idx97_matrix(Options *opts);
++void print_color_changed_idx98_matrix(Options *opts);
++void print_color_changed_idx99_matrix(Options *opts);
++void print_color_changed_idx100_matrix(Options *opts);
++void print_color_changed_idx101_matrix(Options *opts);
++void print_color_changed_idx102_matrix(Options *opts);
++void print_color_changed_idx103_matrix(Options *opts);
++void print_color_changed_idx104_matrix(Options *opts);
++void print_color_changed_idx105_matrix(Options *opts);
++void print_color_changed_idx106_matrix(Options *opts);
++void print_color_changed_idx107_matrix(Options *opts);
++void print_color_changed_idx108_matrix(Options *opts);
++void print_color_changed_idx109_matrix(Options *opts);
++void print_color_changed_idx110_matrix(Options *opts);
++void print_color_changed_idx111_matrix(Options *opts);
++void print_color_changed_idx112_matrix(Options *opts);
++void print_color_changed_idx113_matrix(Options *opts);
++void print_color_changed_idx114_matrix(Options *opts);
++void print_color_changed_idx115_matrix(Options *opts);
++void print_color_changed_idx116_matrix(Options *opts);
++void print_color_changed_idx117_matrix(Options *opts);
++void print_color_changed_idx118_matrix(Options *opts);
++void print_color_changed_idx119_matrix(Options *opts);
++void print_color_changed_idx120_matrix(Options *opts);
++void print_color_changed_idx121_matrix(Options *opts);
++void print_color_changed_idx122_matrix(Options *opts);
++void print_color_changed_idx123_matrix(Options *opts);
++void print_color_changed_idx124_matrix(Options *opts);
++void print_color_changed_idx125_matrix(Options *opts);
++void print_color_changed_idx126_matrix(Options *opts);
++void print_color_changed_idx127_matrix(Options *opts);
++void print_color_changed_idx128_matrix(Options *opts);
++void print_color_changed_idx129_matrix(Options *opts);
++void print_color_changed_idx130_matrix(Options *opts);
++void print_color_changed_idx131_matrix(Options *opts);
++void print_color_changed_idx132_matrix(Options *opts);
++void print_color_changed_idx133_matrix(Options *opts);
++void print_color_changed_idx134_matrix(Options *opts);
++void print_color_changed_idx135_matrix(Options *opts);
++void print_color_changed_idx136_matrix(Options *opts);
++void print_color_changed_idx137_matrix(Options *opts);
++void print_color_changed_idx138_matrix(Options *opts);
++void print_color_changed_idx139_matrix(Options *opts);
++void print_color_changed_idx140_matrix(Options *opts);
++void print_color_changed_idx141_matrix(Options *opts);
++void print_color_changed_idx142_matrix(Options *opts);
++void print_color_changed_idx143_matrix(Options *opts);
++void print_color_changed_idx144_matrix(Options *opts);
++void print_color_changed_idx145_matrix(Options *opts);
++void print_color_changed_idx146_matrix(Options *opts);
++void print_color_changed_idx147_matrix(Options *opts);
++void print_color_changed_idx148_matrix(Options *opts);
++void print_color_changed_idx149_matrix(Options *opts);
++void print_color_changed_idx150_matrix(Options *opts);
++void print_color_changed_idx151_matrix(Options *opts);
++void print_color_changed_idx152_matrix(Options *opts);
++void print_color_changed_idx153_matrix(Options *opts);
++void print_color_changed_idx154_matrix(Options *opts);
++void print_color_changed_idx155_matrix(Options *opts);
++void print_color_changed_idx156_matrix(Options *opts);
++void print_color_changed_idx157_matrix(Options *opts);
++void print_color_changed_idx158_matrix(Options *opts);
++void print_color_changed_idx159_matrix(Options *opts);
++void print_color_changed_idx160_matrix(Options *opts);
++void print_color_changed_idx161_matrix(Options *opts);
++void print_color_changed_idx162_matrix(Options *opts);
++void print_color_changed_idx163_matrix(Options *opts);
++void print_color_changed_idx164_matrix(Options *opts);
++void print_color_changed_idx165_matrix(Options *opts);
++void print_color_changed_idx166_matrix(Options *opts);
++void print_color_changed_idx167_matrix(Options *opts);
++void print_color_changed_idx168_matrix(Options *opts);
++void print_color_changed_idx169_matrix(Options *opts);
++void print_color_changed_idx170_matrix(Options *opts);
++void print_color_changed_idx171_matrix(Options *opts);
++void print_color_changed_idx172_matrix(Options *opts);
++void print_color_changed_idx173_matrix(Options *opts);
++void print_color_changed_idx174_matrix(Options *opts);
++void print_color_changed_idx175_matrix(Options *opts);
++void print_color_changed_idx176_matrix(Options *opts);
++void print_color_changed_idx177_matrix(Options *opts);
++void print_color_changed_idx178_matrix(Options *opts);
++void print_color_changed_idx179_matrix(Options *opts);
++void print_color_changed_idx180_matrix(Options *opts);
++void print_color_changed_idx181_matrix(Options *opts);
++void print_color_changed_idx182_matrix(Options *opts);
++void print_color_changed_idx183_matrix(Options *opts);
++void print_color_changed_idx184_matrix(Options *opts);
++void print_color_changed_idx185_matrix(Options *opts);
++void print_color_changed_idx186_matrix(Options *opts);
++void print_color_changed_idx187_matrix(Options *opts);
++void print_color_changed_idx188_matrix(Options *opts);
++void print_color_changed_idx189_matrix(Options *opts);
++void print_color_changed_idx190_matrix(Options *opts);
++void print_color_changed_idx191_matrix(Options *opts);
++void print_color_changed_idx192_matrix(Options *opts);
++void print_color_changed_idx193_matrix(Options *opts);
++void print_color_changed_idx194_matrix(Options *opts);
++void print_color_changed_idx195_matrix(Options *opts);
++void print_color_changed_idx196_matrix(Options *opts);
++void print_color_changed_idx197_matrix(Options *opts);
++void print_color_changed_idx198_matrix(Options *opts);
++void print_color_changed_idx199_matrix(Options *opts);
++void print_color_changed_idx200_matrix(Options *opts);
++void print_color_changed_idx201_matrix(Options *opts);
++void print_color_changed_idx202_matrix(Options *opts);
++void print_color_changed_idx203_matrix(Options *opts);
++void print_color_changed_idx204_matrix(Options *opts);
++void print_color_changed_idx205_matrix(Options *opts);
++void print_color_changed_idx206_matrix(Options *opts);
++void print_color_changed_idx207_matrix(Options *opts);
++void print_color_changed_idx208_matrix(Options *opts);
++void print_color_changed_idx209_matrix(Options *opts);
++void print_color_changed_idx210_matrix(Options *opts);
++void print_color_changed_idx211_matrix(Options *opts);
++void print_color_changed_idx212_matrix(Options *opts);
++void print_color_changed_idx213_matrix(Options *opts);
++void print_color_changed_idx214_matrix(Options *opts);
++void print_color_changed_idx215_matrix(Options *opts);
++void print_color_changed_idx216_matrix(Options *opts);
++void print_color_changed_idx217_matrix(Options *opts);
++void print_color_changed_idx218_matrix(Options *opts);
++void print_color_changed_idx219_matrix(Options *opts);
++void print_color_changed_idx220_matrix(Options *opts);
++void print_color_changed_idx221_matrix(Options *opts);
++void print_color_changed_idx222_matrix(Options *opts);
++void print_color_changed_idx223_matrix(Options *opts);
++void print_color_changed_idx224_matrix(Options *opts);
++void print_color_changed_idx225_matrix(Options *opts);
++void print_color_changed_idx226_matrix(Options *opts);
++void print_color_changed_idx227_matrix(Options *opts);
++void print_color_changed_idx228_matrix(Options *opts);
++void print_color_changed_idx229_matrix(Options *opts);
++void print_color_changed_idx230_matrix(Options *opts);
++void print_color_changed_idx231_matrix(Options *opts);
++void print_color_changed_idx232_matrix(Options *opts);
++void print_color_changed_idx233_matrix(Options *opts);
++void print_color_changed_idx234_matrix(Options *opts);
++void print_color_changed_idx235_matrix(Options *opts);
++void print_color_changed_idx236_matrix(Options *opts);
++void print_color_changed_idx237_matrix(Options *opts);
++void print_color_changed_idx238_matrix(Options *opts);
++void print_color_changed_idx239_matrix(Options *opts);
++void print_color_changed_idx240_matrix(Options *opts);
++void print_color_changed_idx241_matrix(Options *opts);
++void print_color_changed_idx242_matrix(Options *opts);
++void print_color_changed_idx243_matrix(Options *opts);
++void print_color_changed_idx244_matrix(Options *opts);
++void print_color_changed_idx245_matrix(Options *opts);
++void print_color_changed_idx246_matrix(Options *opts);
++void print_color_changed_idx247_matrix(Options *opts);
++void print_color_changed_idx248_matrix(Options *opts);
++void print_color_changed_idx249_matrix(Options *opts);
++void print_color_changed_idx250_matrix(Options *opts);
++void print_color_changed_idx251_matrix(Options *opts);
++void print_color_changed_idx252_matrix(Options *opts);
++void print_color_changed_idx253_matrix(Options *opts);
++void print_color_changed_idx254_matrix(Options *opts);
++void print_color_changed_idx255_matrix(Options *opts);
++void print_color_changed_idx256_matrix(Options *opts);
++void print_color_changed_idx257_matrix(Options *opts);
++void print_color_changed_idx258_matrix(Options *opts);
++void print_color_changed_idx259_matrix(Options *opts);
++void print_color_changed_idx260_matrix(Options *opts);
++void print_color_changed_idx261_matrix(Options *opts);
++void print_color_changed_idx262_matrix(Options *opts);
++void print_color_changed_idx263_matrix(Options *opts);
++void print_color_changed_idx264_matrix(Options *opts);
++void print_color_changed_idx265_matrix(Options *opts);
++void print_color_changed_idx266_matrix(Options *opts);
++void print_color_changed_idx267_matrix(Options *opts);
++void print_color_changed_idx268_matrix(Options *opts);
++void print_color_changed_idx269_matrix(Options *opts);
++void print_color_changed_idx270_matrix(Options *opts);
++void print_color_changed_idx271_matrix(Options *opts);
++void print_color_changed_idx272_matrix(Options *opts);
++void print_color_changed_idx273_matrix(Options *opts);
++void print_color_changed_idx274_matrix(Options *opts);
++void print_color_changed_idx275_matrix(Options *opts);
++void print_color_changed_idx276_matrix(Options *opts);
++void print_color_changed_idx277_matrix(Options *opts);
++void print_color_changed_idx278_matrix(Options *opts);
++void print_color_changed_idx279_matrix(Options *opts);
++void print_color_changed_idx280_matrix(Options *opts);
++void print_color_changed_idx281_matrix(Options *opts);
++void print_color_changed_idx282_matrix(Options *opts);
++void print_color_changed_idx283_matrix(Options *opts);
++void print_color_changed_idx284_matrix(Options *opts);
++void print_color_changed_idx285_matrix(Options *opts);
++void print_color_changed_idx286_matrix(Options *opts);
++void print_color_changed_idx287_matrix(Options *opts);
++void print_color_changed_idx288_matrix(Options *opts);
++void print_color_changed_idx289_matrix(Options *opts);
++void print_color_changed_idx290_matrix(Options *opts);
++void print_color_changed_idx291_matrix(Options *opts);
++void print_color_changed_idx292_matrix(Options *opts);
++void print_color_changed_idx293_matrix(Options *opts);
++void print_color_changed_idx294_matrix(Options *opts);
++void print_color_changed_idx295_matrix(Options *opts);
++void print_color_changed_idx296_matrix(Options *opts);
++void print_color_changed_idx297_matrix(Options *opts);
++void print_color_changed_idx298_matrix(Options *opts);
++void print_color_changed_idx299_matrix(Options *opts);
++void print_color_changed_idx300_matrix(Options *opts);
++void print_color_changed_idx301_matrix(Options *opts);
++void print_color_changed_idx302_matrix(Options *opts);
++void print_color_changed_idx303_matrix(Options *opts);
++void print_color_changed_idx304_matrix(Options *opts);
++void print_color_changed_idx305_matrix(Options *opts);
++void print_color_changed_idx306_matrix(Options *opts);
++void print_color_changed_idx307_matrix(Options *opts);
++void print_color_changed_idx308_matrix(Options *opts);
++void print_color_changed_idx309_matrix(Options *opts);
++void print_color_changed_idx310_matrix(Options *opts);
++void print_color_changed_idx311_matrix(Options *opts);
++void print_color_changed_idx312_matrix(Options *opts);
++void print_color_changed_idx313_matrix(Options *opts);
++void print_color_changed_idx314_matrix(Options *opts);
++void print_color_changed_idx315_matrix(Options *opts);
++void print_color_changed_idx316_matrix(Options *opts);
++void print_color_changed_idx317_matrix(Options *opts);
++void print_color_changed_idx318_matrix(Options *opts);
++void print_color_changed_idx319_matrix(Options *opts);
++void print_color_changed_idx320_matrix(Options *opts);
++void print_color_changed_idx321_matrix(Options *opts);
++void print_color_changed_idx322_matrix(Options *opts);
++void print_color_changed_idx323_matrix(Options *opts);
++void print_color_changed_idx324_matrix(Options *opts);
++void print_color_changed_idx325_matrix(Options *opts);
++void print_color_changed_idx326_matrix(Options *opts);
++void print_color_changed_idx327_matrix(Options *opts);
++void print_color_changed_idx328_matrix(Options *opts);
++void print_color_changed_idx329_matrix(Options *opts);
++void print_color_changed_idx330_matrix(Options *opts);
++void print_color_changed_idx331_matrix(Options *opts);
++void print_color_changed_idx332_matrix(Options *opts);
++void print_color_changed_idx333_matrix(Options *opts);
++void print_color_changed_idx334_matrix(Options *opts);
++void print_color_changed_idx335_matrix(Options *opts);
++void print_color_changed_idx336_matrix(Options *opts);
++void print_color_changed_idx337_matrix(Options *opts);
++void print_color_changed_idx338_matrix(Options *opts);
++void print_color_changed_idx339_matrix(Options *opts);
++void print_color_changed_idx340_matrix(Options *opts);
++void print_color_changed_idx341_matrix(Options *opts);
++void print_color_changed_idx342_matrix(Options *opts);
++void print_color_changed_idx343_matrix(Options *opts);
++void print_color_changed_idx344_matrix(Options *opts);
++void print_color_changed_idx345_matrix(Options *opts);
++void print_color_changed_idx346_matrix(Options *opts);
++void print_color_changed_idx347_matrix(Options *opts);
++void print_color_changed_idx348_matrix(Options *opts);
++void print_color_changed_idx349_matrix(Options *opts);
++void print_color_changed_idx350_matrix(Options *opts);
++void print_color_changed_idx351_matrix(Options *opts);
++void print_color_changed_idx352_matrix(Options *opts);
++void print_color_changed_idx353_matrix(Options *opts);
++void print_color_changed_idx354_matrix(Options *opts);
++void print_color_changed_idx355_matrix(Options *opts);
++void print_color_changed_idx356_matrix(Options *opts);
++void print_color_changed_idx357_matrix(Options *opts);
++void print_color_changed_idx358_matrix(Options *opts);
++void print_color_changed_idx359_matrix(Options *opts);
++void print_color_changed_idx360_matrix(Options *opts);
++void print_color_changed_idx361_matrix(Options *opts);
++void print_color_changed_idx362_matrix(Options *opts);
++void print_color_changed_idx363_matrix(Options *opts);
++void print_color_changed_idx364_matrix(Options *opts);
++void print_color_changed_idx365_matrix(Options *opts);
++void print_color_changed_idx366_matrix(Options *opts);
++void print_color_changed_idx367_matrix(Options *opts);
++void print_color_changed_idx368_matrix(Options *opts);
++void print_color_changed_idx369_matrix(Options *opts);
++void print_color_changed_idx370_matrix(Options *opts);
++void print_color_changed_idx371_matrix(Options *opts);
++void print_color_changed_idx372_matrix(Options *opts);
++void print_color_changed_idx373_matrix(Options *opts);
++void print_color_changed_idx374_matrix(Options *opts);
++void print_color_changed_idx375_matrix(Options *opts);
++void print_color_changed_idx376_matrix(Options *opts);
++void print_color_changed_idx377_matrix(Options *opts);
++void print_color_changed_idx378_matrix(Options *opts);
++void print_color_changed_idx379_matrix(Options *opts);
++void print_color_changed_idx380_matrix(Options *opts);
++void print_color_changed_idx381_matrix(Options *opts);
++void print_color_changed_idx382_matrix(Options *opts);
++void print_color_changed_idx383_matrix(Options *opts);
++void print_color_changed_idx384_matrix(Options *opts);
++void print_color_changed_idx385_matrix(Options *opts);
++void print_color_changed_idx386_matrix(Options *opts);
++void print_color_changed_idx387_matrix(Options *opts);
++void print_color_changed_idx388_matrix(Options *opts);
++void print_color_changed_idx389_matrix(Options *opts);
++void print_color_changed_idx390_matrix(Options *opts);
++void print_color_changed_idx391_matrix(Options *opts);
++void print_color_changed_idx392_matrix(Options *opts);
++void print_color_changed_idx393_matrix(Options *opts);
++void print_color_changed_idx394_matrix(Options *opts);
++void print_color_changed_idx395_matrix(Options *opts);
++void print_color_changed_idx396_matrix(Options *opts);
++void print_color_changed_idx397_matrix(Options *opts);
++void print_color_changed_idx398_matrix(Options *opts);
++void print_color_changed_idx399_matrix(Options *opts);
++void print_color_changed_idx400_matrix(Options *opts);
++void print_color_changed_idx401_matrix(Options *opts);
++void print_color_changed_idx402_matrix(Options *opts);
++void print_color_changed_idx403_matrix(Options *opts);
++void print_color_changed_idx404_matrix(Options *opts);
++void print_color_changed_idx405_matrix(Options *opts);
++void print_color_changed_idx406_matrix(Options *opts);
++void print_color_changed_idx407_matrix(Options *opts);
++void print_color_changed_idx408_matrix(Options *opts);
++void print_color_changed_idx409_matrix(Options *opts);
++void print_color_changed_idx410_matrix(Options *opts);
++void print_color_changed_idx411_matrix(Options *opts);
++void print_color_changed_idx412_matrix(Options *opts);
++void print_color_changed_idx413_matrix(Options *opts);
++void print_color_changed_idx414_matrix(Options *opts);
++void print_color_changed_idx415_matrix(Options *opts);
++void print_color_changed_idx416_matrix(Options *opts);
++void print_color_changed_idx417_matrix(Options *opts);
++void print_color_changed_idx418_matrix(Options *opts);
++void print_color_changed_idx419_matrix(Options *opts);
++void print_color_changed_idx420_matrix(Options *opts);
++void print_color_changed_idx421_matrix(Options *opts);
++void print_color_changed_idx422_matrix(Options *opts);
++void print_color_changed_idx423_matrix(Options *opts);
++void print_color_changed_idx424_matrix(Options *opts);
++void print_color_changed_idx425_matrix(Options *opts);
++void print_color_changed_idx426_matrix(Options *opts);
++void print_color_changed_idx427_matrix(Options *opts);
++void print_color_changed_idx428_matrix(Options *opts);
++void print_color_changed_idx429_matrix(Options *opts);
++void print_color_changed_idx430_matrix(Options *opts);
++void print_color_changed_idx431_matrix(Options *opts);
++void print_color_changed_idx432_matrix(Options *opts);
++void print_color_changed_idx433_matrix(Options *opts);
++void print_color_changed_idx434_matrix(Options *opts);
++void print_color_changed_idx435_matrix(Options *opts);
++void print_color_changed_idx436_matrix(Options *opts);
++void print_color_changed_idx437_matrix(Options *opts);
++void print_color_changed_idx438_matrix(Options *opts);
++void print_color_changed_idx439_matrix(Options *opts);
++void print_color_changed_idx440_matrix(Options *opts);
++void print_color_changed_idx441_matrix(Options *opts);
++void print_color_changed_idx442_matrix(Options *opts);
++void print_color_changed_idx443_matrix(Options *opts);
++void print_color_changed_idx444_matrix(Options *opts);
++void print_color_changed_idx445_matrix(Options *opts);
++void print_color_changed_idx446_matrix(Options *opts);
++void print_color_changed_idx447_matrix(Options *opts);
++void print_color_changed_idx448_matrix(Options *opts);
++void print_color_changed_idx449_matrix(Options *opts);
++void print_color_changed_idx450_matrix(Options *opts);
++void print_color_changed_idx451_matrix(Options *opts);
++void print_color_changed_idx452_matrix(Options *opts);
++void print_color_changed_idx453_matrix(Options *opts);
++void print_color_changed_idx454_matrix(Options *opts);
++void print_color_changed_idx455_matrix(Options *opts);
++void print_color_changed_idx456_matrix(Options *opts);
++void print_color_changed_idx457_matrix(Options *opts);
++void print_color_changed_idx458_matrix(Options *opts);
++void print_color_changed_idx459_matrix(Options *opts);
++void print_color_changed_idx460_matrix(Options *opts);
++void print_color_changed_idx461_matrix(Options *opts);
++void print_color_changed_idx462_matrix(Options *opts);
++void print_color_changed_idx463_matrix(Options *opts);
++void print_color_changed_idx464_matrix(Options *opts);
++void print_color_changed_idx465_matrix(Options *opts);
++void print_color_changed_idx466_matrix(Options *opts);
++void print_color_changed_idx467_matrix(Options *opts);
++void print_color_changed_idx468_matrix(Options *opts);
++void print_color_changed_idx469_matrix(Options *opts);
++void print_color_changed_idx470_matrix(Options *opts);
++void print_color_changed_idx471_matrix(Options *opts);
++void print_color_changed_idx472_matrix(Options *opts);
++void print_color_changed_idx473_matrix(Options *opts);
++void print_color_changed_idx474_matrix(Options *opts);
++void print_color_changed_idx475_matrix(Options *opts);
++void print_color_changed_idx476_matrix(Options *opts);
++void print_color_changed_idx477_matrix(Options *opts);
++void print_color_changed_idx478_matrix(Options *opts);
++void print_color_changed_idx479_matrix(Options *opts);
++void print_color_changed_idx480_matrix(Options *opts);
++void print_color_changed_idx481_matrix(Options *opts);
++void print_color_changed_idx482_matrix(Options *opts);
++void print_color_changed_idx483_matrix(Options *opts);
++void print_color_changed_idx484_matrix(Options *opts);
++void print_color_changed_idx485_matrix(Options *opts);
++void print_color_changed_idx486_matrix(Options *opts);
++void print_color_changed_idx487_matrix(Options *opts);
++void print_color_changed_idx488_matrix(Options *opts);
++void print_color_changed_idx489_matrix(Options *opts);
++void print_color_changed_idx490_matrix(Options *opts);
++void print_color_changed_idx491_matrix(Options *opts);
++void print_color_changed_idx492_matrix(Options *opts);
++void print_color_changed_idx493_matrix(Options *opts);
++void print_color_changed_idx494_matrix(Options *opts);
++void print_color_changed_idx495_matrix(Options *opts);
++void print_color_changed_idx496_matrix(Options *opts);
++void print_color_changed_idx497_matrix(Options *opts);
++void print_color_changed_idx498_matrix(Options *opts);
++void print_color_changed_idx499_matrix(Options *opts);
++void print_color_changed_idx500_matrix(Options *opts);
++void print_color_changed_idx501_matrix(Options *opts);
++void print_color_changed_idx502_matrix(Options *opts);
++void print_color_changed_idx503_matrix(Options *opts);
++void print_color_changed_idx504_matrix(Options *opts);
++void print_color_changed_idx505_matrix(Options *opts);
++void print_color_changed_idx506_matrix(Options *opts);
++void print_color_changed_idx507_matrix(Options *opts);
++void print_color_changed_idx508_matrix(Options *opts);
++void print_color_changed_idx509_matrix(Options *opts);
++void print_color_changed_idx510_matrix(Options *opts);
++void print_color_changed_idx511_matrix(Options *opts);
++void print_color_changed_idx512_matrix(Options *opts);
++void print_color_changed_idx513_matrix(Options *opts);
++void print_color_changed_idx514_matrix(Options *opts);
++void print_color_changed_idx515_matrix(Options *opts);
++void print_color_changed_idx516_matrix(Options *opts);
++void print_color_changed_idx517_matrix(Options *opts);
++void print_color_changed_idx518_matrix(Options *opts);
++void print_color_changed_idx519_matrix(Options *opts);
++void print_color_changed_idx520_matrix(Options *opts);
++void print_color_changed_idx521_matrix(Options *opts);
++void print_color_changed_idx522_matrix(Options *opts);
++void print_color_changed_idx523_matrix(Options *opts);
++void print_color_changed_idx524_matrix(Options *opts);
++void print_color_changed_idx525_matrix(Options *opts);
++void print_color_changed_idx526_matrix(Options *opts);
++void print_color_changed_idx527_matrix(Options *opts);
++void print_color_changed_idx528_matrix(Options *opts);
++void print_color_changed_idx529_matrix(Options *opts);
++void print_color_changed_idx530_matrix(Options *opts);
++void print_color_changed_idx531_matrix(Options *opts);
++void print_color_changed_idx532_matrix(Options *opts);
++void print_color_changed_idx533_matrix(Options *opts);
++void print_color_changed_idx534_matrix(Options *opts);
++void print_color_changed_idx535_matrix(Options *opts);
++void print_color_changed_idx536_matrix(Options *opts);
++void print_color_changed_idx537_matrix(Options *opts);
++void print_color_changed_idx538_matrix(Options *opts);
++void print_color_changed_idx539_matrix(Options *opts);
++void print_color_changed_idx540_matrix(Options *opts);
++void print_color_changed_idx541_matrix(Options *opts);
++void print_color_changed_idx542_matrix(Options *opts);
++void print_color_changed_idx543_matrix(Options *opts);
++void print_color_changed_idx544_matrix(Options *opts);
++void print_color_changed_idx545_matrix(Options *opts);
++void print_color_changed_idx546_matrix(Options *opts);
++void print_color_changed_idx547_matrix(Options *opts);
++void print_color_changed_idx548_matrix(Options *opts);
++void print_color_changed_idx549_matrix(Options *opts);
++void print_color_changed_idx550_matrix(Options *opts);
++void print_color_changed_idx551_matrix(Options *opts);
++void print_color_changed_idx552_matrix(Options *opts);
++void print_color_changed_idx553_matrix(Options *opts);
++void print_color_changed_idx554_matrix(Options *opts);
++void print_color_changed_idx555_matrix(Options *opts);
++void print_color_changed_idx556_matrix(Options *opts);
++void print_color_changed_idx557_matrix(Options *opts);
++void print_color_changed_idx558_matrix(Options *opts);
++void print_color_changed_idx559_matrix(Options *opts);
++void print_color_changed_idx560_matrix(Options *opts);
++void print_color_changed_idx561_matrix(Options *opts);
++void print_color_changed_idx562_matrix(Options *opts);
++void print_color_changed_idx563_matrix(Options *opts);
++void print_color_changed_idx564_matrix(Options *opts);
++void print_color_changed_idx565_matrix(Options *opts);
++void print_color_changed_idx566_matrix(Options *opts);
++void print_color_changed_idx567_matrix(Options *opts);
++void print_color_changed_idx568_matrix(Options *opts);
++void print_color_changed_idx569_matrix(Options *opts);
++void print_color_changed_idx570_matrix(Options *opts);
++void print_color_changed_idx571_matrix(Options *opts);
++void print_color_changed_idx572_matrix(Options *opts);
++void print_color_changed_idx573_matrix(Options *opts);
++void print_color_changed_idx574_matrix(Options *opts);
++void print_color_changed_idx575_matrix(Options *opts);
++void print_color_changed_idx576_matrix(Options *opts);
++void print_color_changed_idx577_matrix(Options *opts);
++void print_color_changed_idx578_matrix(Options *opts);
++void print_color_changed_idx579_matrix(Options *opts);
++void print_color_changed_idx580_matrix(Options *opts);
++void print_color_changed_idx581_matrix(Options *opts);
++void print_color_changed_idx582_matrix(Options *opts);
++void print_color_changed_idx583_matrix(Options *opts);
++void print_color_changed_idx584_matrix(Options *opts);
++void print_color_changed_idx585_matrix(Options *opts);
++void print_color_changed_idx586_matrix(Options *opts);
++void print_color_changed_idx587_matrix(Options *opts);
++void print_color_changed_idx588_matrix(Options *opts);
++void print_color_changed_idx589_matrix(Options *opts);
++void print_color_changed_idx590_matrix(Options *opts);
++void print_color_changed_idx591_matrix(Options *opts);
++void print_color_changed_idx592_matrix(Options *opts);
++void print_color_changed_idx593_matrix(Options *opts);
++void print_color_changed_idx594_matrix(Options *opts);
++void print_color_changed_idx595_matrix(Options *opts);
++void print_color_changed_idx596_matrix(Options *opts);
++void print_color_changed_idx597_matrix(Options *opts);
++void print_color_changed_idx598_matrix(Options *opts);
++void print_color_changed_idx599_matrix(Options *opts);
++void print_color_changed_idx600_matrix(Options *opts);
++void print_color_changed_idx601_matrix(Options *opts);
++void print_color_changed_idx602_matrix(Options *opts);
++void print_color_changed_idx603_matrix(Options *opts);
++void print_color_changed_idx604_matrix(Options *opts);
++void print_color_changed_idx605_matrix(Options *opts);
++void print_color_changed_idx606_matrix(Options *opts);
++void print_color_changed_idx607_matrix(Options *opts);
++void print_color_changed_idx608_matrix(Options *opts);
++void print_color_changed_idx609_matrix(Options *opts);
++void print_color_changed_idx610_matrix(Options *opts);
++void print_color_changed_idx611_matrix(Options *opts);
++void print_color_changed_idx612_matrix(Options *opts);
++void print_color_changed_idx613_matrix(Options *opts);
++void print_color_changed_idx614_matrix(Options *opts);
++void print_color_changed_idx615_matrix(Options *opts);
++void print_color_changed_idx616_matrix(Options *opts);
++void print_color_changed_idx617_matrix(Options *opts);
++void print_color_changed_idx618_matrix(Options *opts);
++void print_color_changed_idx619_matrix(Options *opts);
++void print_color_changed_idx620_matrix(Options *opts);
++void print_color_changed_idx621_matrix(Options *opts);
++void print_color_changed_idx622_matrix(Options *opts);
++void print_color_changed_idx623_matrix(Options *opts);
++void print_color_changed_idx624_matrix(Options *opts);
++void print_color_changed_idx625_matrix(Options *opts);
++void print_color_changed_idx626_matrix(Options *opts);
++void print_color_changed_idx627_matrix(Options *opts);
++void print_color_changed_idx628_matrix(Options *opts);
++void print_color_changed_idx629_matrix(Options *opts);
++void print_color_changed_idx630_matrix(Options *opts);
++void print_color_changed_idx631_matrix(Options *opts);
++void print_color_changed_idx632_matrix(Options *opts);
++void print_color_changed_idx633_matrix(Options *opts);
++void print_color_changed_idx634_matrix(Options *opts);
++void print_color_changed_idx635_matrix(Options *opts);
++void print_color_changed_idx636_matrix(Options *opts);
++void print_color_changed_idx637_matrix(Options *opts);
++void print_color_changed_idx638_matrix(Options *opts);
++void print_color_changed_idx639_matrix(Options *opts);
++void print_color_changed_idx640_matrix(Options *opts);
++void print_color_changed_idx641_matrix(Options *opts);
++void print_color_changed_idx642_matrix(Options *opts);
++void print_color_changed_idx643_matrix(Options *opts);
++void print_color_changed_idx644_matrix(Options *opts);
++void print_color_changed_idx645_matrix(Options *opts);
++void print_color_changed_idx646_matrix(Options *opts);
++void print_color_changed_idx647_matrix(Options *opts);
++void print_color_changed_idx648_matrix(Options *opts);
++void print_color_changed_idx649_matrix(Options *opts);
++void print_color_changed_idx650_matrix(Options *opts);
++void print_color_changed_idx651_matrix(Options *opts);
++void print_color_changed_idx652_matrix(Options *opts);
++void print_color_changed_idx653_matrix(Options *opts);
++void print_color_changed_idx654_matrix(Options *opts);
++void print_color_changed_idx655_matrix(Options *opts);
++void print_color_changed_idx656_matrix(Options *opts);
++void print_color_changed_idx657_matrix(Options *opts);
++void print_color_changed_idx658_matrix(Options *opts);
++void print_color_changed_idx659_matrix(Options *opts);
++void print_color_changed_idx660_matrix(Options *opts);
++void print_color_changed_idx661_matrix(Options *opts);
++void print_color_changed_idx662_matrix(Options *opts);
++void print_color_changed_idx663_matrix(Options *opts);
++void print_color_changed_idx664_matrix(Options *opts);
++void print_color_changed_idx665_matrix(Options *opts);
++void print_color_changed_idx666_matrix(Options *opts);
++void print_color_changed_idx667_matrix(Options *opts);
++void print_color_changed_idx668_matrix(Options *opts);
++void print_color_changed_idx669_matrix(Options *opts);
++void print_color_changed_idx670_matrix(Options *opts);
++void print_color_changed_idx671_matrix(Options *opts);
++void print_color_changed_idx672_matrix(Options *opts);
++void print_color_changed_idx673_matrix(Options *opts);
++void print_color_changed_idx674_matrix(Options *opts);
++void print_color_changed_idx675_matrix(Options *opts);
++void print_color_changed_idx676_matrix(Options *opts);
++void print_color_changed_idx677_matrix(Options *opts);
++void print_color_changed_idx678_matrix(Options *opts);
++void print_color_changed_idx679_matrix(Options *opts);
++void print_color_changed_idx680_matrix(Options *opts);
++void print_color_changed_idx681_matrix(Options *opts);
++void print_color_changed_idx682_matrix(Options *opts);
++void print_color_changed_idx683_matrix(Options *opts);
++void print_color_changed_idx684_matrix(Options *opts);
++void print_color_changed_idx685_matrix(Options *opts);
++void print_color_changed_idx686_matrix(Options *opts);
++void print_color_changed_idx687_matrix(Options *opts);
++void print_color_changed_idx688_matrix(Options *opts);
++void print_color_changed_idx689_matrix(Options *opts);
++void print_color_changed_idx690_matrix(Options *opts);
++void print_color_changed_idx691_matrix(Options *opts);
++void print_color_changed_idx692_matrix(Options *opts);
++void print_color_changed_idx693_matrix(Options *opts);
++void print_color_changed_idx694_matrix(Options *opts);
++void print_color_changed_idx695_matrix(Options *opts);
++void print_color_changed_idx696_matrix(Options *opts);
++void print_color_changed_idx697_matrix(Options *opts);
++void print_color_changed_idx698_matrix(Options *opts);
++void print_color_changed_idx699_matrix(Options *opts);
++void print_color_changed_idx700_matrix(Options *opts);
++void print_color_changed_idx701_matrix(Options *opts);
++void print_color_changed_idx702_matrix(Options *opts);
++void print_color_changed_idx703_matrix(Options *opts);
++void print_color_changed_idx704_matrix(Options *opts);
++void print_color_changed_idx705_matrix(Options *opts);
++void print_color_changed_idx706_matrix(Options *opts);
++void print_color_changed_idx707_matrix(Options *opts);
++void print_color_changed_idx708_matrix(Options *opts);
++void print_color_changed_idx709_matrix(Options *opts);
++void print_color_changed_idx710_matrix(Options *opts);
++void print_color_changed_idx711_matrix(Options *opts);
++void print_color_changed_idx712_matrix(Options *opts);
++void print_color_changed_idx713_matrix(Options *opts);
++void print_color_changed_idx714_matrix(Options *opts);
++void print_color_changed_idx715_matrix(Options *opts);
++void print_color_changed_idx716_matrix(Options *opts);
++void print_color_changed_idx717_matrix(Options *opts);
++void print_color_changed_idx718_matrix(Options *opts);
++void print_color_changed_idx719_matrix(Options *opts);
++void print_color_changed_idx720_matrix(Options *opts);
++void print_color_changed_idx721_matrix(Options *opts);
++void print_color_changed_idx722_matrix(Options *opts);
++void print_color_changed_idx723_matrix(Options *opts);
++void print_color_changed_idx724_matrix(Options *opts);
++void print_color_changed_idx725_matrix(Options *opts);
++void print_color_changed_idx726_matrix(Options *opts);
++void print_color_changed_idx727_matrix(Options *opts);
++void print_color_changed_idx728_matrix(Options *opts);
++void print_color_changed_idx729_matrix(Options *opts);
++void print_color_changed_idx730_matrix(Options *opts);
++void print_color_changed_idx731_matrix(Options *opts);
++void print_color_changed_idx732_matrix(Options *opts);
++void print_color_changed_idx733_matrix(Options *opts);
++void print_color_changed_idx734_matrix(Options *opts);
++void print_color_changed_idx735_matrix(Options *opts);
++void print_color_changed_idx736_matrix(Options *opts);
++void print_color_changed_idx737_matrix(Options *opts);
++void print_color_changed_idx738_matrix(Options *opts);
++void print_color_changed_idx739_matrix(Options *opts);
++void print_color_changed_idx740_matrix(Options *opts);
++void print_color_changed_idx741_matrix(Options *opts);
++void print_color_changed_idx742_matrix(Options *opts);
++void print_color_changed_idx743_matrix(Options *opts);
++void print_color_changed_idx744_matrix(Options *opts);
++void print_color_changed_idx745_matrix(Options *opts);
++void print_color_changed_idx746_matrix(Options *opts);
++void print_color_changed_idx747_matrix(Options *opts);
++void print_color_changed_idx748_matrix(Options *opts);
++void print_color_changed_idx749_matrix(Options *opts);
++void print_color_changed_idx750_matrix(Options *opts);
++void print_color_changed_idx751_matrix(Options *opts);
++void print_color_changed_idx752_matrix(Options *opts);
++void print_color_changed_idx753_matrix(Options *opts);
++void print_color_changed_idx754_matrix(Options *opts);
++void print_color_changed_idx755_matrix(Options *opts);
++void print_color_changed_idx756_matrix(Options *opts);
++void print_color_changed_idx757_matrix(Options *opts);
++void print_color_changed_idx758_matrix(Options *opts);
++void print_color_changed_idx759_matrix(Options *opts);
++void print_color_changed_idx760_matrix(Options *opts);
++void print_color_changed_idx761_matrix(Options *opts);
++void print_color_changed_idx762_matrix(Options *opts);
++void print_color_changed_idx763_matrix(Options *opts);
++void print_color_changed_idx764_matrix(Options *opts);
++void print_color_changed_idx765_matrix(Options *opts);
++void print_color_changed_idx766_matrix(Options *opts);
++void print_color_changed_idx767_matrix(Options *opts);
++void print_color_changed_idx768_matrix(Options *opts);
++void print_color_changed_idx769_matrix(Options *opts);
++void print_color_changed_idx770_matrix(Options *opts);
++void print_color_changed_idx771_matrix(Options *opts);
++void print_color_changed_idx772_matrix(Options *opts);
++void print_color_changed_idx773_matrix(Options *opts);
++void print_color_changed_idx774_matrix(Options *opts);
++void print_color_changed_idx775_matrix(Options *opts);
++void print_color_changed_idx776_matrix(Options *opts);
++void print_color_changed_idx777_matrix(Options *opts);
++void print_color_changed_idx778_matrix(Options *opts);
++void print_color_changed_idx779_matrix(Options *opts);
++void print_color_changed_idx780_matrix(Options *opts);
++void print_color_changed_idx781_matrix(Options *opts);
++void print_color_changed_idx782_matrix(Options *opts);
++void print_color_changed_idx783_matrix(Options *opts);
++void print_color_changed_idx784_matrix(Options *opts);
++void print_color_changed_idx785_matrix(Options *opts);
++void print_color_changed_idx786_matrix(Options *opts);
++void print_color_changed_idx787_matrix(Options *opts);
++void print_color_changed_idx788_matrix(Options *opts);
++void print_color_changed_idx789_matrix(Options *opts);
++void print_color_changed_idx790_matrix(Options *opts);
++void print_color_changed_idx791_matrix(Options *opts);
++void print_color_changed_idx792_matrix(Options *opts);
++void print_color_changed_idx793_matrix(Options *opts);
++void print_color_changed_idx794_matrix(Options *opts);
++void print_color_changed_idx795_matrix(Options *opts);
++void print_color_changed_idx796_matrix(Options *opts);
++void print_color_changed_idx797_matrix(Options *opts);
++void print_color_changed_idx798_matrix(Options *opts);
++void print_color_changed_idx799_matrix(Options *opts);
++void print_color_changed_idx800_matrix(Options *opts);
++void print_color_changed_idx801_matrix(Options *opts);
++void print_color_changed_idx802_matrix(Options *opts);
++void print_color_changed_idx803_matrix(Options *opts);
++void print_color_changed_idx804_matrix(Options *opts);
++void print_color_changed_idx805_matrix(Options *opts);
++void print_color_changed_idx806_matrix(Options *opts);
++void print_color_changed_idx807_matrix(Options *opts);
++void print_color_changed_idx808_matrix(Options *opts);
++void print_color_changed_idx809_matrix(Options *opts);
++void print_color_changed_idx810_matrix(Options *opts);
++void print_color_changed_idx811_matrix(Options *opts);
++void print_color_changed_idx812_matrix(Options *opts);
++void print_color_changed_idx813_matrix(Options *opts);
++void print_color_changed_idx814_matrix(Options *opts);
++void print_color_changed_idx815_matrix(Options *opts);
++void print_color_changed_idx816_matrix(Options *opts);
++void print_color_changed_idx817_matrix(Options *opts);
++void print_color_changed_idx818_matrix(Options *opts);
++void print_color_changed_idx819_matrix(Options *opts);
++void print_color_changed_idx820_matrix(Options *opts);
++void print_color_changed_idx821_matrix(Options *opts);
++void print_color_changed_idx822_matrix(Options *opts);
++void print_color_changed_idx823_matrix(Options *opts);
++void print_color_changed_idx824_matrix(Options *opts);
++void print_color_changed_idx825_matrix(Options *opts);
++void print_color_changed_idx826_matrix(Options *opts);
++void print_color_changed_idx827_matrix(Options *opts);
++void print_color_changed_idx828_matrix(Options *opts);
++void print_color_changed_idx

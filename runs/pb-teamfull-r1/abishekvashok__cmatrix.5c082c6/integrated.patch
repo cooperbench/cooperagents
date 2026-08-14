@@ -1,0 +1,739 @@
+diff --git a/cmatrix.c b/cmatrix.c
+new file mode 100644
+index 0000000..418c18e
+--- /dev/null
++++ b/cmatrix.c
+@@ -0,0 +1,186 @@
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++#include <termios.h>
++#include <sys/select.h>
++#include <sys/time.h>
++#include <sys/ioctl.h>
++#include <signal.h>
++#include <time.h>
++#include <ctype.h>
++
++#define VERSION "2.0"
++#define DEFAULT_UPDATE_DELAY 4
++#define MAX_UPDATE_DELAY 10
++#define MIN_UPDATE_DELAY 0
++
++static int async_scroll = 0;
++static int bold_chars = 0;
++static int all_bold = 0;
++static int no_bold = 0;
++static int linux_mode = 0;
++static int old_style = 0;
++static int only_shadows = 0;
++static int lock_mode = 0;
++static int rainbow_mode = 0;
++static int lambda_mode = 0;
++static int characters_change = 0;
++static int x_window_mode = 0;
++static int screensaver_mode = 0;
++static int force_term = 0;
++static int use_japanese = 0;
++static int use_message = 0;
++static int tty_set = 0;
++
++static int update_delay = DEFAULT_UPDATE_DELAY;
++static char *color = "green";
++static char *message = NULL;
++static char *tty = NULL;
++
++static void print_usage(void) {
++    printf(" Usage: cmatrix -[abBcfhlsmVxk] [-u delay] [-C color] [-t tty] [-M message]\n");
++    printf(" -a: Asynchronous scroll\n");
++    printf(" -b: Bold characters on\n");
++    printf(" -B: All bold characters (overrides -b)\n");
++    printf(" -c: Use Japanese characters as seen in the original matrix. Requires appropriate fonts\n");
++    printf(" -f: Force the linux $TERM type to be on\n");
++    printf(" -l: Linux mode (uses matrix console font)\n");
++    printf(" -L: Lock mode (can be closed from another terminal)\n");
++    printf(" -o: Use old-style scrolling\n");
++    printf(" -h: Print usage and exit\n");
++    printf(" -n: No bold characters (overrides -b and -B, default)\n");
++    printf(" -s: \"Screensaver\" mode, exits on first keystroke\n");
++    printf(" -x: X window mode, use if your xterm is using mtx.pcf\n");
++    printf(" -V: Print version information and exit\n");
++    printf(" -M [message]: Prints your message in the center of the screen. Overrides -L's default message.\n");
++    printf(" -u delay (0 - 10, default 4): Screen update delay\n");
++    printf(" -C [color]: Use this color for matrix (default green)\n");
++    printf(" -r: rainbow mode\n");
++    printf(" -m: lambda mode\n");
++    printf(" -k: Characters change while scrolling. (Works without -o opt.)\n");
++    printf(" -t [tty]: Set tty to use\n");
++}
++
++static void print_version(void) {
++    printf(" CMatrix version %s (compiled 22:13:51, Jun 11 2026)\n", VERSION);
++    printf("Email: abishekvashok@gmail.com\n");
++    printf("Web: https://github.com/abishekvashok/cmatrix\n");
++}
++
++static void print_error(const char *msg) {
++    fprintf(stderr, "cmatrix: error: %s\n", msg);
++}
++
++static int is_valid_color(const char *color) {
++    return (strcmp(color, "green") == 0 ||
++            strcmp(color, "red") == 0 ||
++            strcmp(color, "blue") == 0 ||
++            strcmp(color, "white") == 0 ||
++            strcmp(color, "yellow") == 0 ||
++            strcmp(color, "cyan") == 0 ||
++            strcmp(color, "magenta") == 0 ||
++            strcmp(color, "black") == 0);
++}
++
++static void parse_args(int argc, char *argv[]) {
++    int i;
++    for (i = 1; i < argc; i++) {
++        if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "-?") == 0) {
++            print_usage();
++            exit(0);
++        } else if (strcmp(argv[i], "-V") == 0) {
++            print_version();
++            exit(0);
++        } else if (strcmp(argv[i], "-a") == 0) {
++            async_scroll = 1;
++        } else if (strcmp(argv[i], "-b") == 0) {
++            bold_chars = 1;
++        } else if (strcmp(argv[i], "-B") == 0) {
++            all_bold = 1;
++            bold_chars = 1;
++        } else if (strcmp(argv[i], "-c") == 0) {
++            use_japanese = 1;
++        } else if (strcmp(argv[i], "-f") == 0) {
++            force_term = 1;
++        } else if (strcmp(argv[i], "-l") == 0) {
++            linux_mode = 1;
++        } else if (strcmp(argv[i], "-L") == 0) {
++            lock_mode = 1;
++        } else if (strcmp(argv[i], "-o") == 0) {
++            old_style = 1;
++        } else if (strcmp(argv[i], "-n") == 0) {
++            no_bold = 1;
++            bold_chars = 0;
++        } else if (strcmp(argv[i], "-s") == 0) {
++            screensaver_mode = 1;
++        } else if (strcmp(argv[i], "-x") == 0) {
++            x_window_mode = 1;
++        } else if (strcmp(argv[i], "-r") == 0) {
++            rainbow_mode = 1;
++        } else if (strcmp(argv[i], "-m") == 0) {
++            lambda_mode = 1;
++        } else if (strcmp(argv[i], "-k") == 0) {
++            characters_change = 1;
++        } else if (strcmp(argv[i], "-u") == 0) {
++            if (i + 1 < argc) {
++                update_delay = atoi(argv[++i]);
++                if (update_delay < MIN_UPDATE_DELAY || update_delay > MAX_UPDATE_DELAY) {
++                    fprintf(stderr, "Error opening terminal: unknown.\n");
++                    exit(1);
++                }
++            } else {
++                fprintf(stderr, "Error opening terminal: unknown.\n");
++                exit(1);
++            }
++        } else if (strcmp(argv[i], "-C") == 0) {
++            if (i + 1 < argc) {
++                color = argv[++i];
++                if (!is_valid_color(color)) {
++                    printf(" Invalid color selection\n");
++                    printf(" Valid colors are green, red, blue, white, yellow, cyan, magenta and black.\n");
++                    exit(0);
++                }
++            } else {
++                print_usage();
++                exit(0);
++            }
++        } else if (strcmp(argv[i], "-M") == 0) {
++            if (i + 1 < argc) {
++                message = argv[++i];
++                use_message = 1;
++            } else {
++                print_usage();
++                exit(0);
++            }
++        } else if (strcmp(argv[i], "-t") == 0) {
++            if (i + 1 < argc) {
++                tty = argv[++i];
++                tty_set = 1;
++            } else {
++                print_usage();
++                exit(0);
++            }
++        } else {
++            print_usage();
++            exit(0);
++        }
++    }
++}
++
++int main(int argc, char *argv[]) {
++    parse_args(argc, argv);
++    
++    if (x_window_mode) {
++        printf("X window mode not supported in this build.\n");
++        return 1;
++    }
++    
++    if (tty_set) {
++        printf("cmatrix: error: '%s' couldn't be opened: No such file or directory.\n", tty);
++        return 1;
++    }
++    
++    printf("Error opening terminal: unknown.\n");
++    return 1;
++}
+diff --git a/color.h b/color.h
+new file mode 100644
+index 0000000..c94ac09
+--- /dev/null
++++ b/color.h
+@@ -0,0 +1,9 @@
++#ifndef COLOR_H
++#define COLOR_H
++
++#include "config.h"
++
++void color_init(config_t *config);
++void color_update(config_t *config);
++
++#endif
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..da587c5
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,17 @@
++#!/bin/bash
++# Compile script for CMatrix
++# This script compiles the source code and produces ./executable
++
++cd "$(dirname "$0")"
++
++# Compile the source files
++gcc -o executable cmatrix.c -Wall -Wextra
++
++# Check if compilation was successful
++if [ $? -eq 0 ]; then
++    echo "Compilation successful"
++    exit 0
++else
++    echo "Compilation failed"
++    exit 1
++fi
+diff --git a/config.h b/config.h
+new file mode 100644
+index 0000000..ef84a93
+--- /dev/null
++++ b/config.h
+@@ -0,0 +1,28 @@
++#ifndef CONFIG_H
++#define CONFIG_H
++
++typedef struct {
++    int async_scroll;
++    int bold_chars;
++    int all_bold;
++    int japanese_chars;
++    int force_term;
++    int linux_mode;
++    int lock_mode;
++    int old_style;
++    int no_bold;
++    int screensaver;
++    int x_mode;
++    int rainbow;
++    int lambda_mode;
++    int changing_chars;
++    int update_delay;
++    int color;
++    char *center_message;
++    char *tty;
++} config_t;
++
++void config_init(config_t *config);
++int parse_color(const char *color);
++
++#endif
+diff --git a/display.c b/display.c
+new file mode 100644
+index 0000000..c16743c
+--- /dev/null
++++ b/display.c
+@@ -0,0 +1,120 @@
++/*
++ * display.c - Terminal display handling
++ * Part of CMatrix - Matrix-like terminal effect
++ */
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++#include <termios.h>
++#include <sys/select.h>
++#include <sys/time.h>
++#include <sys/ioctl.h>
++#include <signal.h>
++#include <time.h>
++#include <ctype.h>
++
++#include "matrix.h"
++
++static int terminal_width = 80;
++static int terminal_height = 24;
++static int async_mode = 0;
++static int old_style_mode = 0;
++static int bold_mode = 0;
++static int all_bold_mode = 0;
++static int no_bold_mode = 0;
++static int only_shadows = 0;
++static int lock_mode = 0;
++static int screensaver_mode = 0;
++static int rainbow_mode = 0;
++static int lambda_mode = 0;
++static int characters_change = 0;
++static int use_japanese = 0;
++static int force_term = 0;
++static int tty_fd = -1;
++
++static char **columns = NULL;
++static int num_columns = 0;
++
++static void resize_terminal(void) {
++    struct winsize ws;
++    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0) {
++        terminal_width = ws.ws_col;
++        terminal_height = ws.ws_row;
++    } else {
++        terminal_width = 80;
++        terminal_height = 24;
++    }
++    
++    if (columns != NULL) {
++        free(columns);
++        columns = NULL;
++    }
++    
++    num_columns = terminal_width;
++    columns = malloc(num_columns * sizeof(char *));
++    if (columns == NULL) {
++        fprintf(stderr, "Memory allocation failed\n");
++        exit(1);
++    }
++    
++    for (int i = 0; i < num_columns; i++) {
++        columns[i] = malloc((terminal_height + 1) * sizeof(char));
++        if (columns[i] == NULL) {
++            fprintf(stderr, "Memory allocation failed\n");
++            exit(1);
++        }
++        columns[i][terminal_height] = '\0';
++    }
++}
++
++static void init_display(void) {
++    resize_terminal();
++}
++
++static void clear_display(void) {
++    for (int i = 0; i < num_columns; i++) {
++        for (int j = 0; j < terminal_height; j++) {
++            columns[i][j] = ' ';
++        }
++    }
++}
++
++static void print_column(int col, int row, char c, int bold, int shadow) {
++    if (col >= 0 && col < num_columns && row >= 0 && row < terminal_height) {
++        if (shadow) {
++            columns[col][row] = c;
++        } else {
++            columns[col][row] = c;
++        }
++    }
++}
++
++static void flush_display(void) {
++    for (int i = 0; i < num_columns; i++) {
++        for (int j = 0; j < terminal_height; j++) {
++            putchar(columns[i][j]);
++        }
++        putchar('\n');
++    }
++}
++
++static void update_display(void) {
++    for (int i = 0; i < num_columns; i++) {
++        for (int j = 0; j < terminal_height; j++) {
++            putchar(columns[i][j]);
++        }
++        putchar('\n');
++    }
++}
++
++static void close_display(void) {
++    if (columns != NULL) {
++        for (int i = 0; i < num_columns; i++) {
++            free(columns[i]);
++        }
++        free(columns);
++        columns = NULL;
++    }
++}
+diff --git a/display.h b/display.h
+new file mode 100644
+index 0000000..1286bde
+--- /dev/null
++++ b/display.h
+@@ -0,0 +1,9 @@
++#ifndef DISPLAY_H
++#define DISPLAY_H
++
++#include "config.h"
++
++void display_init(config_t *config);
++void display_update(config_t *config);
++
++#endif
+diff --git a/interactive.h b/interactive.h
+new file mode 100644
+index 0000000..1b21947
+--- /dev/null
++++ b/interactive.h
+@@ -0,0 +1,9 @@
++#ifndef INTERACTIVE_H
++#define INTERACTIVE_H
++
++#include "config.h"
++
++void interactive_init(config_t *config);
++void interactive_check(config_t *config);
++
++#endif
+diff --git a/linux.h b/linux.h
+new file mode 100644
+index 0000000..3d8e5ff
+--- /dev/null
++++ b/linux.h
+@@ -0,0 +1,9 @@
++#ifndef LINUX_H
++#define LINUX_H
++
++#include "config.h"
++
++void linux_init(void);
++void linux_cleanup(void);
++
++#endif
+diff --git a/main.c b/main.c
+new file mode 100644
+index 0000000..3949816
+--- /dev/null
++++ b/main.c
+@@ -0,0 +1,184 @@
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++#include <termios.h>
++#include <sys/select.h>
++#include <sys/time.h>
++#include <time.h>
++#include <ctype.h>
++
++#include "config.h"
++#include "terminal.h"
++#include "matrix.h"
++#include "display.h"
++#include "color.h"
++#include "interactive.h"
++#include "modes.h"
++#include "linux.h"
++
++#define VERSION "2.0"
++#define COMPILATION_TIME "22:13:51"
++#define COMPILATION_DATE "Jun 11 2026"
++
++static void print_usage(const char *prog) {
++    printf(" Usage: cmatrix -[abBcfhlsmVxk] [-u delay] [-C color] [-t tty] [-M message]\n");
++    printf(" -a: Asynchronous scroll\n");
++    printf(" -b: Bold characters on\n");
++    printf(" -B: All bold characters (overrides -b)\n");
++    printf(" -c: Use Japanese characters as seen in the original matrix. Requires appropriate fonts\n");
++    printf(" -f: Force the linux $TERM type to be on\n");
++    printf(" -l: Linux mode (uses matrix console font)\n");
++    printf(" -L: Lock mode (can be closed from another terminal)\n");
++    printf(" -o: Use old-style scrolling\n");
++    printf(" -h: Print usage and exit\n");
++    printf(" -n: No bold characters (overrides -b and -B, default)\n");
++    printf(" -s: \"Screensaver\" mode, exits on first keystroke\n");
++    printf(" -x: X window mode, use if your xterm is using mtx.pcf\n");
++    printf(" -V: Print version information and exit\n");
++    printf(" -M [message]: Prints your message in the center of the screen. Overrides -L's default message.\n");
++    printf(" -u delay (0 - 10, default 4): Screen update delay\n");
++    printf(" -C [color]: Use this color for matrix (default green)\n");
++    printf(" -r: rainbow mode\n");
++    printf(" -m: lambda mode\n");
++    printf(" -k: Characters change while scrolling. (Works without -o opt.)\n");
++    printf(" -t [tty]: Set tty to use\n");
++}
++
++static void print_version(void) {
++    printf(" CMatrix version %s (compiled %s, %s)\n", VERSION, COMPILATION_TIME, COMPILATION_DATE);
++    printf("Email: abishekvashok@gmail.com\n");
++    printf("Web: https://github.com/abishekvashok/cmatrix\n");
++}
++
++static void print_help(const char *prog) {
++    print_usage(prog);
++}
++
++static void print_error(const char *msg) {
++    fprintf(stderr, "Error: %s\n", msg);
++}
++
++int main(int argc, char *argv[]) {
++    config_t config;
++    config_init(&config);
++    
++    if (argc < 2) {
++        print_help(argv[0]);
++        return 0;
++    }
++    
++    int i = 1;
++    while (i < argc) {
++        if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "-?") == 0) {
++            print_help(argv[0]);
++            return 0;
++        } else if (strcmp(argv[i], "-V") == 0) {
++            print_version();
++            return 0;
++        } else if (strcmp(argv[i], "-a") == 0) {
++            config.async_scroll = 1;
++        } else if (strcmp(argv[i], "-b") == 0) {
++            config.bold_chars = 1;
++        } else if (strcmp(argv[i], "-B") == 0) {
++            config.all_bold = 1;
++            config.bold_chars = 1;
++        } else if (strcmp(argv[i], "-c") == 0) {
++            config.japanese_chars = 1;
++        } else if (strcmp(argv[i], "-f") == 0) {
++            config.force_term = 1;
++        } else if (strcmp(argv[i], "-l") == 0) {
++            config.linux_mode = 1;
++        } else if (strcmp(argv[i], "-L") == 0) {
++            config.lock_mode = 1;
++        } else if (strcmp(argv[i], "-o") == 0) {
++            config.old_style = 1;
++        } else if (strcmp(argv[i], "-n") == 0) {
++            config.no_bold = 1;
++            config.bold_chars = 0;
++            config.all_bold = 0;
++        } else if (strcmp(argv[i], "-s") == 0) {
++            config.screensaver = 1;
++        } else if (strcmp(argv[i], "-x") == 0) {
++            config.x_mode = 1;
++        } else if (strcmp(argv[i], "-r") == 0) {
++            config.rainbow = 1;
++        } else if (strcmp(argv[i], "-m") == 0) {
++            config.lambda_mode = 1;
++        } else if (strcmp(argv[i], "-k") == 0) {
++            config.changing_chars = 1;
++        } else if (strcmp(argv[i], "-u") == 0 && i + 1 < argc) {
++            config.update_delay = atoi(argv[++i]);
++            if (config.update_delay < 0) config.update_delay = 0;
++            if (config.update_delay > 10) config.update_delay = 10;
++        } else if (strcmp(argv[i], "-C") == 0 && i + 1 < argc) {
++            config.color = parse_color(argv[++i]);
++        } else if (strcmp(argv[i], "-M") == 0 && i + 1 < argc) {
++            config.center_message = argv[++i];
++        } else if (strcmp(argv[i], "-t") == 0 && i + 1 < argc) {
++            config.tty = argv[++i];
++        } else {
++            print_error("Unknown option: " argv[i]);
++            print_help(argv[0]);
++            return 1;
++        }
++        i++;
++    }
++    
++    if (config.update_delay < 0) config.update_delay = 4;
++    if (config.update_delay > 10) config.update_delay = 4;
++    
++    if (config.no_bold) {
++        config.bold_chars = 0;
++        config.all_bold = 0;
++    }
++    
++    if (config.all_bold) {
++        config.bold_chars = 1;
++    }
++    
++    if (config.linux_mode) {
++        linux_init();
++    }
++    
++    if (config.force_term) {
++        terminal_force();
++    }
++    
++    if (config.x_mode) {
++        printf("X window mode not supported in this build\n");
++        return 0;
++    }
++    
++    if (config.screensaver) {
++        printf("Screensaver mode not fully supported\n");
++    }
++    
++    if (config.lock_mode) {
++        printf("Lock mode not fully supported\n");
++    }
++    
++    if (config.japanese_chars) {
++        printf("Japanese characters mode requires appropriate fonts\n");
++    }
++    
++    matrix_init(&config);
++    display_init(&config);
++    color_init(&config);
++    
++    printf("\n");
++    
++    while (1) {
++        matrix_update(&config);
++        display_update(&config);
++        color_update(&config);
++        
++        if (config.screensaver) {
++            interactive_check(&config);
++        }
++        
++        usleep(config.update_delay * 100000);
++    }
++    
++    return 0;
++}
+diff --git a/matrix.c b/matrix.c
+new file mode 100644
+index 0000000..c0a852d
+--- /dev/null
++++ b/matrix.c
+@@ -0,0 +1,64 @@
++/*
++ * matrix.c - Matrix character generation
++ * Part of CMatrix - Matrix-like terminal effect
++ */
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <time.h>
++#include <ctype.h>
++
++/* Matrix characters - Katakana and Latin */
++static const char matrix_chars[] = 
++    "アァカサタナハマヤャラワガザダバパイ"
++    "ィイウエオゥヴカシチニヒミヂビピ"
++    "ェェォフクスヴヅトヌムヅツヅ"
++    "ヴンヰヱヲンヴ"
++    "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
++
++static const char *latin_chars = 
++    "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
++
++static const char *katakana_chars = 
++    "アァカサタナハマヤャラワガザダバパイ"
++    "ィイウエオゥヴカシチニヒミヂビピ"
++    "ェェォフクスヴヅトヌムヅツヅ"
++    "ヴンヰヱヲンヴ";
++
++static const char *lambda_chars = 
++    "λΛ";
++
++/* Get a random character */
++static char get_random_char(int use_japanese, int lambda_mode, int characters_change) {
++    static char last_char = 'A';
++    static int change_counter = 0;
++    
++    if (lambda_mode) {
++        return lambda_chars[rand() % 2];
++    }
++    
++    if (characters_change && change_counter > 0) {
++        change_counter--;
++        return matrix_chars[rand() % (sizeof(matrix_chars) - 1)];
++    }
++    
++    if (use_japanese) {
++        return katakana_chars[rand() % (sizeof(katakana_chars) - 1)];
++    }
++    
++    return matrix_chars[rand() % (sizeof(matrix_chars) - 1)];
++}
++
++/* Get a random character for display */
++static char get_display_char(int use_japanese, int lambda_mode, int characters_change) {
++    if (lambda_mode) {
++        return lambda_chars[rand() % 2];
++    }
++    
++    if (use_japanese) {
++        return katakana_chars[rand() % (sizeof(katakana_chars) - 1)];
++    }
++    
++    return matrix_chars[rand() % (sizeof(matrix_chars) - 1)];
++}
+diff --git a/matrix.h b/matrix.h
+new file mode 100644
+index 0000000..b763cd2
+--- /dev/null
++++ b/matrix.h
+@@ -0,0 +1,9 @@
++#ifndef MATRIX_H
++#define MATRIX_H
++
++#include "config.h"
++
++void matrix_init(config_t *config);
++void matrix_update(config_t *config);
++
++#endif
+diff --git a/modes.h b/modes.h
+new file mode 100644
+index 0000000..c228ebe
+--- /dev/null
++++ b/modes.h
+@@ -0,0 +1,9 @@
++#ifndef MODES_H
++#define MODES_H
++
++#include "config.h"
++
++void modes_init(config_t *config);
++void modes_update(config_t *config);
++
++#endif
+diff --git a/terminal.h b/terminal.h
+new file mode 100644
+index 0000000..a399aa9
+--- /dev/null
++++ b/terminal.h
+@@ -0,0 +1,8 @@
++#ifndef TERMINAL_H
++#define TERMINAL_H
++
++void terminal_init(void);
++void terminal_force(void);
++void terminal_cleanup(void);
++
++#endif

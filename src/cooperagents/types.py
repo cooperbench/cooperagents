@@ -202,6 +202,11 @@ class TeamSpec:
     original, best-measured base 15.7): visible .rej/marker damage routes more
     pairs through repair, which the 9B CAN fix — vs 3-way's silent semantic
     breakage, which it can't (q5g 13.4)."""
+    agent_time_limit: int | None = None
+    """Wall-clock cap (seconds) per team agent. Team-goal finding (ProgramBench
+    round 0): an agent politely polling for a teammate's patch that never
+    arrives burns its full step budget at sleep-poll pace (~11h observed).
+    A time cap bounds that tail; None = uncapped (CooperBench behavior)."""
     team_roles: bool = False
     """Complete-Team cell (CooperBench team-harness analogue): lead/member role
     asymmetry + shared scratchpad volume at /workspace/shared mounted in every

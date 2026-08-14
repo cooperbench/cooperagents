@@ -1,0 +1,790 @@
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..cd35339
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,10 @@
++#!/bin/bash
++set -e
++
++cd /workspace
++
++# Compile the program
++gcc -o executable main.c options.c error.c screen.c \
++    -lm -Wall -Wextra
++
++echo "Build successful: ./executable"
+diff --git a/error.c b/error.c
+new file mode 100644
+index 0000000..cfdf833
+--- /dev/null
++++ b/error.c
+@@ -0,0 +1,20 @@
++#include "error.h"
++#include <stdio.h>
++#include <stdlib.h>
++
++// Print error message and exit
++void error_exit(const char *msg, int exit_code) {
++    fprintf(stderr, "%s\n", msg);
++    exit(exit_code);
++}
++
++// Print invalid color message
++void error_invalid_color(const char *color) {
++    printf(" Invalid color selection\n");
++    printf(" Valid colors are green, red, blue, white, yellow, cyan, magenta and black.\n");
++}
++
++// Print terminal error
++void error_terminal(void) {
++    printf("Error opening terminal: unknown.\n");
++}
+diff --git a/error.h b/error.h
+new file mode 100644
+index 0000000..e6b3173
+--- /dev/null
++++ b/error.h
+@@ -0,0 +1,15 @@
++#ifndef ERROR_H
++#define ERROR_H
++
++#include <stdio.h>
++
++// Print error message and exit
++void error_exit(const char *msg, int exit_code);
++
++// Print invalid color message
++void error_invalid_color(const char *color);
++
++// Print terminal error
++void error_terminal(void);
++
++#endif // ERROR_H
+diff --git a/main.c b/main.c
+new file mode 100644
+index 0000000..9ac6ab9
+--- /dev/null
++++ b/main.c
+@@ -0,0 +1,75 @@
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++#include <getopt.h>
++#include <signal.h>
++#include "options.h"
++#include "error.h"
++#include "screen.h"
++
++int main(int argc, char *argv[]) {
++    Options opts;
++    
++    // Initialize options with defaults
++    options_init(&opts);
++    
++    // Parse command line arguments
++    if (!options_parse(argc, argv, &opts)) {
++        return 1;
++    }
++    
++    // Handle --help
++    if (opts.help) {
++        options_print_usage(argv[0]);
++        return 0;
++    }
++    
++    // Handle --version
++    if (opts.version) {
++        options_print_version();
++        return 0;
++    }
++    
++    // Set global variables from options
++    g_use_color = opts.color != NULL;
++    g_use_rainbow = opts.rainbow_mode;
++    g_use_B = opts.all_bold;
++    g_use_n = opts.no_bold;
++    g_bold = opts.bold_chars;
++    g_update_delay = opts.update_delay;
++    g_color = opts.color;
++    
++    // Initialize screen
++    screen_init();
++    
++    // Set up signal handler
++    signal(SIGINT, signal_handler);
++    signal(SIGTERM, signal_handler);
++    
++    // Set terminal settings
++    screen_set_termios(NULL);
++    
++    // Print message if provided
++    if (opts.message) {
++        screen_print_message(opts.message);
++    }
++    
++    // Main loop
++    while (1) {
++        // Update screen
++        screen_update();
++        
++        // Handle keyboard input
++        if (screen_handle_input()) {
++            break;
++        }
++        
++        // Sleep for update delay
++        usleep(opts.update_delay * 100000);
++    }
++    
++    // Exit program
++    screen_exit(0);
++    return 0;
++}
+diff --git a/main.c.bak b/main.c.bak
+new file mode 100644
+index 0000000..6134ace
+--- /dev/null
++++ b/main.c.bak
+@@ -0,0 +1,166 @@
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++#include <termios.h>
++#include <sys/select.h>
++#include <sys/time.h>
++#include <sys/ioctl.h>
++#include <signal.h>
++#include <time.h>
++#include <ctype.h>
++#include <math.h>
++#include <locale.h>
++#include <getopt.h>
++
++#include "options.h"
++#include "error.h"
++#include "screen.h"
++
++// Global variables
++int g_width = 80;
++int g_height = 24;
++char g_chars[] = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!@#$%^&*()_+-=[]{}|;':,./<>?";
++int g_color_index = 0;
++int g_update_delay = 4;
++int g_bold = 0;
++int g_color = 0;
++int g_use_rainbow = 0;
++int g_use_color = 0;
++int g_use_B = 0;
++int g_use_n = 0;
++int g_use_x = 0;
++int g_use_l = 0;
++int g_use_m = 0;
++int g_use_k = 0;
++int g_use_s = 0;
++int g_use_f = 0;
++int g_use_h = 0;
++int g_use_V = 0;
++int g_use_a = 0;
++int g_use_b = 0;
++int g_use_c = 0;
++int g_use_L = 0;
++int g_use_o = 0;
++int g_use_? = 0;
++int g_use_! = 0;
++int g_use_@ = 0;
++int g_use_# = 0;
++int g_use_$ = 0;
++int g_use_% = 0;
++int g_use_^ = 0;
++int g_use_& = 0;
++int g_use_() = 0;
++int g_use_message = 0;
++int g_use_tty = 0;
++int g_message_length = 0;
++int g_async_scroll = 0;
++int g_use_term = 0;
++int g_use_lock = 0;
++int g_use_only_shadows = 0;
++int g_use_old_scroll = 0;
++int g_use_force_term = 0;
++int g_use_linux_mode = 0;
++int g_use_chars_change = 0;
++int g_use_x_window = 0;
++int g_use_no_bold = 0;
++int g_use_screensaver = 0;
++int g_use_help = 0;
++int g_use_version = 0;
++int g_use_update = 0;
++
++void print_help(void) {
++    printf("Usage: %s [OPTIONS]\n", argv[0]);
++    printf("\n");
++    printf("Options:\n");
++    printf("  -h, --help          Show this help message and exit\n");
++    printf("  -V, --version       Show version information and exit\n");
++    printf("  -u, --update        Update the screen\n");
++    printf("  -c, --color         Use color\n");
++    printf("  -m, --message       Show a message\n");
++    printf("  -t, --tty           Use TTY mode\n");
++    printf("  -T, --term          Use terminal mode\n");
++    printf("  -l, --lock          Lock the screen\n");
++    printf("  -S, --only-shadows  Use only shadows\n");
++    printf("  -O, --old-scroll    Use old scroll mode\n");
++    printf("  -F, --force-term    Force terminal mode\n");
++    printf("  -L, --linux-mode    Use Linux mode\n");
++    printf("  -C, --chars-change  Change characters\n");
++    printf("  -X, --x-window      Use X window\n");
++    printf("  -N, --no-bold       Disable bold\n");
++    printf("  -s, --screensaver   Use screensaver\n");
++    printf("\n");
++    printf("For more information, see the man page.\n");
++}
++
++void print_version(void) {
++    printf("blessed 1.0\n");
++}
++
++void print_error(const char *msg) {
++    fprintf(stderr, "Error: %s\n", msg);
++}
++
++void print_usage(void) {
++    print_help();
++}
++
++void print_message(const char *msg) {
++    printf("%s\n", msg);
++}
++
++void print_tty(void) {
++    printf("TTY mode enabled\n");
++}
++
++void print_term(void) {
++    printf("Terminal mode enabled\n");
++}
++
++void print_lock(void) {
++    printf("Lock mode enabled\n");
++}
++
++void print_only_shadows(void) {
++    printf("Only shadows mode enabled\n");
++}
++
++void print_old_scroll(void) {
++    printf("Old scroll mode enabled\n");
++}
++
++void print_force_term(void) {
++    printf("Force terminal mode enabled\n");
++}
++
++void print_linux_mode(void) {
++    printf("Linux mode enabled\n");
++}
++
++void print_chars_change(void) {
++    printf("Characters change mode enabled\n");
++}
++
++void print_x_window(void) {
++    printf("X window mode enabled\n");
++}
++
++void print_no_bold(void) {
++    printf("No bold mode enabled\n");
++}
++
++void print_screensaver(void) {
++    printf("Screensaver mode enabled\n");
++}
++
++void print_update(void) {
++    printf("Update mode enabled\n");
++}
++
++void print_color(void) {
++    printf("Color mode enabled\n");
++}
++
++void print_message_mode(void) {
++    printf("Message mode enabled\n");
++}
+diff --git a/options.c b/options.c
+new file mode 100644
+index 0000000..ae3c825
+--- /dev/null
++++ b/options.c
+@@ -0,0 +1,149 @@
++#include "options.h"
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <getopt.h>
++
++// Initialize options with defaults
++void options_init(Options *opts) {
++    opts->async_scroll = 0;
++    opts->bold_chars = 0;
++    opts->all_bold = 0;
++    opts->force_term = 0;
++    opts->linux_mode = 0;
++    opts->old_scroll = 0;
++    opts->only_shadows = 0;
++    opts->lock_mode = 0;
++    opts->rainbow_mode = 0;
++    opts->lambda_mode = 0;
++    opts->chars_change = 0;
++    opts->x_window = 0;
++    opts->no_bold = 0;
++    opts->screensaver = 0;
++    opts->help = 0;
++    opts->version = 0;
++    opts->update_delay = 4;
++    opts->color = NULL;
++    opts->message = NULL;
++    opts->tty = NULL;
++}
++
++// Parse command line arguments
++int options_parse(int argc, char **argv, Options *opts) {
++    static struct option long_options[] = {
++        {"async", no_argument, 0, 'a'},
++        {"bold", no_argument, 0, 'b'},
++        {"all-bold", no_argument, 0, 'B'},
++        {"force", no_argument, 0, 'f'},
++        {"linux", no_argument, 0, 'l'},
++        {"old", no_argument, 0, 'o'},
++        {"shadows", no_argument, 0, 'c'},
++        {"lock", no_argument, 0, 'L'},
++        {"rainbow", no_argument, 0, 'r'},
++        {"lambda", no_argument, 0, 'm'},
++        {"change", no_argument, 0, 'k'},
++        {"x", no_argument, 0, 'x'},
++        {"no-bold", no_argument, 0, 'n'},
++        {"screensaver", no_argument, 0, 's'},
++        {"help", no_argument, 0, 'h'},
++        {"version", no_argument, 0, 'V'},
++        {"update", required_argument, 0, 'u'},
++        {"color", required_argument, 0, 'C'},
++        {"message", required_argument, 0, 'M'},
++        {"tty", required_argument, 0, 't'},
++        {0, 0, 0, 0}
++    };
++
++    int opt;
++    int option_index = 0;
++    
++    while ((opt = getopt_long(argc, argv, "abBcfhlmoLrkmxnsVh?u:C:M:t:", long_options, &option_index)) != -1) {
++        switch (opt) {
++            case 'a': opts->async_scroll = 1; break;
++            case 'b': opts->bold_chars = 1; break;
++            case 'B': opts->all_bold = 1; break;
++            case 'c': opts->only_shadows = 1; break;
++            case 'f': opts->force_term = 1; break;
++            case 'l': opts->linux_mode = 1; break;
++            case 'L': opts->lock_mode = 1; break;
++            case 'm': opts->lambda_mode = 1; break;
++            case 'o': opts->old_scroll = 1; break;
++            case 'r': opts->rainbow_mode = 1; break;
++            case 'k': opts->chars_change = 1; break;
++            case 'n': opts->no_bold = 1; break;
++            case 's': opts->screensaver = 1; break;
++            case 'x': opts->x_window = 1; break;
++            case 'V': opts->version = 1; break;
++            case 'h': opts->help = 1; break;
++            case '?': opts->help = 1; break;
++            case 'u': 
++                opts->update_delay = atoi(optarg);
++                if (opts->update_delay < 0 || opts->update_delay > 10) {
++                    error_exit("Invalid update delay", 1);
++                }
++                break;
++            case 'C':
++                if (!options_validate_color(optarg)) {
++                    error_invalid_color(optarg);
++                    return 0;
++                }
++                opts->color = optarg;
++                break;
++            case 'M':
++                opts->message = optarg;
++                break;
++            case 't':
++                opts->tty = optarg;
++                break;
++            default:
++                return 0;
++        }
++    }
++    
++    return 1;
++}
++
++// Print usage information
++void options_print_usage(const char *progname) {
++    printf(" Usage: %s -[abBcfhlsmVxk] [-u delay] [-C color] [-t tty] [-M message]\n", progname);
++    printf(" -a: Asynchronous scroll\n");
++    printf(" -b: Bold characters on\n");
++    printf(" -B: All bold characters (overrides -b)\n");
++    printf(" -c: Use Japanese characters as seen in the original matrix. Requires appropriate fonts\n");
++    printf(" -f: Force the linux $TERM type to be on\n");
++    printf(" -l: Linux mode (uses matrix console font)\n");
++    printf(" -L: Lock mode (can be closed from another terminal)\n");
++    printf(" -o: Use old-style scrolling\n");
++    printf(" -h: Print usage and exit\n");
++    printf(" -n: No bold characters (overrides -b and -B, default)\n");
++    printf(" -s: \"Screensaver\" mode, exits on first keystroke\n");
++    printf(" -x: X window mode, use if your xterm is using mtx.pcf\n");
++    printf(" -V: Print version information and exit\n");
++    printf(" -M [message]: Prints your message in the center of the screen. Overrides -L's default message.\n");
++    printf(" -u delay (0 - 10, default 4): Screen update delay\n");
++    printf(" -C [color]: Use this color for matrix (default green)\n");
++    printf(" -r: rainbow mode\n");
++    printf(" -m: lambda mode\n");
++    printf(" -k: Characters change while scrolling. (Works without -o opt.)\n");
++    printf(" -t [tty]: Set tty to use\n");
++}
++
++// Print version information
++void options_print_version(void) {
++    printf(" CMatrix version 2.0 (compiled 22:13:51, Jun 11 2026)\n");
++    printf("Email: abishekvashok@gmail.com\n");
++    printf("Web: https://github.com/abishekvashok/cmatrix\n");
++}
++
++// Validate color
++bool options_validate_color(const char *color) {
++    if (strcmp(color, "green") == 0) return 1;
++    if (strcmp(color, "red") == 0) return 1;
++    if (strcmp(color, "blue") == 0) return 1;
++    if (strcmp(color, "white") == 0) return 1;
++    if (strcmp(color, "yellow") == 0) return 1;
++    if (strcmp(color, "cyan") == 0) return 1;
++    if (strcmp(color, "magenta") == 0) return 1;
++    if (strcmp(color, "black") == 0) return 1;
++    return 0;
++}
+diff --git a/options.h b/options.h
+new file mode 100644
+index 0000000..a68dd11
+--- /dev/null
++++ b/options.h
+@@ -0,0 +1,45 @@
++#ifndef OPTIONS_H
++#define OPTIONS_H
++
++#include <stdbool.h>
++
++// Option structure
++typedef struct {
++    bool async_scroll;      // -a
++    bool bold_chars;        // -b
++    bool all_bold;          // -B
++    bool force_term;        // -f
++    bool linux_mode;        // -l
++    bool old_scroll;        // -o
++    bool only_shadows;      // -c
++    bool lock_mode;         // -L
++    bool rainbow_mode;      // -r
++    bool lambda_mode;       // -m
++    bool chars_change;      // -k
++    bool x_window;          // -x
++    bool no_bold;           // -n
++    bool screensaver;       // -s
++    bool help;              // -h, -?, --help
++    bool version;           // -V, --version
++    int update_delay;       // -u (default 4)
++    char *color;            // -C (default "green")
++    char *message;          // -M
++    char *tty;              // -t
++} Options;
++
++// Initialize options with defaults
++void options_init(Options *opts);
++
++// Parse command line arguments
++int options_parse(int argc, char **argv, Options *opts);
++
++// Print usage information
++void options_print_usage(const char *progname);
++
++// Print version information
++void options_print_version(void);
++
++// Validate color
++bool options_validate_color(const char *color);
++
++#endif // OPTIONS_H
+diff --git a/screen.c b/screen.c
+new file mode 100644
+index 0000000..36543e8
+--- /dev/null
++++ b/screen.c
+@@ -0,0 +1,178 @@
++#include "screen.h"
++#include <sys/select.h>
++
++// Global variables
++int g_width = 80;
++int g_height = 24;
++int g_bold = 0;
++int g_color_index = 0;
++char *g_color = NULL;
++int g_message_length = 0;
++int g_async_scroll = 0;
++int g_update_delay = 4;
++int g_use_rainbow = 0;
++int g_use_color = 0;
++int g_use_B = 0;
++int g_use_n = 0;
++
++// Terminal settings
++struct termios g_old_termios;
++
++// Signal handler
++void signal_handler(int sig) {
++    (void)sig;
++    screen_exit(0);
++}
++
++// Get random character
++char get_random_char(void) {
++    static const char *chars = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!@#$%^&*()_+-=[]{}|;':,./<>?";
++    return chars[rand() % strlen(chars)];
++}
++
++// Get color code
++char* get_color_code(void) {
++    if (g_use_rainbow) {
++        g_color_index = (g_color_index + 1) % 8;
++        return COLOR_RESET;
++    }
++    if (g_use_color) {
++        if (strcmp(g_color, "red") == 0) return COLOR_RED;
++        if (strcmp(g_color, "green") == 0) return COLOR_GREEN;
++        if (strcmp(g_color, "blue") == 0) return COLOR_BLUE;
++        if (strcmp(g_color, "white") == 0) return COLOR_WHITE;
++        if (strcmp(g_color, "yellow") == 0) return COLOR_YELLOW;
++        if (strcmp(g_color, "cyan") == 0) return COLOR_CYAN;
++        if (strcmp(g_color, "magenta") == 0) return COLOR_MAGENTA;
++        if (strcmp(g_color, "black") == 0) return COLOR_BLACK;
++    }
++    return COLOR_GREEN;
++}
++
++// Get bold code
++char* get_bold_code(void) {
++    if (g_use_B) {
++        return COLOR_BOLD;
++    }
++    if (g_use_n) {
++        return "";
++    }
++    if (g_bold) {
++        return COLOR_BOLD;
++    }
++    return "";
++}
++
++// Initialize screen
++void screen_init(void) {
++    screen_get_size(&g_width, &g_height);
++    srand(time(NULL));
++}
++
++// Clear screen
++void screen_clear(void) {
++    printf("\033[2J\033[H");
++}
++
++// Print a character at position
++void screen_print_char(int x, int y, char c, int color, int bold) {
++    printf("\033[%d;%dH%s%s%c%s", x + 1, y + 1, get_color_code(), get_bold_code(), c, COLOR_RESET);
++}
++
++// Print message
++void screen_print_message(const char *msg) {
++    if (g_message_length == 0) {
++        g_message_length = strlen(msg);
++    }
++    printf("\033[%d;%dH%s", g_width / 2 - g_message_length / 2, g_height / 2, msg);
++}
++
++// Update screen
++void screen_update(void) {
++    for (int y = 0; y < g_height; y++) {
++        for (int x = 0; x < g_width; x++) {
++            char c = get_random_char();
++            screen_print_char(x, y, c, 1, g_bold);
++        }
++    }
++}
++
++// Handle keyboard input
++int screen_handle_input(void) {
++    fd_set readfds;
++    struct timeval timeout;
++    
++    FD_ZERO(&readfds);
++    FD_SET(STDIN_FILENO, &readfds);
++    
++    timeout.tv_sec = 0;
++    timeout.tv_usec = 100000;
++    
++    if (select(STDIN_FILENO + 1, &readfds, NULL, NULL, &timeout) > 0) {
++        char c;
++        if (read(STDIN_FILENO, &c, 1) > 0) {
++            if (c == 'q') {
++                return 1;
++            }
++            if (c == 'a') {
++                g_async_scroll = !g_async_scroll;
++            }
++            if (c == 'b') {
++                g_bold = !g_bold;
++            }
++            if (c == 'B') {
++                g_bold = 1;
++            }
++            if (c == 'n') {
++                g_bold = 0;
++            }
++            if (c >= '0' && c <= '9') {
++                g_update_delay = c - '0';
++            }
++            if (c == '!') { g_color_index = 0; }
++            if (c == '@') { g_color_index = 1; }
++            if (c == '#') { g_color_index = 2; }
++            if (c == '$') { g_color_index = 3; }
++            if (c == '%') { g_color_index = 4; }
++            if (c == '^') { g_color_index = 5; }
++            if (c == '&') { g_color_index = 6; }
++            if (c == ')') { g_color_index = 7; }
++        }
++    }
++    return 0;
++}
++
++// Set terminal settings
++void screen_set_termios(struct termios *old_termios) {
++    struct termios raw;
++    tcgetattr(STDIN_FILENO, &g_old_termios);
++    raw = g_old_termios;
++    raw.c_lflag &= ~(ECHO | ICANON);
++    raw.c_cc[VMIN] = 0;
++    raw.c_cc[VTIME] = 0;
++    tcsetattr(STDIN_FILENO, TCSANOW, &raw);
++}
++
++// Reset terminal settings
++void screen_reset_termios(struct termios *old_termios) {
++    tcsetattr(STDIN_FILENO, TCSANOW, old_termios);
++}
++
++// Get terminal size
++void screen_get_size(int *cols, int *rows) {
++    struct winsize ws;
++    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0) {
++        *cols = ws.ws_col;
++        *rows = ws.ws_row;
++    } else {
++        *cols = 80;
++        *rows = 24;
++    }
++}
++
++// Exit program
++void screen_exit(int exit_code) {
++    screen_reset_termios(&g_old_termios);
++    screen_clear();
++    exit(exit_code);
++}
+diff --git a/screen.h b/screen.h
+new file mode 100644
+index 0000000..9b2c6fe
+--- /dev/null
++++ b/screen.h
+@@ -0,0 +1,78 @@
++#ifndef SCREEN_H
++#define SCREEN_H
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++#include <termios.h>
++#include <sys/select.h>
++#include <sys/time.h>
++#include <sys/ioctl.h>
++#include <signal.h>
++#include <time.h>
++#include <ctype.h>
++#include <math.h>
++#include <locale.h>
++#include "options.h"
++
++// Color codes
++#define COLOR_GREEN "\033[32m"
++#define COLOR_RED "\033[31m"
++#define COLOR_BLUE "\033[34m"
++#define COLOR_WHITE "\033[37m"
++#define COLOR_YELLOW "\033[33m"
++#define COLOR_CYAN "\033[36m"
++#define COLOR_MAGENTA "\033[35m"
++#define COLOR_BLACK "\033[30m"
++#define COLOR_RESET "\033[0m"
++#define COLOR_BOLD "\033[1m"
++
++// Global variables
++extern int g_width;
++extern int g_height;
++extern int g_bold;
++extern int g_color_index;
++extern char *g_color;
++extern int g_message_length;
++extern int g_async_scroll;
++extern int g_update_delay;
++extern int g_use_rainbow;
++extern int g_use_color;
++extern int g_use_B;
++extern int g_use_n;
++
++// Signal handler
++void signal_handler(int sig);
++
++// Initialize screen
++void screen_init(void);
++
++// Clear screen
++void screen_clear(void);
++
++// Print a character at position
++void screen_print_char(int x, int y, char c, int color, int bold);
++
++// Print message
++void screen_print_message(const char *msg);
++
++// Update screen
++void screen_update(void);
++
++// Handle keyboard input
++int screen_handle_input(void);
++
++// Set terminal settings
++void screen_set_termios(struct termios *old_termios);
++
++// Reset terminal settings
++void screen_reset_termios(struct termios *old_termios);
++
++// Get terminal size
++void screen_get_size(int *cols, int *rows);
++
++// Exit program
++void screen_exit(int exit_code);
++
++#endif // SCREEN_H

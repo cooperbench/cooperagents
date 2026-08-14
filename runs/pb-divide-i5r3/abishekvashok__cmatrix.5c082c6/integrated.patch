@@ -1,0 +1,841 @@
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..eac9d75
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,18 @@
++#!/bin/bash
++set -e
++
++cd "$(dirname "$0")"
++
++# Create src directory if it doesn't exist
++mkdir -p src
++
++# Compile the program
++gcc -o executable \
++    src/main.c \
++    src/screen.c \
++    src/matrix.c \
++    src/options.c \
++    src/interactive.c \
++    -Wall -Wextra -O2
++
++echo "Build successful: ./executable"
+diff --git a/src/interactive.c b/src/interactive.c
+new file mode 100644
+index 0000000..97fa52a
+--- /dev/null
++++ b/src/interactive.c
+@@ -0,0 +1,112 @@
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++#include <fcntl.h>
++#include <sys/select.h>
++#include <sys/time.h>
++#include <sys/ioctl.h>
++#include <signal.h>
++
++#include "options.h"
++#include "screen.h"
++#include "matrix.h"
++
++static int g_async = 0;
++static int g_locked = 0;
++static int g_screensaver = 0;
++static int g_old_scroll = 0;
++static int g_shadow = 0;
++static int g_rainbow = 0;
++static int g_lambda = 0;
++static int g_change = 0;
++static int g_japanese = 0;
++static int g_force_term = 0;
++static int g_linux_mode = 0;
++static int g_xmode = 0;
++static int g_no_bold = 0;
++static int g_bold = 0;
++static int g_all_bold = 0;
++
++static struct termios g_orig_termios;
++static int g_tty_fd = -1;
++
++static void sigint_handler(int sig) {
++    (void)sig;
++    if (g_locked) return;
++    if (g_screensaver) exit(0);
++    exit(0);
++}
++
++static void sigwinch_handler(int sig) {
++    (void)sig;
++    resize_terminal();
++}
++
++static void setup_signal_handlers(void) {
++    struct sigaction sa;
++    sa.sa_handler = sigint_handler;
++    sigemptyset(&sa.sa_mask);
++    sa.sa_flags = 0;
++    sigaction(SIGINT, &sa, NULL);
++    sa.sa_handler = sigwinch_handler;
++    sigemptyset(&sa.sa_mask);
++    sa.sa_flags = 0;
++    sigaction(SIGWINCH, &sa, NULL);
++}
++
++static void setup_terminal(void) {
++    tcgetattr(STDIN_FILENO, &g_orig_termios);
++    struct termios raw = g_orig_termios;
++    raw.c_lflag &= ~(ICANON | ECHO);
++    raw.c_cc[VMIN] = 1;
++    raw.c_cc[VTIME] = 0;
++    tcsetattr(STDIN_FILENO, TCSANOW, &raw);
++    if (g_force_term) setenv("TERM", "linux", 1);
++    if (g_linux_mode) setenv("TERM", "linux", 1);
++    if (g_xmode) setenv("TERM", "xterm", 1);
++    if (g_tty) {
++        g_tty_fd = open(g_tty, O_RDWR);
++        if (g_tty_fd < 0) {
++            fprintf(stderr, "cmatrix: error: '%s' couldn't be opened: %s\n", g_tty, strerror(errno));
++            exit(1);
++        }
++        dup2(g_tty_fd, STDIN_FILENO);
++        dup2(g_tty_fd, STDOUT_FILENO);
++        close(g_tty_fd);
++    }
++}
++
++static void cleanup_terminal(void) {
++    tcsetattr(STDIN_FILENO, TCSANOW, &g_orig_termios);
++    printf("\033[0m");
++}
++
++static void clear_screen(void) {
++    printf("\033[2J");
++}
++
++static void refresh_screen(void) {
++    fflush(stdout);
++}
++
++static void resize_terminal(void) {
++    struct winsize ws;
++    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0) {
++        /* Update global cols/rows if needed */
++    }
++}
++
++static void init_matrix_chars(void) {
++    g_japanese = g_japanese;
++}
++
++static char get_random_matrix_char(void) {
++    static const char g_matrix_chars[] = 
++        "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
++        "abcdefghijklmnopqrstuvwxyz"
++        "!@#$%^&*()_+-=[]{}|;':\",./<>?";
++    static const char g_japanese_chars[] = 
++        "アァカサタナハマヤャラワガザダバパイ"
++        "ィイウエオゥヴカシチニヒミリヰギジヂビピ"
++        "ェェォフヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴヴ
+diff --git a/src/interactive.h b/src/interactive.h
+new file mode 100644
+index 0000000..69249dc
+--- /dev/null
++++ b/src/interactive.h
+@@ -0,0 +1,10 @@
++#ifndef INTERACTIVE_H
++#define INTERACTIVE_H
++
++#include <stdio.h>
++
++void setup_interactive(void);
++void cleanup_interactive(void);
++void handle_interactive_keypress(int key);
++
++#endif /* INTERACTIVE_H */
+diff --git a/src/main.c b/src/main.c
+new file mode 100644
+index 0000000..57e4f9f
+--- /dev/null
++++ b/src/main.c
+@@ -0,0 +1,335 @@
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++#include <fcntl.h>
++#include <sys/select.h>
++#include <sys/time.h>
++#include <sys/ioctl.h>
++#include <signal.h>
++
++#include "options.h"
++#include "screen.h"
++#include "matrix.h"
++#include "interactive.h"
++
++/* Global state */
++static int g_flags = 0;
++static int g_delay = DEFAULT_DELAY;
++static char *g_color = NULL;
++static char *g_message = NULL;
++static char *g_tty = NULL;
++static int g_async = 0;
++static int g_locked = 0;
++static int g_screensaver = 0;
++static int g_old_scroll = 0;
++static int g_shadow = 0;
++static int g_rainbow = 0;
++static int g_lambda = 0;
++static int g_change = 0;
++static int g_japanese = 0;
++static int g_force_term = 0;
++static int g_linux_mode = 0;
++static int g_xmode = 0;
++static int g_no_bold = 0;
++static int g_bold = 0;
++static int g_all_bold = 0;
++
++/* Terminal state */
++static struct termios g_orig_termios;
++static int g_tty_fd = -1;
++
++/* Matrix state */
++static int g_cols = 80;
++static int g_rows = 24;
++static char g_matrix_chars[80][24];
++static int g_matrix_width = 0;
++static int g_matrix_height = 0;
++
++/* Color state */
++static int g_current_color = COLOR_GREEN;
++
++/* Signal handler */
++static void sigint_handler(int sig) {
++    (void)sig;
++    if (g_locked) {
++        return;
++    }
++    if (g_screensaver) {
++        exit(0);
++    }
++    exit(0);
++}
++
++static void sigwinch_handler(int sig) {
++    (void)sig;
++    resize_terminal();
++}
++
++static void setup_signal_handlers(void) {
++    struct sigaction sa;
++    
++    sa.sa_handler = sigint_handler;
++    sigemptyset(&sa.sa_mask);
++    sa.sa_flags = 0;
++    sigaction(SIGINT, &sa, NULL);
++    
++    sa.sa_handler = sigwinch_handler;
++    sigemptyset(&sa.sa_mask);
++    sa.sa_flags = 0;
++    sigaction(SIGWINCH, &sa, NULL);
++}
++
++static void init_matrix(void) {
++    g_matrix_width = g_cols;
++    g_matrix_height = g_rows;
++    
++    /* Initialize matrix with random characters */
++    for (int y = 0; y < g_rows; y++) {
++        for (int x = 0; x < g_cols; x++) {
++            g_matrix_chars[x][y] = get_random_matrix_char();
++        }
++    }
++}
++
++static void draw_matrix(void) {
++    /* Clear screen */
++    clear_screen();
++    
++    /* Draw matrix characters */
++    for (int y = 0; y < g_rows; y++) {
++        for (int x = 0; x < g_cols; x++) {
++            char c = g_matrix_chars[x][y];
++            int color = g_current_color;
++            
++            /* Apply rainbow mode */
++            if (g_rainbow) {
++                color = (color + (y + x) % 8) % 8;
++            }
++            
++            /* Apply lambda mode */
++            if (g_lambda) {
++                c = 'λ';
++            }
++            
++            /* Apply shadow mode */
++            if (g_shadow) {
++                printf("\033[2K");
++                printf("\033[%d;%dH", y + 1, x + 1);
++                printf("\033[2m%c\033[0m", c);
++            } else {
++                printf("\033[%d;%dH", y + 1, x + 1);
++                printf("\033[%dm%c\033[0m", color, c);
++            }
++            
++            /* Apply bold mode */
++            if (g_bold || g_all_bold) {
++                printf("\033[1m");
++            } else if (g_no_bold) {
++                printf("\033[22m");
++            }
++        }
++    }
++    
++    /* Draw message if present */
++    if (g_message) {
++        printf("\033[%d;%dH", g_rows / 2, g_cols / 2);
++        printf("\033[1;37m%s\033[0m", g_message);
++    }
++    
++    /* Refresh terminal */
++    refresh_screen();
++}
++
++static void update_matrix(void) {
++    /* Shift matrix characters */
++    for (int x = 0; x < g_cols; x++) {
++        for (int y = g_rows - 1; y > 0; y--) {
++            g_matrix_chars[x][y] = g_matrix_chars[x][y - 1];
++        }
++        g_matrix_chars[x][0] = get_random_matrix_char();
++    }
++}
++
++static void async_update_matrix(void) {
++    /* Asynchronous update - update only some columns */
++    int num_cols = g_cols / 4;
++    for (int i = 0; i < num_cols; i++) {
++        int col = (rand() % g_cols);
++        for (int y = g_rows - 1; y > 0; y--) {
++            g_matrix_chars[col][y] = g_matrix_chars[col][y - 1];
++        }
++        g_matrix_chars[col][0] = get_random_matrix_char();
++    }
++}
++
++static void handle_keypress(int key) {
++    if (g_screensaver) {
++        exit(0);
++    }
++    
++    if (g_locked) {
++        return;
++    }
++    
++    switch (key) {
++        case 'a':
++            g_async = !g_async;
++            break;
++        case 'b':
++            g_bold = !g_bold;
++            break;
++        case 'B':
++            g_all_bold = 1;
++            g_bold = 0;
++            g_no_bold = 0;
++            break;
++        case 'n':
++            g_no_bold = 1;
++            g_bold = 0;
++            g_all_bold = 0;
++            break;
++        case '0':
++        case '1':
++        case '2':
++        case '3':
++        case '4':
++        case '5':
++        case '6':
++        case '7':
++        case '8':
++        case '9':
++            g_delay = key - '0';
++            break;
++        case '!':
++            g_current_color = COLOR_RED;
++            break;
++        case '@':
++            g_current_color = COLOR_GREEN;
++            break;
++        case '#':
++            g_current_color = COLOR_YELLOW;
++            break;
++        case '$':
++            g_current_color = COLOR_BLUE;
++            break;
++        case '%':
++            g_current_color = COLOR_MAGENTA;
++            break;
++        case '^':
++            g_current_color = COLOR_CYAN;
++            break;
++        case '&':
++            g_current_color = COLOR_WHITE;
++            break;
++        case ')':
++            g_current_color = COLOR_BLACK;
++            break;
++        case 'q':
++            exit(0);
++            break;
++        default:
++            break;
++    }
++}
++
++static int read_keypress(void) {
++    struct termios raw;
++    tcgetattr(STDIN_FILENO, &raw);
++    int old_flags = raw.c_lflag;
++    raw.c_lflag &= ~(ICANON | ECHO);
++    raw.c_cc[VMIN] = 0;
++    raw.c_cc[VTIME] = 0;
++    tcsetattr(STDIN_FILENO, TCSANOW, &raw);
++    
++    int key = getchar();
++    
++    tcsetattr(STDIN_FILENO, TCSANOW, &g_orig_termios);
++    
++    return key;
++}
++
++static void run_interactive(void) {
++    struct timeval tv;
++    fd_set readfds;
++    
++    while (1) {
++        FD_ZERO(&readfds);
++        FD_SET(STDIN_FILENO, &readfds);
++        
++        tv.tv_sec = 0;
++        tv.tv_usec = g_delay * 10000;
++        
++        int ret = select(STDIN_FILENO + 1, &readfds, NULL, NULL, &tv);
++        
++        if (ret > 0 && FD_ISSET(STDIN_FILENO, &readfds)) {
++            int key = read_keypress();
++            if (key != -1) {
++                handle_keypress(key);
++            }
++        }
++    }
++}
++
++static void run_matrix(void) {
++    while (1) {
++        draw_matrix();
++        
++        if (g_async) {
++            async_update_matrix();
++        } else {
++            update_matrix();
++        }
++        
++        usleep(g_delay * 10000);
++    }
++}
++
++int main(int argc, char **argv) {
++    int flags = 0;
++    int delay = DEFAULT_DELAY;
++    char *color = NULL;
++    char *message = NULL;
++    char *tty = NULL;
++    
++    /* Parse options */
++    if (parse_options(argc, argv, &flags, &delay, &color, &message, &tty) != 0) {
++        return 1;
++    }
++    
++    g_flags = flags;
++    g_delay = delay;
++    g_color = color;
++    g_message = message;
++    g_tty = tty;
++    
++    /* Validate color */
++    if (color) {
++        if (validate_color(color) < 0) {
++            print_error_invalid_color(color);
++            return 0;
++        }
++        g_current_color = validate_color(color);
++    }
++    
++    /* Setup terminal */
++    setup_terminal();
++    
++    /* Setup signal handlers */
++    setup_signal_handlers();
++    
++    /* Initialize matrix */
++    init_matrix();
++    
++    /* Run the program */
++    if (g_screensaver) {
++        run_interactive();
++    } else {
++        run_matrix();
++    }
++    
++    /* Cleanup */
++    cleanup_terminal();
++    
++    return 0;
++}
+diff --git a/src/matrix.c b/src/matrix.c
+new file mode 100644
+index 0000000..d73b9a7
+--- /dev/null
++++ b/src/matrix.c
+@@ -0,0 +1,42 @@
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <time.h>
++
++#include "matrix.h"
++#include "options.h"
++
++/* Matrix character set */
++static const char g_matrix_chars[] = 
++    "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
++    "abcdefghijklmnopqrstuvwxyz"
++    "!@#$%^&*()_+-=[]{}|;':\",./<>?";
++
++/* Japanese characters for -c option */
++static const char g_japanese_chars[] = 
++    "アァカサタナハマヤャラワガザダバパイ"
++    "ィイウエオゥヴカシチニヒミヂビピ"
++    "ェェォフクスヴヅトヌムヅテデベペ"
++    "ョョヮヴグンドトドボポロモゴゾ"
++    "ヴヰヱヲンヴヴヴヴヴヴヴヴヴヴヴヴヴ";
++
++static int g_use_japanese = 0;
++
++void init_matrix_chars(void) {
++    g_use_japanese = g_japanese;
++}
++
++char get_random_matrix_char(void) {
++    const char *chars;
++    int len;
++    
++    if (g_use_japanese) {
++        chars = g_japanese_chars;
++        len = sizeof(g_japanese_chars) - 1;
++    } else {
++        chars = g_matrix_chars;
++        len = sizeof(g_matrix_chars) - 1;
++    }
++    
++    return chars[rand() % len];
++}
+diff --git a/src/matrix.h b/src/matrix.h
+new file mode 100644
+index 0000000..57db252
+--- /dev/null
++++ b/src/matrix.h
+@@ -0,0 +1,8 @@
++#ifndef MATRIX_H
++#define MATRIX_H
++
++#include <stdio.h>
++
++char get_random_matrix_char(void);
++
++#endif /* MATRIX_H */
+diff --git a/src/options.c b/src/options.c
+new file mode 100644
+index 0000000..6bfb35b
+--- /dev/null
++++ b/src/options.c
+@@ -0,0 +1,117 @@
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++#include <fcntl.h>
++#include <sys/select.h>
++#include <sys/time.h>
++#include <sys/ioctl.h>
++#include <signal.h>
++
++#include "options.h"
++
++void print_usage(void) {
++    printf(" Usage: cmatrix -[abBcfhlsmVxk] [-u delay] [-C color] [-t tty] [-M message]\n");
++    printf(" -a: Asynchronous scroll\n");
++    printf(" -b: Bold characters on\n");
++    printf(" -B: All bold characters (overrides -b)\n");
++    printf(" -c: Use Japanese characters as seen in the original matrix. Requires appropriate fonts\n");
++    printf(" -f: Force the linux $TERM type to be on\n");
++    printf(" -l: Linux mode (uses matrix console font)\n");
++    printf(" -L: Lock mode (can be closed from another terminal)\n");
++    printf(" -o: Use old-style scrolling\n");
++    printf(" -h: Print usage and exit\n");
++    printf(" -n: No bold characters (overrides -b and -B, default)\n");
++    printf(" -s: \"Screensaver\" mode, exits on first keystroke\n");
++    printf(" -x: X window mode, use if your xterm is using mtx.pcf\n");
++    printf(" -V: Print version information and exit\n");
++    printf(" -M [message]: Prints your message in the center of the screen. Overrides -L's default message.\n");
++    printf(" -u delay (0 - 10, default 4): Screen update delay\n");
++    printf(" -C [color]: Use this color for matrix (default green)\n");
++    printf(" -r: rainbow mode\n");
++    printf(" -m: lambda mode\n");
++    printf(" -k: Characters change while scrolling. (Works without -o opt.)\n");
++    printf(" -t [tty]: Set tty to use\n");
++}
++
++void print_version(void) {
++    printf("cmatrix %s\n", VERSION);
++    printf("Build time: %s\n", BUILD_TIME);
++    printf("Email: %s\n", EMAIL);
++    printf("Web: %s\n", WEB);
++}
++
++int validate_color(const char *color) {
++    if (strcmp(color, "green") == 0) return COLOR_GREEN;
++    if (strcmp(color, "red") == 0) return COLOR_RED;
++    if (strcmp(color, "blue") == 0) return COLOR_BLUE;
++    if (strcmp(color, "white") == 0) return COLOR_WHITE;
++    if (strcmp(color, "yellow") == 0) return COLOR_YELLOW;
++    if (strcmp(color, "cyan") == 0) return COLOR_CYAN;
++    if (strcmp(color, "magenta") == 0) return COLOR_MAGENTA;
++    if (strcmp(color, "black") == 0) return COLOR_BLACK;
++    return -1;
++}
++
++void print_error(const char *msg) {
++    fprintf(stderr, "cmatrix: error: %s\n", msg);
++}
++
++void print_error_invalid_color(const char *color) {
++    fprintf(stderr, "cmatrix: error: invalid color '%s'\n", color);
++}
++
++int parse_options(int argc, char **argv, int *flags, int *delay, char **color, char **message, char **tty) {
++    int i;
++    *flags = 0;
++    *delay = DEFAULT_DELAY;
++    *color = NULL;
++    *message = NULL;
++    *tty = NULL;
++    
++    for (i = 1; i < argc; i++) {
++        if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "-?") == 0) {
++            print_usage();
++            return 0;
++        }
++        if (strcmp(argv[i], "-V") == 0) {
++            print_version();
++            return 0;
++        }
++        if (strcmp(argv[i], "-a") == 0) *flags |= OPT_ASYNC;
++        else if (strcmp(argv[i], "-b") == 0) *flags |= OPT_BOLD;
++        else if (strcmp(argv[i], "-B") == 0) *flags |= OPT_ALL_BOLD;
++        else if (strcmp(argv[i], "-c") == 0) *flags |= OPT_JAPANESE;
++        else if (strcmp(argv[i], "-f") == 0) *flags |= OPT_FORCE_TERM;
++        else if (strcmp(argv[i], "-l") == 0) *flags |= OPT_LINUX;
++        else if (strcmp(argv[i], "-L") == 0) *flags |= OPT_LOCK;
++        else if (strcmp(argv[i], "-o") == 0) *flags |= OPT_OLD_SCROLL;
++        else if (strcmp(argv[i], "-n") == 0) *flags |= OPT_NO_BOLD;
++        else if (strcmp(argv[i], "-s") == 0) *flags |= OPT_SAVESCREEN;
++        else if (strcmp(argv[i], "-x") == 0) *flags |= OPT_XMODE;
++        else if (strcmp(argv[i], "-r") == 0) *flags |= OPT_RAINBOW;
++        else if (strcmp(argv[i], "-m") == 0) *flags |= OPT_LAMBDA;
++        else if (strcmp(argv[i], "-k") == 0) *flags |= OPT_CHANGE;
++        else if (strcmp(argv[i], "-u") == 0) {
++            if (i + 1 < argc) *delay = atoi(argv[++i]);
++            if (*delay < 0 || *delay > 10) *delay = DEFAULT_DELAY;
++        }
++        else if (strcmp(argv[i], "-C") == 0) {
++            if (i + 1 < argc) *color = argv[++i];
++            else *color = DEFAULT_COLOR;
++        }
++        else if (strcmp(argv[i], "-M") == 0) {
++            if (i + 1 < argc) *message = argv[++i];
++            else *message = "Welcome to the Matrix";
++        }
++        else if (strcmp(argv[i], "-t") == 0) {
++            if (i + 1 < argc) *tty = argv[++i];
++            else *tty = "/dev/tty";
++        }
++        else {
++            fprintf(stderr, "cmatrix: error: unknown option '%s'\n", argv[i]);
++            return 1;
++        }
++    }
++    return 0;
++}
+diff --git a/src/options.h b/src/options.h
+new file mode 100644
+index 0000000..20d31ea
+--- /dev/null
++++ b/src/options.h
+@@ -0,0 +1,48 @@
++#ifndef OPTIONS_H
++#define OPTIONS_H
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++#define VERSION "1.0"
++#define BUILD_TIME "unknown"
++#define EMAIL "cmatrix@example.com"
++#define WEB "http://example.com"
++#define DEFAULT_DELAY 4
++#define DEFAULT_COLOR "green"
++
++/* Option flags */
++#define OPT_ASYNC 1
++#define OPT_BOLD 2
++#define OPT_ALL_BOLD 4
++#define OPT_JAPANESE 8
++#define OPT_FORCE_TERM 16
++#define OPT_LINUX 32
++#define OPT_LOCK 64
++#define OPT_OLD_SCROLL 128
++#define OPT_NO_BOLD 256
++#define OPT_SAVESCREEN 512
++#define OPT_XMODE 1024
++#define OPT_RAINBOW 2048
++#define OPT_LAMBDA 4096
++#define OPT_CHANGE 8192
++
++/* Color constants */
++#define COLOR_GREEN 32
++#define COLOR_RED 31
++#define COLOR_BLUE 34
++#define COLOR_WHITE 37
++#define COLOR_YELLOW 33
++#define COLOR_CYAN 36
++#define COLOR_MAGENTA 35
++#define COLOR_BLACK 30
++
++void print_usage(void);
++void print_version(void);
++int validate_color(const char *color);
++void print_error(const char *msg);
++void print_error_invalid_color(const char *color);
++int parse_options(int argc, char **argv, int *flags, int *delay, char **color, char **message, char **tty);
++
++#endif /* OPTIONS_H */
+diff --git a/src/screen.c b/src/screen.c
+new file mode 100644
+index 0000000..0414566
+--- /dev/null
++++ b/src/screen.c
+@@ -0,0 +1,79 @@
++#include <stdio.h>
++#include <stdlib.h>
++#include <unistd.h>
++#include <termios.h>
++#include <sys/ioctl.h>
++#include <sys/types.h>
++#include <sys/stat.h>
++#include <fcntl.h>
++#include <string.h>
++
++#include "screen.h"
++#include "options.h"
++
++static struct termios g_orig_termios;
++static int g_tty_fd = -1;
++
++void setup_terminal(void) {
++    /* Save original terminal settings */
++    tcgetattr(STDIN_FILENO, &g_orig_termios);
++    
++    /* Set raw mode */
++    struct termios raw = g_orig_termios;
++    raw.c_lflag &= ~(ICANON | ECHO);
++    raw.c_cc[VMIN] = 1;
++    raw.c_cc[VTIME] = 0;
++    tcsetattr(STDIN_FILENO, TCSANOW, &raw);
++    
++    /* Set terminal type */
++    if (g_force_term) {
++        setenv("TERM", "linux", 1);
++    }
++    
++    /* Set Linux mode */
++    if (g_linux_mode) {
++        setenv("TERM", "linux", 1);
++    }
++    
++    /* Set X mode */
++    if (g_xmode) {
++        setenv("TERM", "xterm", 1);
++    }
++    
++    /* Set tty if specified */
++    if (g_tty) {
++        g_tty_fd = open(g_tty, O_RDWR);
++        if (g_tty_fd < 0) {
++            fprintf(stderr, "cmatrix: error: '%s' couldn't be opened: %s\n", 
++                    g_tty, strerror(errno));
++            exit(1);
++        }
++        dup2(g_tty_fd, STDIN_FILENO);
++        dup2(g_tty_fd, STDOUT_FILENO);
++        close(g_tty_fd);
++    }
++}
++
++void cleanup_terminal(void) {
++    /* Restore terminal settings */
++    tcsetattr(STDIN_FILENO, TCSANOW, &g_orig_termios);
++    
++    /* Reset colors */
++    printf("\033[0m");
++}
++
++void clear_screen(void) {
++    printf("\033[2J");
++}
++
++void refresh_screen(void) {
++    fflush(stdout);
++}
++
++void resize_terminal(void) {
++    struct winsize ws;
++    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0) {
++        g_cols = ws.ws_col;
++        g_rows = ws.ws_row;
++    }
++}
+diff --git a/src/screen.h b/src/screen.h
+new file mode 100644
+index 0000000..4b8d0f8
+--- /dev/null
++++ b/src/screen.h
+@@ -0,0 +1,12 @@
++#ifndef SCREEN_H
++#define SCREEN_H
++
++#include <stdio.h>
++
++void setup_terminal(void);
++void cleanup_terminal(void);
++void clear_screen(void);
++void refresh_screen(void);
++void resize_terminal(void);
++
++#endif /* SCREEN_H */

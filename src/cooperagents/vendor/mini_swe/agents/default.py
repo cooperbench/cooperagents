@@ -34,7 +34,7 @@ class AgentConfig(BaseModel):
     """Save the trajectory to this path."""
     compaction_enabled: bool = True
     """Enable context compaction (summarization of old messages)."""
-    compaction_token_trigger: int = 28000
+    compaction_token_trigger: int = 20000
     """Compact when prompt token count exceeds this threshold."""
     compaction_keep_recent_turns: int = 2
     """Number of recent assistant turns to keep verbatim after compaction."""
@@ -250,6 +250,44 @@ class DefaultAgent:
             self._segments.append({"kind": kind, "messages": list(msgs)})
             self._current_segment_messages = []
 
+    def _emergency_truncate(self) -> None:
+        """Mechanical history truncation after a context-window overflow.
+
+        No model call (a summarizer request would overflow too): keep
+        system + task + the last complete assistant turns, clip any oversized
+        message bodies/tool arguments, and insert a re-orientation stub."""
+        prefix = self.messages[:2]  # system + task
+        conversation = self.messages[2:]
+        boundary = self._find_turn_boundary(conversation, self.config.compaction_keep_recent_turns)
+        recent = conversation[boundary:]
+
+        def clip(m: dict) -> dict:
+            m = dict(m)
+            c = m.get("content")
+            if isinstance(c, str) and len(c) > 20000:
+                m["content"] = c[:8000] + "\n...[clipped after context overflow]...\n" + c[-4000:]
+            for tc in m.get("tool_calls") or []:
+                fn = tc.get("function") or {}
+                a = fn.get("arguments")
+                if isinstance(a, str) and len(a) > 20000:
+                    fn["arguments"] = a[:8000] + "...[clipped]..." + a[-4000:]
+            return m
+
+        stub = {
+            "role": "user",
+            "content": (
+                "[Context overflow: earlier steps were dropped from your history. "
+                "Your work so far is intact ON DISK — re-orient with `git status`, "
+                "`git diff --stat`, and `ls` instead of re-doing it.]"
+            ),
+        }
+        self._close_current_segment("solver")
+        self.messages = prefix + [stub] + [clip(m) for m in recent]
+        self._compaction_count += 1
+        self.log(
+            f"Emergency truncation #{self._compaction_count}: kept system+task+{len(recent)} recent messages"
+        )
+
     def _compact_messages(self) -> None:
         """Summarize old messages and replace history, keeping recent turns verbatim."""
         summarize_fn = getattr(self.model, "summarize_context", None)
@@ -304,7 +342,17 @@ class DefaultAgent:
         if self._should_compact():
             self._compact_messages()
         self.n_calls += 1
-        message = self.model.query(self.messages)
+        try:
+            message = self.model.query(self.messages)
+        except Exception as e:  # noqa: BLE001 - reactive compaction for overflow only
+            # Proactive compaction can miss a single-step jump (one tool call
+            # writing a whole file adds >10k tokens at once). On a context
+            # overflow, mechanically truncate history — a summarize call would
+            # itself overflow — and retry once.
+            if "ContextWindow" not in type(e).__name__ and "context length" not in str(e).lower():
+                raise
+            self._emergency_truncate()
+            message = self.model.query(self.messages)
         self.cost += message.get("extra", {}).get("cost", 0.0)
         self._last_prompt_tokens = self._get_prompt_tokens(message)
         self.add_messages(message)

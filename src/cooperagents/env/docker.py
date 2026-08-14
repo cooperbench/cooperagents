@@ -20,11 +20,30 @@ CONTAINER_REPO = "/workspace/repo"
 
 
 class DockerEnv(Environment):
-    def __init__(self, image: str, *, name: str | None = None, keepalive: str = "4h", volumes: list[str] | None = None) -> None:
+    def __init__(
+        self,
+        image: str,
+        *,
+        name: str | None = None,
+        keepalive: str = "4h",
+        volumes: list[str] | None = None,
+        repo_path: str = CONTAINER_REPO,
+        network: str | None = None,
+        user: str | None = None,
+    ) -> None:
         self.image = image
-        self.repo_path = CONTAINER_REPO
+        self.repo_path = repo_path
         self.name = name or f"ca-{uuid.uuid4().hex[:10]}"
         base = ["docker", "run", "-d", "--name", self.name, "--entrypoint", ""]
+        if user:
+            # ProgramBench cleanroom: the reference binary is execute-only for
+            # uid 1000 ("agent"); running as root would let the agent read it.
+            base += ["-u", user]
+        if network:
+            # e.g. "none" — ProgramBench cleanroom fidelity: agent commands
+            # inside the container must not reach the internet (model calls
+            # happen host-side and are unaffected).
+            base += ["--network", network]
         for v in volumes or []:
             base += ["-v", v]
         tail = [image, "sleep", keepalive]
@@ -73,6 +92,7 @@ class DockerEnv(Environment):
                 input=stdin,
                 capture_output=True,
                 text=True,
+                errors="replace",  # agents probing binaries emit non-UTF8 bytes
                 timeout=timeout,
             )
             return ExecResult(stdout=(proc.stdout or "") + (proc.stderr or ""), exit_code=proc.returncode)

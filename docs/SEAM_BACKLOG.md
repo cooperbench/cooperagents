@@ -611,6 +611,247 @@ terrain (fired 42/42 pairs everywhere) — rationing needs a marginal-task
 oracle (same limit as selection). Re-test the accuracy claim at ≥27B: the
 mechanism's broken link is the model, not the design.
 
+## PROGRAMBENCH TEAM-GOAL PROGRAM (2026-08-11): does self-evolution generalize?
+
+User directive: test whether the self-improvement loop generalizes to the
+TEAM-GOAL scenario — one indivisible task, a 2-agent team that must DISCUSS
+to divide the work (explicitly NOT redundant full attempts; a bo2 arm was
+launched and killed on user correction). Single instance per user
+instruction: abishekvashok__cmatrix.5c082c6 (ProgramBench: reconstruct
+source from execute-only binary + docs; graded by behavioral test suite via
+`programbench eval`).
+
+Setup: scripts/bench_programbench.py; DockerEnv grew repo_path=/workspace,
+network=none, user=agent (image defaults to root, which would let agents READ
+the execute-only reference binary — fidelity fix). Model Qwen3.5-9B, step
+limit 100, temperature 0. Fitness = behavioral tests passed; k reps for
+decisions (single-instance noise unknown, calibrate from rep pairs).
+
+Round 0 arms (running): solo (1 agent) · coopgit (2 agents, git-share,
+mechanical merge, no repair) · teamfull (roles+board+scratchpad, lead
+merges) · divide (roles machinery + NEGOTIATION protocol: first action =
+send_message proposal with wait:true, explicit agreement required, agreed
+division on board/PLAN.md, each implements ONLY its components; messaging
+system-prompt billed per Iteration 11 lesson).
+
+Loop plan: eval round-0 → mine trajectories (did negotiation happen? was the
+division honored? did the merged program compile?) → propose mechanism →
+implement behind flag → k reps → keep/drop → record here.
+
+INFRA SHAKEOUT (round-0 restarts, 2026-08-11/12):
+1. Empty patches: `git add -A` FATALS on the execute-only reference binary
+   ("unable to index file 'executable'") → nothing staged, every diff empty.
+   Fix: repo-local .git/info/exclude for `executable` + `shared/`.
+2. Root-owned shared volumes: agents run as uid "agent" (cleanroom fidelity —
+   root could READ the execute-only binary) and could not write PLAN.md /
+   patch exports / git-share. Fix: post-create root chown.
+3. Context overflow at 1000-step budgets: BOTH agents died with
+   ContextWindowExceededError in coopgit-a (steps 86/40) and teamfull-a
+   (58/103). Diagnosis: proactive compaction (28k trigger) cannot catch a
+   single-step jump — one tool call writing a whole 1600-line cmatrix.c adds
+   >10k tokens at once (tool-call ARGUMENTS live in history); prompt went
+   18.5k → 32.8k in one turn. Fix: trigger lowered to 20k + reactive
+   _emergency_truncate() on the overflow error (mechanical: keep system+task+
+   recent turns, clip >20k-char bodies/arguments, re-orientation stub; NO
+   model call — a summarize request would itself overflow). Unit-checked.
+   Truncated-run submissions archived under runs/round0-attempt2/ and
+   evaluated as a truncated-budget reference point.
+4. Container keepalive (4h) expired UNDER the 1000-step runs — agents spent
+   an hour exec-ing into dead containers before detection ("docker ps: 0
+   running, 4 tasks alive"). Fix: keepalive=24h for all ProgramBench
+   containers. Also: truncated coopgit-a compile failure = CONFLICT MARKERS
+   in cmatrix.c ("<<<<<<< ours") — the CooperBench Coop failure mode
+   replicated on the team-goal scenario; teamfull-a = incomplete code.
+   Round-0 attempt 4 launched with all fixes.
+
+ROUND 0 RESULTS (2026-08-12, k=1 each, step-limit 1000):
+- solo: 0 (EMPTY patch — all 1000 steps = ONE looped command, `sudo -n -u
+  root head -c 100 ./executable`; tried to read the protected binary from
+  step 1 and never recovered; deterministic at temp 0).
+- coopgit: 0 (compile_failed — CONFLICT MARKERS in cmatrix.c again; 2nd
+  independent replication of the Coop merge-damage mode; 117min, 1086 steps).
+- teamfull: 0 (compile_failed — NO compile.sh in the lead's tree; suspiciously
+  short run, 169 steps/33min → premature completion).
+- divide: DNF — killed at 14h. Negotiation SUCCEEDED (PLAN.md at 40min);
+  then one agent degenerated (only output: a 122KB options.h dumped to the
+  scratchpad, silent for the last hour+); the other kept coding; the lead's
+  sleep-poll wait loop burned steps at ~40s/step with no wall-clock cap.
+  The wait protocol's unbounded tail is itself the finding.
+
+ITERATION 1 (launched): transplant of the two confirmed qwen mechanisms.
+- Build gate + repair (runner-level, --repair): after integration, apply the
+  patch to a fresh tree; if `bash compile.sh` doesn't produce ./executable,
+  ONE repair agent runs in that tree with the build log as evidence
+  (= Coop+Repair with the BUILD as the gate). Targets coopgit's markers AND
+  teamfull's missing compile.sh.
+- Per-agent wall-clock cap (TeamSpec.agent_time_limit, 3600s): bounds the
+  divide wait-loop tail.
+Arms: coopgit-r / teamfull-r / divide-r (k=1 screen).
+
+ITERATION 1 RESULTS (k=1 screen, % of 506 behavioral tests):
+- coopgit-r1: 91 — repair FIRED (52 steps) on a broken merge, gate_after=0.
+  Clean attribution: the build-gate+repair mechanism converted round-0's
+  conflict-marker failure into the TOP score. Coop+Repair transfers.
+- divide-r1: 86 — gate passed without repair; negotiation + division + 1h cap.
+- teamfull-r1: 78 — gate passed without repair; ran full hour (1382 steps vs
+  round-0's premature 169) — attribution of the behavior change to the time
+  cap's prompt notice NOT yet verified.
+- solo: 0 (unchanged reference).
+Round-0 → Iteration-1: 0/0/0/DNF → 91/86/78. The qwen result structure
+replicates on the team-goal scenario: repair-gated integration recovers the
+coop team; harness scaffolding beats bare solo (0).
+k=3 confirmation launched (r2, r3 for all three arms).
+
+K=3 + ITERATION 2 RESULTS (2026-08-12/13, % of 506 tests):
+- divide+gate: {86, 0, 87} mean 57.7 — strongest, most consistent base.
+- teamfull+gate: {78, 28, 26} mean 44.0 — builds reliably, often shallow.
+- coopgit+repair: {91, 0, 0} mean 30.3 — k=1 high regressed (7th k=1
+  regression across both programs).
+- coopgitc2 (coordinator) k=1: 85 in 785s — 4.7x FASTER than every other
+  arm at comparable score; the qwen efficiency-point signature replicates.
+- dividebo2 (best-of-2 teams, mechanical selection) k=1: 73; selection
+  demonstrably picked the building team over the broken one ((1,1) vs (-1,0)).
+- ATTRIBUTION: every 0 = a FAILED repair submitted anyway (repair fired 4x,
+  succeeded 1x; runner trusted gate_after=1 output). Repair reliability is
+  the binding constraint, not the bases.
+
+ITERATION 3 (launched, k=3 on divide + coopgit): repair-retry (2 attempts,
+fresh evidence) + NEVER trust repair self-report — submit the mechanically
+best candidate among {pre-repair, attempt1, attempt2} by pb_score
+(build + behavioral probes vs reference binary).
+
+ITERATION 3 RESULTS: coopgit {0, 87, 86} mean 57.7 (was 30.3) — build-zeros
+eliminated where repair is feasible (1 irreparable merge remains: both
+attempts hit 150-step limit). divide {26, 82, 13} mean 40.3 (was 57.7) —
+variance moved to the BUILDS-BUT-SHALLOW class (26/13 = gate passes, weak
+behavior; one graded branch errored on i3r3), which build-repair cannot
+address. Single-instance k=3 noise ~±25; ordering coopgit-vs-divide not
+settled. Failure taxonomy stable across iterations: (a) unbuildable merges →
+repair (handled), (b) shallow merges → selection (dividebo2 evidence).
+
+ITERATION 4 (launched, k=3): the Board Best-of-2 analog — 2 full
+negotiated-division teams (isolated bus+volumes) → mechanical pb_score
+selection → retry-repair tail on the winner. dividebo2-i4r{1,2,3}.
+(Also: pkill self-match killed my own shell + the round-0 watcher — the
+dispatcher pgrep lesson repeated; use bracket patterns.)
+
+CONSOLIDATED RESULTS (2026-08-13, % of the 769-entry eval.json test list —
+earlier integers used `programbench info`'s different denominator; ordering
+unchanged). Durations: wall-clock of the full pipeline; nearly all team runs
+land in a 3300-4200s band set by the 3600s per-agent cap + merge/repair tail.
+- solo: 0 (8268s, 1000-step budget exhausted).
+- coopgit i3 (retry-repair): {0, 90.1, 90.0} mean 60.0.
+- teamfull (gate): {84.9, 50.1, 47.1} mean 60.7.
+- divide i1 (gate): {87.5, 0, 88.9} mean 58.8. divide i3: {45.5, 86.3, 23.7}
+  mean 51.8.
+- coopgitc2 (coordinator + retry-repair): {86.1, 85.8, DNF~0}. r1 785s/157
+  steps; r2 3544s; r3 3837s — r1's 4.7x speed did NOT replicate (single-run
+  variance). Coordinator events fired in all reps (LOOP 3-4, COLLISION 2).
+- dividebo2 i4 (bo2 of full teams + selection + repair): {80.1, 71.1, 0, 77.2}
+  mean 57.1. Selection picked the building team over the broken one both
+  times it had signal.
+
+ITERATION 5 (2026-08-13): FITNESS BLINDNESS FOUND AND FIXED — the
+builds-but-misbehaves class. coopgitc2-r3's repaired tree scored pb (1,2)
+(builds, 2 flag probes match) and was submitted; the ProgramBench evaluator
+then hit its 3600s per-branch run_tests cap on EVERY branch attempt
+(results_read_failed x2 branches x2 attempts = DNF, effectively 0).
+Root cause, isolated by container probes on the three reps' submissions:
+r3's binary is an output FIREHOSE — 11.3MB written to the pty in 2s vs the
+reference's 88KB (128x): a main loop redrawing without its frame delay. The
+flood starves the evaluator's terminal emulation until the hour cap kills
+pytest before results.xml is written. (Disambiguation: r2's binary ignores
+'q' (quit-probe RC=124) yet graded 85.8 fast — input-handling deviation is
+survivable; output-rate deviation is fatal. All three reps' binaries die
+with the pty and exit on SIGTERM, so teardown is not the differentiator.)
+Fix (scripts/bench_programbench.py), all reference-comparative and
+program-general:
+- pb_score extended to a lexicographic 4-tuple (build_tier, not_firehose,
+  quit_matches_ref, flag_probes): RATE_PROBE (bytes to a pty in 2s; firehose
+  = >10x reference, floor 200KB) and QUIT_PROBE (feed 'q', compare exit
+  codes) run on reference then candidate.
+- build_gate_and_repair: gate is now build AND not-firehose; a flooding
+  build triggers repair with rate evidence (BEHAVIOR_REPAIR_TASK — frame
+  pacing) instead of build-log evidence. quit mismatch ranks but does not
+  gate (r2 evidence).
+Retrospective validation on the submitted coordinator patches: r1 (1,1,1,5)
+> r2 (1,1,0,3) > r3 (1,0,0,2) — new fitness orders them correctly (and
+r3's firehose bit trips as designed) where the old score rated r3 a
+healthy (1,2).
+MEASURE: coopgitc2-i5r{1,2,3} launched (same flags: 1000 steps, repair,
+3600s agent cap) — tests whether the behavior gate converts the coordinator
+column's DNF class into repaired or at least demoted candidates.
+ITERATION 5 RESULTS — KEPT: coopgitc2-i5 k=3 = {86.0, 85.7, 45.4} mean
+72.4 (old-fitness column: {86.1, 85.8, DNF~0} mean ~57).
+- i5r1: 86.0 @ 1140s/332 steps, gate passed on first merge (no repair).
+  Second sub-cap coordinator finish (now 2 of 6 coordinator runs).
+- i5r2: 85.7 @ 2905s/468 steps, no repair.
+- i5r3: 45.4 @ 2538s/878 steps — the mechanism's proof case: merge
+  unbuildable (-1,0,0,0), repair produced (1,1,0,0) (builds, well-paced,
+  0 flag probes), dual gate passed → graded 45.4 instead of the DNF this
+  failure class produced under the old fitness. The builds-but-misbehaves
+  escape hatch is closed: worst case is now a low score, not an ungradeable
+  submission. Coordinator accuracy stability across 5 graded runs:
+  86.1/85.8/86.0/85.7 within 0.4.
+CAVEAT (self-inflicted): concurrent 16-worker evals starve each other on
+the 16-CPU host — solo-i5r1's first eval attempt hit results_read_failed
+purely from sharing CPUs with the r3 rerun; its binary probes healthy on
+every axis. Killed the r3 rerun (DNF already established); rule: at most
+two concurrent programbench evals, never alongside a doomed one.
+
+FLEET EXECUTION (2026-08-14): the 12-node fleet (16c/61g each; old
+CooperBench-nagent shard workers, still alive) is provisioned for
+ProgramBench: current code + .env.qwen + task image + on-node evaluator.
+Tooling in scripts/fleet/: pbrun.sh (dispatch one run, detached, inline
+eval, .DONE marker), collect.sh (rsync finished runs back + print scores),
+nodes.txt. On-node eval removes the local eval-contention failure mode.
+Smoke-validated end-to-end with coopgitc2-i5r4 on 44.249.194.27:
+70.2 @ 1404s/474 steps, no repair — third sub-cap coordinator finish.
+i5 column at k=4: {86.0, 85.7, 45.4, 70.2} mean 71.8 (old fitness ~57).
+Future runs default to the fleet. AWS session expired: instance
+management (relaunch/terminate) needs `aws login`; SSH dispatch works.
+
+FULL i5 SWEEP (2026-08-14, all arms, i5 fitness, same services, fleet):
+- coordinator (coopgitc2): {86.0, 85.7, 45.4, 70.2} k=4 mean 71.8
+- coopgit:   {84.4, 85.3, 30.2} mean 66.6
+- dividebo2: {0, 83.1, 86.2} mean 56.4
+- solo:      {50.6, 0, 86.7} mean 45.8 (ceiling 86.7 = best single score
+  of the program, in 553s — solo ceiling equals team ceiling)
+- teamfull:  {0, 71.5, 0} mean 23.8
+- divide:    {64.6, 0, 0} mean 21.5
+EVERY zero (6 across 18 runs) is the SAME class: unbuildable merge, both
+repair attempts hit the 150-step limit, build still failing, all
+candidates (-1,·,·,·). NO firehose DNFs anywhere — iteration-5 verdict
+holds: every graded run that built was gradeable; zeros are honest.
+dividebo2 selection: correct pick both times signal existed
+((1,1,1,3) over (1,1,0,1) → 83.1; (1,1,1,3) over (1,1,1,0) → 86.2);
+best-of-2-of-broken-teams is still broken (i5r1).
+STRUCTURAL FINDING (echoes Round-6 separability): division-of-labor arms
+(divide 21.5, teamfull 23.8) now rank BOTTOM — negotiated/dictated split
+on an INDIVISIBLE task produces large overlapping patches (35-99KB) whose
+merges repair cannot rescue in 150 steps. Redundant-work arms
+(coordinator 71.8, coopgit 66.6, bo2 56.4) rank top: on a non-separable
+task, redundancy + coordination/selection beats division of labor.
+Solo's variance (0-86.7) is the team's whole value proposition here:
+teams don't raise the ceiling, they cut the floor.
+BINDING CONSTRAINT NOW: the unbuildable-merge/repair-fails class (6/18
+zeros, only remaining zero class) — candidates: raise repair step budget,
+repair-from-best-agent-tree instead of merged tree, or discard-merge
+fallback (submit best single agent tree when merge is irreparable).
+Also launched: solo-i5r{1,2,3} — solo re-run under the SAME current harness
+services (repair tail, new fitness, truncation fix); solo-a's 0 predates
+those fixes (empty patch after a 1000-step loop). Caveat: solo batch runs
+concurrently with the i5 team batch (shared endpoint/CPU), durations
+descriptive only.
+- solo-i5r1: 50.6 (389/769) @ 430s/132 steps, no repair needed. THE SOLO=0
+  RESULT WAS AN INFRASTRUCTURE ARTIFACT — under current harness services a
+  single agent produces a real half-scoring submission in 7 minutes. The
+  team-vs-solo comparison must be restated against the solo-i5 column
+  (r2, r3 pending); the honest claim so far is coordinator ~86 / mean 71.8
+  vs solo 50.6 (k=1), not "team vs hard 0".
+  (solo-i5r1's first eval attempt DNF'd purely from eval CPU contention —
+  binary probes healthy; retry on a free machine graded normally.)
+
 ## TEAMFULL — complete-Team cell (2026-08-05): DONE — 13.3 (k=3: 13, 13, 14)
 
 Idea source: user question (was the complete team harness tested?) + user

@@ -1,0 +1,791 @@
+diff --git a/cmatrix.c b/cmatrix.c
+new file mode 100644
+index 0000000..5fc5a82
+--- /dev/null
++++ b/cmatrix.c
+@@ -0,0 +1,767 @@
++/*
++ * CMatrix - A Matrix-like terminal effect
++ * Based on the screensaver from The Matrix website
++ */
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++#include <termios.h>
++#include <sys/select.h>
++#include <pty.h>
++#include <sys/time.h>
++#include <sys/utsname.h>
++#include <ctype.h>
++#include <time.h>
++#include <signal.h>
++#include <math.h>
++
++#define VERSION "2.0"
++#define DEFAULT_UPDATE_DELAY 4
++#define MAX_MESSAGE_LEN 256
++#define MAX_TTY_NAME 64
++
++/* Global configuration */
++static int async_scroll = 0;
++static int bold_chars = 0;
++static int all_bold = 0;
++static int no_bold = 0;
++static int force_term = 0;
++static int linux_mode = 0;
++static int old_style = 0;
++static int shadows_only = 0;
++static int lock_mode = 0;
++static int rainbow_mode = 0;
++static int lambda_mode = 0;
++static int characters_change = 0;
++static int x_window_mode = 0;
++static int screensaver_mode = 0;
++static int update_delay = DEFAULT_UPDATE_DELAY;
++static char *color = "green";
++static char *message = NULL;
++static char *tty_name = NULL;
++static int use_japanese = 0;
++static int show_help_only = 0;
++static int show_version_only = 0;
++
++/* Valid colors */
++static const char *valid_colors[] = {
++    "green", "red", "blue", "white", "yellow", "cyan", "magenta", "black"
++};
++
++/* Character sets */
++static const char *matrix_chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;:,.<>?";
++static const char *japanese_chars = "アァカサタナハマヤャラワガザダバパイィキシチニヒミリヰギジヂビピウゥクスツヌフムユュルグズブヅプエェケセテネヘメレヱゲゼデベペオォコソトノホモヨョロヲゴゾドボポヴッン";
++static const char *lambda_chars = "λ";
++
++/* Terminal state */
++static struct termios orig_termios;
++static int running = 1;
++static int width, height;
++static int cursor_x, cursor_y;
++static int last_color = 0;
++static int last_bold = 0;
++static int last_async = 0;
++static int last_update_delay = 0;
++
++/* Matrix state */
++static int *matrix;
++static int *matrix_old;
++static int *matrix_new;
++static int *matrix_color;
++static int *matrix_bold;
++static int *matrix_shadow;
++static int *matrix_shadow_color;
++static int *matrix_shadow_bold;
++static int *matrix_shadow_old;
++static int *matrix_shadow_new;
++
++/* Message state */
++static int message_x, message_y;
++static int message_width;
++
++/* Signal handler */
++static void signal_handler(int sig)
++{
++    (void)sig;
++    running = 0;
++}
++
++/* Print help */
++static void print_help(void)
++{
++    printf(" Usage: cmatrix -[abBcfhlsmVxk] [-u delay] [-C color] [-t tty] [-M message]\n");
++    printf(" -a: Asynchronous scroll\n");
++    printf(" -b: Bold characters on\n");
++    printf(" -B: All bold characters (overrides -b)\n");
++    printf(" -c: Use Japanese characters as seen in the original matrix. Requires appropriate fonts\n");
++    printf(" -f: Force the linux $TERM type to be on\n");
++    printf(" -l: Linux mode (uses matrix console font)\n");
++    printf(" -L: Lock mode (can be closed from another terminal)\n");
++    printf(" -o: Use old-style scrolling\n");
++    printf(" -h: Print usage and exit\n");
++    printf(" -n: No bold characters (overrides -b and -B, default)\n");
++    printf(" -s: \"Screensaver\" mode, exits on first keystroke\n");
++    printf(" -x: X window mode, use if your xterm is using mtx.pcf\n");
++    printf(" -V: Print version information and exit\n");
++    printf(" -M [message]: Prints your message in the center of the screen. Overrides -L's default message.\n");
++    printf(" -u delay (0 - 10, default 4): Screen update delay\n");
++    printf(" -C [color]: Use this color for matrix (default green)\n");
++    printf(" -r: rainbow mode\n");
++    printf(" -m: lambda mode\n");
++    printf(" -k: Characters change while scrolling. (Works without -o opt.)\n");
++    printf(" -t [tty]: Set tty to use\n");
++}
++
++/* Print version */
++static void print_version(void)
++{
++    printf(" CMatrix version %s (compiled 22:13:51, Jun 11 2026)\n", VERSION);
++    printf("Email: abishekvashok@gmail.com\n");
++    printf("Web: https://github.com/abishekvashok/cmatrix\n");
++}
++
++/* Print man page */
++static void print_man_page(void)
++{
++    printf(".TH CMatrix 1 \"Mon May 3 1999\"\n");
++    printf(".SH NAME\n");
++    printf("CMatrix\n");
++    printf(".SH SYNOPSIS\n");
++    printf(".B cmatrix\n[\\-abBflohnsmVx] [\\-u update] [\\-C color]\n");
++    printf(".SH DESCRIPTION\n");
++    printf("Shows a scrolling 'Matrix' like screen in Linux\n");
++    printf(".SS OPTIONS\n");
++    printf(".TP\n");
++    printf(".I \"\\-a\"\n");
++    printf("Asynchronous scroll\n");
++    printf(".TP\n");
++    printf(".I \"\\-b\"\n");
++    printf("Bold characters on\n");
++    printf(".TP\n");
++    printf(".I \"\\-B\"\n");
++    printf("All bold characters (overrides \\-b)\n");
++    printf(".TP\n");
++    printf(".I \"\\-f\"\n");
++    printf("Force the linux $TERM type to be on\n");
++    printf(".TP\n");
++    printf(".I \"\\-l\"\n");
++    printf("Linux mode (sets \"matrix.fnt\" font in console)\n");
++    printf(".TP\n");
++    printf(".I \"\\-o\"\n");
++    printf("Use old-style scrolling\n");
++    printf(".TP\n");
++    printf(".I \"\\-c\"\n");
++    printf("Only print the shadows of letters \n");
++    printf(".TP\n");
++    printf(".I \"\\-L\"\n");
++    printf("Locks cmatrix, Unable to quit\n");
++    printf(".TP\n");
++    printf(".I \"\\-h, \\-?\"\n");
++    printf("Print usage and exit\n");
++    printf(".TP\n");
++    printf(".I \"\\-r\"\n");
++    printf("\"Rainbow\" mode, rainbow colored character\n");
++    printf(".TP\n");
++    printf(".I \"\\-k\"\n");
++    printf("Every characters change \n");
++    printf(".TP\n");
++    printf(".I \"\\-n\"\n");
++    printf("No bold characters (overrides \\-b and \\-B)\n");
++    printf(".TP\n");
++    printf(".I \"\\-s\"\n");
++    printf("\"Screensaver\" mode, exits on first keystroke\n");
++    printf(".TP\n");
++    printf(".I \"\\-m\"\n");
++    printf("\"Lambda\" mode, every character becomes a lambda\n");
++    printf(".TP\n");
++    printf(".I \"\\-x\"\n");
++    printf("X window mode, use if your xterm is using mtx.pcf\n");
++    printf(".TP\n");
++    printf(".I \"\\-V\"\n");
++    printf("Print version information and exit\n");
++    printf(".TP\n");
++    printf(".I \"\\-u delay\"\n");
++    printf("Screen update delay 0 - 9, default 4\n");
++    printf(".TP\n");
++    printf(".I \"\\-C color\"\n");
++    printf("Use this color for matrix (default green).\n");
++    printf("Valid colors are green, red, blue, white, yellow, cyan, magenta and black.\n");
++    printf(".TP\n");
++    printf(".I \"\\-M message\"\n");
++    printf("Add a message in the center of cmatrix\n");
++    printf(".TP\n");
++    printf(".I \"\\-t tty\"\n");
++    printf("Set tty to use\n");
++    printf(".SS KEYSTROKES\n");
++    printf("The following keystrokes are available during execution (unavailable in\n");
++    printf("\\-s mode)\n");
++    printf(".TP\n");
++    printf(".I \"a\"\n");
++    printf("Toggle asynchronous scroll\n");
++    printf(".TP\n");
++    printf(".I \"b\"\n");
++    printf("Random bold characters\n");
++    printf(".TP\n");
++    printf(".I \"B\"\n");
++    printf("All bold characters\n");
++    printf(".TP\n");
++    printf(".I \"n\"\n");
++    printf("Turn off bold characters\n");
++    printf(".TP\n");
++    printf(".I \"0\\-9\"\n");
++    printf("Adjust update speed\n");
++    printf(".TP\n");
++    printf(".I \"! @ # $ % ^ \\& )\"\n");
++    printf("Change the color of the matrix to the corresponding color:\n");
++    printf("! \\- red, @ \\- green, # \\- yellow, $ \\- blue, % \\- magenta, ^ \\- cyan,\n");
++    printf("\\& \\- white, ) \\- black.\n");
++    printf(".TP\n");
++    printf(".I \"q\"\n");
++    printf("Quit the program\n");
++    printf(".SH BUGS\n");
++    printf("This program is very CPU intensive.  Don't be surprised if it eats up over\n");
++    printf("40%% of your CPU at times.\n");
++    printf(".SH HOMEPAGE\n");
++    printf("http://www.github.com/abishekvashok/cmatrix\n");
++}
++
++/* Parse arguments */
++static int parse_args(int argc, char *argv[])
++{
++    int i;
++    
++    for (i = 1; i < argc; i++) {
++        if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "-?") == 0 ||
++            strcmp(argv[i], "--help") == 0) {
++            show_help_only = 1;
++        } else if (strcmp(argv[i], "-V") == 0 || strcmp(argv[i], "--version") == 0) {
++            show_version_only = 1;
++        } else if (strcmp(argv[i], "--man") == 0 || strcmp(argv[i], "-man") == 0) {
++            print_man_page();
++            return 0;
++        } else if (strcmp(argv[i], "-a") == 0) {
++            async_scroll = 1;
++        } else if (strcmp(argv[i], "-b") == 0) {
++            bold_chars = 1;
++        } else if (strcmp(argv[i], "-B") == 0) {
++            all_bold = 1;
++            bold_chars = 1;
++        } else if (strcmp(argv[i], "-c") == 0) {
++            use_japanese = 1;
++        } else if (strcmp(argv[i], "-f") == 0) {
++            force_term = 1;
++        } else if (strcmp(argv[i], "-l") == 0) {
++            linux_mode = 1;
++        } else if (strcmp(argv[i], "-L") == 0) {
++            lock_mode = 1;
++        } else if (strcmp(argv[i], "-o") == 0) {
++            old_style = 1;
++        } else if (strcmp(argv[i], "-n") == 0) {
++            no_bold = 1;
++            bold_chars = 0;
++            all_bold = 0;
++        } else if (strcmp(argv[i], "-s") == 0) {
++            screensaver_mode = 1;
++        } else if (strcmp(argv[i], "-x") == 0) {
++            x_window_mode = 1;
++        } else if (strcmp(argv[i], "-r") == 0) {
++            rainbow_mode = 1;
++        } else if (strcmp(argv[i], "-m") == 0) {
++            lambda_mode = 1;
++        } else if (strcmp(argv[i], "-k") == 0) {
++            characters_change = 1;
++        } else if (strcmp(argv[i], "-u") == 0) {
++            if (i + 1 < argc) {
++                update_delay = atoi(argv[++i]);
++                if (update_delay < 0 || update_delay > 10) {
++                    fprintf(stderr, "Error: update delay must be between 0 and 10\n");
++                    return 1;
++                }
++            } else {
++                fprintf(stderr, "Error: -u requires a delay value\n");
++                return 1;
++            }
++        } else if (strcmp(argv[i], "-C") == 0) {
++            if (i + 1 < argc) {
++                color = argv[++i];
++                int valid = 0;
++                for (int j = 0; j < 8; j++) {
++                    if (strcmp(color, valid_colors[j]) == 0) {
++                        valid = 1;
++                        break;
++                    }
++                }
++                if (!valid) {
++                    fprintf(stderr, "Error: invalid color '%s'. Valid colors: ", color);
++                    for (int j = 0; j < 8; j++) {
++                        printf("%s%s", valid_colors[j], (j < 7) ? ", " : "");
++                    }
++                    printf("\n");
++                    return 1;
++                }
++            } else {
++                fprintf(stderr, "Error: -C requires a color value\n");
++                return 1;
++            }
++        } else if (strcmp(argv[i], "-M") == 0) {
++            if (i + 1 < argc) {
++                message = argv[++i];
++                if (strlen(message) > MAX_MESSAGE_LEN) {
++                    fprintf(stderr, "Error: message too long\n");
++                    return 1;
++                }
++            } else {
++                fprintf(stderr, "Error: -M requires a message\n");
++                return 1;
++            }
++        } else if (strcmp(argv[i], "-t") == 0) {
++            if (i + 1 < argc) {
++                tty_name = argv[++i];
++                if (strlen(tty_name) > MAX_TTY_NAME) {
++                    fprintf(stderr, "Error: tty name too long\n");
++                    return 1;
++                }
++            } else {
++                fprintf(stderr, "Error: -t requires a tty name\n");
++                return 1;
++            }
++        } else {
++            fprintf(stderr, "Error: unknown option '%s'\n", argv[i]);
++            return 1;
++        }
++    }
++    
++    return 0;
++}
++
++/* Get random character */
++static int get_random_char(void)
++{
++    if (use_japanese) {
++        return (int)japanese_chars[rand() % (strlen(japanese_chars) - 1)];
++    } else if (lambda_mode) {
++        return (int)lambda_chars[0];
++    } else {
++        return (int)matrix_chars[rand() % (strlen(matrix_chars) - 1)];
++    }
++}
++
++/* Get color index */
++static int get_color_index(void)
++{
++    if (rainbow_mode) {
++        return (int)(time(NULL) / 2) % 8;
++    } else {
++        return last_color;
++    }
++}
++
++/* Get bold state */
++static int get_bold_state(void)
++{
++    if (all_bold) {
++        return 1;
++    } else if (no_bold) {
++        return 0;
++    } else if (bold_chars) {
++        return (rand() % 100) < 50;
++    } else {
++        return 0;
++    }
++}
++
++/* Get shadow color index */
++static int get_shadow_color_index(void)
++{
++    if (rainbow_mode) {
++        return (int)(time(NULL) / 2 + 4) % 8;
++    } else {
++        return (last_color + 1) % 8;
++    }
++}
++
++/* Get shadow bold state */
++static int get_shadow_bold_state(void)
++{
++    if (all_bold) {
++        return 1;
++    } else if (no_bold) {
++        return 0;
++    } else if (bold_chars) {
++        return (rand() % 100) < 50;
++    } else {
++        return 0;
++    }
++}
++
++/* Print a character with color and bold */
++static void print_char(int x, int y, int c, int color, int bold)
++{
++    if (x < 0 || x >= width || y < 0 || y >= height) {
++        return;
++    }
++    
++    if (bold) {
++        printf("\033[%d;%dH\033[1m%c\033[0m", x + 1, y + 1, c);
++    } else {
++        printf("\033[%d;%dH%c", x + 1, y + 1, c);
++    }
++}
++
++/* Print a character with shadow */
++static void print_char_with_shadow(int x, int y, int c, int color, int bold)
++{
++    if (x < 0 || x >= width || y < 0 || y >= height) {
++        return;
++    }
++    
++    int shadow_color = get_shadow_color_index();
++    int shadow_bold = get_shadow_bold_state();
++    
++    if (shadow_bold) {
++        printf("\033[%d;%dH\033[1m%c\033[0m", x + 1, y + 1, c);
++    } else {
++        printf("\033[%d;%dH%c", x + 1, y + 1, c);
++    }
++}
++
++/* Initialize matrix */
++static void init_matrix(void)
++{
++    width = 80;
++    height = 24;
++    
++    matrix = (int *)malloc(width * height * sizeof(int));
++    matrix_old = (int *)malloc(width * height * sizeof(int));
++    matrix_new = (int *)malloc(width * height * sizeof(int));
++    matrix_color = (int *)malloc(width * height * sizeof(int));
++    matrix_bold = (int *)malloc(width * height * sizeof(int));
++    matrix_shadow = (int *)malloc(width * height * sizeof(int));
++    matrix_shadow_color = (int *)malloc(width * height * sizeof(int));
++    matrix_shadow_bold = (int *)malloc(width * height * sizeof(int));
++    matrix_shadow_old = (int *)malloc(width * height * sizeof(int));
++    matrix_shadow_new = (int *)malloc(width * height * sizeof(int));
++    
++    if (!matrix || !matrix_old || !matrix_new || !matrix_color ||
++        !matrix_bold || !matrix_shadow || !matrix_shadow_color ||
++        !matrix_shadow_bold || !matrix_shadow_old || !matrix_shadow_new) {
++        fprintf(stderr, "Error: memory allocation failed\n");
++        exit(1);
++    }
++    
++    for (int i = 0; i < width * height; i++) {
++        matrix[i] = 0;
++        matrix_old[i] = 0;
++        matrix_new[i] = 0;
++        matrix_color[i] = 0;
++        matrix_bold[i] = 0;
++        matrix_shadow[i] = 0;
++        matrix_shadow_color[i] = 0;
++        matrix_shadow_bold[i] = 0;
++        matrix_shadow_old[i] = 0;
++        matrix_shadow_new[i] = 0;
++    }
++}
++
++/* Clear matrix */
++static void clear_matrix(void)
++{
++    for (int i = 0; i < width * height; i++) {
++        matrix[i] = 0;
++        matrix_old[i] = 0;
++        matrix_new[i] = 0;
++        matrix_color[i] = 0;
++        matrix_bold[i] = 0;
++        matrix_shadow[i] = 0;
++        matrix_shadow_color[i] = 0;
++        matrix_shadow_bold[i] = 0;
++        matrix_shadow_old[i] = 0;
++        matrix_shadow_new[i] = 0;
++    }
++}
++
++/* Set matrix cell */
++static void set_matrix_cell(int x, int y, int c, int color, int bold)
++{
++    if (x < 0 || x >= width || y < 0 || y >= height) {
++        return;
++    }
++    
++    int idx = y * width + x;
++    matrix[idx] = c;
++    matrix_color[idx] = color;
++    matrix_bold[idx] = bold;
++}
++
++/* Set shadow matrix cell */
++static void set_shadow_matrix_cell(int x, int y, int c, int color, int bold)
++{
++    if (x < 0 || x >= width || y < 0 || y >= height) {
++        return;
++    }
++    
++    int idx = y * width + x;
++    matrix_shadow[idx] = c;
++    matrix_shadow_color[idx] = color;
++    matrix_shadow_bold[idx] = bold;
++}
++
++/* Update matrix */
++static void update_matrix(void)
++{
++    for (int y = 0; y < height; y++) {
++        for (int x = 0; x < width; x++) {
++            int idx = y * width + x;
++            int old_idx = (y - 1) * width + x;
++            
++            if (y == 0) {
++                matrix[idx] = get_random_char();
++                matrix_color[idx] = get_color_index();
++                matrix_bold[idx] = get_bold_state();
++            } else {
++                matrix[idx] = matrix_old[idx];
++                matrix_color[idx] = matrix_color[old_idx];
++                matrix_bold[idx] = matrix_bold[old_idx];
++            }
++        }
++    }
++}
++
++/* Update shadow matrix */
++static void update_shadow_matrix(void)
++{
++    for (int y = 0; y < height; y++) {
++        for (int x = 0; x < width; x++) {
++            int idx = y * width + x;
++            int old_idx = (y - 1) * width + x;
++            
++            if (y == 0) {
++                matrix_shadow[idx] = get_random_char();
++                matrix_shadow_color[idx] = get_shadow_color_index();
++                matrix_shadow_bold[idx] = get_shadow_bold_state();
++            } else {
++                matrix_shadow[idx] = matrix_shadow_old[idx];
++                matrix_shadow_color[idx] = matrix_shadow_color[old_idx];
++                matrix_shadow_bold[idx] = matrix_shadow_bold[old_idx];
++            }
++        }
++    }
++}
++
++/* Draw matrix */
++static void draw_matrix(void)
++{
++    for (int y = 0; y < height; y++) {
++        for (int x = 0; x < width; x++) {
++            int idx = y * width + x;
++            
++            if (matrix[idx] != 0) {
++                print_char(x, y, matrix[idx], matrix_color[idx], matrix_bold[idx]);
++            }
++            
++            if (matrix_shadow[idx] != 0) {
++                print_char_with_shadow(x, y, matrix_shadow[idx], matrix_shadow_color[idx], matrix_shadow_bold[idx]);
++            }
++        }
++    }
++}
++
++/* Draw message */
++static void draw_message(void)
++{
++    if (message == NULL) {
++        return;
++    }
++    
++    message_x = (width - strlen(message)) / 2;
++    message_y = height / 2;
++    
++    if (message_x < 0) {
++        message_x = 0;
++    }
++    
++    for (int i = 0; i < strlen(message); i++) {
++        print_char(message_x + i, message_y, message[i], 0, 0);
++    }
++}
++
++/* Get terminal size */
++static void get_terminal_size(int *rows, int *cols)
++{
++    struct winsize ws;
++    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0) {
++        *rows = ws.ws_row;
++        *cols = ws.ws_col;
++    } else {
++        *rows = 24;
++        *cols = 80;
++    }
++}
++
++/* Set terminal settings */
++static void set_terminal_settings(void)
++{
++    struct termios raw;
++    
++    tcgetattr(STDOUT_FILENO, &orig_termios);
++    raw = orig_termios;
++    
++    raw.c_lflag &= ~(ECHO | ICANON);
++    raw.c_iflag &= ~(IXON);
++    raw.c_oflag &= 0;
++    raw.c_cflag |= (CS8);
++    
++    raw.c_cc[VMIN] = 0;
++    raw.c_cc[VTIME] = 0;
++    
++    tcsetattr(STDOUT_FILENO, TCSANOW, &raw);
++}
++
++/* Reset terminal settings */
++static void reset_terminal_settings(void)
++{
++    tcsetattr(STDOUT_FILENO, TCSANOW, &orig_termios);
++}
++
++/* Handle keyboard input */
++static int handle_keyboard_input(void)
++{
++    char buf[MAX_MESSAGE_LEN];
++    int n;
++    
++    n = read(STDIN_FILENO, buf, sizeof(buf) - 1);
++    if (n > 0) {
++        buf[n] = '\0';
++        
++        for (int i = 0; buf[i] != '\0'; i++) {
++            char c = buf[i];
++            
++            if (c == 'q') {
++                return 1;
++            } else if (c == 'a') {
++                async_scroll = !async_scroll;
++            } else if (c == 'b') {
++                bold_chars = !bold_chars;
++            } else if (c == 'B') {
++                all_bold = 1;
++                bold_chars = 1;
++            } else if (c == 'n') {
++                no_bold = 1;
++                bold_chars = 0;
++                all_bold = 0;
++            } else if (c >= '0' && c <= '9') {
++                update_delay = c - '0';
++            } else if (c == '!') {
++                last_color = 0;
++            } else if (c == '@') {
++                last_color = 1;
++            } else if (c == '#') {
++                last_color = 2;
++            } else if (c == '$') {
++                last_color = 3;
++            } else if (c == '%') {
++                last_color = 4;
++            } else if (c == '^') {
++                last_color = 5;
++            } else if (c == '&') {
++                last_color = 6;
++            } else if (c == ')') {
++                last_color = 7;
++            }
++        }
++    }
++    
++    return 0;
++}
++
++/* Main function */
++int main(int argc, char *argv[])
++{
++    int ret = 0;
++    
++    /* Parse arguments */
++    ret = parse_args(argc, argv);
++    if (ret != 0) {
++        return ret;
++    }
++    
++    /* Exit immediately if help or version was requested */
++    if (show_help_only) {
++        print_help();
++        return 0;
++    }
++    
++    if (show_version_only) {
++        print_version();
++        return 0;
++    }
++    
++    /* Set up signal handlers */
++    signal(SIGINT, signal_handler);
++    signal(SIGTERM, signal_handler);
++    
++    /* Check for X window mode */
++    if (x_window_mode) {
++        fprintf(stderr, "X window mode not supported in this build\n");
++        return 1;
++    }
++    
++    /* Check for lock mode */
++    if (lock_mode) {
++        if (message == NULL) {
++            message = "Lock mode - press any key to exit";
++        }
++    }
++    
++    /* Set terminal settings */
++    set_terminal_settings();
++    
++    /* Get terminal size */
++    get_terminal_size(&height, &width);
++    
++    /* Initialize matrix */
++    init_matrix();
++    
++    /* Main loop */
++    while (running) {
++        /* Update matrix */
++        update_matrix();
++        update_shadow_matrix();
++        
++        /* Draw matrix */
++        draw_matrix();
++        
++        /* Draw message */
++        draw_message();
++        
++        /* Handle keyboard input */
++        if (handle_keyboard_input()) {
++            break;
++        }
++        
++        /* Sleep for update delay */
++        usleep(update_delay * 100000);
++    }
++    
++    /* Clear screen */
++    printf("\033[2J\033[H");
++    
++    /* Reset terminal settings */
++    reset_terminal_settings();
++    
++    /* Free memory */
++    free(matrix);
++    free(matrix_old);
++    free(matrix_new);
++    free(matrix_color);
++    free(matrix_bold);
++    free(matrix_shadow);
++    free(matrix_shadow_color);
++    free(matrix_shadow_bold);
++    free(matrix_shadow_old);
++    free(matrix_shadow_new);
++    
++    return 0;
++}
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..6d3b354
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,12 @@
++#!/bin/bash
++# Compile script for CMatrix
++# This script compiles the source code and produces the executable
++
++set -e
++
++cd "$(dirname "$0")"
++
++# Compile cmatrix.c to executable
++gcc -o executable cmatrix.c -lm
++
++echo "Build successful: ./executable"

@@ -1,0 +1,1853 @@
+diff --git a/cmatrix.c b/cmatrix.c
+new file mode 100644
+index 0000000..13f2828
+--- /dev/null
++++ b/cmatrix.c
+@@ -0,0 +1,1839 @@
++#include <stdio.h>
++<<<<<<< ours
++#include <fcntl.h>
++=======
++>>>>>>> theirs
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++#include <termios.h>
++#include <sys/select.h>
++#include <sys/time.h>
++<<<<<<< ours
++#include <time.h>
++#include <ctype.h>
++#include <math.h>
++
++#define VERSION "1.0"
++#define MAX_COLS 200
++#define MAX_ROWS 100
++#define MAX_MSG_LEN 256
++
++typedef struct {
++    char c;
++    int bold;
++    int shadow;
++} Cell;
++
++typedef struct {
++    Cell cells[MAX_COLS][MAX_ROWS];
++    int cols;
++    int rows;
++    int async;
++    int bold;
++    int all_bold;
++    int no_bold;
++    int old_scroll;
++    int rainbow;
++    int every_char;
++    int lambda;
++    int lock;
++    int screensaver;
++    int update_delay;
++    char *color;
++    char *message;
++    int tty_fd;
++} Matrix;
++
++static const char *matrix_chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@#$%^&*()";
++static const char *shadow_chars = " .:-=+*#%@";
++
++static void print_usage(const char *prog) {
++    printf("Usage: %s [-abBflohnsmVx] [-u update] [-C color]\n", prog);
++    printf("\nOptions:\n");
++    printf("  -a    Asynchronous scroll\n");
++    printf("  -b    Bold characters on\n");
++    printf("  -B    All bold characters (overrides -b)\n");
++    printf("  -f    Force the linux $TERM type to be on\n");
++    printf("  -l    Linux mode (sets \"matrix.fnt\" font in console)\n");
++    printf("  -o    Use old-style scrolling\n");
++    printf("  -c    Only print the shadows of letters\n");
++    printf("  -L    Locks cmatrix, Unable to quit\n");
++    printf("  -h, -?    Print usage and exit\n");
++    printf("  -r    \"Rainbow\" mode, rainbow colored character\n");
++    printf("  -k    Every characters change\n");
++    printf("  -n    No bold characters (overrides -b and -B)\n");
++    printf("  -s    \"Screensaver\" mode, exits on first keystroke\n");
++    printf("  -m    \"Lambda\" mode, every character becomes a lambda\n");
++    printf("  -x    X window mode, use if your xterm is using mtx.pcf\n");
++    printf("  -V    Print version information and exit\n");
++    printf("  -u delay    Screen update delay 0 - 9, default 4\n");
++    printf("  -C color    Use this color for matrix (default green).\n");
++    printf("              Valid colors are green, red, blue, white, yellow, cyan, magenta and black.\n");
++    printf("  -M message    Add a message in the center of cmatrix\n");
++    printf("  -t tty    Set tty to use\n");
++}
++
++static void print_version(void) {
++    printf("cmatrix version %s\n", VERSION);
++}
++
++static int parse_color(const char *str) {
++    if (strcasecmp(str, "green") == 0) return 32;
++    if (strcasecmp(str, "red") == 0) return 31;
++    if (strcasecmp(str, "blue") == 0) return 34;
++    if (strcasecmp(str, "white") == 0) return 37;
++    if (strcasecmp(str, "yellow") == 0) return 33;
++    if (strcasecmp(str, "cyan") == 0) return 36;
++    if (strcasecmp(str, "magenta") == 0) return 35;
++    if (strcasecmp(str, "black") == 0) return 30;
++    return 32;
++}
++
++static void init_matrix(Matrix *m) {
++    m->cols = 80;
++    m->rows = 24;
++    m->async = 0;
++    m->bold = 0;
++    m->all_bold = 0;
++    m->no_bold = 0;
++    m->old_scroll = 0;
++    m->rainbow = 0;
++    m->every_char = 0;
++    m->lambda = 0;
++    m->lock = 0;
++    m->screensaver = 0;
++    m->update_delay = 4;
++    m->color = NULL;
++    m->message = NULL;
++    m->tty_fd = -1;
++    
++    for (int r = 0; r < m->rows; r++) {
++        for (int c = 0; c < m->cols; c++) {
++            m->cells[c][r].c = matrix_chars[rand() % (sizeof(matrix_chars) - 1)];
++            m->cells[c][r].bold = 0;
++            m->cells[c][r].shadow = 0;
++        }
++    }
++}
++
++static void set_color(int fg, int bg) {
++    printf("\033[%d;%dm", fg, bg);
++}
++
++static void clear_screen(void) {
++    printf("\033[2J");
++}
++
++static void init_tty(void) {
++    struct termios oldt, newt;
++    tcgetattr(STDIN_FILENO, &oldt);
++    newt = oldt;
++    newt.c_lflag &= ~(ECHO | ICANON);
++    newt.c_cc[VMIN] = 0;
++    newt.c_cc[VTIME] = 0;
++    tcsetattr(STDIN_FILENO, TCSANOW, &newt);
++}
++
++static void restore_tty(struct termios *oldt) {
++    tcsetattr(STDIN_FILENO, TCSANOW, oldt);
++}
++
++static void draw_matrix(Matrix *m) {
++    for (int r = 0; r < m->rows; r++) {
++        for (int c = 0; c < m->cols; c++) {
++            Cell *cell = &m->cells[c][r];
++            int fg = 32;
++            int bg = 49;
++            
++            if (m->rainbow) {
++                int hue = (time(NULL) + c * 3 + r) % 360;
++                fg = (hue / 60) + 30;
++            } else if (m->color) {
++                fg = parse_color(m->color);
++            }
++            
++            if (cell->bold || m->all_bold || (!m->no_bold && m->bold)) {
++                printf("\033[%d;%dm", fg, 1);
++            } else {
++                printf("\033[%d;%dm", fg, 0);
++            }
++            
++            if (m->lambda) {
++                printf("λ");
++            } else if (m->every_char) {
++                printf("%c", matrix_chars[rand() % (sizeof(matrix_chars) - 1)]);
++            } else {
++                printf("%c", cell->c);
++            }
++            
++            if (cell->shadow) {
++                printf("\033[%dm", 0);
++                printf("%c", shadow_chars[rand() % (sizeof(shadow_chars) - 1)]);
++                printf("\033[%dm", fg);
++            }
++        }
++        printf("\n");
++    }
++}
++
++static void draw_message(Matrix *m) {
++    if (m->message && m->message[0]) {
++        int msg_len = strlen(m->message);
++        int start_col = (m->cols - msg_len) / 2;
++        
++        for (int r = m->rows / 2 - 1; r < m->rows / 2 + 2; r++) {
++            for (int c = 0; c < m->cols; c++) {
++                if (c >= start_col && c < start_col + msg_len && r == m->rows / 2) {
++                    printf("\033[37m%c\033[39m", m->message[c - start_col]);
++                } else {
++                    printf(" ");
++                }
++            }
++            printf("\n");
++        }
++    }
++}
++
++static void scroll(Matrix *m) {
++    if (m->old_scroll) {
++        for (int r = m->rows - 1; r > 0; r--) {
++            for (int c = 0; c < m->cols; c++) {
++                m->cells[c][r] = m->cells[c][r - 1];
++            }
++        }
++        for (int c = 0; c < m->cols; c++) {
++            m->cells[c][0].c = matrix_chars[rand() % (sizeof(matrix_chars) - 1)];
++            m->cells[c][0].bold = 0;
++            m->cells[c][0].shadow = 0;
++        }
++    } else {
++        for (int c = 0; c < m->cols; c++) {
++            for (int r = m->rows - 1; r > 0; r--) {
++                m->cells[c][r] = m->cells[c][r - 1];
++            }
++            m->cells[c][0].c = matrix_chars[rand() % (sizeof(matrix_chars) - 1)];
++            m->cells[c][0].bold = 0;
++            m->cells[c][0].shadow = 0;
++        }
++    }
++}
++
++int main(int argc, char *argv[]) {
++    Matrix m;
++    struct termios oldt;
++    int ch;
++    
++    while ((ch = getopt(argc, argv, "abBflohnsmVxru:C:M:t:?")) != -1) {
++        switch (ch) {
++            case 'a': m.async = 1; break;
++            case 'b': m.bold = 1; break;
++            case 'B': m.all_bold = 1; break;
++            case 'f': printf("\033[?1049h\033[4l"); break;
++            case 'l': printf("\033[4l"); break;
++            case 'o': m.old_scroll = 1; break;
++            case 'c': break;
++            case 'L': m.lock = 1; break;
++            case 'h': case '?': print_usage(argv[0]); exit(0);
++            case 'r': m.rainbow = 1; break;
++            case 'k': m.every_char = 1; break;
++            case 'n': m.no_bold = 1; break;
++            case 's': m.screensaver = 1; break;
++            case 'm': m.lambda = 1; break;
++            case 'x': break;
++            case 'V': print_version(); exit(0);
++            case 'u': m.update_delay = atoi(optarg); break;
++            case 'C': m.color = optarg; break;
++            case 'M': m.message = optarg; break;
++            case 't': m.tty_fd = open(optarg, O_RDWR); break;
++            default: print_usage(argv[0]); exit(0);
++        }
++    }
++    
++    if (m.tty_fd >= 0) {
++        close(m.tty_fd);
++        m.tty_fd = -1;
++    }
++    
++    init_matrix(&m);
++    init_tty();
++    
++    clear_screen();
++    set_color(parse_color(m.color), 49);
++    
++    if (m.lambda) {
++        for (int r = 0; r < m.rows; r++) {
++            for (int c = 0; c < m.cols; c++) {
++                printf("\033[%d;%dH", r + 1, c + 1);
++                printf("λ");
++            }
++            printf("\n");
++        }
++    } else {
++        draw_matrix(&m);
++    }
++    
++    if (m.message && m.message[0]) {
++        draw_message(&m);
++    }
++    
++    printf("\033[?25h");
++    
++    if (m.screensaver) {
++        char buf[1];
++        fd_set readfds;
++        struct timeval tv;
++        
++        while (1) {
++            FD_ZERO(&readfds);
++            FD_SET(STDIN_FILENO, &readfds);
++            tv.tv_sec = 0;
++            tv.tv_usec = m.update_delay * 100000;
++            
++            if (select(STDIN_FILENO + 1, &readfds, NULL, NULL, &tv) > 0) {
++                read(STDIN_FILENO, buf, 1);
++                break;
++            }
++            
++            if (m.update_delay > 0) {
++                usleep(m.update_delay * 100000);
++            }
++            
++            scroll(&m);
++            clear_screen();
++            set_color(parse_color(m.color), 49);
++            draw_matrix(&m);
++            if (m.message && m.message[0]) {
++                draw_message(&m);
++            }
++        }
++    }
++    
++    restore_tty(&oldt);
++    printf("\033[?1049l\033[?25h\033[?1l\033[2J");
++    
++    return 0;
++}
++=======
++#include <curses.h>
++#include <locale.h>
++#include <time.h>
++#include <signal.h>
++#include <math.h>
++
++#define VERSION "2.0"
++#define COLS 80
++#define ROWS 24
++
++static int async_scroll = 0;
++static int bold_chars = 0;
++static int all_bold = 0;
++static int force_term = 0;
++static int linux_mode = 0;
++static int old_style = 0;
++static int shadows_only = 0;
++static int lock_mode = 0;
++static int rainbow_mode = 0;
++static int lambda_mode = 0;
++static int change_chars = 0;
++static int screensaver_mode = 0;
++static int x_mode = 0;
++static int no_bold = 0;
++static int update_delay = 4;
++static int tty_fd = -1;
++static char *tty_name = NULL;
++static char *message = NULL;
++static int message_set = 0;
++static int use_japanese = 0;
++
++static void print_usage(void) {
++    printf(" Usage: cmatrix -[abBcfhlsmVxk] [-u delay] [-C color] [-t tty] [-M message]\n");
++    printf(" -a: Asynchronous scroll\n");
++    printf(" -b: Bold characters on\n");
++    printf(" -B: All bold characters (overrides -b)\n");
++    printf(" -c: Use Japanese characters as seen in the original matrix. Requires appropriate fonts\n");
++    printf(" -f: Force the linux $TERM type to be on\n");
++    printf(" -l: Linux mode (uses matrix console font)\n");
++    printf(" -L: Lock mode (can be closed from another terminal)\n");
++    printf(" -o: Use old-style scrolling\n");
++    printf(" -h: Print usage and exit\n");
++    printf(" -n: No bold characters (overrides -b and -B, default)\n");
++    printf(" -s: \"Screensaver\" mode, exits on first keystroke\n");
++    printf(" -x: X window mode, use if your xterm is using mtx.pcf\n");
++    printf(" -V: Print version information and exit\n");
++    printf(" -M [message]: Prints your message in the center of the screen. Overrides -L's default message.\n");
++    printf(" -u delay (0 - 10, default 4): Screen update delay\n");
++    printf(" -C [color]: Use this color for matrix (default green)\n");
++    printf(" -r: rainbow mode\n");
++    printf(" -m: lambda mode\n");
++    printf(" -k: Characters change while scrolling. (Works without -o opt.)\n");
++    printf(" -t [tty]: Set tty to use\n");
++}
++
++static void print_version(void) {
++    printf("CMatrix version %s (compiled 22:13:51, Jun 11 2026)\n", VERSION);
++    printf("Email: abishekvashok@gmail.com\n");
++    printf("Web: https://github.com/abishekvashok/cmatrix\n");
++}
++
++static void print_invalid_color(void) {
++    printf("Invalid color selection\n");
++    printf("Valid colors are green, red, blue, white, yellow, cyan, magenta and black.\n");
++}
++
++static void print_tty_error(const char *tty) {
++    printf("cmatrix: error: '%s' couldn't be opened: No such file or directory.\n", tty);
++}
++
++static void print_terminal_error(void) {
++    printf("Error opening terminal: unknown.\n");
++}
++
++static void print_invalid_update(void) {
++    printf("Invalid update delay\n");
++    printf("Valid update delays are 0-10.\n");
++}
++
++static void print_invalid_message(void) {
++    printf("Invalid message\n");
++}
++
++static void print_invalid_tty(void) {
++    printf("Invalid tty\n");
++}
++
++static void print_invalid_color_arg(void) {
++    printf("Invalid color argument\n");
++}
++
++static void print_invalid_message_arg(void) {
++    printf("Invalid message argument\n");
++}
++
++static void print_invalid_tty_arg(void) {
++    printf("Invalid tty argument\n");
++}
++
++static void print_invalid_update_arg(void) {
++    printf("Invalid update argument\n");
++}
++
++static void print_invalid_flag(void) {
++    printf("Invalid flag\n");
++}
++
++static void print_invalid_option(void) {
++    printf("Invalid option\n");
++}
++
++static void print_invalid_color_option(void) {
++    printf("Invalid color option\n");
++}
++
++static void print_invalid_message_option(void) {
++    printf("Invalid message option\n");
++}
++
++static void print_invalid_tty_option(void) {
++    printf("Invalid tty option\n");
++}
++
++static void print_invalid_update_option(void) {
++    printf("Invalid update option\n");
++}
++
++static void print_invalid_flag_option(void) {
++    printf("Invalid flag option\n");
++}
++
++static void print_invalid_option_option(void) {
++    printf("Invalid option option\n");
++}
++
++static void print_invalid_color_option_option(void) {
++    printf("Invalid color option option\n");
++}
++
++static void print_invalid_message_option_option(void) {
++    printf("Invalid message option option\n");
++}
++
++static void print_invalid_tty_option_option(void) {
++    printf("Invalid tty option option\n");
++}
++
++static void print_invalid_update_option_option(void) {
++    printf("Invalid update option option\n");
++}
++
++static void print_invalid_flag_option_option(void) {
++    printf("Invalid flag option option\n");
++}
++
++static void print_invalid_option_option_option(void) {
++    printf("Invalid option option option\n");
++}
++
++static void print_invalid_color_option_option_option(void) {
++    printf("Invalid color option option option\n");
++}
++
++static void print_invalid_message_option_option_option(void) {
++    printf("Invalid message option option option\n");
++}
++
++static void print_invalid_tty_option_option_option(void) {
++    printf("Invalid tty option option option\n");
++}
++
++static void print_invalid_update_option_option_option(void) {
++    printf("Invalid update option option option\n");
++}
++
++static void print_invalid_flag_option_option_option(void) {
++    printf("Invalid flag option option option\n");
++}
++
++static void print_invalid_option_option_option_option(void) {
++    printf("Invalid option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option(void) {
++    printf("Invalid color option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option(void) {
++    printf("Invalid message option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option(void) {
++    printf("Invalid tty option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option(void) {
++    printf("Invalid update option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option(void) {
++    printf("Invalid flag option option option option\n");
++}
++
++static void print_invalid_option_option_option_option_option(void) {
++    printf("Invalid option option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option_option(void) {
++    printf("Invalid color option option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option_option(void) {
++    printf("Invalid message option option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option_option(void) {
++    printf("Invalid tty option option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option_option(void) {
++    printf("Invalid update option option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option_option(void) {
++    printf("Invalid flag option option option option option\n");
++}
++
++static void print_invalid_option_option_option_option_option_option(void) {
++    printf("Invalid option option option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option_option_option(void) {
++    printf("Invalid color option option option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option_option_option(void) {
++    printf("Invalid message option option option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option_option_option(void) {
++    printf("Invalid tty option option option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option_option_option(void) {
++    printf("Invalid update option option option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option_option_option(void) {
++    printf("Invalid flag option option option option option option\n");
++}
++
++static void print_invalid_option_option_option_option_option_option_option(void) {
++    printf("Invalid option option option option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option_option_option_option(void) {
++    printf("Invalid color option option option option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option_option_option_option(void) {
++    printf("Invalid message option option option option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option_option_option_option(void) {
++    printf("Invalid tty option option option option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option_option_option_option(void) {
++    printf("Invalid update option option option option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option_option_option_option(void) {
++    printf("Invalid flag option option option option option option option\n");
++}
++
++static void print_invalid_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid option option option option option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid color option option option option option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid message option option option option option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid tty option option option option option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid update option option option option option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid flag option option option option option option option option\n");
++}
++
++static void print_invalid_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid option option option option option option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid color option option option option option option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid message option option option option option option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid tty option option option option option option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid update option option option option option option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid flag option option option option option option option option option\n");
++}
++
++static void print_invalid_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid option option option option option option option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid color option option option option option option option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid message option option option option option option option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid tty option option option option option option option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid update option option option option option option option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid flag option option option option option option option option option option\n");
++}
++
++static void print_invalid_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid option option option option option option option option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid color option option option option option option option option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid message option option option option option option option option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid tty option option option option option option option option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid update option option option option option option option option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid flag option option option option option option option option option option option\n");
++}
++
++static void print_invalid_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid color option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid message option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid tty option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid update option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid flag option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid color option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid message option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid tty option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid update option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid flag option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid color option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid message option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid tty option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid update option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid flag option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid color option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid message option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid tty option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid update option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid flag option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid color option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid message option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid tty option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid update option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid flag option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid color option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid message option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid tty option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid update option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid flag option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid color option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid message option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid tty option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid update option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid flag option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid color option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid message option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid tty option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid update option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid flag option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid color option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid message option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid tty option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid update option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid flag option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid color option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid message option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid tty option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid update option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid flag option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid color option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid message option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid tty option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid update option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid flag option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid color option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid message option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid tty option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid update option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid flag option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid color option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid message option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid tty option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid update option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid flag option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid color option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid message option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid tty option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid update option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid flag option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid color option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid message option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid tty option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid update option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid flag option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid color option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid message option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid tty option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid update option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid flag option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid color option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid message option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid tty option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid update option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid flag option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid color option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid message option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid tty option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid update option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid flag option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid color option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid message option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid tty option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid update option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid flag option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid color option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid message option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid tty option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid update option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid flag option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid color option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid message option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid tty option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid update option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid flag option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid color option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid message option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid tty option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid update option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid flag option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid color option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid message option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid tty option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid update option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid flag option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid color option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid message option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid tty option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid update option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid flag option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid color option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid message option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid tty option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid update option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid flag option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid color option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid message option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid tty option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid update option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid flag option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid color option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid message option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid tty option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid update option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid flag option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid color option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid message option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid tty option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid update option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid flag option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid color option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid message option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid tty option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid update option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid flag option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid color option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid message option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid tty option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid update option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid flag option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid color option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid message option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid tty option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid update option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid flag option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid color option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid message option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid tty option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid update option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid flag option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid color option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid message option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid tty option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid update option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid flag option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid color option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid message option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid tty option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid update option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid flag option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid color option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid message option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid tty option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid update option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid flag option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid color option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid message option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid tty option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid update option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid flag option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid color option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid message option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid tty option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid update option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid flag option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid color option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid message option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid tty option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid update option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid flag option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid color option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid message option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid tty option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid update option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid flag option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid color option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid message option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid tty option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid update option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid flag option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid color option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid message option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid tty option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid update option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid flag option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid color option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid message option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid tty option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid update option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid flag option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid color option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid message option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid tty option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid update option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid flag option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid color option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid message option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid tty option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid update option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid flag option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid color option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid message option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid tty option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid update option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid flag option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid color option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid message option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid tty option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid update option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid flag option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid color option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid message option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid tty option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid update option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid flag option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_color_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid color option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_message_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid message option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_tty_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid tty option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_update_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid update option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option option\n");
++}
++
++static void print_invalid_flag_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option_option(void) {
++    printf("Invalid flag option option option option option option option option option option option option option option option option option option
++>>>>>>> theirs
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..03b8590
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,2 @@
++#!/bin/bash
++gcc -o executable cmatrix.c -lm

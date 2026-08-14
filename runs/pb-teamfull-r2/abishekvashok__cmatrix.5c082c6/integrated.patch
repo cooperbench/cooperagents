@@ -1,0 +1,564 @@
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..a6c66bf
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,12 @@
++#!/bin/bash
++set -e
++
++cd /workspace
++
++# Create src directory if it doesn't exist
++mkdir -p src
++
++# Compile the matrix program
++gcc -o executable src/main.c src/matrix.c -lm -Wall -Wextra
++
++echo "Build complete: ./executable"
+diff --git a/src/interactive.h b/src/interactive.h
+new file mode 100644
+index 0000000..137d643
+--- /dev/null
++++ b/src/interactive.h
+@@ -0,0 +1,10 @@
++#ifndef INTERACTIVE_H
++#define INTERACTIVE_H
++
++#include "options.h"
++
++void interactive_init(struct options *opts);
++void interactive_loop(struct options *opts);
++void interactive_cleanup(void);
++
++#endif
+diff --git a/src/main.c b/src/main.c
+new file mode 100644
+index 0000000..38c8a96
+--- /dev/null
++++ b/src/main.c
+@@ -0,0 +1,246 @@
++#define _GNU_SOURCE
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++#include <termios.h>
++#include <sys/time.h>
++#include <time.h>
++#include <signal.h>
++#include <getopt.h>
++#include <fcntl.h>
++
++#include "options.h"
++#include "matrix.h"
++#include "interactive.h"
++
++static volatile int running = 1;
++static volatile int quit_requested = 0;
++
++void signal_handler(int sig) {
++    (void)sig;
++    running = 0;
++}
++
++void print_usage(const char *prog_name) {
++    printf(" Usage: %s -[abBcfhlsmVxk] [-u delay] [-C color] [-t tty] [-M message]\n", prog_name);
++    printf(" -a: Asynchronous scroll\n");
++    printf(" -b: Bold characters on\n");
++    printf(" -B: All bold characters (overrides -b)\n");
++    printf(" -c: Use Japanese characters as seen in the original matrix. Requires appropriate fonts\n");
++    printf(" -f: Force the linux $TERM type to be on\n");
++    printf(" -l: Linux mode (uses matrix console font)\n");
++    printf(" -L: Lock mode (can be closed from another terminal)\n");
++    printf(" -o: Use old-style scrolling\n");
++    printf(" -h: Print usage and exit\n");
++    printf(" -n: No bold characters (overrides -b and -B, default)\n");
++    printf(" -s: \"Screensaver\" mode, exits on first keystroke\n");
++    printf(" -x: X window mode, use if your xterm is using mtx.pcf\n");
++    printf(" -V: Print version information and exit\n");
++    printf(" -M [message]: Prints your message in the center of the screen. Overrides -L's default message.\n");
++    printf(" -u delay (0 - 10, default 4): Screen update delay\n");
++    printf(" -C [color]: Use this color for matrix (default green)\n");
++    printf(" -r: rainbow mode\n");
++    printf(" -m: lambda mode\n");
++    printf(" -k: Characters change while scrolling. (Works without -o opt.)\n");
++    printf(" -t [tty]: Set tty to use\n");
++}
++
++void print_version(void) {
++    printf("cmatrix 1.0\n");
++}
++
++int main(int argc, char *argv[]) {
++    struct options opts;
++    struct termios oldt, newt;
++    int ch;
++    int tty_fd = -1;
++    int tty_set = 0;
++    
++    // Initialize options with defaults
++    memset(&opts, 0, sizeof(opts));
++    opts.async = 0;
++    opts.bold = 0;
++    opts.all_bold = 0;
++    opts.use_japanese = 0;
++    opts.force_term = 0;
++    opts.linux_mode = 0;
++    opts.lock = 0;
++    opts.old_scroll = 0;
++    opts.no_bold = 0;
++    opts.screensaver = 0;
++    opts.x_mode = 0;
++    opts.rainbow = 0;
++    opts.lambda = 0;
++    opts.change_chars = 0;
++    opts.message = NULL;
++    opts.update_delay = 4;
++    opts.color = "green";
++    opts.tty = NULL;
++    
++    // Parse command line arguments
++    while ((ch = getopt(argc, argv, "abBcfhlsmVxknt:u:C:M:r")) != -1) {
++        if (ch == '-') {
++            // End of options
++            break;
++        }
++        switch (ch) {
++            case 'a':
++                opts.async = 1;
++                break;
++            case 'b':
++                opts.bold = 1;
++                break;
++            case 'B':
++                opts.all_bold = 1;
++                break;
++            case 'c':
++                opts.use_japanese = 1;
++                break;
++            case 'f':
++                opts.force_term = 1;
++                break;
++            case 'l':
++                opts.linux_mode = 1;
++                break;
++            case 'L':
++                opts.lock = 1;
++                break;
++            case 'o':
++                opts.old_scroll = 1;
++                break;
++            case 'h':
++                print_usage(argv[0]);
++                return 0;
++            case 'n':
++                opts.no_bold = 1;
++                break;
++            case 's':
++                opts.screensaver = 1;
++                break;
++            case 'x':
++                opts.x_mode = 1;
++                break;
++            case 'V':
++                print_version();
++                return 0;
++            case 'k':
++                opts.change_chars = 1;
++                break;
++            case 'u':
++                opts.update_delay = atoi(optarg);
++                if (opts.update_delay < 0 || opts.update_delay > 10) {
++                    fprintf(stderr, "Error: update delay must be 0-10\n");
++                    return 1;
++                }
++                break;
++            case 'C':
++                opts.color = optarg;
++                break;
++            case 'M':
++                opts.message = optarg;
++                break;
++            case 'r':
++                opts.rainbow = 1;
++                break;
++            case 'm':
++                opts.lambda = 1;
++                break;
++            case 't':
++                opts.tty = optarg;
++                tty_set = 1;
++                break;
++            default:
++                print_usage(argv[0]);
++                return 1;
++        }
++    }
++    
++    // Validate color
++    if (opts.color && strcmp(opts.color, "green") && 
++        strcmp(opts.color, "red") && strcmp(opts.color, "blue") &&
++        strcmp(opts.color, "white") && strcmp(opts.color, "yellow") &&
++        strcmp(opts.color, "cyan") && strcmp(opts.color, "magenta") &&
++        strcmp(opts.color, "black")) {
++        fprintf(stderr, "Error: invalid color '%s'. Valid colors: green, red, blue, white, yellow, cyan, magenta, black\n", opts.color);
++        return 1;
++    }
++    
++    // Handle tty
++    if (tty_set) {
++        tty_fd = open(opts.tty, O_RDWR);
++        if (tty_fd < 0) {
++            fprintf(stderr, "Error: cannot open tty '%s'\n", opts.tty);
++            return 1;
++        }
++    }
++    
++    // Set up signal handlers
++    signal(SIGINT, signal_handler);
++    signal(SIGTERM, signal_handler);
++    
++    // Save terminal settings
++    if (tcgetattr(tty_fd >= 0 ? tty_fd : 0, &oldt) < 0) {
++        fprintf(stderr, "Error: cannot get terminal settings\n");
++        return 1;
++    }
++    
++    // Configure terminal
++    newt = oldt;
++    newt.c_lflag &= ~(ECHO | ICANON);
++    newt.c_cc[VMIN] = 0;
++    newt.c_cc[VTIME] = 0;
++    
++    if (tcsetattr(tty_fd >= 0 ? tty_fd : 0, TCSANOW, &newt) < 0) {
++        fprintf(stderr, "Error: cannot set terminal settings\n");
++        return 1;
++    }
++    
++    // Force TERM if requested
++    if (opts.force_term) {
++        setenv("TERM", "linux", 1);
++    }
++    
++    // Initialize matrix
++    if (matrix_init(&opts) < 0) {
++        fprintf(stderr, "Error: failed to initialize matrix\n");
++        return 1;
++    }
++    
++    // Print message if specified
++    if (opts.message) {
++        printf("%s\n", opts.message);
++    }
++    
++    // Main loop
++    while (running) {
++        // Update matrix
++        matrix_update();
++        
++        // Check for quit
++        if (quit_requested) {
++            break;
++        }
++        
++        // Sleep for update delay
++        struct timeval tv;
++        tv.tv_sec = 0;
++        tv.tv_usec = opts.update_delay * 100000;
++        select(0, NULL, NULL, NULL, &tv);
++    }
++    
++    // Cleanup
++    matrix_cleanup();
++    
++    // Restore terminal settings
++    if (tcsetattr(tty_fd >= 0 ? tty_fd : 0, TCSANOW, &oldt) < 0) {
++        fprintf(stderr, "Warning: cannot restore terminal settings\n");
++    }
++    
++    // Close tty if opened
++    if (tty_fd >= 0) {
++        close(tty_fd);
++    }
++    
++    return 0;
++}
+diff --git a/src/matrix.c b/src/matrix.c
+new file mode 100644
+index 0000000..fcbd99c
+--- /dev/null
++++ b/src/matrix.c
+@@ -0,0 +1,225 @@
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++#include <termios.h>
++#include <sys/time.h>
++#include <time.h>
++#include <math.h>
++#include <ctype.h>
++
++#include "options.h"
++#include "matrix.h"
++
++#define MAX_ROWS 24
++#define MAX_COLS 80
++#define MAX_CHARS 100
++
++// Character sets
++static const char *japanese_chars = 
++    "アァカサタナハマヤャラワガザダバパイィキシチニヒミリヰギジヂビピウゥクスツヌフムユュルグズブヅプエェケセテネヘメレヱゲゼデベペオォコソトノホモヨョロヲゴゾドボポヴッン";
++static const char *latin_chars = 
++    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
++static const char *katakana_chars = 
++    "アァカサタナハマヤャラワガザダバパイィキシチニヒミリヰギジヂビピウゥクスツヌフムユュルグズブヅプエェケセテネヘメレヱゲゼデベペオォコソトノホモヨョロヲゴゾドボポヴッン";
++
++static char *all_chars = NULL;
++static int char_count = 0;
++static int rows = MAX_ROWS;
++static int cols = MAX_COLS;
++static int *char_positions[MAX_CHARS];
++static int *char_colors[MAX_CHARS];
++static int *char_y[MAX_CHARS];
++static int *char_x[MAX_CHARS];
++static int *char_active[MAX_CHARS];
++static int active_count = 0;
++
++static int async_mode = 0;
++static int old_scroll_mode = 0;
++static int change_chars = 0;
++static int rainbow_mode = 0;
++static int lambda_mode = 0;
++static int all_bold = 0;
++static int no_bold = 0;
++static int use_japanese = 0;
++static int use_katakana = 0;
++static int use_latin = 0;
++static int use_all = 0;
++
++static int current_color = 0;
++
++static void set_char_set(void) {
++    if (use_japanese) {
++        all_chars = japanese_chars;
++        char_count = strlen(japanese_chars);
++    } else if (use_katakana) {
++        all_chars = katakana_chars;
++        char_count = strlen(katakana_chars);
++    } else if (use_latin) {
++        all_chars = latin_chars;
++        char_count = strlen(latin_chars);
++    } else {
++        all_chars = japanese_chars;
++        char_count = strlen(japanese_chars);
++    }
++}
++
++static int get_color_index(int color) {
++    if (color == 0) return 32;  // green
++    if (color == 1) return 31;  // red
++    if (color == 2) return 34;  // blue
++    if (color == 3) return 37;  // white
++    if (color == 4) return 33;  // yellow
++    if (color == 5) return 36;  // cyan
++    if (color == 6) return 35;  // magenta
++    if (color == 7) return 30;  // black
++    return 32;
++}
++
++static void init_matrix(struct options *opts) {
++    rows = MAX_ROWS;
++    cols = MAX_COLS;
++    char_count = strlen(all_chars);
++    active_count = 0;
++    
++    // Initialize character arrays
++    for (int i = 0; i < MAX_CHARS; i++) {
++        char_positions[i] = NULL;
++        char_colors[i] = NULL;
++        char_y[i] = NULL;
++        char_x[i] = NULL;
++        char_active[i] = NULL;
++    }
++    
++    // Allocate memory
++    for (int i = 0; i < MAX_CHARS; i++) {
++        char_positions[i] = malloc(cols * sizeof(int));
++        char_colors[i] = malloc(cols * sizeof(int));
++        char_y[i] = malloc(cols * sizeof(int));
++        char_x[i] = malloc(cols * sizeof(int));
++        char_active[i] = malloc(cols * sizeof(int));
++        if (char_positions[i] && char_colors[i] && char_y[i] && char_x[i] && char_active[i]) {
++            memset(char_positions[i], 0, cols * sizeof(int));
++            memset(char_colors[i], 0, cols * sizeof(int));
++            memset(char_y[i], 0, cols * sizeof(int));
++            memset(char_x[i], 0, cols * sizeof(int));
++            memset(char_active[i], 0, cols * sizeof(int));
++        }
++    }
++    
++    // Initialize character positions
++    for (int i = 0; i < MAX_CHARS; i++) {
++        for (int j = 0; j < cols; j++) {
++            char_positions[i][j] = 0;
++            char_colors[i][j] = 0;
++            char_y[i][j] = 0;
++            char_x[i][j] = 0;
++            char_active[i][j] = 0;
++        }
++    }
++    
++    // Set character set
++    set_char_set();
++    
++    // Set modes
++    async_mode = opts->async;
++    old_scroll_mode = opts->old_scroll;
++    change_chars = opts->change_chars;
++    rainbow_mode = opts->rainbow;
++    lambda_mode = opts->lambda;
++    all_bold = opts->all_bold;
++    no_bold = opts->no_bold;
++    use_japanese = opts->use_japanese;
++    use_katakana = 0;
++    use_latin = 0;
++    use_all = 0;
++    
++    // Set color
++    current_color = get_color_index(0);
++}
++
++static void cleanup_matrix(void) {
++    for (int i = 0; i < MAX_CHARS; i++) {
++        if (char_positions[i]) free(char_positions[i]);
++        if (char_colors[i]) free(char_colors[i]);
++        if (char_y[i]) free(char_y[i]);
++        if (char_x[i]) free(char_x[i]);
++        if (char_active[i]) free(char_active[i]);
++    }
++}
++
++static void update_char_positions(void) {
++    for (int i = 0; i < MAX_CHARS; i++) {
++        for (int j = 0; j < cols; j++) {
++            if (char_active[i][j]) {
++                // Move character down
++                char_y[i][j]++;
++                
++                // Wrap around
++                if (char_y[i][j] >= rows) {
++                    char_y[i][j] = 0;
++                    char_x[i][j] = 0;
++                }
++                
++                // Update position
++                char_positions[i][j] = char_y[i][j] * cols + char_x[i][j];
++            }
++        }
++    }
++}
++
++static void draw_matrix(void) {
++    // Clear screen
++    printf("\033[2J\033[H");
++    
++    // Draw matrix
++    for (int i = 0; i < MAX_CHARS; i++) {
++        for (int j = 0; j < cols; j++) {
++            if (char_active[i][j]) {
++                int pos = char_positions[i][j];
++                int y = char_y[i][j];
++                int x = char_x[i][j];
++                
++                // Get character
++                char c = all_chars[pos % char_count];
++                
++                // Apply lambda mode - use a simple character
++                if (lambda_mode) {
++                    c = 'L';
++                }
++                
++                // Apply color
++                int color = char_colors[i][j];
++                if (rainbow_mode) {
++                    color = (color + current_color) % 8;
++                }
++                
++                // Apply bold
++                if (all_bold || (no_bold == 0 && char_colors[i][j] > 0)) {
++                    printf("\033[%d;%dH%db%c", y + 1, x + 1, color, c);
++                } else {
++                    printf("\033[%d;%dH%c", y + 1, x + 1, c);
++                }
++            }
++        }
++    }
++    
++    // Update color cycle
++    if (rainbow_mode) {
++        current_color = (current_color + 1) % 8;
++    }
++}
++
++int matrix_init(struct options *opts) {
++    init_matrix(opts);
++    return 0;
++}
++
++void matrix_update(void) {
++    update_char_positions();
++    draw_matrix();
++}
++
++void matrix_cleanup(void) {
++    cleanup_matrix();
++}
+diff --git a/src/matrix.h b/src/matrix.h
+new file mode 100644
+index 0000000..4fa0abb
+--- /dev/null
++++ b/src/matrix.h
+@@ -0,0 +1,10 @@
++#ifndef MATRIX_H
++#define MATRIX_H
++
++#include "options.h"
++
++int matrix_init(struct options *opts);
++void matrix_update(void);
++void matrix_cleanup(void);
++
++#endif
+diff --git a/src/options.h b/src/options.h
+new file mode 100644
+index 0000000..aa9c486
+--- /dev/null
++++ b/src/options.h
+@@ -0,0 +1,25 @@
++#ifndef OPTIONS_H
++#define OPTIONS_H
++
++struct options {
++    int async;
++    int bold;
++    int all_bold;
++    int use_japanese;
++    int force_term;
++    int linux_mode;
++    int lock;
++    int old_scroll;
++    int no_bold;
++    int screensaver;
++    int x_mode;
++    int rainbow;
++    int lambda;
++    int change_chars;
++    char *message;
++    int update_delay;
++    char *color;
++    char *tty;
++};
++
++#endif

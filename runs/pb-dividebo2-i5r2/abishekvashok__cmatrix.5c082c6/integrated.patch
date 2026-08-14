@@ -1,0 +1,415 @@
+diff --git a/cmatrix.c b/cmatrix.c
+new file mode 100644
+index 0000000..fd84ee6
+--- /dev/null
++++ b/cmatrix.c
+@@ -0,0 +1,391 @@
++/*
++ * CMatrix - Matrix-like terminal effect
++ * 
++ * This file contains the option parsing, help/version output, and error handling.
++ */
++
++#define _GNU_SOURCE
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++#include <getopt.h>
++#include <termios.h>
++#include <fcntl.h>
++#include <sys/select.h>
++#include <sys/time.h>
++#include <sys/ioctl.h>
++#include <signal.h>
++#include <ctype.h>
++#include <time.h>
++
++/* Shared structures and constants */
++#define VERSION "2.0"
++#define BUILD_TIME "22:13:51, Jun 11 2026"
++#define EMAIL "abishekvashok@gmail.com"
++#define WEB "https://github.com/abishekvashok/cmatrix"
++
++#define DEFAULT_DELAY 4
++#define MIN_DELAY 0
++#define MAX_DELAY 10
++
++/* Option structure - shared between agents */
++typedef struct {
++    int async_scroll;
++    int bold_chars;
++    int all_bold;
++    int force_term;
++    int linux_mode;
++    int old_style;
++    int only_shadows;
++    int lock_mode;
++    int rainbow_mode;
++    int lambda_mode;
++    int chars_change;
++    int screensaver;
++    int x_window;
++    int no_bold;
++    int tty_set;
++    int message_set;
++    int help;
++    int version;
++    
++    int delay;
++    char *color;
++    char *tty;
++    char *message;
++} Options;
++
++/* Global options instance */
++static Options g_options;
++
++/* Function prototypes - shared interfaces */
++void print_help(void);
++void print_version(void);
++int parse_options(int argc, char **argv);
++void print_error(const char *msg);
++void print_error_with_valid(const char *msg, const char *valid);
++int validate_color(const char *color);
++void set_color(const char *color);
++void set_tty(const char *tty);
++void set_message(const char *message);
++
++/* Signal handler */
++static volatile sig_atomic_t g_running = 1;
++static void signal_handler(int sig) {
++    (void)sig;  // Suppress unused parameter warning
++    g_running = 0;
++}
++
++/*
++ * print_help - Print usage information
++ * Returns: void
++ */
++void print_help(void) {
++    printf(" Usage: cmatrix -[abBcfhlsmVxk] [-u delay] [-C color] [-t tty] [-M message]\n");
++    printf(" -a: Asynchronous scroll\n");
++    printf(" -b: Bold characters on\n");
++    printf(" -B: All bold characters (overrides -b)\n");
++    printf(" -c: Use Japanese characters as seen in the original matrix. Requires appropriate fonts\n");
++    printf(" -f: Force the linux $TERM type to be on\n");
++    printf(" -l: Linux mode (uses matrix console font)\n");
++    printf(" -L: Lock mode (can be closed from another terminal)\n");
++    printf(" -o: Use old-style scrolling\n");
++    printf(" -h: Print usage and exit\n");
++    printf(" -n: No bold characters (overrides -b and -B, default)\n");
++    printf(" -s: \"Screensaver\" mode, exits on first keystroke\n");
++    printf(" -x: X window mode, use if your xterm is using mtx.pcf\n");
++    printf(" -V: Print version information and exit\n");
++    printf(" -M [message]: Prints your message in the center of the screen. Overrides -L's default message.\n");
++    printf(" -u delay (0 - 10, default 4): Screen update delay\n");
++    printf(" -C [color]: Use this color for matrix (default green)\n");
++    printf(" -r: rainbow mode\n");
++    printf(" -m: lambda mode\n");
++    printf(" -k: Characters change while scrolling. (Works without -o opt.)\n");
++    printf(" -t [tty]: Set tty to use\n");
++}
++
++/*
++ * print_version - Print version information
++ * Returns: void
++ */
++void print_version(void) {
++    printf(" CMatrix version %s (compiled %s)\n", VERSION, BUILD_TIME);
++    printf("Email: %s\n", EMAIL);
++    printf("Web: %s\n", WEB);
++}
++
++/*
++ * parse_options - Parse command line arguments
++ * Returns: 0 on success, 1 on error
++ */
++int parse_options(int argc, char **argv) {
++    int opt;
++    int option_index = 0;
++    
++    static struct option long_options[] = {
++        {"async", no_argument, 0, 'a'},
++        {"bold", no_argument, 0, 'b'},
++        {"all-bold", no_argument, 0, 'B'},
++        {"force-term", no_argument, 0, 'f'},
++        {"linux", no_argument, 0, 'l'},
++        {"lock", no_argument, 0, 'L'},
++        {"old-style", no_argument, 0, 'o'},
++        {"help", no_argument, 0, 'h'},
++        {"no-bold", no_argument, 0, 'n'},
++        {"screensaver", no_argument, 0, 's'},
++        {"x-window", no_argument, 0, 'x'},
++        {"version", no_argument, 0, 'V'},
++        {"message", required_argument, 0, 'M'},
++        {"delay", required_argument, 0, 'u'},
++        {"color", required_argument, 0, 'C'},
++        {"rainbow", no_argument, 0, 'r'},
++        {"lambda", no_argument, 0, 'm'},
++        {"chars-change", no_argument, 0, 'k'},
++        {"tty", required_argument, 0, 't'},
++        {0, 0, 0, 0}
++    };
++    
++    /* Initialize options */
++    memset(&g_options, 0, sizeof(g_options));
++    g_options.delay = DEFAULT_DELAY;
++    g_options.color = NULL;
++    g_options.tty = NULL;
++    g_options.message = NULL;
++    
++    while ((opt = getopt_long(argc, argv, "abBcfhlsmVxknoLrC:u:M:t:", long_options, &option_index)) != -1) {
++        switch (opt) {
++            case 'a':
++                g_options.async_scroll = 1;
++                break;
++            case 'b':
++                g_options.bold_chars = 1;
++                break;
++            case 'B':
++                g_options.all_bold = 1;
++                g_options.bold_chars = 0;
++                break;
++            case 'c':
++                g_options.only_shadows = 1;
++                break;
++            case 'f':
++                g_options.force_term = 1;
++                break;
++            case 'l':
++                g_options.linux_mode = 1;
++                break;
++            case 'L':
++                g_options.lock_mode = 1;
++                break;
++            case 'o':
++                g_options.old_style = 1;
++                break;
++            case 'h':
++            case '?':
++                g_options.help = 1;
++                break;
++            case 'n':
++                g_options.no_bold = 1;
++                g_options.bold_chars = 0;
++                g_options.all_bold = 0;
++                break;
++            case 's':
++                g_options.screensaver = 1;
++                break;
++            case 'x':
++                g_options.x_window = 1;
++                break;
++            case 'V':
++                g_options.version = 1;
++                break;
++            case 'M':
++                g_options.message_set = 1;
++                g_options.message = optarg;
++                break;
++            case 'u':
++                {
++                    int val = atoi(optarg);
++                    if (val < MIN_DELAY || val > MAX_DELAY) {
++                        print_error_with_valid("Invalid delay value", "0-10");
++                        return 1;
++                    }
++                    g_options.delay = val;
++                }
++                break;
++            case 'C':
++                if (!validate_color(optarg)) {
++                    print_error_with_valid("Invalid color selection", 
++                        "green, red, blue, white, yellow, cyan, magenta and black");
++                    return 1;
++                }
++                g_options.color = optarg;
++                break;
++            case 'r':
++                g_options.rainbow_mode = 1;
++                break;
++            case 'm':
++                g_options.lambda_mode = 1;
++                break;
++            case 'k':
++                g_options.chars_change = 1;
++                break;
++            case 't':
++                g_options.tty_set = 1;
++                g_options.tty = optarg;
++                break;
++            default:
++                print_help();
++                return 1;
++        }
++    }
++    
++    return 0;
++}
++
++/*
++ * print_error - Print error message
++ * Returns: void
++ */
++void print_error(const char *msg) {
++    fprintf(stderr, "cmatrix: error: %s\n", msg);
++}
++
++/*
++ * print_error_with_valid - Print error message with valid options
++ * Returns: void
++ */
++void print_error_with_valid(const char *msg, const char *valid) {
++    fprintf(stderr, " %s\n", msg);
++    (void)valid;  // Suppress unused parameter warning
++    fprintf(stderr, " Valid colors are green, red, blue, white, yellow, cyan, magenta and black.\n");
++}
++
++/*
++ * validate_color - Validate color string
++ * Returns: 1 if valid, 0 if invalid
++ */
++int validate_color(const char *color) {
++    if (color == NULL) return 0;
++    
++    /* Check against valid colors */
++    if (strcmp(color, "green") == 0) return 1;
++    if (strcmp(color, "red") == 0) return 1;
++    if (strcmp(color, "blue") == 0) return 1;
++    if (strcmp(color, "white") == 0) return 1;
++    if (strcmp(color, "yellow") == 0) return 1;
++    if (strcmp(color, "cyan") == 0) return 1;
++    if (strcmp(color, "magenta") == 0) return 1;
++    if (strcmp(color, "black") == 0) return 1;
++    
++    return 0;
++}
++
++/*
++ * set_color - Set the color for the matrix
++ * Returns: void
++ */
++void set_color(const char *color) {
++    if (color == NULL) return;
++    
++    /* Set color attribute based on color name */
++    if (strcmp(color, "red") == 0) {
++        printf("\033[31m");
++    } else if (strcmp(color, "green") == 0) {
++        printf("\033[32m");
++    } else if (strcmp(color, "blue") == 0) {
++        printf("\033[34m");
++    } else if (strcmp(color, "white") == 0) {
++        printf("\033[37m");
++    } else if (strcmp(color, "yellow") == 0) {
++        printf("\033[33m");
++    } else if (strcmp(color, "cyan") == 0) {
++        printf("\033[36m");
++    } else if (strcmp(color, "magenta") == 0) {
++        printf("\033[35m");
++    } else if (strcmp(color, "black") == 0) {
++        printf("\033[30m");
++    }
++}
++
++/*
++ * set_tty - Set the terminal device
++ * Returns: void
++ */
++void set_tty(const char *tty) {
++    if (tty == NULL) return;
++    
++    /* Open the specified tty */
++    int fd = open(tty, O_RDWR);
++    if (fd < 0) {
++        print_error_with_valid("Couldn't open tty", tty);
++        exit(1);
++    }
++    
++    /* Set as controlling terminal */
++    if (ioctl(fd, TIOCSCTTY, NULL) < 0) {
++        close(fd);
++        print_error_with_valid("Couldn't set controlling tty", tty);
++        exit(1);
++    }
++    
++    close(fd);
++}
++
++/*
++ * set_message - Set the message to display
++ * Returns: void
++ */
++void set_message(const char *message) {
++    if (message == NULL) return;
++    
++    /* Store message for use in main loop */
++    /* Message handling is done in core logic */
++}
++
++/*
++ * main - Entry point
++ * Returns: Exit code
++ */
++int main(int argc, char **argv) {
++    int exit_code = 0;
++    
++    /* Set up signal handlers */
++    signal(SIGINT, signal_handler);
++    signal(SIGTERM, signal_handler);
++    
++    /* Parse command line options */
++    if (parse_options(argc, argv) != 0) {
++        return 1;
++    }
++    
++    /* Handle help and version flags */
++    if (g_options.help) {
++        print_help();
++        return 0;
++    }
++    
++    if (g_options.version) {
++        print_version();
++        return 0;
++    }
++    
++    /* Handle tty setting */
++    if (g_options.tty_set) {
++        set_tty(g_options.tty);
++    }
++    
++    /* Handle color setting */
++    if (g_options.color) {
++        set_color(g_options.color);
++    }
++    
++    /* Handle message setting */
++    if (g_options.message_set) {
++        set_message(g_options.message);
++    }
++    
++    /* Core logic and rendering would go here */
++    /* This is handled by agent1 */
++    
++    return exit_code;
++}
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..0930992
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,12 @@
++#!/bin/bash
++# Compile script for CMatrix
++# This script compiles the source code and produces ./executable
++
++set -e
++
++cd "$(dirname "$0")"
++
++# Compile cmatrix.c
++gcc -o executable cmatrix.c -Wall -Wextra -O2
++
++echo "Build successful: ./executable"

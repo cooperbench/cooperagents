@@ -1,0 +1,69 @@
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..5e42e65
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,3 @@
++#!/bin/bash
++cd /workspace
++gcc -I./shared -o executable main.c -lm
+diff --git a/help_version.h b/help_version.h
+new file mode 100644
+index 0000000..12eba83
+--- /dev/null
++++ b/help_version.h
+@@ -0,0 +1,12 @@
++#ifndef HELP_VERSION_H
++#define HELP_VERSION_H
++
++#include <stdio.h>
++
++/* Print help/usage message */
++void print_help(void);
++
++/* Print version information */
++void print_version(void);
++
++#endif /* HELP_VERSION_H */
+diff --git a/main.c b/main.c
+new file mode 100644
+index 0000000..52aa08d
+--- /dev/null
++++ b/main.c
+@@ -0,0 +1,36 @@
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++#include <sys/time.h>
++#include <time.h>
++#include <termios.h>
++#include <sys/ioctl.h>
++#include <sys/select.h>
++#include <sys/types.h>
++#include <sys/stat.h>
++#include <fcntl.h>
++#include <signal.h>
++#include <errno.h>
++#include <locale.h>
++#include <math.h>
++#include <getopt.h>
++#include <sys/wait.h>
++#include <sys/socket.h>
++#include <netinet/in.h>
++#include <arpa/inet.h>
++#include <netdb.h>
++#include <ctype.h>
++#include <limits.h>
++#include <paths.h>
++#include <pwd.h>
++#include <grp.h>
++#include <utime.h>
++#include <utmpx.h>
++#include <syslog.h>
++#include <sys/un.h>
++#include <sys/utsname.h>
++#include <sys/resource.h>
++#include <sys/mman.h>
++#include <sys/times.h>
++#include "help_version.h"

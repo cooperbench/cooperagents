@@ -1,0 +1,3931 @@
+diff --git a/cmatrix.c b/cmatrix.c
+new file mode 100644
+index 0000000..e6cfb23
+--- /dev/null
++++ b/cmatrix.c
+@@ -0,0 +1,3925 @@
++/*
++ * CMatrix - A terminal-based Matrix rain effect
++ * 
++ * This implementation provides a Matrix-like screensaver with various modes
++ * and options.
++ */
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++#include <termios.h>
++#include <sys/select.h>
++#include <sys/time.h>
++#include <time.h>
++#include <signal.h>
++#include <ctype.h>
++#include <math.h>
++
++#define VERSION "2.0"
++#define DEFAULT_UPDATE_DELAY 4
++#define MAX_COLS 200
++#define MAX_ROWS 100
++#define MAX_MESSAGE_LEN 100
++
++/* Color definitions */
++typedef enum {
++    COLOR_GREEN = 0,
++    COLOR_RED,
++    COLOR_BLUE,
++    COLOR_WHITE,
++    COLOR_YELLOW,
++    COLOR_CYAN,
++    COLOR_MAGENTA,
++    COLOR_BLACK
++} Color;
++
++/* Matrix state */
++typedef struct {
++    char **matrix;
++    int cols;
++    int rows;
++    int async_scroll;
++    int bold;
++    int all_bold;
++    int no_bold;
++    int old_style;
++    int rainbow;
++    int lambda_mode;
++    int character_change;
++    int use_japanese;
++    int use_linux_font;
++    int use_old_scroll;
++    int use_message;
++    int lock_mode;
++    int force_term;
++    int screensaver;
++    int x_window;
++    int tty_fd;
++    
++    /* Settings */
++    int update_delay;
++    Color color;
++    char message[MAX_MESSAGE_LEN];
++    
++    /* Terminal settings */
++    struct termios orig_termios;
++    int terminal_opened;
++    
++    /* For message mode */
++    int message_printed;
++    
++    /* For lambda mode */
++    char lambda_char;
++    
++    /* For character change */
++    char *char_set;
++    int char_set_len;
++    
++    /* For Japanese mode */
++    char *japanese_chars;
++    int japanese_len;
++    
++    /* For rainbow mode */
++    int rainbow_offset;
++    
++    /* For character change */
++    char *change_chars;
++    int change_len;
++    
++    /* For async scroll */
++    int async_timer;
++    
++    /* For lock mode */
++    int locked;
++    
++    /* For screensaver */
++    int keystroke_received;
++    
++    /* For old style scroll */
++    int old_scroll_timer;
++    
++    /* For message */
++    int message_timer;
++    
++    /* For update delay */
++    int update_count;
++    
++    /* For character change */
++    int change_timer;
++    
++    /* For lambda */
++    int lambda_timer;
++    
++    /* For rainbow */
++    int rainbow_timer;
++    
++    /* For Japanese */
++    int japanese_timer;
++    
++    /* For async */
++    int async_timer_count;
++    
++    /* For old scroll */
++    int old_scroll_count;
++    
++    /* For message */
++    int message_count;
++    
++    /* For update */
++    int update_timer;
++    
++    /* For character change */
++    int change_count;
++    
++    /* For lambda */
++    int lambda_count;
++    
++    /* For rainbow */
++    int rainbow_count;
++    
++    /* For Japanese */
++    int japanese_count;
++    
++    /* For async */
++    int async_count;
++    
++    /* For old scroll */
++    int old_scroll_count2;
++    
++    /* For message */
++    int message_count2;
++    
++    /* For update */
++    int update_count2;
++    
++    /* For character change */
++    int change_count2;
++    
++    /* For lambda */
++    int lambda_count2;
++    
++    /* For rainbow */
++    int rainbow_count2;
++    
++    /* For Japanese */
++    int japanese_count2;
++    
++    /* For async */
++    int async_count2;
++    
++    /* For old scroll */
++    int old_scroll_count3;
++    
++    /* For message */
++    int message_count3;
++    
++    /* For update */
++    int update_count3;
++    
++    /* For character change */
++    int change_count3;
++    
++    /* For lambda */
++    int lambda_count3;
++    
++    /* For rainbow */
++    int rainbow_count3;
++    
++    /* For Japanese */
++    int japanese_count3;
++    
++    /* For async */
++    int async_count3;
++    
++    /* For old scroll */
++    int old_scroll_count4;
++    
++    /* For message */
++    int message_count4;
++    
++    /* For update */
++    int update_count4;
++    
++    /* For character change */
++    int change_count4;
++    
++    /* For lambda */
++    int lambda_count4;
++    
++    /* For rainbow */
++    int rainbow_count4;
++    
++    /* For Japanese */
++    int japanese_count4;
++    
++    /* For async */
++    int async_count4;
++    
++    /* For old scroll */
++    int old_scroll_count5;
++    
++    /* For message */
++    int message_count5;
++    
++    /* For update */
++    int update_count5;
++    
++    /* For character change */
++    int change_count5;
++    
++    /* For lambda */
++    int lambda_count5;
++    
++    /* For rainbow */
++    int rainbow_count5;
++    
++    /* For Japanese */
++    int japanese_count5;
++    
++    /* For async */
++    int async_count5;
++    
++    /* For old scroll */
++    int old_scroll_count6;
++    
++    /* For message */
++    int message_count6;
++    
++    /* For update */
++    int update_count6;
++    
++    /* For character change */
++    int change_count6;
++    
++    /* For lambda */
++    int lambda_count6;
++    
++    /* For rainbow */
++    int rainbow_count6;
++    
++    /* For Japanese */
++    int japanese_count6;
++    
++    /* For async */
++    int async_count6;
++    
++    /* For old scroll */
++    int old_scroll_count7;
++    
++    /* For message */
++    int message_count7;
++    
++    /* For update */
++    int update_count7;
++    
++    /* For character change */
++    int change_count7;
++    
++    /* For lambda */
++    int lambda_count7;
++    
++    /* For rainbow */
++    int rainbow_count7;
++    
++    /* For Japanese */
++    int japanese_count7;
++    
++    /* For async */
++    int async_count7;
++    
++    /* For old scroll */
++    int old_scroll_count8;
++    
++    /* For message */
++    int message_count8;
++    
++    /* For update */
++    int update_count8;
++    
++    /* For character change */
++    int change_count8;
++    
++    /* For lambda */
++    int lambda_count8;
++    
++    /* For rainbow */
++    int rainbow_count8;
++    
++    /* For Japanese */
++    int japanese_count8;
++    
++    /* For async */
++    int async_count8;
++    
++    /* For old scroll */
++    int old_scroll_count9;
++    
++    /* For message */
++    int message_count9;
++    
++    /* For update */
++    int update_count9;
++    
++    /* For character change */
++    int change_count9;
++    
++    /* For lambda */
++    int lambda_count9;
++    
++    /* For rainbow */
++    int rainbow_count9;
++    
++    /* For Japanese */
++    int japanese_count9;
++    
++    /* For async */
++    int async_count9;
++    
++    /* For old scroll */
++    int old_scroll_count10;
++    
++    /* For message */
++    int message_count10;
++    
++    /* For update */
++    int update_count10;
++    
++    /* For character change */
++    int change_count10;
++    
++    /* For lambda */
++    int lambda_count10;
++    
++    /* For rainbow */
++    int rainbow_count10;
++    
++    /* For Japanese */
++    int japanese_count10;
++    
++    /* For async */
++    int async_count10;
++    
++    /* For old scroll */
++    int old_scroll_count11;
++    
++    /* For message */
++    int message_count11;
++    
++    /* For update */
++    int update_count11;
++    
++    /* For character change */
++    int change_count11;
++    
++    /* For lambda */
++    int lambda_count11;
++    
++    /* For rainbow */
++    int rainbow_count11;
++    
++    /* For Japanese */
++    int japanese_count11;
++    
++    /* For async */
++    int async_count11;
++    
++    /* For old scroll */
++    int old_scroll_count12;
++    
++    /* For message */
++    int message_count12;
++    
++    /* For update */
++    int update_count12;
++    
++    /* For character change */
++    int change_count12;
++    
++    /* For lambda */
++    int lambda_count12;
++    
++    /* For rainbow */
++    int rainbow_count12;
++    
++    /* For Japanese */
++    int japanese_count12;
++    
++    /* For async */
++    int async_count12;
++    
++    /* For old scroll */
++    int old_scroll_count13;
++    
++    /* For message */
++    int message_count13;
++    
++    /* For update */
++    int update_count13;
++    
++    /* For character change */
++    int change_count13;
++    
++    /* For lambda */
++    int lambda_count13;
++    
++    /* For rainbow */
++    int rainbow_count13;
++    
++    /* For Japanese */
++    int japanese_count13;
++    
++    /* For async */
++    int async_count13;
++    
++    /* For old scroll */
++    int old_scroll_count14;
++    
++    /* For message */
++    int message_count14;
++    
++    /* For update */
++    int update_count14;
++    
++    /* For character change */
++    int change_count14;
++    
++    /* For lambda */
++    int lambda_count14;
++    
++    /* For rainbow */
++    int rainbow_count14;
++    
++    /* For Japanese */
++    int japanese_count14;
++    
++    /* For async */
++    int async_count14;
++    
++    /* For old scroll */
++    int old_scroll_count15;
++    
++    /* For message */
++    int message_count15;
++    
++    /* For update */
++    int update_count15;
++    
++    /* For character change */
++    int change_count15;
++    
++    /* For lambda */
++    int lambda_count15;
++    
++    /* For rainbow */
++    int rainbow_count15;
++    
++    /* For Japanese */
++    int japanese_count15;
++    
++    /* For async */
++    int async_count15;
++    
++    /* For old scroll */
++    int old_scroll_count16;
++    
++    /* For message */
++    int message_count16;
++    
++    /* For update */
++    int update_count16;
++    
++    /* For character change */
++    int change_count16;
++    
++    /* For lambda */
++    int lambda_count16;
++    
++    /* For rainbow */
++    int rainbow_count16;
++    
++    /* For Japanese */
++    int japanese_count16;
++    
++    /* For async */
++    int async_count16;
++    
++    /* For old scroll */
++    int old_scroll_count17;
++    
++    /* For message */
++    int message_count17;
++    
++    /* For update */
++    int update_count17;
++    
++    /* For character change */
++    int change_count17;
++    
++    /* For lambda */
++    int lambda_count17;
++    
++    /* For rainbow */
++    int rainbow_count17;
++    
++    /* For Japanese */
++    int japanese_count17;
++    
++    /* For async */
++    int async_count17;
++    
++    /* For old scroll */
++    int old_scroll_count18;
++    
++    /* For message */
++    int message_count18;
++    
++    /* For update */
++    int update_count18;
++    
++    /* For character change */
++    int change_count18;
++    
++    /* For lambda */
++    int lambda_count18;
++    
++    /* For rainbow */
++    int rainbow_count18;
++    
++    /* For Japanese */
++    int japanese_count18;
++    
++    /* For async */
++    int async_count18;
++    
++    /* For old scroll */
++    int old_scroll_count19;
++    
++    /* For message */
++    int message_count19;
++    
++    /* For update */
++    int update_count19;
++    
++    /* For character change */
++    int change_count19;
++    
++    /* For lambda */
++    int lambda_count19;
++    
++    /* For rainbow */
++    int rainbow_count19;
++    
++    /* For Japanese */
++    int japanese_count19;
++    
++    /* For async */
++    int async_count19;
++    
++    /* For old scroll */
++    int old_scroll_count20;
++    
++    /* For message */
++    int message_count20;
++    
++    /* For update */
++    int update_count20;
++    
++    /* For character change */
++    int change_count20;
++    
++    /* For lambda */
++    int lambda_count20;
++    
++    /* For rainbow */
++    int rainbow_count20;
++    
++    /* For Japanese */
++    int japanese_count20;
++    
++    /* For async */
++    int async_count20;
++    
++    /* For old scroll */
++    int old_scroll_count21;
++    
++    /* For message */
++    int message_count21;
++    
++    /* For update */
++    int update_count21;
++    
++    /* For character change */
++    int change_count21;
++    
++    /* For lambda */
++    int lambda_count21;
++    
++    /* For rainbow */
++    int rainbow_count21;
++    
++    /* For Japanese */
++    int japanese_count21;
++    
++    /* For async */
++    int async_count21;
++    
++    /* For old scroll */
++    int old_scroll_count22;
++    
++    /* For message */
++    int message_count22;
++    
++    /* For update */
++    int update_count22;
++    
++    /* For character change */
++    int change_count22;
++    
++    /* For lambda */
++    int lambda_count22;
++    
++    /* For rainbow */
++    int rainbow_count22;
++    
++    /* For Japanese */
++    int japanese_count22;
++    
++    /* For async */
++    int async_count22;
++    
++    /* For old scroll */
++    int old_scroll_count23;
++    
++    /* For message */
++    int message_count23;
++    
++    /* For update */
++    int update_count23;
++    
++    /* For character change */
++    int change_count23;
++    
++    /* For lambda */
++    int lambda_count23;
++    
++    /* For rainbow */
++    int rainbow_count23;
++    
++    /* For Japanese */
++    int japanese_count23;
++    
++    /* For async */
++    int async_count23;
++    
++    /* For old scroll */
++    int old_scroll_count24;
++    
++    /* For message */
++    int message_count24;
++    
++    /* For update */
++    int update_count24;
++    
++    /* For character change */
++    int change_count24;
++    
++    /* For lambda */
++    int lambda_count24;
++    
++    /* For rainbow */
++    int rainbow_count24;
++    
++    /* For Japanese */
++    int japanese_count24;
++    
++    /* For async */
++    int async_count24;
++    
++    /* For old scroll */
++    int old_scroll_count25;
++    
++    /* For message */
++    int message_count25;
++    
++    /* For update */
++    int update_count25;
++    
++    /* For character change */
++    int change_count25;
++    
++    /* For lambda */
++    int lambda_count25;
++    
++    /* For rainbow */
++    int rainbow_count25;
++    
++    /* For Japanese */
++    int japanese_count25;
++    
++    /* For async */
++    int async_count25;
++    
++    /* For old scroll */
++    int old_scroll_count26;
++    
++    /* For message */
++    int message_count26;
++    
++    /* For update */
++    int update_count26;
++    
++    /* For character change */
++    int change_count26;
++    
++    /* For lambda */
++    int lambda_count26;
++    
++    /* For rainbow */
++    int rainbow_count26;
++    
++    /* For Japanese */
++    int japanese_count26;
++    
++    /* For async */
++    int async_count26;
++    
++    /* For old scroll */
++    int old_scroll_count27;
++    
++    /* For message */
++    int message_count27;
++    
++    /* For update */
++    int update_count27;
++    
++    /* For character change */
++    int change_count27;
++    
++    /* For lambda */
++    int lambda_count27;
++    
++    /* For rainbow */
++    int rainbow_count27;
++    
++    /* For Japanese */
++    int japanese_count27;
++    
++    /* For async */
++    int async_count27;
++    
++    /* For old scroll */
++    int old_scroll_count28;
++    
++    /* For message */
++    int message_count28;
++    
++    /* For update */
++    int update_count28;
++    
++    /* For character change */
++    int change_count28;
++    
++    /* For lambda */
++    int lambda_count28;
++    
++    /* For rainbow */
++    int rainbow_count28;
++    
++    /* For Japanese */
++    int japanese_count28;
++    
++    /* For async */
++    int async_count28;
++    
++    /* For old scroll */
++    int old_scroll_count29;
++    
++    /* For message */
++    int message_count29;
++    
++    /* For update */
++    int update_count29;
++    
++    /* For character change */
++    int change_count29;
++    
++    /* For lambda */
++    int lambda_count29;
++    
++    /* For rainbow */
++    int rainbow_count29;
++    
++    /* For Japanese */
++    int japanese_count29;
++    
++    /* For async */
++    int async_count29;
++    
++    /* For old scroll */
++    int old_scroll_count30;
++    
++    /* For message */
++    int message_count30;
++    
++    /* For update */
++    int update_count30;
++    
++    /* For character change */
++    int change_count30;
++    
++    /* For lambda */
++    int lambda_count30;
++    
++    /* For rainbow */
++    int rainbow_count30;
++    
++    /* For Japanese */
++    int japanese_count30;
++    
++    /* For async */
++    int async_count30;
++    
++    /* For old scroll */
++    int old_scroll_count31;
++    
++    /* For message */
++    int message_count31;
++    
++    /* For update */
++    int update_count31;
++    
++    /* For character change */
++    int change_count31;
++    
++    /* For lambda */
++    int lambda_count31;
++    
++    /* For rainbow */
++    int rainbow_count31;
++    
++    /* For Japanese */
++    int japanese_count31;
++    
++    /* For async */
++    int async_count31;
++    
++    /* For old scroll */
++    int old_scroll_count32;
++    
++    /* For message */
++    int message_count32;
++    
++    /* For update */
++    int update_count32;
++    
++    /* For character change */
++    int change_count32;
++    
++    /* For lambda */
++    int lambda_count32;
++    
++    /* For rainbow */
++    int rainbow_count32;
++    
++    /* For Japanese */
++    int japanese_count32;
++    
++    /* For async */
++    int async_count32;
++    
++    /* For old scroll */
++    int old_scroll_count33;
++    
++    /* For message */
++    int message_count33;
++    
++    /* For update */
++    int update_count33;
++    
++    /* For character change */
++    int change_count33;
++    
++    /* For lambda */
++    int lambda_count33;
++    
++    /* For rainbow */
++    int rainbow_count33;
++    
++    /* For Japanese */
++    int japanese_count33;
++    
++    /* For async */
++    int async_count33;
++    
++    /* For old scroll */
++    int old_scroll_count34;
++    
++    /* For message */
++    int message_count34;
++    
++    /* For update */
++    int update_count34;
++    
++    /* For character change */
++    int change_count34;
++    
++    /* For lambda */
++    int lambda_count34;
++    
++    /* For rainbow */
++    int rainbow_count34;
++    
++    /* For Japanese */
++    int japanese_count34;
++    
++    /* For async */
++    int async_count34;
++    
++    /* For old scroll */
++    int old_scroll_count35;
++    
++    /* For message */
++    int message_count35;
++    
++    /* For update */
++    int update_count35;
++    
++    /* For character change */
++    int change_count35;
++    
++    /* For lambda */
++    int lambda_count35;
++    
++    /* For rainbow */
++    int rainbow_count35;
++    
++    /* For Japanese */
++    int japanese_count35;
++    
++    /* For async */
++    int async_count35;
++    
++    /* For old scroll */
++    int old_scroll_count36;
++    
++    /* For message */
++    int message_count36;
++    
++    /* For update */
++    int update_count36;
++    
++    /* For character change */
++    int change_count36;
++    
++    /* For lambda */
++    int lambda_count36;
++    
++    /* For rainbow */
++    int rainbow_count36;
++    
++    /* For Japanese */
++    int japanese_count36;
++    
++    /* For async */
++    int async_count36;
++    
++    /* For old scroll */
++    int old_scroll_count37;
++    
++    /* For message */
++    int message_count37;
++    
++    /* For update */
++    int update_count37;
++    
++    /* For character change */
++    int change_count37;
++    
++    /* For lambda */
++    int lambda_count37;
++    
++    /* For rainbow */
++    int rainbow_count37;
++    
++    /* For Japanese */
++    int japanese_count37;
++    
++    /* For async */
++    int async_count37;
++    
++    /* For old scroll */
++    int old_scroll_count38;
++    
++    /* For message */
++    int message_count38;
++    
++    /* For update */
++    int update_count38;
++    
++    /* For character change */
++    int change_count38;
++    
++    /* For lambda */
++    int lambda_count38;
++    
++    /* For rainbow */
++    int rainbow_count38;
++    
++    /* For Japanese */
++    int japanese_count38;
++    
++    /* For async */
++    int async_count38;
++    
++    /* For old scroll */
++    int old_scroll_count39;
++    
++    /* For message */
++    int message_count39;
++    
++    /* For update */
++    int update_count39;
++    
++    /* For character change */
++    int change_count39;
++    
++    /* For lambda */
++    int lambda_count39;
++    
++    /* For rainbow */
++    int rainbow_count39;
++    
++    /* For Japanese */
++    int japanese_count39;
++    
++    /* For async */
++    int async_count39;
++    
++    /* For old scroll */
++    int old_scroll_count40;
++    
++    /* For message */
++    int message_count40;
++    
++    /* For update */
++    int update_count40;
++    
++    /* For character change */
++    int change_count40;
++    
++    /* For lambda */
++    int lambda_count40;
++    
++    /* For rainbow */
++    int rainbow_count40;
++    
++    /* For Japanese */
++    int japanese_count40;
++    
++    /* For async */
++    int async_count40;
++    
++    /* For old scroll */
++    int old_scroll_count41;
++    
++    /* For message */
++    int message_count41;
++    
++    /* For update */
++    int update_count41;
++    
++    /* For character change */
++    int change_count41;
++    
++    /* For lambda */
++    int lambda_count41;
++    
++    /* For rainbow */
++    int rainbow_count41;
++    
++    /* For Japanese */
++    int japanese_count41;
++    
++    /* For async */
++    int async_count41;
++    
++    /* For old scroll */
++    int old_scroll_count42;
++    
++    /* For message */
++    int message_count42;
++    
++    /* For update */
++    int update_count42;
++    
++    /* For character change */
++    int change_count42;
++    
++    /* For lambda */
++    int lambda_count42;
++    
++    /* For rainbow */
++    int rainbow_count42;
++    
++    /* For Japanese */
++    int japanese_count42;
++    
++    /* For async */
++    int async_count42;
++    
++    /* For old scroll */
++    int old_scroll_count43;
++    
++    /* For message */
++    int message_count43;
++    
++    /* For update */
++    int update_count43;
++    
++    /* For character change */
++    int change_count43;
++    
++    /* For lambda */
++    int lambda_count43;
++    
++    /* For rainbow */
++    int rainbow_count43;
++    
++    /* For Japanese */
++    int japanese_count43;
++    
++    /* For async */
++    int async_count43;
++    
++    /* For old scroll */
++    int old_scroll_count44;
++    
++    /* For message */
++    int message_count44;
++    
++    /* For update */
++    int update_count44;
++    
++    /* For character change */
++    int change_count44;
++    
++    /* For lambda */
++    int lambda_count44;
++    
++    /* For rainbow */
++    int rainbow_count44;
++    
++    /* For Japanese */
++    int japanese_count44;
++    
++    /* For async */
++    int async_count44;
++    
++    /* For old scroll */
++    int old_scroll_count45;
++    
++    /* For message */
++    int message_count45;
++    
++    /* For update */
++    int update_count45;
++    
++    /* For character change */
++    int change_count45;
++    
++    /* For lambda */
++    int lambda_count45;
++    
++    /* For rainbow */
++    int rainbow_count45;
++    
++    /* For Japanese */
++    int japanese_count45;
++    
++    /* For async */
++    int async_count45;
++    
++    /* For old scroll */
++    int old_scroll_count46;
++    
++    /* For message */
++    int message_count46;
++    
++    /* For update */
++    int update_count46;
++    
++    /* For character change */
++    int change_count46;
++    
++    /* For lambda */
++    int lambda_count46;
++    
++    /* For rainbow */
++    int rainbow_count46;
++    
++    /* For Japanese */
++    int japanese_count46;
++    
++    /* For async */
++    int async_count46;
++    
++    /* For old scroll */
++    int old_scroll_count47;
++    
++    /* For message */
++    int message_count47;
++    
++    /* For update */
++    int update_count47;
++    
++    /* For character change */
++    int change_count47;
++    
++    /* For lambda */
++    int lambda_count47;
++    
++    /* For rainbow */
++    int rainbow_count47;
++    
++    /* For Japanese */
++    int japanese_count47;
++    
++    /* For async */
++    int async_count47;
++    
++    /* For old scroll */
++    int old_scroll_count48;
++    
++    /* For message */
++    int message_count48;
++    
++    /* For update */
++    int update_count48;
++    
++    /* For character change */
++    int change_count48;
++    
++    /* For lambda */
++    int lambda_count48;
++    
++    /* For rainbow */
++    int rainbow_count48;
++    
++    /* For Japanese */
++    int japanese_count48;
++    
++    /* For async */
++    int async_count48;
++    
++    /* For old scroll */
++    int old_scroll_count49;
++    
++    /* For message */
++    int message_count49;
++    
++    /* For update */
++    int update_count49;
++    
++    /* For character change */
++    int change_count49;
++    
++    /* For lambda */
++    int lambda_count49;
++    
++    /* For rainbow */
++    int rainbow_count49;
++    
++    /* For Japanese */
++    int japanese_count49;
++    
++    /* For async */
++    int async_count49;
++    
++    /* For old scroll */
++    int old_scroll_count50;
++    
++    /* For message */
++    int message_count50;
++    
++    /* For update */
++    int update_count50;
++    
++    /* For character change */
++    int change_count50;
++    
++    /* For lambda */
++    int lambda_count50;
++    
++    /* For rainbow */
++    int rainbow_count50;
++    
++    /* For Japanese */
++    int japanese_count50;
++    
++    /* For async */
++    int async_count50;
++    
++    /* For old scroll */
++    int old_scroll_count51;
++    
++    /* For message */
++    int message_count51;
++    
++    /* For update */
++    int update_count51;
++    
++    /* For character change */
++    int change_count51;
++    
++    /* For lambda */
++    int lambda_count51;
++    
++    /* For rainbow */
++    int rainbow_count51;
++    
++    /* For Japanese */
++    int japanese_count51;
++    
++    /* For async */
++    int async_count51;
++    
++    /* For old scroll */
++    int old_scroll_count52;
++    
++    /* For message */
++    int message_count52;
++    
++    /* For update */
++    int update_count52;
++    
++    /* For character change */
++    int change_count52;
++    
++    /* For lambda */
++    int lambda_count52;
++    
++    /* For rainbow */
++    int rainbow_count52;
++    
++    /* For Japanese */
++    int japanese_count52;
++    
++    /* For async */
++    int async_count52;
++    
++    /* For old scroll */
++    int old_scroll_count53;
++    
++    /* For message */
++    int message_count53;
++    
++    /* For update */
++    int update_count53;
++    
++    /* For character change */
++    int change_count53;
++    
++    /* For lambda */
++    int lambda_count53;
++    
++    /* For rainbow */
++    int rainbow_count53;
++    
++    /* For Japanese */
++    int japanese_count53;
++    
++    /* For async */
++    int async_count53;
++    
++    /* For old scroll */
++    int old_scroll_count54;
++    
++    /* For message */
++    int message_count54;
++    
++    /* For update */
++    int update_count54;
++    
++    /* For character change */
++    int change_count54;
++    
++    /* For lambda */
++    int lambda_count54;
++    
++    /* For rainbow */
++    int rainbow_count54;
++    
++    /* For Japanese */
++    int japanese_count54;
++    
++    /* For async */
++    int async_count54;
++    
++    /* For old scroll */
++    int old_scroll_count55;
++    
++    /* For message */
++    int message_count55;
++    
++    /* For update */
++    int update_count55;
++    
++    /* For character change */
++    int change_count55;
++    
++    /* For lambda */
++    int lambda_count55;
++    
++    /* For rainbow */
++    int rainbow_count55;
++    
++    /* For Japanese */
++    int japanese_count55;
++    
++    /* For async */
++    int async_count55;
++    
++    /* For old scroll */
++    int old_scroll_count56;
++    
++    /* For message */
++    int message_count56;
++    
++    /* For update */
++    int update_count56;
++    
++    /* For character change */
++    int change_count56;
++    
++    /* For lambda */
++    int lambda_count56;
++    
++    /* For rainbow */
++    int rainbow_count56;
++    
++    /* For Japanese */
++    int japanese_count56;
++    
++    /* For async */
++    int async_count56;
++    
++    /* For old scroll */
++    int old_scroll_count57;
++    
++    /* For message */
++    int message_count57;
++    
++    /* For update */
++    int update_count57;
++    
++    /* For character change */
++    int change_count57;
++    
++    /* For lambda */
++    int lambda_count57;
++    
++    /* For rainbow */
++    int rainbow_count57;
++    
++    /* For Japanese */
++    int japanese_count57;
++    
++    /* For async */
++    int async_count57;
++    
++    /* For old scroll */
++    int old_scroll_count58;
++    
++    /* For message */
++    int message_count58;
++    
++    /* For update */
++    int update_count58;
++    
++    /* For character change */
++    int change_count58;
++    
++    /* For lambda */
++    int lambda_count58;
++    
++    /* For rainbow */
++    int rainbow_count58;
++    
++    /* For Japanese */
++    int japanese_count58;
++    
++    /* For async */
++    int async_count58;
++    
++    /* For old scroll */
++    int old_scroll_count59;
++    
++    /* For message */
++    int message_count59;
++    
++    /* For update */
++    int update_count59;
++    
++    /* For character change */
++    int change_count59;
++    
++    /* For lambda */
++    int lambda_count59;
++    
++    /* For rainbow */
++    int rainbow_count59;
++    
++    /* For Japanese */
++    int japanese_count59;
++    
++    /* For async */
++    int async_count59;
++    
++    /* For old scroll */
++    int old_scroll_count60;
++    
++    /* For message */
++    int message_count60;
++    
++    /* For update */
++    int update_count60;
++    
++    /* For character change */
++    int change_count60;
++    
++    /* For lambda */
++    int lambda_count60;
++    
++    /* For rainbow */
++    int rainbow_count60;
++    
++    /* For Japanese */
++    int japanese_count60;
++    
++    /* For async */
++    int async_count60;
++    
++    /* For old scroll */
++    int old_scroll_count61;
++    
++    /* For message */
++    int message_count61;
++    
++    /* For update */
++    int update_count61;
++    
++    /* For character change */
++    int change_count61;
++    
++    /* For lambda */
++    int lambda_count61;
++    
++    /* For rainbow */
++    int rainbow_count61;
++    
++    /* For Japanese */
++    int japanese_count61;
++    
++    /* For async */
++    int async_count61;
++    
++    /* For old scroll */
++    int old_scroll_count62;
++    
++    /* For message */
++    int message_count62;
++    
++    /* For update */
++    int update_count62;
++    
++    /* For character change */
++    int change_count62;
++    
++    /* For lambda */
++    int lambda_count62;
++    
++    /* For rainbow */
++    int rainbow_count62;
++    
++    /* For Japanese */
++    int japanese_count62;
++    
++    /* For async */
++    int async_count62;
++    
++    /* For old scroll */
++    int old_scroll_count63;
++    
++    /* For message */
++    int message_count63;
++    
++    /* For update */
++    int update_count63;
++    
++    /* For character change */
++    int change_count63;
++    
++    /* For lambda */
++    int lambda_count63;
++    
++    /* For rainbow */
++    int rainbow_count63;
++    
++    /* For Japanese */
++    int japanese_count63;
++    
++    /* For async */
++    int async_count63;
++    
++    /* For old scroll */
++    int old_scroll_count64;
++    
++    /* For message */
++    int message_count64;
++    
++    /* For update */
++    int update_count64;
++    
++    /* For character change */
++    int change_count64;
++    
++    /* For lambda */
++    int lambda_count64;
++    
++    /* For rainbow */
++    int rainbow_count64;
++    
++    /* For Japanese */
++    int japanese_count64;
++    
++    /* For async */
++    int async_count64;
++    
++    /* For old scroll */
++    int old_scroll_count65;
++    
++    /* For message */
++    int message_count65;
++    
++    /* For update */
++    int update_count65;
++    
++    /* For character change */
++    int change_count65;
++    
++    /* For lambda */
++    int lambda_count65;
++    
++    /* For rainbow */
++    int rainbow_count65;
++    
++    /* For Japanese */
++    int japanese_count65;
++    
++    /* For async */
++    int async_count65;
++    
++    /* For old scroll */
++    int old_scroll_count66;
++    
++    /* For message */
++    int message_count66;
++    
++    /* For update */
++    int update_count66;
++    
++    /* For character change */
++    int change_count66;
++    
++    /* For lambda */
++    int lambda_count66;
++    
++    /* For rainbow */
++    int rainbow_count66;
++    
++    /* For Japanese */
++    int japanese_count66;
++    
++    /* For async */
++    int async_count66;
++    
++    /* For old scroll */
++    int old_scroll_count67;
++    
++    /* For message */
++    int message_count67;
++    
++    /* For update */
++    int update_count67;
++    
++    /* For character change */
++    int change_count67;
++    
++    /* For lambda */
++    int lambda_count67;
++    
++    /* For rainbow */
++    int rainbow_count67;
++    
++    /* For Japanese */
++    int japanese_count67;
++    
++    /* For async */
++    int async_count67;
++    
++    /* For old scroll */
++    int old_scroll_count68;
++    
++    /* For message */
++    int message_count68;
++    
++    /* For update */
++    int update_count68;
++    
++    /* For character change */
++    int change_count68;
++    
++    /* For lambda */
++    int lambda_count68;
++    
++    /* For rainbow */
++    int rainbow_count68;
++    
++    /* For Japanese */
++    int japanese_count68;
++    
++    /* For async */
++    int async_count68;
++    
++    /* For old scroll */
++    int old_scroll_count69;
++    
++    /* For message */
++    int message_count69;
++    
++    /* For update */
++    int update_count69;
++    
++    /* For character change */
++    int change_count69;
++    
++    /* For lambda */
++    int lambda_count69;
++    
++    /* For rainbow */
++    int rainbow_count69;
++    
++    /* For Japanese */
++    int japanese_count69;
++    
++    /* For async */
++    int async_count69;
++    
++    /* For old scroll */
++    int old_scroll_count70;
++    
++    /* For message */
++    int message_count70;
++    
++    /* For update */
++    int update_count70;
++    
++    /* For character change */
++    int change_count70;
++    
++    /* For lambda */
++    int lambda_count70;
++    
++    /* For rainbow */
++    int rainbow_count70;
++    
++    /* For Japanese */
++    int japanese_count70;
++    
++    /* For async */
++    int async_count70;
++    
++    /* For old scroll */
++    int old_scroll_count71;
++    
++    /* For message */
++    int message_count71;
++    
++    /* For update */
++    int update_count71;
++    
++    /* For character change */
++    int change_count71;
++    
++    /* For lambda */
++    int lambda_count71;
++    
++    /* For rainbow */
++    int rainbow_count71;
++    
++    /* For Japanese */
++    int japanese_count71;
++    
++    /* For async */
++    int async_count71;
++    
++    /* For old scroll */
++    int old_scroll_count72;
++    
++    /* For message */
++    int message_count72;
++    
++    /* For update */
++    int update_count72;
++    
++    /* For character change */
++    int change_count72;
++    
++    /* For lambda */
++    int lambda_count72;
++    
++    /* For rainbow */
++    int rainbow_count72;
++    
++    /* For Japanese */
++    int japanese_count72;
++    
++    /* For async */
++    int async_count72;
++    
++    /* For old scroll */
++    int old_scroll_count73;
++    
++    /* For message */
++    int message_count73;
++    
++    /* For update */
++    int update_count73;
++    
++    /* For character change */
++    int change_count73;
++    
++    /* For lambda */
++    int lambda_count73;
++    
++    /* For rainbow */
++    int rainbow_count73;
++    
++    /* For Japanese */
++    int japanese_count73;
++    
++    /* For async */
++    int async_count73;
++    
++    /* For old scroll */
++    int old_scroll_count74;
++    
++    /* For message */
++    int message_count74;
++    
++    /* For update */
++    int update_count74;
++    
++    /* For character change */
++    int change_count74;
++    
++    /* For lambda */
++    int lambda_count74;
++    
++    /* For rainbow */
++    int rainbow_count74;
++    
++    /* For Japanese */
++    int japanese_count74;
++    
++    /* For async */
++    int async_count74;
++    
++    /* For old scroll */
++    int old_scroll_count75;
++    
++    /* For message */
++    int message_count75;
++    
++    /* For update */
++    int update_count75;
++    
++    /* For character change */
++    int change_count75;
++    
++    /* For lambda */
++    int lambda_count75;
++    
++    /* For rainbow */
++    int rainbow_count75;
++    
++    /* For Japanese */
++    int japanese_count75;
++    
++    /* For async */
++    int async_count75;
++    
++    /* For old scroll */
++    int old_scroll_count76;
++    
++    /* For message */
++    int message_count76;
++    
++    /* For update */
++    int update_count76;
++    
++    /* For character change */
++    int change_count76;
++    
++    /* For lambda */
++    int lambda_count76;
++    
++    /* For rainbow */
++    int rainbow_count76;
++    
++    /* For Japanese */
++    int japanese_count76;
++    
++    /* For async */
++    int async_count76;
++    
++    /* For old scroll */
++    int old_scroll_count77;
++    
++    /* For message */
++    int message_count77;
++    
++    /* For update */
++    int update_count77;
++    
++    /* For character change */
++    int change_count77;
++    
++    /* For lambda */
++    int lambda_count77;
++    
++    /* For rainbow */
++    int rainbow_count77;
++    
++    /* For Japanese */
++    int japanese_count77;
++    
++    /* For async */
++    int async_count77;
++    
++    /* For old scroll */
++    int old_scroll_count78;
++    
++    /* For message */
++    int message_count78;
++    
++    /* For update */
++    int update_count78;
++    
++    /* For character change */
++    int change_count78;
++    
++    /* For lambda */
++    int lambda_count78;
++    
++    /* For rainbow */
++    int rainbow_count78;
++    
++    /* For Japanese */
++    int japanese_count78;
++    
++    /* For async */
++    int async_count78;
++    
++    /* For old scroll */
++    int old_scroll_count79;
++    
++    /* For message */
++    int message_count79;
++    
++    /* For update */
++    int update_count79;
++    
++    /* For character change */
++    int change_count79;
++    
++    /* For lambda */
++    int lambda_count79;
++    
++    /* For rainbow */
++    int rainbow_count79;
++    
++    /* For Japanese */
++    int japanese_count79;
++    
++    /* For async */
++    int async_count79;
++    
++    /* For old scroll */
++    int old_scroll_count80;
++    
++    /* For message */
++    int message_count80;
++    
++    /* For update */
++    int update_count80;
++    
++    /* For character change */
++    int change_count80;
++    
++    /* For lambda */
++    int lambda_count80;
++    
++    /* For rainbow */
++    int rainbow_count80;
++    
++    /* For Japanese */
++    int japanese_count80;
++    
++    /* For async */
++    int async_count80;
++    
++    /* For old scroll */
++    int old_scroll_count81;
++    
++    /* For message */
++    int message_count81;
++    
++    /* For update */
++    int update_count81;
++    
++    /* For character change */
++    int change_count81;
++    
++    /* For lambda */
++    int lambda_count81;
++    
++    /* For rainbow */
++    int rainbow_count81;
++    
++    /* For Japanese */
++    int japanese_count81;
++    
++    /* For async */
++    int async_count81;
++    
++    /* For old scroll */
++    int old_scroll_count82;
++    
++    /* For message */
++    int message_count82;
++    
++    /* For update */
++    int update_count82;
++    
++    /* For character change */
++    int change_count82;
++    
++    /* For lambda */
++    int lambda_count82;
++    
++    /* For rainbow */
++    int rainbow_count82;
++    
++    /* For Japanese */
++    int japanese_count82;
++    
++    /* For async */
++    int async_count82;
++    
++    /* For old scroll */
++    int old_scroll_count83;
++    
++    /* For message */
++    int message_count83;
++    
++    /* For update */
++    int update_count83;
++    
++    /* For character change */
++    int change_count83;
++    
++    /* For lambda */
++    int lambda_count83;
++    
++    /* For rainbow */
++    int rainbow_count83;
++    
++    /* For Japanese */
++    int japanese_count83;
++    
++    /* For async */
++    int async_count83;
++    
++    /* For old scroll */
++    int old_scroll_count84;
++    
++    /* For message */
++    int message_count84;
++    
++    /* For update */
++    int update_count84;
++    
++    /* For character change */
++    int change_count84;
++    
++    /* For lambda */
++    int lambda_count84;
++    
++    /* For rainbow */
++    int rainbow_count84;
++    
++    /* For Japanese */
++    int japanese_count84;
++    
++    /* For async */
++    int async_count84;
++    
++    /* For old scroll */
++    int old_scroll_count85;
++    
++    /* For message */
++    int message_count85;
++    
++    /* For update */
++    int update_count85;
++    
++    /* For character change */
++    int change_count85;
++    
++    /* For lambda */
++    int lambda_count85;
++    
++    /* For rainbow */
++    int rainbow_count85;
++    
++    /* For Japanese */
++    int japanese_count85;
++    
++    /* For async */
++    int async_count85;
++    
++    /* For old scroll */
++    int old_scroll_count86;
++    
++    /* For message */
++    int message_count86;
++    
++    /* For update */
++    int update_count86;
++    
++    /* For character change */
++    int change_count86;
++    
++    /* For lambda */
++    int lambda_count86;
++    
++    /* For rainbow */
++    int rainbow_count86;
++    
++    /* For Japanese */
++    int japanese_count86;
++    
++    /* For async */
++    int async_count86;
++    
++    /* For old scroll */
++    int old_scroll_count87;
++    
++    /* For message */
++    int message_count87;
++    
++    /* For update */
++    int update_count87;
++    
++    /* For character change */
++    int change_count87;
++    
++    /* For lambda */
++    int lambda_count87;
++    
++    /* For rainbow */
++    int rainbow_count87;
++    
++    /* For Japanese */
++    int japanese_count87;
++    
++    /* For async */
++    int async_count87;
++    
++    /* For old scroll */
++    int old_scroll_count88;
++    
++    /* For message */
++    int message_count88;
++    
++    /* For update */
++    int update_count88;
++    
++    /* For character change */
++    int change_count88;
++    
++    /* For lambda */
++    int lambda_count88;
++    
++    /* For rainbow */
++    int rainbow_count88;
++    
++    /* For Japanese */
++    int japanese_count88;
++    
++    /* For async */
++    int async_count88;
++    
++    /* For old scroll */
++    int old_scroll_count89;
++    
++    /* For message */
++    int message_count89;
++    
++    /* For update */
++    int update_count89;
++    
++    /* For character change */
++    int change_count89;
++    
++    /* For lambda */
++    int lambda_count89;
++    
++    /* For rainbow */
++    int rainbow_count89;
++    
++    /* For Japanese */
++    int japanese_count89;
++    
++    /* For async */
++    int async_count89;
++    
++    /* For old scroll */
++    int old_scroll_count90;
++    
++    /* For message */
++    int message_count90;
++    
++    /* For update */
++    int update_count90;
++    
++    /* For character change */
++    int change_count90;
++    
++    /* For lambda */
++    int lambda_count90;
++    
++    /* For rainbow */
++    int rainbow_count90;
++    
++    /* For Japanese */
++    int japanese_count90;
++    
++    /* For async */
++    int async_count90;
++    
++    /* For old scroll */
++    int old_scroll_count91;
++    
++    /* For message */
++    int message_count91;
++    
++    /* For update */
++    int update_count91;
++    
++    /* For character change */
++    int change_count91;
++    
++    /* For lambda */
++    int lambda_count91;
++    
++    /* For rainbow */
++    int rainbow_count91;
++    
++    /* For Japanese */
++    int japanese_count91;
++    
++    /* For async */
++    int async_count91;
++    
++    /* For old scroll */
++    int old_scroll_count92;
++    
++    /* For message */
++    int message_count92;
++    
++    /* For update */
++    int update_count92;
++    
++    /* For character change */
++    int change_count92;
++    
++    /* For lambda */
++    int lambda_count92;
++    
++    /* For rainbow */
++    int rainbow_count92;
++    
++    /* For Japanese */
++    int japanese_count92;
++    
++    /* For async */
++    int async_count92;
++    
++    /* For old scroll */
++    int old_scroll_count93;
++    
++    /* For message */
++    int message_count93;
++    
++    /* For update */
++    int update_count93;
++    
++    /* For character change */
++    int change_count93;
++    
++    /* For lambda */
++    int lambda_count93;
++    
++    /* For rainbow */
++    int rainbow_count93;
++    
++    /* For Japanese */
++    int japanese_count93;
++    
++    /* For async */
++    int async_count93;
++    
++    /* For old scroll */
++    int old_scroll_count94;
++    
++    /* For message */
++    int message_count94;
++    
++    /* For update */
++    int update_count94;
++    
++    /* For character change */
++    int change_count94;
++    
++    /* For lambda */
++    int lambda_count94;
++    
++    /* For rainbow */
++    int rainbow_count94;
++    
++    /* For Japanese */
++    int japanese_count94;
++    
++    /* For async */
++    int async_count94;
++    
++    /* For old scroll */
++    int old_scroll_count95;
++    
++    /* For message */
++    int message_count95;
++    
++    /* For update */
++    int update_count95;
++    
++    /* For character change */
++    int change_count95;
++    
++    /* For lambda */
++    int lambda_count95;
++    
++    /* For rainbow */
++    int rainbow_count95;
++    
++    /* For Japanese */
++    int japanese_count95;
++    
++    /* For async */
++    int async_count95;
++    
++    /* For old scroll */
++    int old_scroll_count96;
++    
++    /* For message */
++    int message_count96;
++    
++    /* For update */
++    int update_count96;
++    
++    /* For character change */
++    int change_count96;
++    
++    /* For lambda */
++    int lambda_count96;
++    
++    /* For rainbow */
++    int rainbow_count96;
++    
++    /* For Japanese */
++    int japanese_count96;
++    
++    /* For async */
++    int async_count96;
++    
++    /* For old scroll */
++    int old_scroll_count97;
++    
++    /* For message */
++    int message_count97;
++    
++    /* For update */
++    int update_count97;
++    
++    /* For character change */
++    int change_count97;
++    
++    /* For lambda */
++    int lambda_count97;
++    
++    /* For rainbow */
++    int rainbow_count97;
++    
++    /* For Japanese */
++    int japanese_count97;
++    
++    /* For async */
++    int async_count97;
++    
++    /* For old scroll */
++    int old_scroll_count98;
++    
++    /* For message */
++    int message_count98;
++    
++    /* For update */
++    int update_count98;
++    
++    /* For character change */
++    int change_count98;
++    
++    /* For lambda */
++    int lambda_count98;
++    
++    /* For rainbow */
++    int rainbow_count98;
++    
++    /* For Japanese */
++    int japanese_count98;
++    
++    /* For async */
++    int async_count98;
++    
++    /* For old scroll */
++    int old_scroll_count99;
++    
++    /* For message */
++    int message_count99;
++    
++    /* For update */
++    int update_count99;
++    
++    /* For character change */
++    int change_count99;
++    
++    /* For lambda */
++    int lambda_count99;
++    
++    /* For rainbow */
++    int rainbow_count99;
++    
++    /* For Japanese */
++    int japanese_count99;
++    
++    /* For async */
++    int async_count99;
++    
++    /* For old scroll */
++    int old_scroll_count100;
++    
++    /* For message */
++    int message_count100;
++    
++    /* For update */
++    int update_count100;
++    
++    /* For character change */
++    int change_count100;
++    
++    /* For lambda */
++    int lambda_count100;
++    
++    /* For rainbow */
++    int rainbow_count100;
++    
++    /* For Japanese */
++    int japanese_count100;
++    
++    /* For async */
++    int async_count100;
++    
++    /* For old scroll */
++    int old_scroll_count101;
++    
++    /* For message */
++    int message_count101;
++    
++    /* For update */
++    int update_count101;
++    
++    /* For character change */
++    int change_count101;
++    
++    /* For lambda */
++    int lambda_count101;
++    
++    /* For rainbow */
++    int rainbow_count101;
++    
++    /* For Japanese */
++    int japanese_count101;
++    
++    /* For async */
++    int async_count101;
++    
++    /* For old scroll */
++    int old_scroll_count102;
++    
++    /* For message */
++    int message_count102;
++    
++    /* For update */
++    int update_count102;
++    
++    /* For character change */
++    int change_count102;
++    
++    /* For lambda */
++    int lambda_count102;
++    
++    /* For rainbow */
++    int rainbow_count102;
++    
++    /* For Japanese */
++    int japanese_count102;
++    
++    /* For async */
++    int async_count102;
++    
++    /* For old scroll */
++    int old_scroll_count103;
++    
++    /* For message */
++    int message_count103;
++    
++    /* For update */
++    int update_count103;
++    
++    /* For character change */
++    int change_count103;
++    
++    /* For lambda */
++    int lambda_count103;
++    
++    /* For rainbow */
++    int rainbow_count103;
++    
++    /* For Japanese */
++    int japanese_count103;
++    
++    /* For async */
++    int async_count103;
++    
++    /* For old scroll */
++    int old_scroll_count104;
++    
++    /* For message */
++    int message_count104;
++    
++    /* For update */
++    int update_count104;
++    
++    /* For character change */
++    int change_count104;
++    
++    /* For lambda */
++    int lambda_count104;
++    
++    /* For rainbow */
++    int rainbow_count104;
++    
++    /* For Japanese */
++    int japanese_count104;
++    
++    /* For async */
++    int async_count104;
++    
++    /* For old scroll */
++    int old_scroll_count105;
++    
++    /* For message */
++    int message_count105;
++    
++    /* For update */
++    int update_count105;
++    
++    /* For character change */
++    int change_count105;
++    
++    /* For lambda */
++    int lambda_count105;
++    
++    /* For rainbow */
++    int rainbow_count105;
++    
++    /* For Japanese */
++    int japanese_count105;
++    
++    /* For async */
++    int async_count105;
++    
++    /* For old scroll */
++    int old_scroll_count106;
++    
++    /* For message */
++    int message_count106;
++    
++    /* For update */
++    int update_count106;
++    
++    /* For character change */
++    int change_count106;
++    
++    /* For lambda */
++    int lambda_count106;
++    
++    /* For rainbow */
++    int rainbow_count106;
++    
++    /* For Japanese */
++    int japanese_count106;
++    
++    /* For async */
++    int async_count106;
++    
++    /* For old scroll */
++    int old_scroll_count107;
++    
++    /* For message */
++    int message_count107;
++    
++    /* For update */
++    int update_count107;
++    
++    /* For character change */
++    int change_count107;
++    
++    /* For lambda */
++    int lambda_count107;
++    
++    /* For rainbow */
++    int rainbow_count107;
++    
++    /* For Japanese */
++    int japanese_count107;
++    
++    /* For async */
++    int async_count107;
++    
++    /* For old scroll */
++    int old_scroll_count108;
++    
++    /* For message */
++    int message_count108;
++    
++    /* For update */
++    int update_count108;
++    
++    /* For character change */
++    int change_count108;
++    
++    /* For lambda */
++    int lambda_count108;
++    
++    /* For rainbow */
++    int rainbow_count108;
++    
++    /* For Japanese */
++    int japanese_count108;
++    
++    /* For async */
++    int async_count108;
++    
++    /* For old scroll */
++    int old_scroll_count109;
++    
++    /* For message */
++    int message_count109;
++    
++    /* For update */
++    int update_count109;
++    
++    /* For character change */
++    int change_count109;
++    
++    /* For lambda */
++    int lambda_count109;
++    
++    /* For rainbow */
++    int rainbow_count109;
++    
++    /* For Japanese */
++    int japanese_count109;
++    
++    /* For async */
++    int async_count109;
++    
++    /* For old scroll */
++    int old_scroll_count110;
++    
++    /* For message */
++    int message_count110;
++    
++    /* For update */
++    int update_count110;
++    
++    /* For character change */
++    int change_count110;
++    
++    /* For lambda */
++    int lambda_count110;
++    
++    /* For rainbow */
++    int rainbow_count110;
++    
++    /* For Japanese */
++    int japanese_count110;
++    
++    /* For async */
++    int async_count110;
++    
++    /* For old scroll */
++    int old_scroll_count111;
++    
++    /* For message */
++    int message_count111;
++    
++    /* For update */
++    int update_count111;
++    
++    /* For character change */
++    int change_count111;
++    
++    /* For lambda */
++    int lambda_count111;
++    
++    /* For rainbow */
++    int rainbow_count111;
++    
++    /* For Japanese */
++    int japanese_count111;
++    
++    /* For async */
++    int async_count111;
++    
++    /* For old scroll */
++    int old_scroll_count112;
++    
++    /* For message */
++    int message_count112;
++    
++    /* For update */
++    int update_count112;
++    
++    /* For character change */
++    int change_count112;
++    
++    /* For lambda */
++    int lambda_count112;
++    
++    /* For rainbow */
++    int rainbow_count112;
++    
++    /* For Japanese */
++    int japanese_count112;
++    
++    /* For async */
++    int async_count112;
++    
++    /* For old scroll */
++    int old_scroll_count113;
++    
++    /* For message */
++    int message_count113;
++    
++    /* For update */
++    int update_count113;
++    
++    /* For character change */
++    int change_count113;
++    
++    /* For lambda */
++    int lambda_count113;
++    
++    /* For rainbow */
++    int rainbow_count113;
++    
++    /* For Japanese */
++    int japanese_count113;
++    
++    /* For async */
++    int async_count113;
++    
++    /* For old scroll */
++    int old_scroll_count114;
++    
++    /* For message */
++    int message_count114;
++    
++    /* For update */
++    int update_count114;
++    
++    /* For character change */
++    int change_count114;
++    
++    /* For lambda */
++    int lambda_count114;
++    
++    /* For rainbow */
++    int rainbow_count114;
++    
++    /* For Japanese */
++    int japanese_count114;
++    
++    /* For async */
++    int async_count114;
++    
++    /* For old scroll */
++    int old_scroll_count115;
++    
++    /* For message */
++    int message_count115;
++    
++    /* For update */
++    int update_count115;
++    
++    /* For character change */
++    int change_count115;
++    
++    /* For lambda */
++    int lambda_count115;
++    
++    /* For rainbow */
++    int rainbow_count115;
++    
++    /* For Japanese */
++    int japanese_count115;
++    
++    /* For async */
++    int async_count115;
++    
++    /* For old scroll */
++    int old_scroll_count116;
++    
++    /* For message */
++    int message_count116;
++    
++    /* For update */
++    int update_count116;
++    
++    /* For character change */
++    int change_count116;
++    
++    /* For lambda */
++    int lambda_count116;
++    
++    /* For rainbow */
++    int rainbow_count116;
++    
++    /* For Japanese */
++    int japanese_count116;
++    
++    /* For async */
++    int async_count116;
++    
++    /* For old scroll */
++    int old_scroll_count117;
++    
++    /* For message */
++    int message_count117;
++    
++    /* For update */
++    int update_count117;
++    
++    /* For character change */
++    int change_count117;
++    
++    /* For lambda */
++    int lambda_count117;
++    
++    /* For rainbow */
++    int rainbow_count117;
++    
++    /* For Japanese */
++    int japanese_count117;
++    
++    /* For async */
++    int async_count117;
++    
++    /* For old scroll */
++    int old_scroll_count118;
++    
++    /* For message */
++    int message_count118;
++    
++    /* For update */
++    int update_count118;
++    
++    /* For character change */
++    int change_count118;
++    
++    /* For lambda */
++    int lambda_count118;
++    
++    /* For rainbow */
++    int rainbow_count118;
++    
++    /* For Japanese */
++    int japanese_count118;
++    
++    /* For async */
++    int async_count118;
++    
++    /* For old scroll */
++    int old_scroll_count119;
++    
++    /* For message */
++    int message_count119;
++    
++    /* For update */
++    int update_count119;
++    
++    /* For character change */
++    int change_count119;
++    
++    /* For lambda */
++    int lambda_count119;
++    
++    /* For rainbow */
++    int rainbow_count119;
++    
++    /* For Japanese */
++    int japanese_count119;
++    
++    /* For async */
++    int async_count119;
++    
++    /* For old scroll */
++    int old_scroll_count120;
++    
++    /* For message */
++    int message_count120;
++    
++    /* For update */
++    int update_count120;
++    
++    /* For character change */
++    int change_count120;
++    
++    /* For lambda */
++    int lambda_count120;
++    
++    /* For rainbow */
++    int rainbow_count120;
++    
++    /* For Japanese */
++    int japanese_count120;
++    
++    /* For async */
++    int async_count120;
++    
++    /* For old scroll */
++    int old_scroll_count121;
++    
++    /* For message */
++    int message_count121;
++    
++    /* For update */
++    int update_count121;
++    
++    /* For character change */
++    int change_count121;
++    
++    /* For lambda */
++    int lambda_count121;
++    
++    /* For rainbow */
++    int rainbow_count121;
++    
++    /* For Japanese */
++    int japanese_count121;
++    
++    /* For async */
++    int async_count121;
++    
++    /* For old scroll */
++    int old_scroll_count122;
++    
++    /* For message */
++    int message_count122;
++    
++    /* For update */
++    int update_count122;
++    
++    /* For character change */
++    int change_count122;
++    
++    /* For lambda */
++    int lambda_count122;
++    
++    /* For rainbow */
++    int rainbow_count122;
++    
++    /* For Japanese */
++    int japanese_count122;
++    
++    /* For async */
++    int async_count122;
++    
++    /* For old scroll */
++    int old_scroll_count123;
++    
++    /* For message */
++    int message_count123;
++    
++    /* For update */
++    int update_count123;
++    
++    /* For character change */
++    int change_count123;
++    
++    /* For lambda */
++    int lambda_count123;
++    
++    /* For rainbow */
++    int rainbow_count123;
++    
++    /* For Japanese */
++    int japanese_count123;
++    
++    /* For async */
++    int async_count123;
++    
++    /* For old scroll */
++    int old_scroll_count124;
++    
++    /* For message */
++    int message_count124;
++    
++    /* For update */
++    int update_count124;
++    
++    /* For character change */
++    int change_count124;
++    
++    /* For lambda */
++    int lambda_count124;
++    
++    /* For rainbow */
++    int rainbow_count124;
++    
++    /* For Japanese */
++    int japanese_count124;
++    
++    /* For async */
++    int async_count124;
++    
++    /* For old scroll */
++    int old_scroll_count125;
++    
++    /* For message */
++    int message_count125;
++    
++    /* For update */
++    int update_count125;
++    
++    /* For character change */
++    int change_count125;
++    
++    /* For lambda */
++    int lambda_count125;
++    
++    /* For rainbow */
++    int rainbow_count125;
++    
++    /* For Japanese */
++    int japanese_count125;
++    
++    /* For async */
++    int async_count125;
++    
++    /* For old scroll */
++    int old_scroll_count126;
++    
++    /* For message */
++    int message_count126;
++    
++    /* For update */
++    int update_count126;
++    
++    /* For character change */
++    int change_count126;
++    
++    /* For lambda */
++    int lambda_count126;
++    
++    /* For rainbow */
++    int rainbow_count126;
++    
++    /* For Japanese */
++    int japanese_count126;
++    
++    /* For async */
++    int async_count126;
++    
++    /* For old scroll */
++    int old_scroll_count127;
++    
++    /* For message */
++    int message_count127;
++    
++    /* For update */
++    int update_count127;
++    
++    /* For character change */
++    int change_count127;
++    
++    /* For lambda */
++    int lambda_count127;
++    
++    /* For rainbow */
++    int rainbow_count127;
++    
++    /* For Japanese */
++    int japanese_count127;
++    
++    /* For async */
++    int async_count127;
++    
++    /* For old scroll */
++    int old_scroll_count128;
++    
++    /* For message */
++    int message_count128;
++    
++    /* For update */
++    int update_count128;
++    
++    /* For character change */
++    int change_count128;
++    
++    /* For lambda */
++    int lambda_count128;
++    
++    /* For rainbow */
++    int rainbow_count128;
++    
++    /* For Japanese */
++    int japanese_count128;
++    
++    /* For async */
++    int async_count128;
++    
++    /* For old scroll */
++    int old_scroll_count129;
++    
++    /* For message */
++    int message_count129;
++    
++    /* For update */
++    int update_count129;
++    
++    /* For character change */
++    int change_count129;
++    
++    /* For lambda */
++    int lambda_count129;
++    
++    /* For rainbow */
++    int rainbow_count129;
++    
++    /* For Japanese */
++    int japanese_count129;
++    
++    /* For async */
++    int async_count129;
++    
++    /* For old scroll */
++    int old_scroll_count130;
++    
++    /* For message */
++    int message_count130;
++    
++    /* For update */
++    int update_count130;
++    
++    /* For character change */
++    int change_count130;
++    
++    /* For lambda */
++    int lambda_count130;
++    
++    /* For rainbow */
++    int rainbow_count130;
++    
++    /* For Japanese */
++    int japanese_count130;
++    
++    /* For async */
++    int async_count130;
++    
++    /* For old scroll */
++    int old_scroll_count131;
++    
++    /* For message */
++    int message_count131;
++    
++    /* For update */
++    int update_count131;
++    
++    /* For character change */
++    int change_count131;
++    
++    /* For lambda */
++    int lambda_count131;
++    
++    /* For rainbow */
++    int rainbow_count131;
++    
++    /* For Japanese */
++    int japanese_count131;
++    
++    /* For async */
++    int async_count131;
++    
++    /* For old scroll */
++    int old_scroll_count132;
++    
++    /* For message */
++    int message_count132;
++    
++    /* For update */
++    int update_count132;
++    
++    /* For character change */
++    int change_count132;
++    
++    /* For lambda */
++    int lambda_count132;
++    
++    /* For rainbow */
++    int rainbow_count132;
++    
++    /* For Japanese */
++    int japanese_count132;
++    
++    /* For async */
++    int async_count132;
++    
++    /* For old scroll */
++    int old_scroll_count133;
++    
++    /* For message */
++    int message_count133;
++    
++    /* For update */
++    int update_count133;
++    
++    /* For character change */
++    int change_count133;
++    
++    /* For lambda */
++    int lambda_count133;
++    
++    /* For rainbow */
++    int rainbow_count133;
++    
++    /* For Japanese */
++    int japanese_count133;
++    
++    /* For async */
++    int async_count133;
++    
++    /* For old scroll */
++    int old_scroll_count134;
++    
++    /* For message */
++    int message_count134;
++    
++    /* For update */
++    int update_count134;
++    
++    /* For character change */
++    int change_count134;
++    
++    /* For lambda */
++    int lambda_count134;
++    
++    /* For rainbow */
++    int rainbow_count134;
++    
++    /* For Japanese */
++    int japanese_count134;
++    
++    /* For async */
++    int async_count134;
++    
++    /* For old scroll */
++    int old_scroll_count135;
++    
++    /* For message */
++    int message_count135;
++    
++    /* For update */
++    int update_count135;
++    
++    /* For character change */
++    int change_count135;
++    
++    /* For lambda */
++    int lambda_count135;
++    
++    /* For rainbow */
++    int rainbow_count135;
++    
++    /* For Japanese */
++    int japanese_count135;
++    
++    /* For async */
++    int async_count135;
++    
++    /* For old scroll */
++    int old_scroll_count136;
++    
++    /* For message */
++    int message_count136;
++    
++    /* For update */
++    int update_count136;
++    
++    /* For character change */
++    int change_count136;
++    
++    /* For lambda */
++    int lambda_count136;
++    
++    /* For rainbow */
++    int rainbow_count136;
++    
++    /* For Japanese */
++    int japanese_count136;
++    
++    /* For async */
++    int async_count136;
++    
++    /* For old scroll */
++    int old_scroll_count137;
++    
++    /* For message */
++    int message_count137;
++    
++    /* For update */
++    int update_count137;
++    
++    /* For character change */
++    int change_count137;
++    
++    /* For lambda */
++    int lambda_count137;
++    
++    /* For rainbow */
++    int rainbow_count137;
++    
++    /* For Japanese */
++    int japanese_count137;
++    
++    /* For async */
++    int async_count137;
++    
++    /* For old scroll */
++    int old_scroll_count138;
++    
++    /* For message */
++    int message_count138;
++    
++    /* For update */
++    int update_count138;
++    
++    /* For character change */
++    int change_count138;
++    
++    /* For lambda */
++    int lambda_count138;
++    
++    /* For rainbow */
++    int rainbow_count138;
++    
++    /* For Japanese */
++    int japanese_count138;
++    
++    /* For async */
++    int async_count138;
++    
++    /* For old scroll */
++    int old_scroll_count139;
++    
++    /* For message */
++    int message_count139;
++    
++    /* For update */
++    int update_count139;
++    
++    /* For character change */
++    int change_count139;
++    
++    /* For lambda */
++    int lambda_count139;
++    
++    /* For rainbow */
++    int rainbow_count139;
++    
++    /* For Japanese */
++    int japanese_count139;
++    
++    /* For async */
++    int async_count139;
++    
++    /* For old scroll */
++    int old_scroll_count140;
++    
++    /* For message */
++    int message_count140;
++    
++    /* For update */
++    int update_count140;
++    
++    /* For character change */
++    int change_count140;
++    
++    /* For lambda */
++    int lambda_count140;
++    
++    /* For rainbow */
++    int rainbow_count140;
++    
++    /* For Japanese */
++    int japanese_count140;
++    
++    /* For async */
++    int async_count140;
++    
++    /* For old scroll */
++    int old_scroll_count141;
++    
++    /* For message */
++    int message_count141;
++    
++    /* For update */
++    int update_count141;
++    
++    /* For character change */
++    int change_count141;
++    
++    /* For lambda */
++    int lambda_count141;
++    
++    /* For rainbow */
++    int rainbow_count141;
++    
++    /* For Japanese */
++    int japanese_count141;
++    
++    /* For async */
++    int async_count141;
++    
++    /* For old scroll */
++    int old_scroll_count142;
++    
++    /* For message */
++    int message_count142;
++    
++    /* For update */
++    int update_count142;
++    
++    /* For character change */
++    int change_count142;
++    
++    /* For lambda */
++    int lambda_count142;
++    
++    /* For rainbow */
++    int rainbow_count142;
++    
++    /* For Japanese */
++    int japanese_count142;
++    
++    /* For async */
++    int async_count142;
++    
++    /* For old scroll */
++    int old_scroll_count143;
++    
++    /* For message */
++    int message_count143;
++    
++    /* For update */
++    int update_count143;
++    
++    /* For character change */
++    int change_count143;
++    
++    /* For lambda */
++    int lambda_count143;
++    
++    /* For rainbow */
++    int rainbow_count143;
++    
++    /* For Japanese */
++    int japanese_count143;
++    
++    /* For async */
++    int async_count143;
++    
++    /* For old scroll */
++    int old_scroll_count144;
++    
++    /* For message */
++    int message_count144;
++    
++    /* For update */
++    int update_count144;
++    
++    /* For character change */
++    int change_count144;
++    
++    /* For lambda */
++    int lambda_count144;
++    
++    /* For rainbow */
++    int rainbow_count144;
++    
++    /* For Japanese */
++    int japanese_count144;
++    
++    /* For async */
++    int async_count144;
++    
++    /* For old scroll */
++    int old_scroll_count145;
++    
++    /* For message */
++    int message_count145;
++    
++    /* For update */
++    int update_count145;
++    
++    /* For character change */
++    int change_count145;
++    
++    /* For lambda */
++    int lambda_count145;
++    
++    /* For rainbow */
++    int rainbow_count145;
++    
++    /* For Japanese */
++    int japanese_count145;
++    
++    /* For async */
++    int async_count145;
++    
++    /* For old scroll */
++    int old_scroll_count146;
++    
++    /* For message */
++    int message_count146;
++    
++    /* For update */
++    int update_count146;
++    
++    /* For character change */
++    int change_count146;
++    
++    /* For lambda */
++    int lambda_count146;
++    
++    /* For rainbow */
++    int rainbow_count146;
++    
++    /* For Japanese */
++    int japanese_count146;
++    
++    /* For async */
++    int async_count146;
++    
++    /* For old scroll */
++    int old_scroll_count147;
++    
++    /* For message */
++    int message_count147;
++    
++    /* For update */
++    int update_count147;
++    
++    /* For character change */
++    int change_count147;
++    
++    /* For lambda */
++    int lambda_count147;
++    
++    /* For rainbow */
++    int rainbow_count147;
++    
++    /* For Japanese */
++    int japanese_count147;
++    
++    /* For async */
++    int async_count147;
++    
++    /* For old scroll */
++    int old_scroll_count148;
++    
++    /* For message */
++    int message_count148;
++    
++    /* For update */
++    int update_count148;
++    
++    /* For character change */
++    int change_count148;
++    
++    /* For lambda */
++    int lambda_count148;
++    
++    /* For rainbow */
++    int rainbow_count148;
++    
++    /* For Japanese */
++    int japanese_count148;
++    
++    /* For async */
++    int async_count148;
++    
++    /* For old scroll */
++    int old_scroll_count149;
++    
++    /* For message */
++    int message_count149;
++    
++    /* For update */
++    int update_count149;
++    
++    /* For character change */
++    int change_count149;
++    
++    /* For lambda */
++    int lambda_count149;
++    
++    /* For rainbow */
++    int rainbow_count149;
++    
++    /* For Japanese */
++    int japanese_count149;
++    
++    /* For async */
++    int async_count149;
++    
++    /* For old scroll */
++    int old_scroll_count150;
++    
++    /* For message */
++    int message_count150;
++    
++    /* For update */
++    int update_count150;
++    
++    /* For character change */
++    int change_count150;
++    
++    /* For lambda */
++    int lambda_count150;
++    
++    /* For rainbow */
++    int rainbow_count150;
++    
++    /* For Japanese */
++    int japanese_count150;
++    
++    /* For async */
++    int async_count150;
++    
++    /* For old scroll */
++    int old_scroll_count151;
++    
++    /* For message */
++    int message_count151;
++    
++    /* For update */
++    int update_count151;
++    
++    /* For character change */
++    int change_count151;
++    
++    /* For lambda */
++    int lambda_count151;
++    
++    /* For rainbow */
++    int rainbow_count151;
++    
++    /* For Japanese */
++    int japanese_count151;
++    
++    /* For async */
++    int async_count151;
++    
++    /* For old scroll */
++    int old_scroll_count152;
++    
++    /* For message */
++    int message_count152;
++    
++    /* For update */
++    int update_count152;
++    
++    /* For character change */
++    int change_count152;
++    
++    /* For lambda */
++    int lambda_count152;
++    
++    /* For rainbow */
++    int rainbow_count152;
++    
++    /* For Japanese */
++    int japanese_count152;
++    
++    /* For async */
++    int async_count152;
++    
++    /* For old scroll */
++    int old_scroll_count153;
++    
++    /* For message */
++    int message_count153;
++    
++    /* For update */
++    int update_count153;
++    
++    /* For character change */
++    int change_count153;
++    
++    /* For lambda */
++    int lambda_count153;
++    
++    /* For rainbow */
++    int rainbow_count153;
++    
++    /* For Japanese */
++    int japanese_count153;
++    
++    /* For async */
++    int async_count153;
++    
++    /* For old scroll */
++    int old_scroll_count154;
++    
++    /* For message */
++    int message_count154;
++    
++    /* For update */
++    int update_count154;
++    
++    /* For character change */
++    int change_count154;
++    
++    /* For lambda */
++    int lambda_count154;
++    
++    /* For rainbow */
++    int rainbow_count154;
++    
++    /* For Japanese */
++    int japanese_count154;
++    
++    /* For async */
++    int async_count154;
++    
++    /* For old scroll */
++    int old_scroll_count155;
++    
++    /* For message */
++    int message_count155;
++    
++    /* For update */
++    int update_count155;
++    
++    /* For character change */
++    int change_count155;
++    
++    /* For lambda */
++    int lambda_count155;
++    
++    /* For rainbow */
++    int rainbow_count155;
++    
++    /* For Japanese */
++    int japanese_count155;
++    
++    /* For async */
++    int async_count155;
++    
++    /* For old scroll */
++    int old_scroll_count156;
++    
++    /* For message */
++    int message_count156;
++    
++    /* For update */
++    int update_count156;
++    
++    /* For character change */
++    int change_count156;
++    
++    /* For lambda */
++    int lambda_count156;
++    
++    /* For rainbow */
++    int rainbow_count156;
++    
++    /* For Japanese */
++    int japanese_count156;
++    
++    /* For async */
++    int async_count156;
++    
++    /* For old scroll */
++    int old_scroll_count157;
++    
++    /* For message */
++    int message_count157;
++    
++    /* For update */
++    int update_count157;
++    
++    /* For character change */
++    int change_count157;
++    
++    /* For lambda */
++    int lambda_count157;
++    
++    /* For rainbow */
++    int rainbow_count157;
++    
++    /* For Japanese */
++    int japanese_count157;
++    
++    /* For async */
++    int async_count157;
++    
++    /* For old scroll */
++    int old_scroll_count158;
++    
++    /* For message */
++    int message_count158;
++    
++    /* For update */
++    int update_count158;
++    
++    /* For character change */
++    int change_count158;
++    
++    /* For lambda */
++    int lambda_count158;
++    
++    /* For rainbow */
++    int rainbow_count158;
++    
++    /* For Japanese */
++    int japanese_count158;
++    
++    /* For async */
++    int async_count158;
++    
++    /* For old scroll */
++    int old_scroll_count159;
++    
++    /* For message */
++    int message_count159;
++    
++    /* For update */
++    int update_count159;
++    
++    /* For character

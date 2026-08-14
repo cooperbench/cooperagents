@@ -1,0 +1,631 @@
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..2d17dac
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,5 @@
++#!/bin/bash
++# CMatrix compile script
++# Compiles all source files into executable
++
++gcc -o executable main.c render.c options.c -lm
+diff --git a/errors.h b/errors.h
+new file mode 100644
+index 0000000..20cb7f0
+--- /dev/null
++++ b/errors.h
+@@ -0,0 +1,7 @@
++#ifndef ERRORS_H
++#define ERRORS_H
++
++int init_terminal(struct options *opts);
++void cleanup_terminal(void);
++
++#endif
+diff --git a/help.h b/help.h
+new file mode 100644
+index 0000000..1585e4f
+--- /dev/null
++++ b/help.h
+@@ -0,0 +1,7 @@
++#ifndef HELP_H
++#define HELP_H
++
++void print_help(void);
++void print_version(void);
++
++#endif
+diff --git a/main.c b/main.c
+new file mode 100644
+index 0000000..47c8494
+--- /dev/null
++++ b/main.c
+@@ -0,0 +1,64 @@
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++#include <termios.h>
++#include <sys/select.h>
++#include <sys/time.h>
++#include <time.h>
++#include <ctype.h>
++#include <math.h>
++
++#include "options.h"
++#include "render.h"
++#include "help.h"
++#include "errors.h"
++
++#define VERSION "2.0"
++#define COMPILE_TIME __DATE__ " " __TIME__
++
++int main(int argc, char *argv[]) {
++    // Parse command-line options
++    struct options opts;
++    if (parse_options(argc, argv, &opts) != 0) {
++        return 1;  // Error in option parsing
++    }
++
++    // Print version if requested
++    if (opts.show_version) {
++        printf("CMatrix version %s (compiled %s)\n", VERSION, COMPILE_TIME);
++        printf("Email: abishekvashok@gmail.com\n");
++        printf("Web: https://github.com/abishekvashok/cmatrix\n");
++        return 0;
++    }
++
++    // Print help if requested
++    if (opts.show_help) {
++        print_help();
++        return 0;
++    }
++
++    // Initialize terminal settings
++    if (!opts.force_term) {
++        if (init_terminal(&opts) != 0) {
++            return 1;
++        }
++    }
++
++    // Initialize random number generator
++    srand(time(NULL));
++
++    // Initialize render state
++    struct render_state state;
++    if (init_render(&state, &opts) != 0) {
++        return 1;
++    }
++
++    // Main render loop
++    render_loop(&state, &opts);
++
++    // Cleanup
++    cleanup_terminal();
++
++    return 0;
++}
+diff --git a/options.c b/options.c
+new file mode 100644
+index 0000000..c94e581
+--- /dev/null
++++ b/options.c
+@@ -0,0 +1,142 @@
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++#include <termios.h>
++#include <sys/select.h>
++#include <sys/time.h>
++#include <time.h>
++#include <ctype.h>
++#include <math.h>
++
++#include "options.h"
++#include "render.h"
++#include "help.h"
++#include "errors.h"
++
++#define VERSION "2.0"
++#define COMPILE_TIME __DATE__ " " __TIME__
++
++static const char *usage = " Usage: cmatrix -[abBcfhlsmVxk] [-u delay] [-C color] [-t tty] [-M message]\n -a: Asynchronous scroll\n -b: Bold characters on\n -B: All bold characters (overrides -b)\n -c: Use Japanese characters as seen in the original matrix. Requires appropriate fonts\n -f: Force the linux $TERM type to be on\n -l: Linux mode (uses matrix console font)\n -L: Lock mode (can be closed from another terminal)\n -o: Use old-style scrolling\n -h: Print usage and exit\n -n: No bold characters (overrides -b and -B, default)\n -s: \"Screensaver\" mode, exits on first keystroke\n -x: X window mode, use if your xterm is using mtx.pcf\n -V: Print version information and exit\n -M [message]: Prints your message in the center of the screen. Overrides -L's default message.\n -u delay (0 - 10, default 4): Screen update delay\n -C [color]: Use this color for matrix (default green)\n -r: rainbow mode\n -m: lambda mode\n -k: Characters change while scrolling. (Works without -o opt.)\n -t [tty]: Set tty to use\n";
++
++static const char *valid_colors[] = {"green", "red", "blue", "white", "yellow", "cyan", "magenta", "black"};
++
++int parse_options(int argc, char *argv[], struct options *opts) {
++    memset(opts, 0, sizeof(struct options));
++    
++    for (int i = 1; i < argc; i++) {
++        if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "-?") == 0 || strcmp(argv[i], "--help") == 0) {
++            opts->show_help = 1;
++            return 0;
++        }
++        if (strcmp(argv[i], "-V") == 0 || strcmp(argv[i], "--version") == 0) {
++            opts->show_version = 1;
++            return 0;
++        }
++        if (strcmp(argv[i], "-a") == 0) {
++            opts->async = 1;
++        } else if (strcmp(argv[i], "-b") == 0) {
++            opts->bold = 1;
++        } else if (strcmp(argv[i], "-B") == 0) {
++            opts->all_bold = 1;
++        } else if (strcmp(argv[i], "-c") == 0) {
++            opts->japanese = 1;
++        } else if (strcmp(argv[i], "-f") == 0) {
++            opts->force_term = 1;
++        } else if (strcmp(argv[i], "-l") == 0) {
++            opts->linux_mode = 1;
++            opts->linux_font = 1;
++        } else if (strcmp(argv[i], "-L") == 0) {
++            opts->lock = 1;
++        } else if (strcmp(argv[i], "-o") == 0) {
++            opts->old_style = 1;
++        } else if (strcmp(argv[i], "-n") == 0) {
++            opts->no_bold = 1;
++        } else if (strcmp(argv[i], "-s") == 0) {
++            opts->screensaver = 1;
++        } else if (strcmp(argv[i], "-x") == 0) {
++            opts->xterm = 1;
++        } else if (strcmp(argv[i], "-r") == 0) {
++            opts->rainbow = 1;
++        } else if (strcmp(argv[i], "-m") == 0) {
++            opts->lambda = 1;
++        } else if (strcmp(argv[i], "-k") == 0) {
++            opts->change_chars = 1;
++        } else if (strcmp(argv[i], "-u") == 0) {
++            if (i + 1 < argc) {
++                opts->update_delay = atoi(argv[++i]);
++            } else {
++                return 1;  // Show help for missing argument
++            }
++        } else if (strcmp(argv[i], "-C") == 0) {
++            if (i + 1 < argc) {
++                opts->color = find_color(argv[++i]);
++            } else {
++                return 1;  // Show help for missing argument
++            }
++        } else if (strcmp(argv[i], "-M") == 0) {
++            if (i + 1 < argc) {
++                opts->message = argv[++i];
++                opts->message_len = strlen(opts->message);
++            } else {
++                return 1;  // Show help for missing argument
++            }
++        } else if (strcmp(argv[i], "-t") == 0) {
++            if (i + 1 < argc) {
++                opts->tty = argv[++i];
++            } else {
++                return 1;  // Show help for missing argument
++            }
++        } else {
++            return 1;  // Show help for unknown option
++        }
++    }
++    
++    return 0;
++}
++
++int find_color(const char *color) {
++    for (int i = 0; i < 8; i++) {
++        if (strcmp(color, valid_colors[i]) == 0) {
++            return i;
++        }
++    }
++    return -1;
++}
++
++int init_terminal(struct options *opts) {
++    struct termios oldt, newt;
++    
++    if (tcgetattr(STDIN_FILENO, &oldt) != 0) {
++        return -1;
++    }
++    
++    newt = oldt;
++    newt.c_lflag &= ~(ECHO | ICANON);
++    newt.c_cc[VMIN] = 0;
++    newt.c_cc[VTIME] = 0;
++    
++    if (tcsetattr(STDIN_FILENO, TCSANOW, &newt) != 0) {
++        return -1;
++    }
++    
++    return 0;
++}
++
++void cleanup_terminal(void) {
++    struct termios oldt;
++    
++    if (tcgetattr(STDIN_FILENO, &oldt) != 0) {
++        return;
++    }
++    
++    tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
++}
++
++void print_help(void) {
++    printf("%s", usage);
++}
++
++void print_version(void) {
++    printf("cmatrix %s\n", VERSION);
++}
+diff --git a/options.h b/options.h
+new file mode 100644
+index 0000000..0bd8de8
+--- /dev/null
++++ b/options.h
+@@ -0,0 +1,36 @@
++#ifndef OPTIONS_H
++#define OPTIONS_H
++
++struct options {
++    int show_help;
++    int show_version;
++    int async;
++    int bold;
++    int all_bold;
++    int force_term;
++    int linux_mode;
++    int linux_font;
++    int old_style;
++    int only_shadows;
++    int lock;
++    int rainbow;
++    int change_chars;
++    int no_bold;
++    int screensaver;
++    int lambda;
++    int xterm;
++    int update_delay;
++    int color;
++    int message_len;
++    int japanese;
++    char *message;
++    char *tty;
++    int quit;
++};
++
++int parse_options(int argc, char *argv[], struct options *opts);
++int init_terminal(struct options *opts);
++void cleanup_terminal(void);
++int find_color(const char *color);
++
++#endif
+diff --git a/render.c b/render.c
+new file mode 100644
+index 0000000..514b5ac
+--- /dev/null
++++ b/render.c
+@@ -0,0 +1,279 @@
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++#include <termios.h>
++#include <sys/select.h>
++#include <sys/time.h>
++#include <time.h>
++#include <ctype.h>
++#include <math.h>
++
++#include "options.h"
++#include "render.h"
++#include "help.h"
++#include "errors.h"
++
++#define MATRIX_WIDTH 80
++#define MATRIX_HEIGHT 24
++#define MAX_CHARS 1024
++
++// Character sets
++static const char *ascii_chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;:,.<>?";
++static const char *katakana_chars = "アァカサタナハマヤャラワガザダバパイィキシチニヒミリヰギジヂビピウゥクスツヌフムユュルグズブヅプエェケセテネヘメレヱゲゼデベペオォコソトノホモヨョロヲゴゾドボポヴッン";
++static const char *latin_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()_+-=[]{}|;:,.<>?";
++
++// Color codes
++static const char *color_codes[] = {
++    "\033[0;32m",  // green (default)
++    "\033[0;31m",  // red
++    "\033[0;34m",  // blue
++    "\033[0;37m",  // white
++    "\033[0;33m",  // yellow
++    "\033[0;36m",  // cyan
++    "\033[0;35m",  // magenta
++    "\033[0;30m",  // black
++};
++
++// Lambda character
++static const char *lambda_char = "λ";
++
++// Initialize render state
++int init_render(struct render_state *state, struct options *opts) {
++    state->width = MATRIX_WIDTH;
++    state->height = MATRIX_HEIGHT;
++    state->chars = malloc(MATRIX_WIDTH * MATRIX_HEIGHT * sizeof(char));
++    if (!state->chars) {
++        return -1;
++    }
++    
++    state->colors = malloc(MATRIX_WIDTH * MATRIX_HEIGHT * sizeof(int));
++    if (!state->colors) {
++        free(state->chars);
++        return -1;
++    }
++    
++    state->x = 0;
++    state->y = 0;
++    state->speed = 4;
++    state->update_delay = 4;
++    state->color = opts->color;
++    state->bold = opts->bold;
++    state->all_bold = opts->all_bold;
++    state->no_bold = opts->no_bold;
++    state->async = opts->async;
++    state->old_style = opts->old_style;
++    state->rainbow = opts->rainbow;
++    state->lambda = opts->lambda;
++    state->change_chars = opts->change_chars;
++    state->japanese = opts->japanese;
++    state->message = opts->message;
++    state->message_len = opts->message_len;
++    state->tty = opts->tty;
++    state->locked = opts->lock;
++    state->screensaver = opts->screensaver;
++    state->force_term = opts->force_term;
++    state->linux_mode = opts->linux_mode;
++    state->linux_font = opts->linux_font;
++    state->old_font = 0;
++    state->xterm = opts->xterm;
++    state->quit = 0;
++    
++    // Initialize character grid
++    for (int i = 0; i < MATRIX_WIDTH * MATRIX_HEIGHT; i++) {
++        state->chars[i] = ascii_chars[rand() % strlen(ascii_chars)];
++        state->colors[i] = opts->color;
++    }
++    
++    return 0;
++}
++
++// Cleanup render state
++void cleanup_render(struct render_state *state) {
++    free(state->chars);
++    free(state->colors);
++    free(state->message);
++}
++
++// Get character based on mode
++char get_char(struct render_state *state) {
++    if (state->lambda) {
++        return *lambda_char;
++    }
++    if (state->japanese) {
++        return katakana_chars[rand() % strlen(katakana_chars)];
++    }
++    if (state->change_chars) {
++        return latin_chars[rand() % strlen(latin_chars)];
++    }
++    return ascii_chars[rand() % strlen(ascii_chars)];
++}
++
++// Get color based on mode
++int get_color(struct render_state *state) {
++    if (state->rainbow) {
++        int hue = (time(NULL) / 1000) % 8;
++        return hue;
++    }
++    return state->color;
++}
++
++// Print a line of characters
++void print_line(struct render_state *state, int y) {
++    if (state->message && state->message_len > 0) {
++        // Print message in center
++        int msg_start = (MATRIX_WIDTH - state->message_len) / 2;
++        for (int i = 0; i < MATRIX_WIDTH; i++) {
++            if (i >= msg_start && i < msg_start + state->message_len) {
++                printf("%c", state->message[i - msg_start]);
++            } else {
++                printf(" ");
++            }
++        }
++    } else {
++        for (int x = 0; x < MATRIX_WIDTH; x++) {
++            int idx = y * MATRIX_WIDTH + x;
++            char c = state->chars[idx];
++            int col = state->colors[idx];
++            
++            if (state->bold || state->all_bold) {
++                printf("\033[1m%c\033[0m", c);
++            } else if (state->no_bold) {
++                printf("%c", c);
++            } else {
++                printf("%c", c);
++            }
++            
++            if (col >= 0 && col < 8) {
++                printf("%s", color_codes[col]);
++            }
++        }
++    }
++    printf("\n");
++}
++
++// Render one frame
++void render_frame(struct render_state *state, struct options *opts) {
++    // Move cursor to top-left
++    printf("\033[H");
++    
++    // Print all lines
++    for (int y = 0; y < state->height; y++) {
++        print_line(state, y);
++    }
++    
++    // Update delay
++    usleep(state->update_delay * 100000);
++}
++
++// Main render loop
++void render_loop(struct render_state *state, struct options *opts) {
++    int running = 1;
++    int async_mode = state->async;
++    
++    while (running) {
++        // Move cursor to current position
++        printf("\033[%d;%dH", state->y + 1, state->x + 1);
++        
++        // Update character at current position
++        int idx = state->y * state->width + state->x;
++        state->chars[idx] = get_char(state);
++        state->colors[idx] = get_color(state);
++        
++        // Move to next position
++        state->x++;
++        if (state->x >= state->width) {
++            state->x = 0;
++            state->y++;
++            if (state->y >= state->height) {
++                state->y = 0;
++            }
++        }
++        
++        // Check for keystrokes (if not in screensaver mode)
++        if (!state->screensaver) {
++            fd_set readfds;
++            struct timeval timeout;
++            FD_ZERO(&readfds);
++            FD_SET(STDIN_FILENO, &readfds);
++            timeout.tv_sec = 0;
++            timeout.tv_usec = 100000;  // 100ms
++            
++            if (select(STDIN_FILENO, &readfds, NULL, NULL, &timeout) > 0) {
++                char buf[1];
++                if (read(STDIN_FILENO, buf, 1) > 0) {
++                    handle_key(state, opts, buf[0]);
++                }
++            }
++        }
++        
++        // Render frame
++        render_frame(state, opts);
++        
++        // Check for quit
++        if (state->quit) {
++            running = 0;
++        }
++    }
++}
++
++// Handle keystrokes
++void handle_key(struct render_state *state, struct options *opts, char key) {
++    if (state->screensaver) {
++        return;
++    }
++    
++    switch (key) {
++        case 'q':
++            state->quit = 1;
++            break;
++        case 'a':
++            state->async = !state->async;
++            break;
++        case 'b':
++            state->bold = 1;
++            break;
++        case 'B':
++            state->all_bold = 1;
++            break;
++        case 'n':
++            state->no_bold = 1;
++            break;
++        case '0':
++        case '1':
++        case '2':
++        case '3':
++        case '4':
++        case '5':
++        case '6':
++        case '7':
++        case '8':
++        case '9':
++            state->update_delay = key - '0';
++            break;
++        case '!':
++            state->color = 0;  // red
++            break;
++        case '@':
++            state->color = 1;  // green
++            break;
++        case '#':
++            state->color = 2;  // yellow
++            break;
++        case '$':
++            state->color = 3;  // blue
++            break;
++        case '%':
++            state->color = 4;  // magenta
++            break;
++        case '^':
++            state->color = 5;  // cyan
++            break;
++        case '&':
++            state->color = 6;  // white
++            break;
++        case ')':
++            state->color = 7;  // black
++            break;
++    }
++}
+diff --git a/render.h b/render.h
+new file mode 100644
+index 0000000..6a1206f
+--- /dev/null
++++ b/render.h
+@@ -0,0 +1,43 @@
++#ifndef RENDER_H
++#define RENDER_H
++
++#include "options.h"
++
++struct render_state {
++    int width;
++    int height;
++    char *chars;
++    int *colors;
++    int x;
++    int y;
++    int speed;
++    int update_delay;
++    int color;
++    int bold;
++    int all_bold;
++    int no_bold;
++    int async;
++    int old_style;
++    int rainbow;
++    int lambda;
++    int change_chars;
++    int japanese;
++    char *message;
++    int message_len;
++    char *tty;
++    int locked;
++    int screensaver;
++    int force_term;
++    int linux_mode;
++    int linux_font;
++    int old_font;
++    int xterm;
++    int quit;
++};
++
++int init_render(struct render_state *state, struct options *opts);
++void cleanup_render(struct render_state *state);
++void render_loop(struct render_state *state, struct options *opts);
++void handle_key(struct render_state *state, struct options *opts, char key);
++
++#endif

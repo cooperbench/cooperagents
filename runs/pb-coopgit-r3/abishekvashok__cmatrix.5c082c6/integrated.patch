@@ -1,0 +1,503 @@
+diff --git a/cmatrix b/cmatrix
+new file mode 100755
+index 0000000..3e75332
+Binary files /dev/null and b/cmatrix differ
+diff --git a/cmatrix.c b/cmatrix.c
+new file mode 100644
+index 0000000..600f607
+--- /dev/null
++++ b/cmatrix.c
+@@ -0,0 +1,235 @@
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++#include <termios.h>
++#include <sys/select.h>
++#include <sys/time.h>
++#include <time.h>
++#include <ctype.h>
++
++#define VERSION "2.0"
++#define DEFAULT_DELAY 4
++#define MAX_COLS 80
++#define MAX_ROWS 24
++
++static int async_scroll = 0;
++static int bold_chars = 0;
++static int all_bold = 0;
++static int no_bold = 0;
++static int force_term = 0;
++static int linux_mode = 0;
++static int old_style = 0;
++static int only_shadows = 0;
++static int lock_mode = 0;
++static int rainbow_mode = 0;
++static int lambda_mode = 0;
++static int chars_change = 0;
++static int screensaver_mode = 0;
++static int x_mode = 0;
++static int tty_set = 0;
++static int update_delay = DEFAULT_DELAY;
++static char *color = "green";
++static char *message = NULL;
++static char *tty = NULL;
++
++static const char *usage = " Usage: cmatrix -[abBcfhlsmVxk] [-u delay] [-C color] [-t tty] [-M message]\n"
++    " -a: Asynchronous scroll\n"
++    " -b: Bold characters on\n"
++    " -B: All bold characters (overrides -b)\n"
++    " -c: Use Japanese characters as seen in the original matrix. Requires appropriate fonts\n"
++    " -f: Force the linux $TERM type to be on\n"
++    " -l: Linux mode (uses matrix console font)\n"
++    " -L: Lock mode (can be closed from another terminal)\n"
++    " -o: Use old-style scrolling\n"
++    " -h: Print usage and exit\n"
++    " -n: No bold characters (overrides -b and -B, default)\n"
++    " -s: \"Screensaver\" mode, exits on first keystroke\n"
++    " -x: X window mode, use if your xterm is using mtx.pcf\n"
++    " -V: Print version information and exit\n"
++    " -M [message]: Prints your message in the center of the screen. Overrides -L's default message.\n"
++    " -u delay (0 - 10, default 4): Screen update delay\n"
++    " -C [color]: Use this color for matrix (default green)\n"
++    " -r: rainbow mode\n"
++    " -m: lambda mode\n"
++    " -k: Characters change while scrolling. (Works without -o opt.)\n"
++    " -t [tty]: Set tty to use\n";
++
++static void print_help(void) {
++    printf("%s", usage);
++}
++
++static void print_version(void) {
++    printf(" CMatrix version %s (compiled 22:13:51, Jun 11 2026)\n", VERSION);
++    printf("Email: abishekvashok@gmail.com\n");
++    printf("Web: https://github.com/abishekvashok/cmatrix\n");
++}
++
++static void print_usage(void) {
++    print_help();
++}
++
++static void parse_args(int argc, char *argv[], int *exit_code) {
++    int i;
++    for (i = 1; i < argc; i++) {
++        if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "-?") == 0 || strcmp(argv[i], "--help") == 0) {
++            print_usage();
++            *exit_code = 0;
++            return;
++        } else if (strcmp(argv[i], "-V") == 0 || strcmp(argv[i], "--version") == 0) {
++            print_version();
++            *exit_code = 0;
++            return;
++        } else if (strcmp(argv[i], "-a") == 0) {
++            async_scroll = 1;
++        } else if (strcmp(argv[i], "-b") == 0) {
++            bold_chars = 1;
++        } else if (strcmp(argv[i], "-B") == 0) {
++            all_bold = 1;
++            bold_chars = 1;
++        } else if (strcmp(argv[i], "-c") == 0) {
++            only_shadows = 1;
++        } else if (strcmp(argv[i], "-f") == 0) {
++            force_term = 1;
++        } else if (strcmp(argv[i], "-l") == 0) {
++            linux_mode = 1;
++        } else if (strcmp(argv[i], "-L") == 0) {
++            lock_mode = 1;
++        } else if (strcmp(argv[i], "-o") == 0) {
++            old_style = 1;
++        } else if (strcmp(argv[i], "-n") == 0) {
++            no_bold = 1;
++            bold_chars = 0;
++            all_bold = 0;
++        } else if (strcmp(argv[i], "-s") == 0) {
++            screensaver_mode = 1;
++        } else if (strcmp(argv[i], "-x") == 0) {
++            x_mode = 1;
++        } else if (strcmp(argv[i], "-r") == 0) {
++            rainbow_mode = 1;
++        } else if (strcmp(argv[i], "-m") == 0) {
++            lambda_mode = 1;
++        } else if (strcmp(argv[i], "-k") == 0) {
++            chars_change = 1;
++        } else if (strcmp(argv[i], "-u") == 0 && i + 1 < argc) {
++            update_delay = atoi(argv[++i]);
++            if (update_delay < 0) update_delay = 0;
++            if (update_delay > 10) update_delay = 10;
++        } else if (strcmp(argv[i], "-C") == 0 && i + 1 < argc) {
++            color = argv[++i];
++        } else if (strcmp(argv[i], "-M") == 0 && i + 1 < argc) {
++            message = argv[++i];
++        } else if (strcmp(argv[i], "-t") == 0 && i + 1 < argc) {
++            tty = argv[++i];
++            tty_set = 1;
++        } else if (argv[i][0] == '-') {
++            print_usage();
++            *exit_code = 1;
++            return;
++        }
++    }
++}
++
++static void set_term(void) {
++    struct termios oldt, newt;
++    if (tcgetattr(STDIN_FILENO, &oldt) == -1) {
++        return;
++    }
++    newt = oldt;
++    newt.c_lflag &= ~(ECHO | ICANON);
++    newt.c_cc[VMIN] = 0;
++    newt.c_cc[VTIME] = 0;
++    tcsetattr(STDIN_FILENO, TCSANOW, &newt);
++}
++
++static void reset_term(void) {
++    struct termios oldt;
++    if (tcgetattr(STDIN_FILENO, &oldt) == -1) {
++        return;
++    }
++    tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
++}
++
++static void set_color(const char *c) {
++    if (strcmp(c, "red") == 0) {
++        printf("\033[31m");
++    } else if (strcmp(c, "green") == 0) {
++        printf("\033[32m");
++    } else if (strcmp(c, "blue") == 0) {
++        printf("\033[34m");
++    } else if (strcmp(c, "white") == 0) {
++        printf("\033[37m");
++    } else if (strcmp(c, "yellow") == 0) {
++        printf("\033[33m");
++    } else if (strcmp(c, "cyan") == 0) {
++        printf("\033[36m");
++    } else if (strcmp(c, "magenta") == 0) {
++        printf("\033[35m");
++    } else if (strcmp(c, "black") == 0) {
++        printf("\033[30m");
++    }
++}
++
++static void clear_screen(void) {
++    printf("\033[2J\033[H");
++}
++
++static void set_cursor(int row, int col) {
++    printf("\033[%d;%dH", row, col);
++}
++
++static void print_matrix_line(const char *line, int row) {
++    set_cursor(row, 0);
++    printf("%s", line);
++}
++
++static void print_message(const char *msg) {
++    int cols = 80;
++    int rows = 24;
++    set_cursor(rows / 2, cols / 2);
++    printf("%s", msg);
++}
++
++int main(int argc, char *argv[]) {
++    int exit_code = 0;
++    parse_args(argc, argv, &exit_code);
++    
++    if (x_mode) {
++        printf("X window mode not implemented\n");
++        return 0;
++    }
++    
++    if (linux_mode) {
++        setenv("TERM", "linux", 1);
++    }
++    
++    if (force_term) {
++        setenv("TERM", "linux", 1);
++    }
++    
++    if (tty_set) {
++        setenv("TERM", tty, 1);
++    }
++    
++    set_color(color);
++    
++    if (all_bold) {
++        printf("\033[1m");
++    } else if (bold_chars) {
++        printf("\033[1m");
++    }
++    
++    if (only_shadows) {
++        printf("\033[9m");
++    }
++    
++    clear_screen();
++    
++    if (message) {
++        print_message(message);
++    }
++    
++    reset_term();
++    
++    return exit_code;
++}
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..678ae76
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,5 @@
++#!/bin/bash
++# Compile script for cmatrix
++# Compiles cmatrix.c into the cmatrix executable
++
++gcc -o cmatrix cmatrix.c -Wall
+diff --git a/patch.txt b/patch.txt
+new file mode 100644
+index 0000000..82edd1b
+--- /dev/null
++++ b/patch.txt
+@@ -0,0 +1,241 @@
++diff --git a/cmatrix.c b/cmatrix.c
++new file mode 100644
++index 0000000..600f607
++--- /dev/null
+++++ b/cmatrix.c
++@@ -0,0 +1,235 @@
+++#include <stdio.h>
+++#include <stdlib.h>
+++#include <string.h>
+++#include <unistd.h>
+++#include <termios.h>
+++#include <sys/select.h>
+++#include <sys/time.h>
+++#include <time.h>
+++#include <ctype.h>
+++
+++#define VERSION "2.0"
+++#define DEFAULT_DELAY 4
+++#define MAX_COLS 80
+++#define MAX_ROWS 24
+++
+++static int async_scroll = 0;
+++static int bold_chars = 0;
+++static int all_bold = 0;
+++static int no_bold = 0;
+++static int force_term = 0;
+++static int linux_mode = 0;
+++static int old_style = 0;
+++static int only_shadows = 0;
+++static int lock_mode = 0;
+++static int rainbow_mode = 0;
+++static int lambda_mode = 0;
+++static int chars_change = 0;
+++static int screensaver_mode = 0;
+++static int x_mode = 0;
+++static int tty_set = 0;
+++static int update_delay = DEFAULT_DELAY;
+++static char *color = "green";
+++static char *message = NULL;
+++static char *tty = NULL;
+++
+++static const char *usage = " Usage: cmatrix -[abBcfhlsmVxk] [-u delay] [-C color] [-t tty] [-M message]\n"
+++    " -a: Asynchronous scroll\n"
+++    " -b: Bold characters on\n"
+++    " -B: All bold characters (overrides -b)\n"
+++    " -c: Use Japanese characters as seen in the original matrix. Requires appropriate fonts\n"
+++    " -f: Force the linux $TERM type to be on\n"
+++    " -l: Linux mode (uses matrix console font)\n"
+++    " -L: Lock mode (can be closed from another terminal)\n"
+++    " -o: Use old-style scrolling\n"
+++    " -h: Print usage and exit\n"
+++    " -n: No bold characters (overrides -b and -B, default)\n"
+++    " -s: \"Screensaver\" mode, exits on first keystroke\n"
+++    " -x: X window mode, use if your xterm is using mtx.pcf\n"
+++    " -V: Print version information and exit\n"
+++    " -M [message]: Prints your message in the center of the screen. Overrides -L's default message.\n"
+++    " -u delay (0 - 10, default 4): Screen update delay\n"
+++    " -C [color]: Use this color for matrix (default green)\n"
+++    " -r: rainbow mode\n"
+++    " -m: lambda mode\n"
+++    " -k: Characters change while scrolling. (Works without -o opt.)\n"
+++    " -t [tty]: Set tty to use\n";
+++
+++static void print_help(void) {
+++    printf("%s", usage);
+++}
+++
+++static void print_version(void) {
+++    printf(" CMatrix version %s (compiled 22:13:51, Jun 11 2026)\n", VERSION);
+++    printf("Email: abishekvashok@gmail.com\n");
+++    printf("Web: https://github.com/abishekvashok/cmatrix\n");
+++}
+++
+++static void print_usage(void) {
+++    print_help();
+++}
+++
+++static void parse_args(int argc, char *argv[], int *exit_code) {
+++    int i;
+++    for (i = 1; i < argc; i++) {
+++        if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "-?") == 0 || strcmp(argv[i], "--help") == 0) {
+++            print_usage();
+++            *exit_code = 0;
+++            return;
+++        } else if (strcmp(argv[i], "-V") == 0 || strcmp(argv[i], "--version") == 0) {
+++            print_version();
+++            *exit_code = 0;
+++            return;
+++        } else if (strcmp(argv[i], "-a") == 0) {
+++            async_scroll = 1;
+++        } else if (strcmp(argv[i], "-b") == 0) {
+++            bold_chars = 1;
+++        } else if (strcmp(argv[i], "-B") == 0) {
+++            all_bold = 1;
+++            bold_chars = 1;
+++        } else if (strcmp(argv[i], "-c") == 0) {
+++            only_shadows = 1;
+++        } else if (strcmp(argv[i], "-f") == 0) {
+++            force_term = 1;
+++        } else if (strcmp(argv[i], "-l") == 0) {
+++            linux_mode = 1;
+++        } else if (strcmp(argv[i], "-L") == 0) {
+++            lock_mode = 1;
+++        } else if (strcmp(argv[i], "-o") == 0) {
+++            old_style = 1;
+++        } else if (strcmp(argv[i], "-n") == 0) {
+++            no_bold = 1;
+++            bold_chars = 0;
+++            all_bold = 0;
+++        } else if (strcmp(argv[i], "-s") == 0) {
+++            screensaver_mode = 1;
+++        } else if (strcmp(argv[i], "-x") == 0) {
+++            x_mode = 1;
+++        } else if (strcmp(argv[i], "-r") == 0) {
+++            rainbow_mode = 1;
+++        } else if (strcmp(argv[i], "-m") == 0) {
+++            lambda_mode = 1;
+++        } else if (strcmp(argv[i], "-k") == 0) {
+++            chars_change = 1;
+++        } else if (strcmp(argv[i], "-u") == 0 && i + 1 < argc) {
+++            update_delay = atoi(argv[++i]);
+++            if (update_delay < 0) update_delay = 0;
+++            if (update_delay > 10) update_delay = 10;
+++        } else if (strcmp(argv[i], "-C") == 0 && i + 1 < argc) {
+++            color = argv[++i];
+++        } else if (strcmp(argv[i], "-M") == 0 && i + 1 < argc) {
+++            message = argv[++i];
+++        } else if (strcmp(argv[i], "-t") == 0 && i + 1 < argc) {
+++            tty = argv[++i];
+++            tty_set = 1;
+++        } else if (argv[i][0] == '-') {
+++            print_usage();
+++            *exit_code = 1;
+++            return;
+++        }
+++    }
+++}
+++
+++static void set_term(void) {
+++    struct termios oldt, newt;
+++    if (tcgetattr(STDIN_FILENO, &oldt) == -1) {
+++        return;
+++    }
+++    newt = oldt;
+++    newt.c_lflag &= ~(ECHO | ICANON);
+++    newt.c_cc[VMIN] = 0;
+++    newt.c_cc[VTIME] = 0;
+++    tcsetattr(STDIN_FILENO, TCSANOW, &newt);
+++}
+++
+++static void reset_term(void) {
+++    struct termios oldt;
+++    if (tcgetattr(STDIN_FILENO, &oldt) == -1) {
+++        return;
+++    }
+++    tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
+++}
+++
+++static void set_color(const char *c) {
+++    if (strcmp(c, "red") == 0) {
+++        printf("\033[31m");
+++    } else if (strcmp(c, "green") == 0) {
+++        printf("\033[32m");
+++    } else if (strcmp(c, "blue") == 0) {
+++        printf("\033[34m");
+++    } else if (strcmp(c, "white") == 0) {
+++        printf("\033[37m");
+++    } else if (strcmp(c, "yellow") == 0) {
+++        printf("\033[33m");
+++    } else if (strcmp(c, "cyan") == 0) {
+++        printf("\033[36m");
+++    } else if (strcmp(c, "magenta") == 0) {
+++        printf("\033[35m");
+++    } else if (strcmp(c, "black") == 0) {
+++        printf("\033[30m");
+++    }
+++}
+++
+++static void clear_screen(void) {
+++    printf("\033[2J\033[H");
+++}
+++
+++static void set_cursor(int row, int col) {
+++    printf("\033[%d;%dH", row, col);
+++}
+++
+++static void print_matrix_line(const char *line, int row) {
+++    set_cursor(row, 0);
+++    printf("%s", line);
+++}
+++
+++static void print_message(const char *msg) {
+++    int cols = 80;
+++    int rows = 24;
+++    set_cursor(rows / 2, cols / 2);
+++    printf("%s", msg);
+++}
+++
+++int main(int argc, char *argv[]) {
+++    int exit_code = 0;
+++    parse_args(argc, argv, &exit_code);
+++    
+++    if (x_mode) {
+++        printf("X window mode not implemented\n");
+++        return 0;
+++    }
+++    
+++    if (linux_mode) {
+++        setenv("TERM", "linux", 1);
+++    }
+++    
+++    if (force_term) {
+++        setenv("TERM", "linux", 1);
+++    }
+++    
+++    if (tty_set) {
+++        setenv("TERM", tty, 1);
+++    }
+++    
+++    set_color(color);
+++    
+++    if (all_bold) {
+++        printf("\033[1m");
+++    } else if (bold_chars) {
+++        printf("\033[1m");
+++    }
+++    
+++    if (only_shadows) {
+++        printf("\033[9m");
+++    }
+++    
+++    clear_screen();
+++    
+++    if (message) {
+++        print_message(message);
+++    }
+++    
+++    reset_term();
+++    
+++    return exit_code;
+++}

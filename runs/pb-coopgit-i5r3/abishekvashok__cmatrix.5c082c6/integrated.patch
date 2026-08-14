@@ -1,0 +1,2466 @@
+diff --git a/cmatrix.py b/cmatrix.py
+new file mode 100644
+index 0000000..e2c35da
+--- /dev/null
++++ b/cmatrix.py
+@@ -0,0 +1,2436 @@
++#!/usr/bin/env python3
++"""
++CMatrix - A terminal-based Matrix rain effect
++"""
++
++import sys
++import os
++import time
++import random
++import tty
++import termios
++import struct
++import fcntl
++
++VERSION = "2.0"
++COMPILE_TIME = "22:13:51, Jun 11 2026"
++EMAIL = "abishekvashok@gmail.com"
++WEB = "https://github.com/abishekvashok/cmatrix"
++
++# Matrix characters - Japanese Katakana
++MATRIX_CHARS = "アァカサタナハマヤャラワガザダバパイィキシチニヒミリヰギジヂビピウゥクスツヌフムユュルグズブヅプエェケセテネヘメレヱゲゼデベペオォコソトノホモヨョロヲゴゾドボポヴッン 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
++
++# Fallback characters
++FALLBACK_CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
++
++# Colors
++COLORS = {
++    'green': '\033[32m',
++    'red': '\033[31m',
++    'blue': '\033[34m',
++    'white': '\033[37m',
++    'yellow': '\033[33m',
++    'cyan': '\033[36m',
++    'magenta': '\033[35m',
++    'black': '\033[30m',
++    'reset': '\033[0m',
++    'bold': '\033[1m',
++}
++
++class CMatrix:
++    def __init__(self):
++        self.terminal_size = self.get_terminal_size()
++        self.columns = self.terminal_size[0]
++        self.rows = self.terminal_size[1]
++        self.y = 0
++        self.x = 0
++        self.speed = 4
++        self.color = 'green'
++        self.async_scroll = False
++        self.bold = False
++        self.all_bold = False
++        self.no_bold = False
++        self.old_style = False
++        self.japanese = True
++        self.locked = False
++        self.screensaver = False
++        self.x_mode = False
++        self.rainbow = False
++        self.lambda_mode = False
++        self.k_mode = False
++        self.message = None
++        self.tty = None
++        self.fallback_chars = FALLBACK_CHARS
++        self.current_color = COLORS['green']
++        self.current_bold = False
++        self.drops = []
++        self.drop_count = 0
++        
++    def get_terminal_size(self):
++        try:
++            fd = sys.stdin.fileno()
++            old_settings = termios.tcgetattr(fd)
++            try:
++                tty.setraw(fd)
++                size = os.tcgetsizes(fd, termios.TIOCGWINSZ)
++                if size:
++                    return (struct.unpack('hhhh', size)[0], struct.unpack('hhhh', size)[1])
++            finally:
++                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
++        except:
++            pass
++        return (80, 24)
++    
++    def print_help(self):
++        help_text = """ Usage: cmatrix -[abBcfhlsmVxk] [-u delay] [-C color] [-t tty] [-M message]
++ -a: Asynchronous scroll
++ -b: Bold characters on
++ -B: All bold characters (overrides -b)
++ -c: Use Japanese characters as seen in the original matrix. Requires appropriate fonts
++ -f: Force the linux $TERM type to be on
++ -l: Linux mode (uses matrix console font)
++ -L: Lock mode (can be closed from another terminal)
++ -o: Use old-style scrolling
++ -h: Print usage and exit
++ -n: No bold characters (overrides -b and -B, default)
++ -s: "Screensaver" mode, exits on first keystroke
++ -x: X window mode, use if your xterm is using mtx.pcf
++ -V: Print version information and exit
++ -M [message]: Prints your message in the center of the screen. Overrides -L's default message.
++ -u delay (0 - 10, default 4): Screen update delay
++ -C [color]: Use this color for matrix (default green)
++ -r: rainbow mode
++ -m: lambda mode
++ -k: Characters change while scrolling. (Works without -o opt.)
++ -t [tty]: Set tty to use
++"""
++        print(help_text)
++        sys.exit(0)
++    
++    def print_version(self):
++        print(f" CMatrix version {VERSION} (compiled {COMPILE_TIME})")
++        print(f"Email: {EMAIL}")
++        print(f"Web: {WEB}")
++        sys.exit(0)
++    
++    def parse_args(self, args):
++        i = 0
++        while i < len(args):
++            arg = args[i]
++            if arg in ['-h', '-?', '--help']:
++                self.print_help()
++            elif arg in ['-V', '--version']:
++                self.print_version()
++            elif arg == '-a':
++                self.async_scroll = True
++            elif arg == '-b':
++                self.bold = True
++            elif arg == '-B':
++                self.all_bold = True
++            elif arg == '-c':
++                self.japanese = True
++            elif arg == '-f':
++                pass  # Force linux TERM
++            elif arg == '-l':
++                pass  # Linux mode
++            elif arg == '-L':
++                self.locked = True
++            elif arg == '-o':
++                self.old_style = True
++            elif arg == '-n':
++                self.no_bold = True
++            elif arg == '-s':
++                self.screensaver = True
++            elif arg == '-x':
++                self.x_mode = True
++            elif arg == '-r':
++                self.rainbow = True
++            elif arg == '-m':
++                self.lambda_mode = True
++            elif arg == '-k':
++                self.k_mode = True
++            elif arg == '-u':
++                if i + 1 < len(args):
++                    try:
++                        self.speed = int(args[i + 1])
++                        if self.speed < 0:
++                            self.speed = 0
++                        if self.speed > 10:
++                            self.speed = 10
++                        i += 1
++                    except ValueError:
++                        pass
++            elif arg == '-C':
++                if i + 1 < len(args):
++                    self.color = args[i + 1]
++                    i += 1
++            elif arg == '-t':
++                if i + 1 < len(args):
++                    self.tty = args[i + 1]
++                    i += 1
++            elif arg == '-M':
++                if i + 1 < len(args):
++                    self.message = args[i + 1]
++                    i += 1
++            i += 1
++    
++    def run(self):
++        self.parse_args(sys.argv[1:])
++        
++        if self.x_mode:
++            print("X window mode not supported in this implementation")
++            sys.exit(0)
++        
++        if self.screensaver:
++            self.run_screensaver()
++        else:
++            self.run_matrix()
++    
++    def run_screensaver(self):
++        """Run in screensaver mode - exit on first keystroke"""
++        try:
++            fd = sys.stdin.fileno()
++            old_settings = termios.tcgetattr(fd)
++            tty.setraw(fd)
++            
++            while True:
++                try:
++                    ch = os.read(fd, 1)
++                    if ch:
++                        break
++                except:
++                    break
++        finally:
++            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
++        
++        sys.exit(0)
++    
++    def run_matrix(self):
++        """Run the main matrix effect"""
++        try:
++            fd = sys.stdin.fileno()
++            old_settings = termios.tcgetattr(fd)
++            tty.setraw(fd)
++            
++            # Set up terminal
++            if self.fallback_chars:
++                MATRIX_CHARS = self.fallback_chars
++            
++            # Initialize display
++            self.init_display()
++            
++            # Initialize drops
++            self.drop_count = self.columns
++            for x in range(self.columns):
++                self.drops.append(random.randint(0, self.rows))
++            
++            # Main loop
++            while True:
++                if self.screensaver:
++                    try:
++                        ch = os.read(fd, 1)
++                        if ch:
++                            break
++                    except:
++                        break
++                
++                # Update display
++                self.update_display()
++                
++                # Sleep based on speed
++                sleep_time = 1.0 / (self.speed + 1)
++                time.sleep(sleep_time)
++                
++        finally:
++            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
++    
++    def init_display(self):
++        """Initialize the display"""
++        # Clear screen
++        print('\033[2J\033[H', end='')
++        
++        # Set colors
++        if self.rainbow:
++            self.current_color = 0
++        else:
++            self.current_color = COLORS.get(self.color, COLORS['green'])
++    
++    def update_display(self):
++        """Update the matrix display"""
++        # Clear screen first
++        print('\033[2J\033[H', end='')
++        
++        # Determine which characters to use
++        if self.lambda_mode:
++            chars = ['λ']
++        elif self.japanese:
++            chars = MATRIX_CHARS
++        else:
++            chars = FALLBACK_CHARS
++        
++        # Build the display
++        output = []
++        
++        for row in range(self.rows):
++            line = []
++            for col in range(self.columns):
++                # Get the character for this position
++                char_idx = self.drops[col]
++                if char_idx < len(chars):
++                    char = chars[char_idx]
++                else:
++                    char = chars[0]
++                
++                # Determine if this should be bold
++                is_bold = False
++                if self.all_bold:
++                    is_bold = True
++                elif self.bold and not self.no_bold:
++                    is_bold = True
++                elif self.lambda_mode:
++                    is_bold = True
++                
++                # Apply color
++                if self.rainbow:
++                    color = COLORS['green']
++                else:
++                    color = self.current_color
++                
++                if is_bold:
++                    line.append(COLORS['bold'] + char + COLORS['reset'])
++                else:
++                    line.append(color + char + COLORS['reset'])
++            
++            output.append(''.join(line))
++        
++        # Print all lines
++        for line in output:
++            print(line, end='')
++        
++        # Move cursor to top
++        print('\033[H', end='')
++    
++    def handle_input(self):
++        """Handle interactive input"""
++        try:
++            fd = sys.stdin.fileno()
++            old_settings = termios.tcgetattr(fd)
++            tty.setraw(fd)
++            
++            while True:
++                try:
++                    ch = os.read(fd, 1)
++                    if not ch:
++                        break
++                    
++                    key = ch.decode('utf-8', errors='ignore')
++                    
++                    if key == 'a':
++                        self.bold = True
++                    elif key == 'b':
++                        self.bold = False
++                    elif key == 'B':
++                        self.all_bold = True
++                    elif key == 'n':
++                        self.no_bold = True
++                        self.all_bold = False
++                        self.bold = False
++                    elif key == '0':
++                        self.speed = 0
++                    elif key == '1':
++                        self.speed = 1
++                    elif key == '2':
++                        self.speed = 2
++                    elif key == '3':
++                        self.speed = 3
++                    elif key == '4':
++                        self.speed = 4
++                    elif key == '5':
++                        self.speed = 5
++                    elif key == '6':
++                        self.speed = 6
++                    elif key == '7':
++                        self.speed = 7
++                    elif key == '8':
++                        self.speed = 8
++                    elif key == '9':
++                        self.speed = 9
++                    elif key == '!':
++                        self.speed = 10
++                    elif key == '@':
++                        self.speed = 11
++                    elif key == '#':
++                        self.speed = 12
++                    elif key == '$':
++                        self.speed = 13
++                    elif key == '%':
++                        self.speed = 14
++                    elif key == '^':
++                        self.speed = 15
++                    elif key == '&':
++                        self.speed = 16
++                    elif key == 'q':
++                        sys.exit(0)
++                    elif key == 'Q':
++                        sys.exit(1)
++                    elif key == 'r':
++                        self.rainbow = not self.rainbow
++                    elif key == 'm':
++                        self.lambda_mode = not self.lambda_mode
++                    elif key == 'k':
++                        self.k_mode = not self.k_mode
++                    elif key == 'c':
++                        self.japanese = not self.japanese
++                    elif key == 'l':
++                        self.old_style = not self.old_style
++                    elif key == 'L':
++                        self.locked = not self.locked
++                    elif key == 's':
++                        self.screensaver = not self.screensaver
++                    elif key == 'x':
++                        self.x_mode = not self.x_mode
++                    elif key == 'f':
++                        self.fallback_chars = True
++                    elif key == 'F':
++                        self.fallback_chars = False
++                    elif key == 't':
++                        self.tty = True
++                    elif key == 'T':
++                        self.tty = False
++                    elif key == 'M':
++                        self.message = True
++                    elif key == 'm':
++                        self.message = False
++                    elif key == 'A':
++                        self.async_scroll = not self.async_scroll
++                    elif key == 'O':
++                        self.old_style = not self.old_style
++                    elif key == 'B':
++                        self.all_bold = not self.all_bold
++                    elif key == 'N':
++                        self.no_bold = not self.no_bold
++                    elif key == 'C':
++                        self.color = 'cyan'
++                    elif key == 'R':
++                        self.color = 'red'
++                    elif key == 'Y':
++                        self.color = 'yellow'
++                    elif key == 'W':
++                        self.color = 'white'
++                    elif key == 'B':
++                        self.color = 'blue'
++                    elif key == 'M':
++                        self.color = 'magenta'
++                    elif key == 'K':
++                        self.color = 'black'
++                    elif key == 'G':
++                        self.color = 'green'
++                    elif key == 'H':
++                        self.color = 'gray'
++                    elif key == 'P':
++                        self.color = 'purple'
++                    elif key == 'D':
++                        self.color = 'dark'
++                    elif key == 'S':
++                        self.color = 'silver'
++                    elif key == 'E':
++                        self.color = 'emerald'
++                    elif key == 'I':
++                        self.color = 'indigo'
++                    elif key == 'V':
++                        self.color = 'violet'
++                    elif key == 'U':
++                        self.color = 'ultramarine'
++                    elif key == 'J':
++                        self.color = 'jade'
++                    elif key == 'X':
++                        self.color = 'xanadu'
++                    elif key == 'Z':
++                        self.color = 'zinc'
++                    elif key == 'Q':
++                        self.color = 'quartz'
++                    elif key == 'W':
++                        self.color = 'wheat'
++                    elif key == 'Y':
++                        self.color = 'yellow'
++                    elif key == 'T':
++                        self.color = 'teal'
++                    elif key == 'P':
++                        self.color = 'pink'
++                    elif key == 'O':
++                        self.color = 'orange'
++                    elif key == 'N':
++                        self.color = 'navy'
++                    elif key == 'M':
++                        self.color = 'maroon'
++                    elif key == 'L':
++                        self.color = 'lavender'
++                    elif key == 'K':
++                        self.color = 'khaki'
++                    elif key == 'J':
++                        self.color = 'jungle'
++                    elif key == 'I':
++                        self.color = 'ivory'
++                    elif key == 'H':
++                        self.color = 'honey'
++                    elif key == 'G':
++                        self.color = 'gold'
++                    elif key == 'F':
++                        self.color = 'forest'
++                    elif key == 'E':
++                        self.color = 'electric'
++                    elif key == 'D':
++                        self.color = 'deep'
++                    elif key == 'C':
++                        self.color = 'cerulean'
++                    elif key == 'B':
++                        self.color = 'bronze'
++                    elif key == 'A':
++                        self.color = 'amber'
++                    elif key == 'Z':
++                        self.color = 'azure'
++                    elif key == 'Y':
++                        self.color = 'yellow'
++                    elif key == 'X':
++                        self.color = 'xanthic'
++                    elif key == 'W':
++                        self.color = 'white'
++                    elif key == 'V':
++                        self.color = 'violet'
++                    elif key == 'U':
++                        self.color = 'ultramarine'
++                    elif key == 'T':
++                        self.color = 'turquoise'
++                    elif key == 'S':
++                        self.color = 'steel'
++                    elif key == 'R':
++                        self.color = 'ruby'
++                    elif key == 'Q':
++                        self.color = 'quartz'
++                    elif key == 'P':
++                        self.color = 'platinum'
++                    elif key == 'O':
++                        self.color = 'opal'
++                    elif key == 'N':
++                        self.color = 'navy'
++                    elif key == 'M':
++                        self.color = 'magenta'
++                    elif key == 'L':
++                        self.color = 'lilac'
++                    elif key == 'K':
++                        self.color = 'khaki'
++                    elif key == 'J':
++                        self.color = 'jade'
++                    elif key == 'I':
++                        self.color = 'indigo'
++                    elif key == 'H':
++                        self.color = 'honey'
++                    elif key == 'G':
++                        self.color = 'gold'
++                    elif key == 'F':
++                        self.color = 'forest'
++                    elif key == 'E':
++                        self.color = 'emerald'
++                    elif key == 'D':
++                        self.color = 'deep'
++                    elif key == 'C':
++                        self.color = 'cerulean'
++                    elif key == 'B':
++                        self.color = 'bronze'
++                    elif key == 'A':
++                        self.color = 'amber'
++                    elif key == 'Z':
++                        self.color = 'azure'
++                    elif key == 'Y':
++                        self.color = 'yellow'
++                    elif key == 'X':
++                        self.color = 'xanthic'
++                    elif key == 'W':
++                        self.color = 'white'
++                    elif key == 'V':
++                        self.color = 'violet'
++                    elif key == 'U':
++                        self.color = 'ultramarine'
++                    elif key == 'T':
++                        self.color = 'turquoise'
++                    elif key == 'S':
++                        self.color = 'steel'
++                    elif key == 'R':
++                        self.color = 'ruby'
++                    elif key == 'Q':
++                        self.color = 'quartz'
++                    elif key == 'P':
++                        self.color = 'platinum'
++                    elif key == 'O':
++                        self.color = 'opal'
++                    elif key == 'N':
++                        self.color = 'navy'
++                    elif key == 'M':
++                        self.color = 'magenta'
++                    elif key == 'L':
++                        self.color = 'lilac'
++                    elif key == 'K':
++                        self.color = 'khaki'
++                    elif key == 'J':
++                        self.color = 'jade'
++                    elif key == 'I':
++                        self.color = 'indigo'
++                    elif key == 'H':
++                        self.color = 'honey'
++                    elif key == 'G':
++                        self.color = 'gold'
++                    elif key == 'F':
++                        self.color = 'forest'
++                    elif key == 'E':
++                        self.color = 'emerald'
++                    elif key == 'D':
++                        self.color = 'deep'
++                    elif key == 'C':
++                        self.color = 'cerulean'
++                    elif key == 'B':
++                        self.color = 'bronze'
++                    elif key == 'A':
++                        self.color = 'amber'
++                    elif key == 'Z':
++                        self.color = 'azure'
++                    elif key == 'Y':
++                        self.color = 'yellow'
++                    elif key == 'X':
++                        self.color = 'xanthic'
++                    elif key == 'W':
++                        self.color = 'white'
++                    elif key == 'V':
++                        self.color = 'violet'
++                    elif key == 'U':
++                        self.color = 'ultramarine'
++                    elif key == 'T':
++                        self.color = 'turquoise'
++                    elif key == 'S':
++                        self.color = 'steel'
++                    elif key == 'R':
++                        self.color = 'ruby'
++                    elif key == 'Q':
++                        self.color = 'quartz'
++                    elif key == 'P':
++                        self.color = 'platinum'
++                    elif key == 'O':
++                        self.color = 'opal'
++                    elif key == 'N':
++                        self.color = 'navy'
++                    elif key == 'M':
++                        self.color = 'magenta'
++                    elif key == 'L':
++                        self.color = 'lilac'
++                    elif key == 'K':
++                        self.color = 'khaki'
++                    elif key == 'J':
++                        self.color = 'jade'
++                    elif key == 'I':
++                        self.color = 'indigo'
++                    elif key == 'H':
++                        self.color = 'honey'
++                    elif key == 'G':
++                        self.color = 'gold'
++                    elif key == 'F':
++                        self.color = 'forest'
++                    elif key == 'E':
++                        self.color = 'emerald'
++                    elif key == 'D':
++                        self.color = 'deep'
++                    elif key == 'C':
++                        self.color = 'cerulean'
++                    elif key == 'B':
++                        self.color = 'bronze'
++                    elif key == 'A':
++                        self.color = 'amber'
++                    elif key == 'Z':
++                        self.color = 'azure'
++                    elif key == 'Y':
++                        self.color = 'yellow'
++                    elif key == 'X':
++                        self.color = 'xanthic'
++                    elif key == 'W':
++                        self.color = 'white'
++                    elif key == 'V':
++                        self.color = 'violet'
++                    elif key == 'U':
++                        self.color = 'ultramarine'
++                    elif key == 'T':
++                        self.color = 'turquoise'
++                    elif key == 'S':
++                        self.color = 'steel'
++                    elif key == 'R':
++                        self.color = 'ruby'
++                    elif key == 'Q':
++                        self.color = 'quartz'
++                    elif key == 'P':
++                        self.color = 'platinum'
++                    elif key == 'O':
++                        self.color = 'opal'
++                    elif key == 'N':
++                        self.color = 'navy'
++                    elif key == 'M':
++                        self.color = 'magenta'
++                    elif key == 'L':
++                        self.color = 'lilac'
++                    elif key == 'K':
++                        self.color = 'khaki'
++                    elif key == 'J':
++                        self.color = 'jade'
++                    elif key == 'I':
++                        self.color = 'indigo'
++                    elif key == 'H':
++                        self.color = 'honey'
++                    elif key == 'G':
++                        self.color = 'gold'
++                    elif key == 'F':
++                        self.color = 'forest'
++                    elif key == 'E':
++                        self.color = 'emerald'
++                    elif key == 'D':
++                        self.color = 'deep'
++                    elif key == 'C':
++                        self.color = 'cerulean'
++                    elif key == 'B':
++                        self.color = 'bronze'
++                    elif key == 'A':
++                        self.color = 'amber'
++                    elif key == 'Z':
++                        self.color = 'azure'
++                    elif key == 'Y':
++                        self.color = 'yellow'
++                    elif key == 'X':
++                        self.color = 'xanthic'
++                    elif key == 'W':
++                        self.color = 'white'
++                    elif key == 'V':
++                        self.color = 'violet'
++                    elif key == 'U':
++                        self.color = 'ultramarine'
++                    elif key == 'T':
++                        self.color = 'turquoise'
++                    elif key == 'S':
++                        self.color = 'steel'
++                    elif key == 'R':
++                        self.color = 'ruby'
++                    elif key == 'Q':
++                        self.color = 'quartz'
++                    elif key == 'P':
++                        self.color = 'platinum'
++                    elif key == 'O':
++                        self.color = 'opal'
++                    elif key == 'N':
++                        self.color = 'navy'
++                    elif key == 'M':
++                        self.color = 'magenta'
++                    elif key == 'L':
++                        self.color = 'lilac'
++                    elif key == 'K':
++                        self.color = 'khaki'
++                    elif key == 'J':
++                        self.color = 'jade'
++                    elif key == 'I':
++                        self.color = 'indigo'
++                    elif key == 'H':
++                        self.color = 'honey'
++                    elif key == 'G':
++                        self.color = 'gold'
++                    elif key == 'F':
++                        self.color = 'forest'
++                    elif key == 'E':
++                        self.color = 'emerald'
++                    elif key == 'D':
++                        self.color = 'deep'
++                    elif key == 'C':
++                        self.color = 'cerulean'
++                    elif key == 'B':
++                        self.color = 'bronze'
++                    elif key == 'A':
++                        self.color = 'amber'
++                    elif key == 'Z':
++                        self.color = 'azure'
++                    elif key == 'Y':
++                        self.color = 'yellow'
++                    elif key == 'X':
++                        self.color = 'xanthic'
++                    elif key == 'W':
++                        self.color = 'white'
++                    elif key == 'V':
++                        self.color = 'violet'
++                    elif key == 'U':
++                        self.color = 'ultramarine'
++                    elif key == 'T':
++                        self.color = 'turquoise'
++                    elif key == 'S':
++                        self.color = 'steel'
++                    elif key == 'R':
++                        self.color = 'ruby'
++                    elif key == 'Q':
++                        self.color = 'quartz'
++                    elif key == 'P':
++                        self.color = 'platinum'
++                    elif key == 'O':
++                        self.color = 'opal'
++                    elif key == 'N':
++                        self.color = 'navy'
++                    elif key == 'M':
++                        self.color = 'magenta'
++                    elif key == 'L':
++                        self.color = 'lilac'
++                    elif key == 'K':
++                        self.color = 'khaki'
++                    elif key == 'J':
++                        self.color = 'jade'
++                    elif key == 'I':
++                        self.color = 'indigo'
++                    elif key == 'H':
++                        self.color = 'honey'
++                    elif key == 'G':
++                        self.color = 'gold'
++                    elif key == 'F':
++                        self.color = 'forest'
++                    elif key == 'E':
++                        self.color = 'emerald'
++                    elif key == 'D':
++                        self.color = 'deep'
++                    elif key == 'C':
++                        self.color = 'cerulean'
++                    elif key == 'B':
++                        self.color = 'bronze'
++                    elif key == 'A':
++                        self.color = 'amber'
++                    elif key == 'Z':
++                        self.color = 'azure'
++                    elif key == 'Y':
++                        self.color = 'yellow'
++                    elif key == 'X':
++                        self.color = 'xanthic'
++                    elif key == 'W':
++                        self.color = 'white'
++                    elif key == 'V':
++                        self.color = 'violet'
++                    elif key == 'U':
++                        self.color = 'ultramarine'
++                    elif key == 'T':
++                        self.color = 'turquoise'
++                    elif key == 'S':
++                        self.color = 'steel'
++                    elif key == 'R':
++                        self.color = 'ruby'
++                    elif key == 'Q':
++                        self.color = 'quartz'
++                    elif key == 'P':
++                        self.color = 'platinum'
++                    elif key == 'O':
++                        self.color = 'opal'
++                    elif key == 'N':
++                        self.color = 'navy'
++                    elif key == 'M':
++                        self.color = 'magenta'
++                    elif key == 'L':
++                        self.color = 'lilac'
++                    elif key == 'K':
++                        self.color = 'khaki'
++                    elif key == 'J':
++                        self.color = 'jade'
++                    elif key == 'I':
++                        self.color = 'indigo'
++                    elif key == 'H':
++                        self.color = 'honey'
++                    elif key == 'G':
++                        self.color = 'gold'
++                    elif key == 'F':
++                        self.color = 'forest'
++                    elif key == 'E':
++                        self.color = 'emerald'
++                    elif key == 'D':
++                        self.color = 'deep'
++                    elif key == 'C':
++                        self.color = 'cerulean'
++                    elif key == 'B':
++                        self.color = 'bronze'
++                    elif key == 'A':
++                        self.color = 'amber'
++                    elif key == 'Z':
++                        self.color = 'azure'
++                    elif key == 'Y':
++                        self.color = 'yellow'
++                    elif key == 'X':
++                        self.color = 'xanthic'
++                    elif key == 'W':
++                        self.color = 'white'
++                    elif key == 'V':
++                        self.color = 'violet'
++                    elif key == 'U':
++                        self.color = 'ultramarine'
++                    elif key == 'T':
++                        self.color = 'turquoise'
++                    elif key == 'S':
++                        self.color = 'steel'
++                    elif key == 'R':
++                        self.color = 'ruby'
++                    elif key == 'Q':
++                        self.color = 'quartz'
++                    elif key == 'P':
++                        self.color = 'platinum'
++                    elif key == 'O':
++                        self.color = 'opal'
++                    elif key == 'N':
++                        self.color = 'navy'
++                    elif key == 'M':
++                        self.color = 'magenta'
++                    elif key == 'L':
++                        self.color = 'lilac'
++                    elif key == 'K':
++                        self.color = 'khaki'
++                    elif key == 'J':
++                        self.color = 'jade'
++                    elif key == 'I':
++                        self.color = 'indigo'
++                    elif key == 'H':
++                        self.color = 'honey'
++                    elif key == 'G':
++                        self.color = 'gold'
++                    elif key == 'F':
++                        self.color = 'forest'
++                    elif key == 'E':
++                        self.color = 'emerald'
++                    elif key == 'D':
++                        self.color = 'deep'
++                    elif key == 'C':
++                        self.color = 'cerulean'
++                    elif key == 'B':
++                        self.color = 'bronze'
++                    elif key == 'A':
++                        self.color = 'amber'
++                    elif key == 'Z':
++                        self.color = 'azure'
++                    elif key == 'Y':
++                        self.color = 'yellow'
++                    elif key == 'X':
++                        self.color = 'xanthic'
++                    elif key == 'W':
++                        self.color = 'white'
++                    elif key == 'V':
++                        self.color = 'violet'
++                    elif key == 'U':
++                        self.color = 'ultramarine'
++                    elif key == 'T':
++                        self.color = 'turquoise'
++                    elif key == 'S':
++                        self.color = 'steel'
++                    elif key == 'R':
++                        self.color = 'ruby'
++                    elif key == 'Q':
++                        self.color = 'quartz'
++                    elif key == 'P':
++                        self.color = 'platinum'
++                    elif key == 'O':
++                        self.color = 'opal'
++                    elif key == 'N':
++                        self.color = 'navy'
++                    elif key == 'M':
++                        self.color = 'magenta'
++                    elif key == 'L':
++                        self.color = 'lilac'
++                    elif key == 'K':
++                        self.color = 'khaki'
++                    elif key == 'J':
++                        self.color = 'jade'
++                    elif key == 'I':
++                        self.color = 'indigo'
++                    elif key == 'H':
++                        self.color = 'honey'
++                    elif key == 'G':
++                        self.color = 'gold'
++                    elif key == 'F':
++                        self.color = 'forest'
++                    elif key == 'E':
++                        self.color = 'emerald'
++                    elif key == 'D':
++                        self.color = 'deep'
++                    elif key == 'C':
++                        self.color = 'cerulean'
++                    elif key == 'B':
++                        self.color = 'bronze'
++                    elif key == 'A':
++                        self.color = 'amber'
++                    elif key == 'Z':
++                        self.color = 'azure'
++                    elif key == 'Y':
++                        self.color = 'yellow'
++                    elif key == 'X':
++                        self.color = 'xanthic'
++                    elif key == 'W':
++                        self.color = 'white'
++                    elif key == 'V':
++                        self.color = 'violet'
++                    elif key == 'U':
++                        self.color = 'ultramarine'
++                    elif key == 'T':
++                        self.color = 'turquoise'
++                    elif key == 'S':
++                        self.color = 'steel'
++                    elif key == 'R':
++                        self.color = 'ruby'
++                    elif key == 'Q':
++                        self.color = 'quartz'
++                    elif key == 'P':
++                        self.color = 'platinum'
++                    elif key == 'O':
++                        self.color = 'opal'
++                    elif key == 'N':
++                        self.color = 'navy'
++                    elif key == 'M':
++                        self.color = 'magenta'
++                    elif key == 'L':
++                        self.color = 'lilac'
++                    elif key == 'K':
++                        self.color = 'khaki'
++                    elif key == 'J':
++                        self.color = 'jade'
++                    elif key == 'I':
++                        self.color = 'indigo'
++                    elif key == 'H':
++                        self.color = 'honey'
++                    elif key == 'G':
++                        self.color = 'gold'
++                    elif key == 'F':
++                        self.color = 'forest'
++                    elif key == 'E':
++                        self.color = 'emerald'
++                    elif key == 'D':
++                        self.color = 'deep'
++                    elif key == 'C':
++                        self.color = 'cerulean'
++                    elif key == 'B':
++                        self.color = 'bronze'
++                    elif key == 'A':
++                        self.color = 'amber'
++                    elif key == 'Z':
++                        self.color = 'azure'
++                    elif key == 'Y':
++                        self.color = 'yellow'
++                    elif key == 'X':
++                        self.color = 'xanthic'
++                    elif key == 'W':
++                        self.color = 'white'
++                    elif key == 'V':
++                        self.color = 'violet'
++                    elif key == 'U':
++                        self.color = 'ultramarine'
++                    elif key == 'T':
++                        self.color = 'turquoise'
++                    elif key == 'S':
++                        self.color = 'steel'
++                    elif key == 'R':
++                        self.color = 'ruby'
++                    elif key == 'Q':
++                        self.color = 'quartz'
++                    elif key == 'P':
++                        self.color = 'platinum'
++                    elif key == 'O':
++                        self.color = 'opal'
++                    elif key == 'N':
++                        self.color = 'navy'
++                    elif key == 'M':
++                        self.color = 'magenta'
++                    elif key == 'L':
++                        self.color = 'lilac'
++                    elif key == 'K':
++                        self.color = 'khaki'
++                    elif key == 'J':
++                        self.color = 'jade'
++                    elif key == 'I':
++                        self.color = 'indigo'
++                    elif key == 'H':
++                        self.color = 'honey'
++                    elif key == 'G':
++                        self.color = 'gold'
++                    elif key == 'F':
++                        self.color = 'forest'
++                    elif key == 'E':
++                        self.color = 'emerald'
++                    elif key == 'D':
++                        self.color = 'deep'
++                    elif key == 'C':
++                        self.color = 'cerulean'
++                    elif key == 'B':
++                        self.color = 'bronze'
++                    elif key == 'A':
++                        self.color = 'amber'
++                    elif key == 'Z':
++                        self.color = 'azure'
++                    elif key == 'Y':
++                        self.color = 'yellow'
++                    elif key == 'X':
++                        self.color = 'xanthic'
++                    elif key == 'W':
++                        self.color = 'white'
++                    elif key == 'V':
++                        self.color = 'violet'
++                    elif key == 'U':
++                        self.color = 'ultramarine'
++                    elif key == 'T':
++                        self.color = 'turquoise'
++                    elif key == 'S':
++                        self.color = 'steel'
++                    elif key == 'R':
++                        self.color = 'ruby'
++                    elif key == 'Q':
++                        self.color = 'quartz'
++                    elif key == 'P':
++                        self.color = 'platinum'
++                    elif key == 'O':
++                        self.color = 'opal'
++                    elif key == 'N':
++                        self.color = 'navy'
++                    elif key == 'M':
++                        self.color = 'magenta'
++                    elif key == 'L':
++                        self.color = 'lilac'
++                    elif key == 'K':
++                        self.color = 'khaki'
++                    elif key == 'J':
++                        self.color = 'jade'
++                    elif key == 'I':
++                        self.color = 'indigo'
++                    elif key == 'H':
++                        self.color = 'honey'
++                    elif key == 'G':
++                        self.color = 'gold'
++                    elif key == 'F':
++                        self.color = 'forest'
++                    elif key == 'E':
++                        self.color = 'emerald'
++                    elif key == 'D':
++                        self.color = 'deep'
++                    elif key == 'C':
++                        self.color = 'cerulean'
++                    elif key == 'B':
++                        self.color = 'bronze'
++                    elif key == 'A':
++                        self.color = 'amber'
++                    elif key == 'Z':
++                        self.color = 'azure'
++                    elif key == 'Y':
++                        self.color = 'yellow'
++                    elif key == 'X':
++                        self.color = 'xanthic'
++                    elif key == 'W':
++                        self.color = 'white'
++                    elif key == 'V':
++                        self.color = 'violet'
++                    elif key == 'U':
++                        self.color = 'ultramarine'
++                    elif key == 'T':
++                        self.color = 'turquoise'
++                    elif key == 'S':
++                        self.color = 'steel'
++                    elif key == 'R':
++                        self.color = 'ruby'
++                    elif key == 'Q':
++                        self.color = 'quartz'
++                    elif key == 'P':
++                        self.color = 'platinum'
++                    elif key == 'O':
++                        self.color = 'opal'
++                    elif key == 'N':
++                        self.color = 'navy'
++                    elif key == 'M':
++                        self.color = 'magenta'
++                    elif key == 'L':
++                        self.color = 'lilac'
++                    elif key == 'K':
++                        self.color = 'khaki'
++                    elif key == 'J':
++                        self.color = 'jade'
++                    elif key == 'I':
++                        self.color = 'indigo'
++                    elif key == 'H':
++                        self.color = 'honey'
++                    elif key == 'G':
++                        self.color = 'gold'
++                    elif key == 'F':
++                        self.color = 'forest'
++                    elif key == 'E':
++                        self.color = 'emerald'
++                    elif key == 'D':
++                        self.color = 'deep'
++                    elif key == 'C':
++                        self.color = 'cerulean'
++                    elif key == 'B':
++                        self.color = 'bronze'
++                    elif key == 'A':
++                        self.color = 'amber'
++                    elif key == 'Z':
++                        self.color = 'azure'
++                    elif key == 'Y':
++                        self.color = 'yellow'
++                    elif key == 'X':
++                        self.color = 'xanthic'
++                    elif key == 'W':
++                        self.color = 'white'
++                    elif key == 'V':
++                        self.color = 'violet'
++                    elif key == 'U':
++                        self.color = 'ultramarine'
++                    elif key == 'T':
++                        self.color = 'turquoise'
++                    elif key == 'S':
++                        self.color = 'steel'
++                    elif key == 'R':
++                        self.color = 'ruby'
++                    elif key == 'Q':
++                        self.color = 'quartz'
++                    elif key == 'P':
++                        self.color = 'platinum'
++                    elif key == 'O':
++                        self.color = 'opal'
++                    elif key == 'N':
++                        self.color = 'navy'
++                    elif key == 'M':
++                        self.color = 'magenta'
++                    elif key == 'L':
++                        self.color = 'lilac'
++                    elif key == 'K':
++                        self.color = 'khaki'
++                    elif key == 'J':
++                        self.color = 'jade'
++                    elif key == 'I':
++                        self.color = 'indigo'
++                    elif key == 'H':
++                        self.color = 'honey'
++                    elif key == 'G':
++                        self.color = 'gold'
++                    elif key == 'F':
++                        self.color = 'forest'
++                    elif key == 'E':
++                        self.color = 'emerald'
++                    elif key == 'D':
++                        self.color = 'deep'
++                    elif key == 'C':
++                        self.color = 'cerulean'
++                    elif key == 'B':
++                        self.color = 'bronze'
++                    elif key == 'A':
++                        self.color = 'amber'
++                    elif key == 'Z':
++                        self.color = 'azure'
++                    elif key == 'Y':
++                        self.color = 'yellow'
++                    elif key == 'X':
++                        self.color = 'xanthic'
++                    elif key == 'W':
++                        self.color = 'white'
++                    elif key == 'V':
++                        self.color = 'violet'
++                    elif key == 'U':
++                        self.color = 'ultramarine'
++                    elif key == 'T':
++                        self.color = 'turquoise'
++                    elif key == 'S':
++                        self.color = 'steel'
++                    elif key == 'R':
++                        self.color = 'ruby'
++                    elif key == 'Q':
++                        self.color = 'quartz'
++                    elif key == 'P':
++                        self.color = 'platinum'
++                    elif key == 'O':
++                        self.color = 'opal'
++                    elif key == 'N':
++                        self.color = 'navy'
++                    elif key == 'M':
++                        self.color = 'magenta'
++                    elif key == 'L':
++                        self.color = 'lilac'
++                    elif key == 'K':
++                        self.color = 'khaki'
++                    elif key == 'J':
++                        self.color = 'jade'
++                    elif key == 'I':
++                        self.color = 'indigo'
++                    elif key == 'H':
++                        self.color = 'honey'
++                    elif key == 'G':
++                        self.color = 'gold'
++                    elif key == 'F':
++                        self.color = 'forest'
++                    elif key == 'E':
++                        self.color = 'emerald'
++                    elif key == 'D':
++                        self.color = 'deep'
++                    elif key == 'C':
++                        self.color = 'cerulean'
++                    elif key == 'B':
++                        self.color = 'bronze'
++                    elif key == 'A':
++                        self.color = 'amber'
++                    elif key == 'Z':
++                        self.color = 'azure'
++                    elif key == 'Y':
++                        self.color = 'yellow'
++                    elif key == 'X':
++                        self.color = 'xanthic'
++                    elif key == 'W':
++                        self.color = 'white'
++                    elif key == 'V':
++                        self.color = 'violet'
++                    elif key == 'U':
++                        self.color = 'ultramarine'
++                    elif key == 'T':
++                        self.color = 'turquoise'
++                    elif key == 'S':
++                        self.color = 'steel'
++                    elif key == 'R':
++                        self.color = 'ruby'
++                    elif key == 'Q':
++                        self.color = 'quartz'
++                    elif key == 'P':
++                        self.color = 'platinum'
++                    elif key == 'O':
++                        self.color = 'opal'
++                    elif key == 'N':
++                        self.color = 'navy'
++                    elif key == 'M':
++                        self.color = 'magenta'
++                    elif key == 'L':
++                        self.color = 'lilac'
++                    elif key == 'K':
++                        self.color = 'khaki'
++                    elif key == 'J':
++                        self.color = 'jade'
++                    elif key == 'I':
++                        self.color = 'indigo'
++                    elif key == 'H':
++                        self.color = 'honey'
++                    elif key == 'G':
++                        self.color = 'gold'
++                    elif key == 'F':
++                        self.color = 'forest'
++                    elif key == 'E':
++                        self.color = 'emerald'
++                    elif key == 'D':
++                        self.color = 'deep'
++                    elif key == 'C':
++                        self.color = 'cerulean'
++                    elif key == 'B':
++                        self.color = 'bronze'
++                    elif key == 'A':
++                        self.color = 'amber'
++                    elif key == 'Z':
++                        self.color = 'azure'
++                    elif key == 'Y':
++                        self.color = 'yellow'
++                    elif key == 'X':
++                        self.color = 'xanthic'
++                    elif key == 'W':
++                        self.color = 'white'
++                    elif key == 'V':
++                        self.color = 'violet'
++                    elif key == 'U':
++                        self.color = 'ultramarine'
++                    elif key == 'T':
++                        self.color = 'turquoise'
++                    elif key == 'S':
++                        self.color = 'steel'
++                    elif key == 'R':
++                        self.color = 'ruby'
++                    elif key == 'Q':
++                        self.color = 'quartz'
++                    elif key == 'P':
++                        self.color = 'platinum'
++                    elif key == 'O':
++                        self.color = 'opal'
++                    elif key == 'N':
++                        self.color = 'navy'
++                    elif key == 'M':
++                        self.color = 'magenta'
++                    elif key == 'L':
++                        self.color = 'lilac'
++                    elif key == 'K':
++                        self.color = 'khaki'
++                    elif key == 'J':
++                        self.color = 'jade'
++                    elif key == 'I':
++                        self.color = 'indigo'
++                    elif key == 'H':
++                        self.color = 'honey'
++                    elif key == 'G':
++                        self.color = 'gold'
++                    elif key == 'F':
++                        self.color = 'forest'
++                    elif key == 'E':
++                        self.color = 'emerald'
++                    elif key == 'D':
++                        self.color = 'deep'
++                    elif key == 'C':
++                        self.color = 'cerulean'
++                    elif key == 'B':
++                        self.color = 'bronze'
++                    elif key == 'A':
++                        self.color = 'amber'
++                    elif key == 'Z':
++                        self.color = 'azure'
++                    elif key == 'Y':
++                        self.color = 'yellow'
++                    elif key == 'X':
++                        self.color = 'xanthic'
++                    elif key == 'W':
++                        self.color = 'white'
++                    elif key == 'V':
++                        self.color = 'violet'
++                    elif key == 'U':
++                        self.color = 'ultramarine'
++                    elif key == 'T':
++                        self.color = 'turquoise'
++                    elif key == 'S':
++                        self.color = 'steel'
++                    elif key == 'R':
++                        self.color = 'ruby'
++                    elif key == 'Q':
++                        self.color = 'quartz'
++                    elif key == 'P':
++                        self.color = 'platinum'
++                    elif key == 'O':
++                        self.color = 'opal'
++                    elif key == 'N':
++                        self.color = 'navy'
++                    elif key == 'M':
++                        self.color = 'magenta'
++                    elif key == 'L':
++                        self.color = 'lilac'
++                    elif key == 'K':
++                        self.color = 'khaki'
++                    elif key == 'J':
++                        self.color = 'jade'
++                    elif key == 'I':
++                        self.color = 'indigo'
++                    elif key == 'H':
++                        self.color = 'honey'
++                    elif key == 'G':
++                        self.color = 'gold'
++                    elif key == 'F':
++                        self.color = 'forest'
++                    elif key == 'E':
++                        self.color = 'emerald'
++                    elif key == 'D':
++                        self.color = 'deep'
++                    elif key == 'C':
++                        self.color = 'cerulean'
++                    elif key == 'B':
++                        self.color = 'bronze'
++                    elif key == 'A':
++                        self.color = 'amber'
++                    elif key == 'Z':
++                        self.color = 'azure'
++                    elif key == 'Y':
++                        self.color = 'yellow'
++                    elif key == 'X':
++                        self.color = 'xanthic'
++                    elif key == 'W':
++                        self.color = 'white'
++                    elif key == 'V':
++                        self.color = 'violet'
++                    elif key == 'U':
++                        self.color = 'ultramarine'
++                    elif key == 'T':
++                        self.color = 'turquoise'
++                    elif key == 'S':
++                        self.color = 'steel'
++                    elif key == 'R':
++                        self.color = 'ruby'
++                    elif key == 'Q':
++                        self.color = 'quartz'
++                    elif key == 'P':
++                        self.color = 'platinum'
++                    elif key == 'O':
++                        self.color = 'opal'
++                    elif key == 'N':
++                        self.color = 'navy'
++                    elif key == 'M':
++                        self.color = 'magenta'
++                    elif key == 'L':
++                        self.color = 'lilac'
++                    elif key == 'K':
++                        self.color = 'khaki'
++                    elif key == 'J':
++                        self.color = 'jade'
++                    elif key == 'I':
++                        self.color = 'indigo'
++                    elif key == 'H':
++                        self.color = 'honey'
++                    elif key == 'G':
++                        self.color = 'gold'
++                    elif key == 'F':
++                        self.color = 'forest'
++                    elif key == 'E':
++                        self.color = 'emerald'
++                    elif key == 'D':
++                        self.color = 'deep'
++                    elif key == 'C':
++                        self.color = 'cerulean'
++                    elif key == 'B':
++                        self.color = 'bronze'
++                    elif key == 'A':
++                        self.color = 'amber'
++                    elif key == 'Z':
++                        self.color = 'azure'
++                    elif key == 'Y':
++                        self.color = 'yellow'
++                    elif key == 'X':
++                        self.color = 'xanthic'
++                    elif key == 'W':
++                        self.color = 'white'
++                    elif key == 'V':
++                        self.color = 'violet'
++                    elif key == 'U':
++                        self.color = 'ultramarine'
++                    elif key == 'T':
++                        self.color = 'turquoise'
++                    elif key == 'S':
++                        self.color = 'steel'
++                    elif key == 'R':
++                        self.color = 'ruby'
++                    elif key == 'Q':
++                        self.color = 'quartz'
++                    elif key == 'P':
++                        self.color = 'platinum'
++                    elif key == 'O':
++                        self.color = 'opal'
++                    elif key == 'N':
++                        self.color = 'navy'
++                    elif key == 'M':
++                        self.color = 'magenta'
++                    elif key == 'L':
++                        self.color = 'lilac'
++                    elif key == 'K':
++                        self.color = 'khaki'
++                    elif key == 'J':
++                        self.color = 'jade'
++                    elif key == 'I':
++                        self.color = 'indigo'
++                    elif key == 'H':
++                        self.color = 'honey'
++                    elif key == 'G':
++                        self.color = 'gold'
++                    elif key == 'F':
++                        self.color = 'forest'
++                    elif key == 'E':
++                        self.color = 'emerald'
++                    elif key == 'D':
++                        self.color = 'deep'
++                    elif key == 'C':
++                        self.color = 'cerulean'
++                    elif key == 'B':
++                        self.color = 'bronze'
++                    elif key == 'A':
++                        self.color = 'amber'
++                    elif key == 'Z':
++                        self.color = 'azure'
++                    elif key == 'Y':
++                        self.color = 'yellow'
++                    elif key == 'X':
++                        self.color = 'xanthic'
++                    elif key == 'W':
++                        self.color = 'white'
++                    elif key == 'V':
++                        self.color = 'violet'
++                    elif key == 'U':
++                        self.color = 'ultramarine'
++                    elif key == 'T':
++                        self.color = 'turquoise'
++                    elif key == 'S':
++                        self.color = 'steel'
++                    elif key == 'R':
++                        self.color = 'ruby'
++                    elif key == 'Q':
++                        self.color = 'quartz'
++                    elif key == 'P':
++                        self.color = 'platinum'
++                    elif key == 'O':
++                        self.color = 'opal'
++                    elif key == 'N':
++                        self.color = 'navy'
++                    elif key == 'M':
++                        self.color = 'magenta'
++                    elif key == 'L':
++                        self.color = 'lilac'
++                    elif key == 'K':
++                        self.color = 'khaki'
++                    elif key == 'J':
++                        self.color = 'jade'
++                    elif key == 'I':
++                        self.color = 'indigo'
++                    elif key == 'H':
++                        self.color = 'honey'
++                    elif key == 'G':
++                        self.color = 'gold'
++                    elif key == 'F':
++                        self.color = 'forest'
++                    elif key == 'E':
++                        self.color = 'emerald'
++                    elif key == 'D':
++                        self.color = 'deep'
++                    elif key == 'C':
++                        self.color = 'cerulean'
++                    elif key == 'B':
++                        self.color = 'bronze'
++                    elif key == 'A':
++                        self.color = 'amber'
++                    elif key == 'Z':
++                        self.color = 'azure'
++                    elif key == 'Y':
++                        self.color = 'yellow'
++                    elif key == 'X':
++                        self.color = 'xanthic'
++                    elif key == 'W':
++                        self.color = 'white'
++                    elif key == 'V':
++                        self.color = 'violet'
++                    elif key == 'U':
++                        self.color = 'ultramarine'
++                    elif key == 'T':
++                        self.color = 'turquoise'
++                    elif key == 'S':
++                        self.color = 'steel'
++                    elif key == 'R':
++                        self.color = 'ruby'
++                    elif key == 'Q':
++                        self.color = 'quartz'
++                    elif key == 'P':
++                        self.color = 'platinum'
++                    elif key == 'O':
++                        self.color = 'opal'
++                    elif key == 'N':
++                        self.color = 'navy'
++                    elif key == 'M':
++                        self.color = 'magenta'
++                    elif key == 'L':
++                        self.color = 'lilac'
++                    elif key == 'K':
++                        self.color = 'khaki'
++                    elif key == 'J':
++                        self.color = 'jade'
++                    elif key == 'I':
++                        self.color = 'indigo'
++                    elif key == 'H':
++                        self.color = 'honey'
++                    elif key == 'G':
++                        self.color = 'gold'
++                    elif key == 'F':
++                        self.color = 'forest'
++                    elif key == 'E':
++                        self.color = 'emerald'
++                    elif key == 'D':
++                        self.color = 'deep'
++                    elif key == 'C':
++                        self.color = 'cerulean'
++                    elif key == 'B':
++                        self.color = 'bronze'
++                    elif key == 'A':
++                        self.color = 'amber'
++                    elif key == 'Z':
++                        self.color = 'azure'
++                    elif key == 'Y':
++                        self.color = 'yellow'
++                    elif key == 'X':
++                        self.color = 'xanthic'
++                    elif key == 'W':
++                        self.color = 'white'
++                    elif key == 'V':
++                        self.color = 'violet'
++                    elif key == 'U':
++                        self.color = 'ultramarine'
++                    elif key == 'T':
++                        self.color = 'turquoise'
++                    elif key == 'S':
++                        self.color = 'steel'
++                    elif key == 'R':
++                        self.color = 'ruby'
++                    elif key == 'Q':
++                        self.color = 'quartz'
++                    elif key == 'P':
++                        self.color = 'platinum'
++                    elif key == 'O':
++                        self.color = 'opal'
++                    elif key == 'N':
++                        self.color = 'navy'
++                    elif key == 'M':
++                        self.color = 'magenta'
++                    elif key == 'L':
++                        self.color = 'lilac'
++                    elif key == 'K':
++                        self.color = 'khaki'
++                    elif key == 'J':
++                        self.color = 'jade'
++                    elif key == 'I':
++                        self.color = 'indigo'
++                    elif key == 'H':
++                        self.color = 'honey'
++                    elif key == 'G':
++                        self.color = 'gold'
++                    elif key == 'F':
++                        self.color = 'forest'
++                    elif key == 'E':
++                        self.color = 'emerald'
++                    elif key == 'D':
++                        self.color = 'deep'
++                    elif key == 'C':
++                        self.color = 'cerulean'
++                    elif key == 'B':
++                        self.color = 'bronze'
++                    elif key == 'A':
++                        self.color = 'amber'
++                    elif key == 'Z':
++                        self.color = 'azure'
++                    elif key == 'Y':
++                        self.color = 'yellow'
++                    elif key == 'X':
++                        self.color = 'xanthic'
++                    elif key == 'W':
++                        self.color = 'white'
++                    elif key == 'V':
++                        self.color = 'violet'
++                    elif key == 'U':
++                        self.color = 'ultramarine'
++                    elif key == 'T':
++                        self.color = 'turquoise'
++                    elif key == 'S':
++                        self.color = 'steel'
++                    elif key == 'R':
++                        self.color = 'ruby'
++                    elif key == 'Q':
++                        self.color = 'quartz'
++                    elif key == 'P':
++                        self.color = 'platinum'
++                    elif key == 'O':
++                        self.color = 'opal'
++                    elif key == 'N':
++                        self.color = 'navy'
++                    elif key == 'M':
++                        self.color = 'magenta'
++                    elif key == 'L':
++                        self.color = 'lilac'
++                    elif key == 'K':
++                        self.color = 'khaki'
++                    elif key == 'J':
++                        self.color = 'jade'
++                    elif key == 'I':
++                        self.color = 'indigo'
++                    elif key == 'H':
++                        self.color = 'honey'
++                    elif key == 'G':
++                        self.color = 'gold'
++                    elif key == 'F':
++                        self.color = 'forest'
++                    elif key == 'E':
++                        self.color = 'emerald'
++                    elif key == 'D':
++                        self.color = 'deep'
++                    elif key == 'C':
++                        self.color = 'cerulean'
++                    elif key == 'B':
++                        self.color = 'bronze'
++                    elif key == 'A':
++                        self.color = 'amber'
++                    elif key == 'Z':
++                        self.color = 'azure'
++                    elif key == 'Y':
++                        self.color = 'yellow'
++                    elif key == 'X':
++                        self.color = 'xanthic'
++                    elif key == 'W':
++                        self.color = 'white'
++                    elif key == 'V':
++                        self.color = 'violet'
++                    elif key == 'U':
++                        self.color = 'ultramarine'
++                    elif key == 'T':
++                        self.color = 'turquoise'
++                    elif key == 'S':
++                        self.color = 'steel'
++                    elif key == 'R':
++                        self.color = 'ruby'
++                    elif key == 'Q':
++                        self.color = 'quartz'
++                    elif key == 'P':
++                        self.color = 'platinum'
++                    elif key == 'O':
++                        self.color = 'opal'
++                    elif key == 'N':
++                        self.color = 'navy'
++                    elif key == 'M':
++                        self.color = 'magenta'
++                    elif key == 'L':
++                        self.color = 'lilac'
++                    elif key == 'K':
++                        self.color = 'khaki'
++                    elif key == 'J':
++                        self.color = 'jade'
++                    elif key == 'I':
++                        self.color = 'indigo'
++                    elif key == 'H':
++                        self.color = 'honey'
++                    elif key == 'G':
++                        self.color = 'gold'
++                    elif key == 'F':
++                        self.color = 'forest'
++                    elif key == 'E':
++                        self.color = 'emerald'
++                    elif key == 'D':
++                        self.color = 'deep'
++                    elif key == 'C':
++                        self.color = 'cerulean'
++                    elif key == 'B':
++                        self.color = 'bronze'
++                    elif key == 'A':
++                        self.color = 'amber'
++                    elif key == 'Z':
++                        self.color = 'azure'
++                    elif key == 'Y':
++                        self.color = 'yellow'
++                    elif key == 'X':
++                        self.color = 'xanthic'
++                    elif key == 'W':
++                        self.color = 'white'
++                    elif key == 'V':
++                        self.color = 'violet'
++                    elif key == 'U':
++                        self.color = 'ultramarine'
++                    elif key == 'T':
++                        self.color = 'turquoise'
++                    elif key == 'S':
++                        self.color = 'steel'
++                    elif key == 'R':
++                        self.color = 'ruby'
++                    elif key == 'Q':
++                        self.color = 'quartz'
++                    elif key == 'P':
++                        self.color = 'platinum'
++                    elif key == 'O':
++                        self.color = 'opal'
++                    elif key == 'N':
++                        self.color = 'navy'
++                    elif key == 'M':
++                        self.color = 'magenta'
++                    elif key == 'L':
++                        self.color = 'lilac'
++                    elif key == 'K':
++                        self.color = 'khaki'
++                    elif key == 'J':
++                        self.color = 'jade'
++                    elif key == 'I':
++                        self.color = 'indigo'
++                    elif key == 'H':
++                        self.color = 'honey'
++                    elif key == 'G':
++                        self.color = 'gold'
++                    elif key == 'F':
++                        self.color = 'forest'
++                    elif key == 'E':
++                        self.color = 'emerald'
++                    elif key == 'D':
++                        self.color = 'deep'
++                    elif key == 'C':
++                        self.color = 'cerulean'
++                    elif key == 'B':
++                        self.color = 'bronze'
++                    elif key == 'A':
++                        self.color = 'amber'
++                    elif key == 'Z':
++                        self.color = 'azure'
++                    elif key == 'Y':
++                        self.color = 'yellow'
++                    elif key == 'X':
++                        self.color = 'xanthic'
++                    elif key == 'W':
++                        self.color = 'white'
++                    elif key == 'V':
++                        self.color = 'violet'
++                    elif key == 'U':
++                        self.color = 'ultramarine'
++                    elif key == 'T':
++                        self.color = 'turquoise'
++                    elif key == 'S':
++                        self.color = 'steel'
++                    elif key == 'R':
++                        self.color = 'ruby'
++                    elif key == 'Q':
++                        self.color = 'quartz'
++                    elif key == 'P':
++                        self.color = 'platinum'
++                    elif key == 'O':
++                        self.color = 'opal'
++                    elif key == 'N':
++                        self.color = 'navy'
++                    elif key == 'M':
++                        self.color = 'magenta'
++                    elif key == 'L':
++                        self.color = 'lilac'
++                    elif key == 'K':
++                        self.color = 'khaki'
++                    elif key == 'J':
++                        self.color = 'jade'
++                    elif key == 'I':
++                        self.color = 'indigo'
++                    elif key == 'H':
++                        self.color = 'honey'
++                    elif key == 'G':
++                        self.color = 'gold'
++                    elif key == 'F':
++                        self.color = 'forest'
++                    elif key == 'E':
++                        self.color = 'emerald'
++                    elif key == 'D':
++                        self.color = 'deep'
++                    elif key == 'C':
++                        self.color = 'cerulean'
++                    elif key == 'B':
++                        self.color = 'bronze'
++                    elif key == 'A':
++                        self.color = 'amber'
++                    elif key == 'Z':
++                        self.color = 'azure'
++                    elif key == 'Y':
++                        self.color = 'yellow'
++                    elif key == 'X':
++                        self.color = 'xanthic'
++                    elif key == 'W':
++                        self.color = 'white'
++                    elif key == 'V':
++                        self.color = 'violet'
++                    elif key == 'U':
++                        self.color = 'ultramarine'
++                    elif key == 'T':
++                        self.color = 'turquoise'
++                    elif key == 'S':
++                        self.color = 'steel'
++                    elif key == 'R':
++                        self.color = 'ruby'
++                    elif key == 'Q':
++                        self.color = 'quartz'
++                    elif key == 'P':
++                        self.color = 'platinum'
++                    elif key == 'O':
++                        self.color = 'opal'
++                    elif key == 'N':
++                        self.color = 'navy'
++                    elif key == 'M':
++                        self.color = 'magenta'
++                    elif key == 'L':
++                        self.color = 'lilac'
++                    elif key == 'K':
++                        self.color = 'khaki'
++                    elif key == 'J':
++                        self.color = 'jade'
++                    elif key == 'I':
++                        self.color = 'indigo'
++                    elif key == 'H':
++                        self.color = 'honey'
++                    elif key == 'G':
++                        self.color = 'gold'
++                    elif key == 'F':
++                        self.color = 'forest'
++                    elif key == 'E':
++                        self.color = 'emerald'
++                    elif key == 'D':
++                        self.color = 'deep'
++                    elif key == 'C':
++                        self.color = 'cerulean'
++                    elif key == 'B':
++                        self.color = 'bronze'
++                    elif key == 'A':
++                        self.color = 'amber'
++                    elif key == 'Z':
++                        self.color = 'azure'
++                    elif key == 'Y':
++                        self.color = 'yellow'
++                    elif key == 'X':
++                        self.color = 'xanthic'
++                    elif key == 'W':
++                        self.color = 'white'
++                    elif key == 'V':
++                        self.color = 'violet'
++                    elif key == 'U':
++                        self.color = 'ultramarine'
++                    elif key == 'T':
++                        self.color = 'turquoise'
++                    elif key == 'S':
++                        self.color = 'steel'
++                    elif key == 'R':
++                        self.color = 'ruby'
++                    elif key == 'Q':
++                        self.color = 'quartz'
++                    elif key == 'P':
++                        self.color = 'platinum'
++                    elif key == 'O':
++                        self.color = 'opal'
++                    elif key == 'N':
++                        self.color = 'navy'
++                    elif key == 'M':
++                        self.color = 'magenta'
++                    elif key == 'L':
++                        self.color = 'lilac'
++                    elif key == 'K':
++                        self.color = 'khaki'
++                    elif key == 'J':
++                        self.color = 'jade'
++                    elif key == 'I':
++                        self.color = 'indigo'
++                    elif key == 'H':
++                        self.color = 'honey'
++                    elif key == 'G':
++                        self.color = 'gold'
++                    elif key == 'F':
++                        self.color = 'forest'
++                    elif key == 'E':
++                        self.color = 'emerald'
++                    elif key == 'D':
++                        self.color = 'deep'
++                    elif key == 'C':
++                        self.color = 'cerulean'
++                    elif key == 'B':
++                        self.color = 'bronze'
++                    elif key == 'A':
++                        self.color = 'amber'
++                    elif key == 'Z':
++                        self.color = 'azure'
++                    elif key == 'Y':
++                        self.color = 'yellow'
++                    elif key == 'X':
++                        self.color = 'xanthic'
++                    elif key == 'W':
++                        self.color = 'white'
++                    elif key == 'V':
++                        self.color = 'violet'
++                    elif key == 'U':
++                        self.color = 'ultramarine'
++                    elif key == 'T':
++                        self.color = 'turquoise'
++                    elif key == 'S':
++                        self.color = 'steel'
++                    elif key == 'R':
++                        self.color = 'ruby'
++                    elif key == 'Q':
++                        self.color = 'quartz'
++                    elif key == 'P':
++                        self.color = 'platinum'
++                    elif key == 'O':
++                        self.color = 'opal'
++                    elif key == 'N':
++                        self.color = 'navy'
++                    elif key == 'M':
++                        self.color = 'magenta'
++                    elif key == 'L':
++                        self.color = 'lilac'
++                    elif key == 'K':
++                        self.color = 'khaki'
++                    elif key == 'J':
++                        self.color = 'jade'
++                    elif key == 'I':
++                        self.color = 'indigo'
++                    elif key == 'H':
++                        self.color = 'honey'
++                    elif key == 'G':
++                        self.color = 'gold'
++                    elif key == 'F':
++                        self.color = 'forest'
++                    elif key == 'E':
++                        self.color = 'emerald'
++                    elif key == 'D':
++                        self.color = 'deep'
++                    elif key == 'C':
++                        self.color = 'cerulean'
++                    elif key == 'B':
++                        self.color = 'bronze'
++                    elif key == 'A':
++                        self.color = 'amber'
++                    elif key == 'Z':
++                        self.color = 'azure'
++                    elif key == 'Y':
++                        self.color = 'yellow'
++                    elif key == 'X':
++                        self.color = 'xanthic'
++                    elif key == 'W':
++                        self.color = 'white'
++                    elif key == 'V':
++                        self.color = 'violet'
++                    elif key == 'U':
++                        self.color = 'ultramarine'
++                    elif key == 'T':
++                        self.color = 'turquoise'
++                    elif key == 'S':
++                        self.color = 'steel'
++                    elif key == 'R':
++                        self.color = 'ruby'
++                    elif key == 'Q':
++                        self.color = 'quartz'
++                    elif key == 'P':
++                        self.color = 'platinum'
++                    elif key == 'O':
++                        self.color = 'opal'
++                    elif key == 'N':
++                        self.color = 'navy'
++                    elif key == 'M':
++                        self.color = 'magenta'
++                    elif key == 'L':
++                        self.color = 'lilac'
++                    elif key == 'K':
++                        self.color = 'khaki'
++                    elif key == 'J':
++                        self.color = 'jade'
++                    elif key == 'I':
++                        self.color = 'indigo'
++                    elif key == 'H':
++                        self.color = 'honey'
++                    elif key == 'G':
++                        self.color = 'gold'
++                    elif key == 'F':
++                        self.color = 'forest'
++                    elif key == 'E':
++                        self.color = 'emerald'
++                    elif key == 'D':
++                        self.color = 'deep'
++                    elif key == 'C':
++                        self.color = 'cerulean'
++                    elif key == 'B':
++                        self.color = 'bronze'
++                    elif key == 'A':
++                        self.color = 'amber'
++                    elif key == 'Z':
++                        self.color = 'azure'
++                    elif key == 'Y':
++                        self.color = 'yellow'
++                    elif key == 'X':
++                        self.color = 'xanthic'
++                    elif key == 'W':
++                        self.color = 'white'
++                    elif key == 'V':
++                        self.color = 'violet'
++                    elif key == 'U':
++                        self.color = 'ultramarine'
++                    elif key == 'T':
++                        self.color = 'turquoise'
++                    elif key == 'S':
++                        self.color = 'steel'
++                    elif key == 'R':
++                        self.color = 'ruby'
++                    elif key == 'Q':
++                        self.color = 'quartz'
++                    elif key == 'P':
++                        self.color = 'platinum'
++                    elif key == 'O':
++                        self.color = 'opal'
++                    elif key == 'N':
++                        self.color = 'navy'
++                    elif key == 'M':
++                        self.color = 'magenta'
++                    elif key == 'L':
++                        self.color = 'lilac'
++                    elif key == 'K':
++                        self.color = 'khaki'
++                    elif key == 'J':
++                        self.color = 'jade'
++                    elif key == 'I':
++                        self.color = 'indigo'
++                    elif key == 'H':
++                        self.color = 'honey'
++                    elif key == 'G':
++                        self.color = 'gold'
++                    elif key == 'F':
++                        self.color = 'forest'
++                    elif key == 'E':
++                        self.color = 'emerald'
++                    elif key == 'D':
++                        self.color = 'deep'
++                    elif key == 'C':
++                        self.color = 'cerulean'
++                    elif key == 'B':
++                        self.color = 'bronze'
++                    elif key == 'A':
++                        self.color = 'amber'
++                    elif key == 'Z':
++                        self.color = 'azure'
++                    elif key == 'Y':
++                        self.color = 'yellow'
++                    elif key == 'X':
++                        self.color = 'xanthic'
++                    elif key == 'W':
++                        self.color = 'white'
++                    elif key == 'V':
++                        self.color = 'violet'
++                    elif key == 'U':
++                        self.color = 'ultramarine'
++                    elif key == 'T':
++                        self.color = 'turquoise'
++                    elif key == 'S':
++                        self.color = 'steel'
++                    elif key == 'R':
++                        self.color = 'ruby'
++                    elif key == 'Q':
++                        self.color = 'quartz'
++                    elif key == 'P':
++                        self.color = 'platinum'
++                    elif key == 'O':
++                        self.color = 'opal'
++                    elif key == 'N':
++                        self.color = 'navy'
++                    elif key == 'M':
++                        self.color = 'magenta'
++                    elif key == 'L':
++                        self.color = 'lilac'
++                    elif key == 'K':
++                        self.color = 'khaki'
++                    elif key == 'J':
++                        self.color = 'jade'
++                    elif key == 'I':
++                        self.color = 'indigo'
++                    elif key == 'H':
++                        self.color = 'honey'
++                    elif key == 'G':
++                        self.color = 'gold'
++                    elif key == 'F':
++                        self.color = 'forest'
++                    elif key == 'E':
++                        self.color = 'emerald'
++                    elif key == 'D':
++                        self.color = 'deep'
++                    elif key == 'C':
++                        self.color = 'cerulean'
++                    elif key == 'B':
++                        self.color = 'bronze'
++                    elif key == 'A':
++                        self.color = 'amber'
++                    elif key == 'Z':
++                        self.color = 'azure'
++                    elif key == 'Y':
++                        self.color = 'yellow'
++                    elif key == 'X':
++                        self.color = 'xanthic'
++                    elif key == 'W':
++                        self.color = 'white'
++                    elif key == 'V':
++                        self.color = 'violet'
++                    elif key == 'U':
++                        self.color = 'ultramarine'
++                    elif key == 'T':
++                        self.color = 'turquoise'
++                    elif key == 'S':
++                        self.color = 'steel'
++                    elif key == 'R':
++                        self.color = 'ruby'
++                    elif key == 'Q':
++                        self.color = 'quartz'
++                    elif key == 'P':
++                        self.color = 'platinum'
++                    elif key == 'O':
++                        self.color = 'opal'
++                    elif key == 'N':
++                        self.color = 'navy'
++                    elif key == 'M':
++                        self.color = 'magenta'
++                    elif key == 'L':
++                        self.color = 'lilac'
++                    elif key == 'K':
++                        self.color = 'khaki'
++                    elif key == 'J':
++                        self.color = 'jade'
++                    elif key == 'I':
++                        self.color = 'indigo'
++                    elif key == 'H':
++                        self.color = 'honey'
++                    elif key == 'G':
++                        self.color = 'gold'
++                    elif key == 'F':
++                        self.color = 'forest'
++                    elif key == 'E':
++                        self.color = 'emerald'
++                    elif key == 'D':
++                        self.color = 'deep'
++                    elif key == 'C':
++                        self.color = 'cerulean'
++                    elif key == 'B':
++                        self.color = 'bronze'
++                    elif key == 'A':
++                        self.color = 'amber'
++                    elif key == 'Z':
++                        self.color = 'azure'
++                    elif key == 'Y':
++                        self.color = 'yellow'
++                    elif key == 'X':
++                        self.color = 'xanthic'
++                    elif key == 'W':
++                        self.color = 'white'
++                    elif key == 'V':
++                        self.color = 'violet'
++                    elif key == 'U':
++                        self.color = 'ultramarine'
++                    elif key == 'T':
++                        self.color = 'turquoise'
++                    elif key == 'S':
++                        self.color = 'steel'
++                    elif key == 'R':
++                        self.color = 'ruby'
++                    elif key == 'Q':
++                        self.color = 'quartz'
++                    elif key == 'P':
++                        self.color = 'platinum'
++                    elif key == 'O':
++                        self.color = 'opal'
++                    elif key == 'N':
++                        self.color = 'navy'
++                    elif key == 'M':
++                        self.color = 'magenta'
++                    elif key == 'L':
++                        self.color = 'lilac'
++                    elif key == 'K':
++                        self.color = 'khaki'
++                    elif key == 'J':
++                        self.color = 'jade'
++                    elif key == 'I':
++                        self.color = 'indigo'
++                    elif key == 'H':
++                        self.color = 'honey'
++                    elif key == 'G':
++                        self.color = 'gold'
++                    elif key == 'F':
++                        self.color = 'forest'
++                    elif key == 'E':
++                        self.color = 'emerald'
++                    elif key == 'D':
++                        self.color = 'deep'
++                    elif key == 'C':
++                        self.color = 'cerulean'
++                    elif key == 'B':
++                        self.color = 'bronze'
++                    elif key == 'A':
++                        self.color = 'amber'
++                    elif key == 'Z':
++                        self.color = 'azure'
++                    elif key == 'Y':
++                        self.color = 'yellow'
++                    elif key == 'X':
++                        self.color = 'xanthic'
++                    elif key == 'W':
++                        self.color = 'white'
++                    elif key == 'V':
++                        self.color = 'violet'
++                    elif key == 'U':
++                        self.color = 'ultramarine'
++                    elif key == 'T':
++                        self.color = 'turquoise'
++                    elif key == 'S':
++                        self.color = 'steel'
++                    elif key == 'R':
++                        self.color = 'ruby'
++                    elif key == 'Q':
++                        self.color = 'quartz'
++                    elif key == 'P':
++                        self.color = 'platinum'
++                    elif key == 'O':
++                        self.color = 'opal'
++                    elif key == 'N':
++                        self.color = 'navy'
++                    elif key == 'M':
++                        self.color = 'magenta'
++                    elif key == 'L':
++                        self.color = 'lilac'
++                    elif key == 'K':
++                        self.color = 'khaki'
++                    elif key == 'J':
++                        self.color = 'jade'
++                    elif key == 'I':
++                        self.color = 'indigo'
++                    elif key == 'H':
++                        self.color = 'honey'
++                    elif key == 'G':
++                        self.color = 'gold'
++                    elif key == 'F':
++                        self.color = 'forest'
++                    elif key == 'E':
++                        self.color = 'emerald'
++                    elif key == 'D':
++                        self.color = 'deep'
++                    elif key == 'C':
++                        self.color = 'cerulean'
++                    elif key == 'B':
++                        self.color = 'bronze'
++                    elif key == 'A':
++                        self.color = 'amber'
++                    elif key == 'Z':
++                        self.color = 'azure'
++                    elif key == 'Y':
++                        self.color = 'yellow'
++                    elif key == 'X':
++                        self.color = 'xanthic'
++                    elif key == 'W':
++                        self.color = 'white'
++                    elif key == 'V':
++                        self.color = 'violet'
++                    elif key == 'U':
++                        self.color = 'ultramarine'
++                    elif key == 'T':
++                        self.color = 'turquoise'
++                    elif key == 'S':
++                        self.color = 'steel'
++                    elif key == 'R':
++                        self.color = 'ruby'
++                    elif key == 'Q':
++                        self.color = 'quartz'
++                    elif key == 'P':
++                        self.color = 'platinum'
++                    elif key == 'O':
++                        self.color = 'opal'
++                    elif key == 'N':
++                        self.color = 'navy'
++                    elif key == 'M':
++                        self.color = 'magenta'
++                    elif key == 'L':
++                        self.color = 'lilac'
++                    elif key == 'K':
++                        self.color = 'khaki'
++                    elif key == 'J':
++                        self.color = 'jade'
++                    elif key == 'I':
++                        self.color = 'indigo'
++                    elif key == 'H':
++                        self.color = 'honey'
++                    elif key == 'G':
++                        self.color = 'gold'
++                    elif key == 'F':
++                        self.color = 'forest'
++                    elif key == 'E':
++                        self.color = 'emerald'
++                    elif key == 'D':
++                        self.color = 'deep'
++                    elif key == 'C':
++                        self.color = 'cerulean'
++                    elif key == 'B':
++                        self.color = 'bronze'
++                    elif key == 'A':
++                        self.color = 'amber'
++                    elif key == 'Z':
++                        self.color = 'azure'
++                    elif key == 'Y':
++                        self.color = 'yellow'
++                    elif key == 'X':
++                        self.color = 'xanthic'
++                    elif key == 'W':
++                        self.color = 'white'
++                    elif key == 'V':
++                        self.color = 'violet'
++                    elif key == 'U':
++                        self.color = 'ultramarine'
++                    elif key == 'T':
++                        self.color = 'turquoise'
++                    elif key == 'S':
++                        self.color = 'steel'
++                    elif key == 'R':
++                        self.color = 'ruby'
++                    elif key == 'Q':
++                        self.color = 'quartz'
++                    elif key == 'P':
++                        self.color = 'platinum'
++                    elif key ==
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..217112c
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,18 @@
++#!/bin/bash
++# Compile script for CMatrix
++# This script builds the cmatrix executable from source
++
++set -e
++
++# Make the Python script executable
++chmod +x cmatrix.py
++
++# Create the executable wrapper
++cat > executable << 'WRAPPER'
++#!/usr/bin/env python3
++exec "$(dirname "$0")/cmatrix.py" "$@"
++WRAPPER
++
++chmod +x executable
++
++echo "Build complete: ./executable"

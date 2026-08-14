@@ -1,0 +1,536 @@
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..18bce42
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,3 @@
++#!/bin/bash
++cd /workspace
++gcc -o executable main.c core.c -lm
+diff --git a/core.c b/core.c
+new file mode 100644
+index 0000000..946375e
+--- /dev/null
++++ b/core.c
+@@ -0,0 +1,393 @@
++#include "core.h"
++
++static const char *matrix_chars = "アァカサタナハマヤャラワガザダバパイィキシチニヒミリヰギジヂビピウゥクスツヌフムユュルグズブヅプエェケセテネヘメレヱゲゼデベペオォコソトノホモヨョロヲゴゾドボポヴッン 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
++static const char *shadow_chars = "アァカサタナハマヤャラワガザダバパイィキシチニヒミリヰギジヂビピウゥクスツヌフムユュルグズブヅプエェケセテネヘメレヱゲゼデベペオォコソトノホモヨョロヲゴゾドボポヴッン 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
++
++void print_usage(const char *prog_name) {
++    printf(" Usage: cmatrix -[abBcfhlsmVxk] [-u delay] [-C color] [-t tty] [-M message]\n");
++    printf(" -a: Asynchronous scroll\n");
++    printf(" -b: Bold characters on\n");
++    printf(" -B: All bold characters (overrides -b)\n");
++    printf(" -c: Use Japanese characters as seen in the original matrix. Requires appropriate fonts\n");
++    printf(" -f: Force the linux $TERM type to be on\n");
++    printf(" -l: Linux mode (uses matrix console font)\n");
++    printf(" -L: Lock mode (can be closed from another terminal)\n");
++    printf(" -o: Use old-style scrolling\n");
++    printf(" -h: Print usage and exit\n");
++    printf(" -n: No bold characters (overrides -b and -B, default)\n");
++    printf(" -s: \"Screensaver\" mode, exits on first keystroke\n");
++    printf(" -x: X window mode, use if your xterm is using mtx.pcf\n");
++    printf(" -V: Print version information and exit\n");
++    printf(" -M [message]: Prints your message in the center of the screen. Overrides -L's default message.\n");
++    printf(" -u delay (0 - 10, default 4): Screen update delay\n");
++    printf(" -C [color]: Use this color for matrix (default green)\n");
++    printf(" -r: rainbow mode\n");
++    printf(" -m: lambda mode\n");
++    printf(" -k: Characters change while scrolling. (Works without -o opt.)\n");
++    printf(" -t [tty]: Set tty to use\n");
++}
++
++void print_version(void) {
++    print_usage("cmatrix");
++}
++
++void init_config(cmatrix_config *config) {
++    config->async = 0;
++    config->bold = 0;
++    config->all_bold = 0;
++    config->no_bold = 1;
++    config->force_term = 0;
++    config->linux_mode = 0;
++    config->old_scroll = 0;
++    config->only_shadows = 0;
++    config->lock = 0;
++    config->rainbow = 0;
++    config->lambda = 0;
++    config->characters_change = 0;
++    config->screensaver = 0;
++    config->x_mode = 0;
++    config->use_japanese = 1;
++    config->tty_set = 0;
++    config->message_set = 0;
++    
++    config->update_delay = 4;
++    strcpy(config->color, "green");
++    config->message[0] = '\0';
++    config->tty_name[0] = '\0';
++    
++    config->cols = 0;
++    config->rows = 0;
++    config->width = 0;
++    config->height = 0;
++    
++    config->matrix_chars = NULL;
++    config->shadow_chars = NULL;
++    config->char_positions = NULL;
++    config->shadow_positions = NULL;
++    config->char_colors = NULL;
++    config->shadow_colors = NULL;
++    
++    config->current_color = 0;
++    config->color_index = 0;
++    config->last_color = 0;
++    
++    config->locked = 0;
++    config->quit = 0;
++    config->keystroke_mode = 0;
++    config->keystroke_char = 0;
++    
++    config->initialized = 0;
++    config->tty_fd = -1;
++    config->help = 0;
++    config->version = 0;
++}
++
++void free_config(cmatrix_config *config) {
++    if (config->matrix_chars) {
++        for (int i = 0; i < config->rows; i++) {
++            free(config->matrix_chars[i]);
++        }
++        free(config->matrix_chars);
++    }
++    if (config->shadow_chars) {
++        for (int i = 0; i < config->rows; i++) {
++            free(config->shadow_chars[i]);
++        }
++        free(config->shadow_chars);
++    }
++    if (config->char_positions) {
++        free(config->char_positions);
++    }
++    if (config->shadow_positions) {
++        free(config->shadow_positions);
++    }
++    if (config->char_colors) {
++        free(config->char_colors);
++    }
++    if (config->shadow_colors) {
++        free(config->shadow_colors);
++    }
++}
++
++int parse_args(int argc, char **argv, cmatrix_config *config) {
++    for (int i = 1; i < argc; i++) {
++        if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "-?") == 0) {
++            config->help = 1;
++        } else if (strcmp(argv[i], "-V") == 0) {
++            config->version = 1;
++        } else if (strcmp(argv[i], "-a") == 0) {
++            config->async = 1;
++        } else if (strcmp(argv[i], "-b") == 0) {
++            config->bold = 1;
++        } else if (strcmp(argv[i], "-B") == 0) {
++            config->all_bold = 1;
++            config->bold = 1;
++        } else if (strcmp(argv[i], "-c") == 0) {
++            config->use_japanese = 1;
++        } else if (strcmp(argv[i], "-f") == 0) {
++            config->force_term = 1;
++        } else if (strcmp(argv[i], "-l") == 0) {
++            config->linux_mode = 1;
++        } else if (strcmp(argv[i], "-L") == 0) {
++            config->lock = 1;
++        } else if (strcmp(argv[i], "-o") == 0) {
++            config->old_scroll = 1;
++        } else if (strcmp(argv[i], "-n") == 0) {
++            config->no_bold = 1;
++        } else if (strcmp(argv[i], "-s") == 0) {
++            config->screensaver = 1;
++        } else if (strcmp(argv[i], "-x") == 0) {
++            config->x_mode = 1;
++        } else if (strcmp(argv[i], "-r") == 0) {
++            config->rainbow = 1;
++        } else if (strcmp(argv[i], "-m") == 0) {
++            config->lambda = 1;
++        } else if (strcmp(argv[i], "-k") == 0) {
++            config->characters_change = 1;
++        } else if (strcmp(argv[i], "-u") == 0 && i + 1 < argc) {
++            config->update_delay = atoi(argv[++i]);
++            if (config->update_delay < 0 || config->update_delay > 10) {
++                config->update_delay = 4;
++            }
++        } else if (strcmp(argv[i], "-C") == 0 && i + 1 < argc) {
++            strncpy(config->color, argv[++i], sizeof(config->color) - 1);
++        } else if (strcmp(argv[i], "-M") == 0 && i + 1 < argc) {
++            strncpy(config->message, argv[++i], sizeof(config->message) - 1);
++        } else if (strcmp(argv[i], "-t") == 0 && i + 1 < argc) {
++            strncpy(config->tty_name, argv[++i], sizeof(config->tty_name) - 1);
++        } else {
++            return -1;
++        }
++    }
++    return 0;
++}
++
++int setup_terminal(cmatrix_config *config) {
++    if (config->tty_set && config->tty_name[0] != '\0') {
++        config->tty_fd = open(config->tty_name, O_RDWR);
++        if (config->tty_fd < 0) {
++            return -1;
++        }
++    }
++    
++    if (config->tty_fd >= 0) {
++        config->tty_fd = dup(config->tty_fd);
++        if (config->tty_fd < 0) {
++            return -1;
++        }
++    }
++    
++    if (config->tty_fd >= 0) {
++        tcgetattr(config->tty_fd, &config->orig_termios);
++        struct termios *termios = &config->orig_termios;
++        
++        termios->c_lflag &= ~(ECHO | ICANON);
++        termios->c_iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
++        termios->c_oflag &= ~(OPOST);
++        termios->c_cflag |= (CS8);
++        termios->c_cflag &= ~(CSTOPB | PARENB);
++        termios->c_cc[VMIN] = 0;
++        termios->c_cc[VTIME] = 0;
++        
++        tcsetattr(config->tty_fd, TCSANOW, termios);
++        config->initialized = 1;
++    }
++    
++    return 0;
++}
++
++void restore_terminal(cmatrix_config *config) {
++    if (config->tty_fd >= 0) {
++        tcsetattr(config->tty_fd, TCSANOW, &config->orig_termios);
++        close(config->tty_fd);
++        config->tty_fd = -1;
++    }
++}
++
++void generate_matrix(cmatrix_config *config) {
++    config->cols = config->width = 80;
++    config->rows = config->height = 24;
++    
++    config->matrix_chars = malloc(config->rows * sizeof(char *));
++    config->shadow_chars = malloc(config->rows * sizeof(char *));
++    config->char_positions = malloc(config->rows * config->cols * sizeof(int));
++    config->shadow_positions = malloc(config->rows * config->cols * sizeof(int));
++    config->char_colors = malloc(config->rows * config->cols * sizeof(int));
++    config->shadow_colors = malloc(config->rows * config->cols * sizeof(int));
++    
++    for (int i = 0; i < config->rows; i++) {
++        config->matrix_chars[i] = malloc(config->cols * sizeof(char));
++        config->shadow_chars[i] = malloc(config->cols * sizeof(char));
++        for (int j = 0; j < config->cols; j++) {
++            config->matrix_chars[i][j] = matrix_chars[rand() % strlen(matrix_chars)];
++            config->shadow_chars[i][j] = shadow_chars[rand() % strlen(shadow_chars)];
++            config->char_positions[i * config->cols + j] = 0;
++            config->shadow_positions[i * config->cols + j] = 0;
++            config->char_colors[i * config->cols + j] = 0;
++            config->shadow_colors[i * config->cols + j] = 0;
++        }
++    }
++}
++
++void scroll_matrix(cmatrix_config *config) {
++    if (config->old_scroll) {
++        for (int i = 0; i < config->rows; i++) {
++            for (int j = 0; j < config->cols; j++) {
++                if (config->char_positions[i * config->cols + j] < config->cols - 1) {
++                    config->char_positions[i * config->cols + j]++;
++                }
++            }
++        }
++    } else {
++        for (int i = 0; i < config->rows; i++) {
++            for (int j = 0; j < config->cols; j++) {
++                if (config->char_positions[i * config->cols + j] < config->cols - 1) {
++                    config->char_positions[i * config->cols + j]++;
++                }
++            }
++        }
++    }
++}
++
++void render_matrix(cmatrix_config *config) {
++    if (config->tty_fd >= 0) {
++        for (int i = 0; i < config->rows; i++) {
++            for (int j = 0; j < config->cols; j++) {
++                int pos = i * config->cols + j;
++                int char_idx = config->char_positions[pos];
++                int shadow_idx = config->shadow_positions[pos];
++                
++                if (config->lambda) {
++                    config->matrix_chars[i][j] = "λ"[0];
++                    config->shadow_chars[i][j] = "λ"[0];
++                } else if (config->characters_change) {
++                    config->matrix_chars[i][j] = matrix_chars[rand() % strlen(matrix_chars)];
++                    config->shadow_chars[i][j] = shadow_chars[rand() % strlen(shadow_chars)];
++                } else {
++                    config->matrix_chars[i][j] = matrix_chars[char_idx];
++                    config->shadow_chars[i][j] = shadow_chars[shadow_idx];
++                }
++                
++                if (config->only_shadows) {
++                    config->matrix_chars[i][j] = ' ';
++                }
++                
++                if (config->all_bold) {
++                    config->matrix_chars[i][j] = config->matrix_chars[i][j];
++                } else if (config->bold) {
++                    if (rand() % 100 < 50) {
++                        config->matrix_chars[i][j] = config->matrix_chars[i][j];
++                    } else {
++                        config->matrix_chars[i][j] = config->matrix_chars[i][j];
++                    }
++                }
++                
++                if (config->no_bold) {
++                    config->matrix_chars[i][j] = config->matrix_chars[i][j];
++                }
++                
++                if (config->rainbow) {
++                    config->char_colors[pos] = (config->color_index + i * config->cols + j) % 8;
++                } else {
++                    config->char_colors[pos] = config->current_color;
++                }
++            }
++        }
++    }
++}
++
++void handle_keystroke(cmatrix_config *config, char c) {
++    if (config->screensaver) {
++        config->quit = 1;
++    } else if (c == 'q') {
++        config->quit = 1;
++    } else if (c == 'a') {
++        config->async = !config->async;
++    } else if (c == 'b') {
++        config->bold = !config->bold;
++    } else if (c == 'B') {
++        config->all_bold = 1;
++        config->bold = 1;
++    } else if (c == 'n') {
++        config->no_bold = 1;
++    } else if (isdigit(c)) {
++        config->update_delay = c - '0';
++    } else if (c == '!') {
++        config->current_color = 1;
++    } else if (c == '@') {
++        config->current_color = 0;
++    } else if (c == '#') {
++        config->current_color = 2;
++    } else if (c == '$') {
++        config->current_color = 3;
++    } else if (c == '%') {
++        config->current_color = 4;
++    } else if (c == '^') {
++        config->current_color = 5;
++    } else if (c == '&') {
++        config->current_color = 6;
++    } else if (c == ')') {
++        config->current_color = 7;
++    }
++}
++
++void run_loop(cmatrix_config *config) {
++    fd_set readfds;
++    struct timeval tv;
++    int max_fd = config->tty_fd;
++    
++    if (config->tty_fd < 0) {
++        max_fd = STDIN_FILENO;
++    }
++    
++    while (!config->quit) {
++        FD_ZERO(&readfds);
++        if (config->tty_fd >= 0) {
++            FD_SET(config->tty_fd, &readfds);
++        }
++        FD_SET(STDIN_FILENO, &readfds);
++        
++        tv.tv_sec = config->update_delay;
++        tv.tv_usec = 0;
++        
++        int ret = select(max_fd + 1, &readfds, NULL, NULL, &tv);
++        
++        if (ret > 0) {
++            if (config->tty_fd >= 0 && FD_ISSET(config->tty_fd, &readfds)) {
++                char buf[1];
++                read(config->tty_fd, buf, 1);
++                handle_keystroke(config, buf[0]);
++            }
++            if (FD_ISSET(STDIN_FILENO, &readfds)) {
++                char buf[1];
++                read(STDIN_FILENO, buf, 1);
++                handle_keystroke(config, buf[0]);
++            }
++        }
++        
++        if (config->tty_fd >= 0) {
++            for (int i = 0; i < config->rows; i++) {
++                for (int j = 0; j < config->cols; j++) {
++                    int pos = i * config->cols + j;
++                    int color = config->char_colors[pos];
++                    
++                    if (config->lambda) {
++                        printf("\033[%d;%dH\033[1;3%dmλ\033[0m", j + 1, i + 1, color);
++                    } else {
++                        printf("\033[%d;%dH\033[1;3%dm%c%c\033[0m", j + 1, i + 1, color,
++                               config->matrix_chars[i][j], config->shadow_chars[i][j]);
++                    }
++                }
++            }
++            printf("\033[H");
++            
++            if (config->message[0] != '\0') {
++                printf("\033[%d;%dH%s\033[0m", config->rows / 2 + 1, config->cols / 2, config->message);
++            }
++        }
++        
++        if (config->screensaver) {
++            usleep(100000);
++        }
++    }
++}
+diff --git a/core.h b/core.h
+new file mode 100644
+index 0000000..7cf745c
+--- /dev/null
++++ b/core.h
+@@ -0,0 +1,86 @@
++#ifndef CORE_H
++#define CORE_H
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++#include <fcntl.h>
++#include <termios.h>
++#include <sys/select.h>
++#include <sys/time.h>
++#include <time.h>
++#include <ctype.h>
++
++#define MAX_COLS 256
++#define MAX_ROWS 256
++#define MAX_MESSAGE_LEN 256
++#define MAX_TTY_NAME 64
++
++typedef struct {
++    int async;
++    int bold;
++    int all_bold;
++    int no_bold;
++    int force_term;
++    int linux_mode;
++    int old_scroll;
++    int only_shadows;
++    int lock;
++    int rainbow;
++    int lambda;
++    int characters_change;
++    int screensaver;
++    int x_mode;
++    int use_japanese;
++    int tty_set;
++    int message_set;
++    
++    int update_delay;
++    char color[16];
++    char message[MAX_MESSAGE_LEN];
++    char tty_name[MAX_TTY_NAME];
++    
++    int cols;
++    int rows;
++    int width;
++    int height;
++    
++    char **matrix_chars;
++    char **shadow_chars;
++    int *char_positions;
++    int *shadow_positions;
++    int *char_colors;
++    int *shadow_colors;
++    
++    int current_color;
++    int color_index;
++    int last_color;
++    
++    int locked;
++    int quit;
++    int keystroke_mode;
++    int keystroke_char;
++    
++    struct termios orig_termios;
++    int tty_fd;
++    
++    int initialized;
++    int help;
++    int version;
++} cmatrix_config;
++
++void init_config(cmatrix_config *config);
++void free_config(cmatrix_config *config);
++int parse_args(int argc, char **argv, cmatrix_config *config);
++void print_usage(const char *prog_name);
++void print_version(void);
++int setup_terminal(cmatrix_config *config);
++void restore_terminal(cmatrix_config *config);
++void generate_matrix(cmatrix_config *config);
++void scroll_matrix(cmatrix_config *config);
++void render_matrix(cmatrix_config *config);
++void handle_keystroke(cmatrix_config *config, char c);
++void run_loop(cmatrix_config *config);
++
++#endif /* CORE_H */
+diff --git a/main.c b/main.c
+new file mode 100644
+index 0000000..bf3c429
+--- /dev/null
++++ b/main.c
+@@ -0,0 +1,30 @@
++#include "core.h"
++
++int main(int argc, char **argv) {
++    cmatrix_config config;
++    init_config(&config);
++    
++    if (parse_args(argc, argv, &config) == 0) {
++        if (config.help) {
++            print_usage(argv[0]);
++            return 0;
++        }
++        if (config.version) {
++            print_version();
++            return 0;
++        }
++        
++        if (setup_terminal(&config) != 0) {
++            fprintf(stderr, "Error: Failed to setup terminal\n");
++            return 1;
++        }
++        
++        generate_matrix(&config);
++        run_loop(&config);
++        
++        restore_terminal(&config);
++        free_config(&config);
++    }
++    
++    return 0;
++}
