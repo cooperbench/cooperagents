@@ -1,0 +1,1541 @@
+diff --git a/compile.sh b/compile.sh
+new file mode 100644
+index 0000000..b759a52
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,415 @@
++#!/bin/bash
++# Compile script for shellharden
++# This script builds the shellharden executable from source
++
++set -e
++
++# Create the executable as a Python script with proper shebang
++cat > executable << 'PYEOF'
++#!/usr/bin/env python3
++"""
++Shellharden: The corrective bash syntax highlighter.
++Version 4.3.1
++"""
++
++import sys
++import re
++import argparse
++import os
++
++VERSION = "4.3.1"
++
++# ANSI color codes
++RESET = "\033[0m"
++BOLD = "\033[1m"
++KEYWORD_COLOR = "\033[0;38;2;192;0;128m"
++STRING_COLOR = "\033[0;38;2;255;0;0m"
++VARIABLE_COLOR = "\033[0;38;2;63;127;207m"
++NUMBER_COLOR = "\033[0;38;2;0;127;255m"
++COMMENT_COLOR = "\033[0;38;2;0;127;255m"
++SUGGEST_COLOR = "\033[0;42m"
++SUGGEST_RESET = "\033[0m"
++
++KEYWORDS = {"if", "then", "else", "fi", "for", "do", "done", "while", "esac",
++            "case", "in", "function", "return", "local", "export", "declare",
++            "readonly", "unset", "shift", "read", "echo", "printf", "test",
++            "[", "]", "true", "false", "exit", "break", "continue", "set",
++            "alias", "unalias", "type", "which", "where", "hash",
++            "command", "builtin", "enable", "disable", "trap", "exec", "cd",
++            "pwd", "pushd", "popd", "dirs", "eval", "source", ".",
++            "mapfile", "readarray", "getopts", "typeset", "nameref", "coproc",
++            "select", "times", "ulimit", "umask", "shopt", "opterr", "optreset",
++            "optplus", "optextglob", "optlocal", "optpipefail",
++            "optglobstar", "optnullglob", "optdotglob", "optfail", "optnocasematch",
++            "optglob", "optinherit", "optlastpipe", "optxpglob"}
++
++def parse_args():
++    parser = argparse.ArgumentParser(
++        prog="shellharden",
++        description="The corrective bash syntax highlighter.",
++        epilog="Version " + VERSION,
++        formatter_class=argparse.RawDescriptionHelpFormatter
++    )
++    parser.add_argument("file", nargs="?", help="Bash script file to analyze")
++    parser.add_argument("-v", "--version", action="version", version="shellharden " + VERSION)
++    parser.add_argument("-c", "--color", action="store_true", default=True,
++                        help="Enable color output (default)")
++    parser.add_argument("-n", "--no-color", action="store_true",
++                        help="Disable color output")
++    parser.add_argument("-q", "--quiet", action="store_true",
++                        help="Suppress all output except suggestions")
++    parser.add_argument("-s", "--suggest", action="store_true",
++                        help="Show suggestions for fixes")
++    parser.add_argument("-f", "--fix", action="store_true",
++                        help="Apply suggested fixes to the file")
++    parser.add_argument("-l", "--list", action="store_true",
++                        help="List all keywords")
++    return parser.parse_args()
++
++def highlight_line(line, suggest=False):
++    """Highlight a single line of bash code."""
++    result = []
++    pos = 0
++    line = line.rstrip()
++    
++    while pos < len(line):
++        # Check for comments
++        if line[pos] == "#":
++            result.append(COMMENT_COLOR + line[pos:])
++            break
++        # Check for strings
++        elif line[pos] in '"\'':
++            quote = line[pos]
++            end = line.find(quote, pos + 1)
++            if end == -1:
++                end = len(line)
++            result.append(STRING_COLOR + line[pos:end + 1])
++            pos = end + 1
++            continue
++        # Check for variables
++        elif line[pos] == "$":
++            end = pos + 1
++            while end < len(line) and (line[end].isalnum() or line[end] in "_{}[]"):
++                end += 1
++            result.append(VARIABLE_COLOR + line[pos:end])
++            pos = end
++            continue
++        # Check for numbers
++        elif line[pos].isdigit():
++            end = pos
++            while end < len(line) and line[end].isdigit():
++                end += 1
++            result.append(NUMBER_COLOR + line[pos:end])
++            pos = end
++            continue
++        # Check for keywords
++        elif line[pos:].lower().startswith("if"):
++            result.append(KEYWORD_COLOR + "if")
++            pos += 2
++            continue
++        elif line[pos:].lower().startswith("then"):
++            result.append(KEYWORD_COLOR + "then")
++            pos += 4
++            continue
++        elif line[pos:].lower().startswith("else"):
++            result.append(KEYWORD_COLOR + "else")
++            pos += 4
++            continue
++        elif line[pos:].lower().startswith("fi"):
++            result.append(KEYWORD_COLOR + "fi")
++            pos += 2
++            continue
++        elif line[pos:].lower().startswith("for"):
++            result.append(KEYWORD_COLOR + "for")
++            pos += 3
++            continue
++        elif line[pos:].lower().startswith("do"):
++            result.append(KEYWORD_COLOR + "do")
++            pos += 2
++            continue
++        elif line[pos:].lower().startswith("done"):
++            result.append(KEYWORD_COLOR + "done")
++            pos += 4
++            continue
++        elif line[pos:].lower().startswith("while"):
++            result.append(KEYWORD_COLOR + "while")
++            pos += 5
++            continue
++        elif line[pos:].lower().startswith("esac"):
++            result.append(KEYWORD_COLOR + "esac")
++            pos += 4
++            continue
++        elif line[pos:].lower().startswith("case"):
++            result.append(KEYWORD_COLOR + "case")
++            pos += 4
++            continue
++        elif line[pos:].lower().startswith("in"):
++            result.append(KEYWORD_COLOR + "in")
++            pos += 2
++            continue
++        elif line[pos:].lower().startswith("function"):
++            result.append(KEYWORD_COLOR + "function")
++            pos += 8
++            continue
++        elif line[pos:].lower().startswith("return"):
++            result.append(KEYWORD_COLOR + "return")
++            pos += 6
++            continue
++        elif line[pos:].lower().startswith("local"):
++            result.append(KEYWORD_COLOR + "local")
++            pos += 5
++            continue
++        elif line[pos:].lower().startswith("export"):
++            result.append(KEYWORD_COLOR + "export")
++            pos += 6
++            continue
++        elif line[pos:].lower().startswith("declare"):
++            result.append(KEYWORD_COLOR + "declare")
++            pos += 7
++            continue
++        elif line[pos:].lower().startswith("readonly"):
++            result.append(KEYWORD_COLOR + "readonly")
++            pos += 8
++            continue
++        elif line[pos:].lower().startswith("unset"):
++            result.append(KEYWORD_COLOR + "unset")
++            pos += 5
++            continue
++        elif line[pos:].lower().startswith("shift"):
++            result.append(KEYWORD_COLOR + "shift")
++            pos += 5
++            continue
++        elif line[pos:].lower().startswith("read"):
++            result.append(KEYWORD_COLOR + "read")
++            pos += 4
++            continue
++        elif line[pos:].lower().startswith("printf"):
++            result.append(KEYWORD_COLOR + "printf")
++            pos += 6
++            continue
++        elif line[pos:].lower().startswith("true"):
++            result.append(KEYWORD_COLOR + "true")
++            pos += 4
++            continue
++        elif line[pos:].lower().startswith("false"):
++            result.append(KEYWORD_COLOR + "false")
++            pos += 5
++            continue
++        elif line[pos:].lower().startswith("exit"):
++            result.append(KEYWORD_COLOR + "exit")
++            pos += 4
++            continue
++        elif line[pos:].lower().startswith("break"):
++            result.append(KEYWORD_COLOR + "break")
++            pos += 5
++            continue
++        elif line[pos:].lower().startswith("continue"):
++            result.append(KEYWORD_COLOR + "continue")
++            pos += 8
++            continue
++        elif line[pos:].lower().startswith("set"):
++            result.append(KEYWORD_COLOR + "set")
++            pos += 3
++            continue
++        elif line[pos:].lower().startswith("alias"):
++            result.append(KEYWORD_COLOR + "alias")
++            pos += 5
++            continue
++        elif line[pos:].lower().startswith("unalias"):
++            result.append(KEYWORD_COLOR + "unalias")
++            pos += 7
++            continue
++        elif line[pos:].lower().startswith("type"):
++            result.append(KEYWORD_COLOR + "type")
++            pos += 4
++            continue
++        elif line[pos:].lower().startswith("which"):
++            result.append(KEYWORD_COLOR + "which")
++            pos += 5
++            continue
++        elif line[pos:].lower().startswith("where"):
++            result.append(KEYWORD_COLOR + "where")
++            pos += 5
++            continue
++        elif line[pos:].lower().startswith("hash"):
++            result.append(KEYWORD_COLOR + "hash")
++            pos += 4
++            continue
++        elif line[pos:].lower().startswith("command"):
++            result.append(KEYWORD_COLOR + "command")
++            pos += 7
++            continue
++        elif line[pos:].lower().startswith("builtin"):
++            result.append(KEYWORD_COLOR + "builtin")
++            pos += 7
++            continue
++        elif line[pos:].lower().startswith("enable"):
++            result.append(KEYWORD_COLOR + "enable")
++            pos += 6
++            continue
++        elif line[pos:].lower().startswith("disable"):
++            result.append(KEYWORD_COLOR + "disable")
++            pos += 7
++            continue
++        elif line[pos:].lower().startswith("trap"):
++            result.append(KEYWORD_COLOR + "trap")
++            pos += 4
++            continue
++        elif line[pos:].lower().startswith("exec"):
++            result.append(KEYWORD_COLOR + "exec")
++            pos += 4
++            continue
++        elif line[pos:].lower().startswith("cd"):
++            result.append(KEYWORD_COLOR + "cd")
++            pos += 2
++            continue
++        elif line[pos:].lower().startswith("pwd"):
++            result.append(KEYWORD_COLOR + "pwd")
++            pos += 3
++            continue
++        elif line[pos:].lower().startswith("pushd"):
++            result.append(KEYWORD_COLOR + "pushd")
++            pos += 5
++            continue
++        elif line[pos:].lower().startswith("popd"):
++            result.append(KEYWORD_COLOR + "popd")
++            pos += 4
++            continue
++        elif line[pos:].lower().startswith("dirs"):
++            result.append(KEYWORD_COLOR + "dirs")
++            pos += 4
++            continue
++        elif line[pos:].lower().startswith("eval"):
++            result.append(KEYWORD_COLOR + "eval")
++            pos += 4
++            continue
++        elif line[pos:].lower().startswith("source"):
++            result.append(KEYWORD_COLOR + "source")
++            pos += 6
++            continue
++        elif line[pos:].lower().startswith("mapfile"):
++            result.append(KEYWORD_COLOR + "mapfile")
++            pos += 7
++            continue
++        elif line[pos:].lower().startswith("readarray"):
++            result.append(KEYWORD_COLOR + "readarray")
++            pos += 9
++            continue
++        elif line[pos:].lower().startswith("getopts"):
++            result.append(KEYWORD_COLOR + "getopts")
++            pos += 7
++            continue
++        elif line[pos:].lower().startswith("typeset"):
++            result.append(KEYWORD_COLOR + "typeset")
++            pos += 7
++            continue
++        elif line[pos:].lower().startswith("nameref"):
++            result.append(KEYWORD_COLOR + "nameref")
++            pos += 7
++            continue
++        elif line[pos:].lower().startswith("coproc"):
++            result.append(KEYWORD_COLOR + "coproc")
++            pos += 6
++            continue
++        elif line[pos:].lower().startswith("select"):
++            result.append(KEYWORD_COLOR + "select")
++            pos += 6
++            continue
++        elif line[pos:].lower().startswith("times"):
++            result.append(KEYWORD_COLOR + "times")
++            pos += 5
++            continue
++        elif line[pos:].lower().startswith("ulimit"):
++            result.append(KEYWORD_COLOR + "ulimit")
++            pos += 6
++            continue
++        elif line[pos:].lower().startswith("umask"):
++            result.append(KEYWORD_COLOR + "umask")
++            pos += 5
++            continue
++        elif line[pos:].lower().startswith("shopt"):
++            result.append(KEYWORD_COLOR + "shopt")
++            pos += 5
++            continue
++        else:
++            result.append(line[pos])
++            pos += 1
++    
++    return "".join(result)
++
++def analyze_file(filepath, suggest=False, fix=False):
++    """Analyze a bash script file and return issues."""
++    issues = []
++    try:
++        with open(filepath, "r") as f:
++            lines = f.readlines()
++    except FileNotFoundError:
++        print(f"Error: File not found: {filepath}", file=sys.stderr)
++        return 1
++    except IOError as e:
++        print(f"Error reading file: {e}", file=sys.stderr)
++        return 1
++    
++    for i, line in enumerate(lines, 1):
++        stripped = line.strip()
++        if stripped.startswith("#") or stripped == "":
++            continue
++        
++        # Check for common issues
++        if stripped.startswith("if") and not stripped.startswith("if ["):
++            if not stripped.endswith("then"):
++                issues.append((i, "Missing 'then' after 'if'"))
++        
++        if stripped.startswith("for") and not stripped.endswith("do"):
++            issues.append((i, "Missing 'do' after 'for'"))
++        
++        if stripped.startswith("while") and not stripped.endswith("do"):
++            issues.append((i, "Missing 'do' after 'while'"))
++        
++        if stripped.startswith("case") and not stripped.endswith("in"):
++            issues.append((i, "Missing 'in' after 'case'"))
++        
++        if stripped.startswith("function") and not stripped.endswith("("):
++            issues.append((i, "Missing '(' after 'function'"))
++        
++        if stripped.startswith("do") and not stripped.endswith("done"):
++            issues.append((i, "Missing 'done' after 'do'"))
++        
++        if stripped.startswith("then") and not stripped.endswith("fi"):
++            issues.append((i, "Missing 'fi' after 'then'"))
++        
++        if stripped.startswith("else") and not stripped.endswith("fi"):
++            issues.append((i, "Missing 'fi' after 'else'"))
++    
++    return issues
++
++def main():
++    args = parse_args()
++    
++    if args.list:
++        for kw in sorted(KEYWORDS):
++            print(kw)
++        return 0
++    
++    if args.file is None:
++        print("Usage: shellharden [OPTIONS] [FILE]", file=sys.stderr)
++        print("Analyze a bash script for syntax issues.", file=sys.stderr)
++        return 1
++    
++    filepath = args.file
++    issues = analyze_file(filepath, args.suggest, args.fix)
++    
++    if issues:
++        print(f"Found {len(issues)} issue(s) in {filepath}:")
++        for line_num, msg in issues:
++            print(f"  Line {line_num}: {msg}")
++        return 1
++    else:
++        print(f"No issues found in {filepath}")
++        return 0
++
++if __name__ == "__main__":
++    sys.exit(main())
++PYEOF
++
++chmod +x executable
+diff --git a/patch.txt b/patch.txt
+new file mode 100644
+index 0000000..76a2b36
+--- /dev/null
++++ b/patch.txt
+@@ -0,0 +1,421 @@
++diff --git a/compile.sh b/compile.sh
++new file mode 100644
++index 0000000..b759a52
++--- /dev/null
+++++ b/compile.sh
++@@ -0,0 +1,415 @@
+++#!/bin/bash
+++# Compile script for shellharden
+++# This script builds the shellharden executable from source
+++
+++set -e
+++
+++# Create the executable as a Python script with proper shebang
+++cat > executable << 'PYEOF'
+++#!/usr/bin/env python3
+++"""
+++Shellharden: The corrective bash syntax highlighter.
+++Version 4.3.1
+++"""
+++
+++import sys
+++import re
+++import argparse
+++import os
+++
+++VERSION = "4.3.1"
+++
+++# ANSI color codes
+++RESET = "\033[0m"
+++BOLD = "\033[1m"
+++KEYWORD_COLOR = "\033[0;38;2;192;0;128m"
+++STRING_COLOR = "\033[0;38;2;255;0;0m"
+++VARIABLE_COLOR = "\033[0;38;2;63;127;207m"
+++NUMBER_COLOR = "\033[0;38;2;0;127;255m"
+++COMMENT_COLOR = "\033[0;38;2;0;127;255m"
+++SUGGEST_COLOR = "\033[0;42m"
+++SUGGEST_RESET = "\033[0m"
+++
+++KEYWORDS = {"if", "then", "else", "fi", "for", "do", "done", "while", "esac",
+++            "case", "in", "function", "return", "local", "export", "declare",
+++            "readonly", "unset", "shift", "read", "echo", "printf", "test",
+++            "[", "]", "true", "false", "exit", "break", "continue", "set",
+++            "alias", "unalias", "type", "which", "where", "hash",
+++            "command", "builtin", "enable", "disable", "trap", "exec", "cd",
+++            "pwd", "pushd", "popd", "dirs", "eval", "source", ".",
+++            "mapfile", "readarray", "getopts", "typeset", "nameref", "coproc",
+++            "select", "times", "ulimit", "umask", "shopt", "opterr", "optreset",
+++            "optplus", "optextglob", "optlocal", "optpipefail",
+++            "optglobstar", "optnullglob", "optdotglob", "optfail", "optnocasematch",
+++            "optglob", "optinherit", "optlastpipe", "optxpglob"}
+++
+++def parse_args():
+++    parser = argparse.ArgumentParser(
+++        prog="shellharden",
+++        description="The corrective bash syntax highlighter.",
+++        epilog="Version " + VERSION,
+++        formatter_class=argparse.RawDescriptionHelpFormatter
+++    )
+++    parser.add_argument("file", nargs="?", help="Bash script file to analyze")
+++    parser.add_argument("-v", "--version", action="version", version="shellharden " + VERSION)
+++    parser.add_argument("-c", "--color", action="store_true", default=True,
+++                        help="Enable color output (default)")
+++    parser.add_argument("-n", "--no-color", action="store_true",
+++                        help="Disable color output")
+++    parser.add_argument("-q", "--quiet", action="store_true",
+++                        help="Suppress all output except suggestions")
+++    parser.add_argument("-s", "--suggest", action="store_true",
+++                        help="Show suggestions for fixes")
+++    parser.add_argument("-f", "--fix", action="store_true",
+++                        help="Apply suggested fixes to the file")
+++    parser.add_argument("-l", "--list", action="store_true",
+++                        help="List all keywords")
+++    return parser.parse_args()
+++
+++def highlight_line(line, suggest=False):
+++    """Highlight a single line of bash code."""
+++    result = []
+++    pos = 0
+++    line = line.rstrip()
+++    
+++    while pos < len(line):
+++        # Check for comments
+++        if line[pos] == "#":
+++            result.append(COMMENT_COLOR + line[pos:])
+++            break
+++        # Check for strings
+++        elif line[pos] in '"\'':
+++            quote = line[pos]
+++            end = line.find(quote, pos + 1)
+++            if end == -1:
+++                end = len(line)
+++            result.append(STRING_COLOR + line[pos:end + 1])
+++            pos = end + 1
+++            continue
+++        # Check for variables
+++        elif line[pos] == "$":
+++            end = pos + 1
+++            while end < len(line) and (line[end].isalnum() or line[end] in "_{}[]"):
+++                end += 1
+++            result.append(VARIABLE_COLOR + line[pos:end])
+++            pos = end
+++            continue
+++        # Check for numbers
+++        elif line[pos].isdigit():
+++            end = pos
+++            while end < len(line) and line[end].isdigit():
+++                end += 1
+++            result.append(NUMBER_COLOR + line[pos:end])
+++            pos = end
+++            continue
+++        # Check for keywords
+++        elif line[pos:].lower().startswith("if"):
+++            result.append(KEYWORD_COLOR + "if")
+++            pos += 2
+++            continue
+++        elif line[pos:].lower().startswith("then"):
+++            result.append(KEYWORD_COLOR + "then")
+++            pos += 4
+++            continue
+++        elif line[pos:].lower().startswith("else"):
+++            result.append(KEYWORD_COLOR + "else")
+++            pos += 4
+++            continue
+++        elif line[pos:].lower().startswith("fi"):
+++            result.append(KEYWORD_COLOR + "fi")
+++            pos += 2
+++            continue
+++        elif line[pos:].lower().startswith("for"):
+++            result.append(KEYWORD_COLOR + "for")
+++            pos += 3
+++            continue
+++        elif line[pos:].lower().startswith("do"):
+++            result.append(KEYWORD_COLOR + "do")
+++            pos += 2
+++            continue
+++        elif line[pos:].lower().startswith("done"):
+++            result.append(KEYWORD_COLOR + "done")
+++            pos += 4
+++            continue
+++        elif line[pos:].lower().startswith("while"):
+++            result.append(KEYWORD_COLOR + "while")
+++            pos += 5
+++            continue
+++        elif line[pos:].lower().startswith("esac"):
+++            result.append(KEYWORD_COLOR + "esac")
+++            pos += 4
+++            continue
+++        elif line[pos:].lower().startswith("case"):
+++            result.append(KEYWORD_COLOR + "case")
+++            pos += 4
+++            continue
+++        elif line[pos:].lower().startswith("in"):
+++            result.append(KEYWORD_COLOR + "in")
+++            pos += 2
+++            continue
+++        elif line[pos:].lower().startswith("function"):
+++            result.append(KEYWORD_COLOR + "function")
+++            pos += 8
+++            continue
+++        elif line[pos:].lower().startswith("return"):
+++            result.append(KEYWORD_COLOR + "return")
+++            pos += 6
+++            continue
+++        elif line[pos:].lower().startswith("local"):
+++            result.append(KEYWORD_COLOR + "local")
+++            pos += 5
+++            continue
+++        elif line[pos:].lower().startswith("export"):
+++            result.append(KEYWORD_COLOR + "export")
+++            pos += 6
+++            continue
+++        elif line[pos:].lower().startswith("declare"):
+++            result.append(KEYWORD_COLOR + "declare")
+++            pos += 7
+++            continue
+++        elif line[pos:].lower().startswith("readonly"):
+++            result.append(KEYWORD_COLOR + "readonly")
+++            pos += 8
+++            continue
+++        elif line[pos:].lower().startswith("unset"):
+++            result.append(KEYWORD_COLOR + "unset")
+++            pos += 5
+++            continue
+++        elif line[pos:].lower().startswith("shift"):
+++            result.append(KEYWORD_COLOR + "shift")
+++            pos += 5
+++            continue
+++        elif line[pos:].lower().startswith("read"):
+++            result.append(KEYWORD_COLOR + "read")
+++            pos += 4
+++            continue
+++        elif line[pos:].lower().startswith("printf"):
+++            result.append(KEYWORD_COLOR + "printf")
+++            pos += 6
+++            continue
+++        elif line[pos:].lower().startswith("true"):
+++            result.append(KEYWORD_COLOR + "true")
+++            pos += 4
+++            continue
+++        elif line[pos:].lower().startswith("false"):
+++            result.append(KEYWORD_COLOR + "false")
+++            pos += 5
+++            continue
+++        elif line[pos:].lower().startswith("exit"):
+++            result.append(KEYWORD_COLOR + "exit")
+++            pos += 4
+++            continue
+++        elif line[pos:].lower().startswith("break"):
+++            result.append(KEYWORD_COLOR + "break")
+++            pos += 5
+++            continue
+++        elif line[pos:].lower().startswith("continue"):
+++            result.append(KEYWORD_COLOR + "continue")
+++            pos += 8
+++            continue
+++        elif line[pos:].lower().startswith("set"):
+++            result.append(KEYWORD_COLOR + "set")
+++            pos += 3
+++            continue
+++        elif line[pos:].lower().startswith("alias"):
+++            result.append(KEYWORD_COLOR + "alias")
+++            pos += 5
+++            continue
+++        elif line[pos:].lower().startswith("unalias"):
+++            result.append(KEYWORD_COLOR + "unalias")
+++            pos += 7
+++            continue
+++        elif line[pos:].lower().startswith("type"):
+++            result.append(KEYWORD_COLOR + "type")
+++            pos += 4
+++            continue
+++        elif line[pos:].lower().startswith("which"):
+++            result.append(KEYWORD_COLOR + "which")
+++            pos += 5
+++            continue
+++        elif line[pos:].lower().startswith("where"):
+++            result.append(KEYWORD_COLOR + "where")
+++            pos += 5
+++            continue
+++        elif line[pos:].lower().startswith("hash"):
+++            result.append(KEYWORD_COLOR + "hash")
+++            pos += 4
+++            continue
+++        elif line[pos:].lower().startswith("command"):
+++            result.append(KEYWORD_COLOR + "command")
+++            pos += 7
+++            continue
+++        elif line[pos:].lower().startswith("builtin"):
+++            result.append(KEYWORD_COLOR + "builtin")
+++            pos += 7
+++            continue
+++        elif line[pos:].lower().startswith("enable"):
+++            result.append(KEYWORD_COLOR + "enable")
+++            pos += 6
+++            continue
+++        elif line[pos:].lower().startswith("disable"):
+++            result.append(KEYWORD_COLOR + "disable")
+++            pos += 7
+++            continue
+++        elif line[pos:].lower().startswith("trap"):
+++            result.append(KEYWORD_COLOR + "trap")
+++            pos += 4
+++            continue
+++        elif line[pos:].lower().startswith("exec"):
+++            result.append(KEYWORD_COLOR + "exec")
+++            pos += 4
+++            continue
+++        elif line[pos:].lower().startswith("cd"):
+++            result.append(KEYWORD_COLOR + "cd")
+++            pos += 2
+++            continue
+++        elif line[pos:].lower().startswith("pwd"):
+++            result.append(KEYWORD_COLOR + "pwd")
+++            pos += 3
+++            continue
+++        elif line[pos:].lower().startswith("pushd"):
+++            result.append(KEYWORD_COLOR + "pushd")
+++            pos += 5
+++            continue
+++        elif line[pos:].lower().startswith("popd"):
+++            result.append(KEYWORD_COLOR + "popd")
+++            pos += 4
+++            continue
+++        elif line[pos:].lower().startswith("dirs"):
+++            result.append(KEYWORD_COLOR + "dirs")
+++            pos += 4
+++            continue
+++        elif line[pos:].lower().startswith("eval"):
+++            result.append(KEYWORD_COLOR + "eval")
+++            pos += 4
+++            continue
+++        elif line[pos:].lower().startswith("source"):
+++            result.append(KEYWORD_COLOR + "source")
+++            pos += 6
+++            continue
+++        elif line[pos:].lower().startswith("mapfile"):
+++            result.append(KEYWORD_COLOR + "mapfile")
+++            pos += 7
+++            continue
+++        elif line[pos:].lower().startswith("readarray"):
+++            result.append(KEYWORD_COLOR + "readarray")
+++            pos += 9
+++            continue
+++        elif line[pos:].lower().startswith("getopts"):
+++            result.append(KEYWORD_COLOR + "getopts")
+++            pos += 7
+++            continue
+++        elif line[pos:].lower().startswith("typeset"):
+++            result.append(KEYWORD_COLOR + "typeset")
+++            pos += 7
+++            continue
+++        elif line[pos:].lower().startswith("nameref"):
+++            result.append(KEYWORD_COLOR + "nameref")
+++            pos += 7
+++            continue
+++        elif line[pos:].lower().startswith("coproc"):
+++            result.append(KEYWORD_COLOR + "coproc")
+++            pos += 6
+++            continue
+++        elif line[pos:].lower().startswith("select"):
+++            result.append(KEYWORD_COLOR + "select")
+++            pos += 6
+++            continue
+++        elif line[pos:].lower().startswith("times"):
+++            result.append(KEYWORD_COLOR + "times")
+++            pos += 5
+++            continue
+++        elif line[pos:].lower().startswith("ulimit"):
+++            result.append(KEYWORD_COLOR + "ulimit")
+++            pos += 6
+++            continue
+++        elif line[pos:].lower().startswith("umask"):
+++            result.append(KEYWORD_COLOR + "umask")
+++            pos += 5
+++            continue
+++        elif line[pos:].lower().startswith("shopt"):
+++            result.append(KEYWORD_COLOR + "shopt")
+++            pos += 5
+++            continue
+++        else:
+++            result.append(line[pos])
+++            pos += 1
+++    
+++    return "".join(result)
+++
+++def analyze_file(filepath, suggest=False, fix=False):
+++    """Analyze a bash script file and return issues."""
+++    issues = []
+++    try:
+++        with open(filepath, "r") as f:
+++            lines = f.readlines()
+++    except FileNotFoundError:
+++        print(f"Error: File not found: {filepath}", file=sys.stderr)
+++        return 1
+++    except IOError as e:
+++        print(f"Error reading file: {e}", file=sys.stderr)
+++        return 1
+++    
+++    for i, line in enumerate(lines, 1):
+++        stripped = line.strip()
+++        if stripped.startswith("#") or stripped == "":
+++            continue
+++        
+++        # Check for common issues
+++        if stripped.startswith("if") and not stripped.startswith("if ["):
+++            if not stripped.endswith("then"):
+++                issues.append((i, "Missing 'then' after 'if'"))
+++        
+++        if stripped.startswith("for") and not stripped.endswith("do"):
+++            issues.append((i, "Missing 'do' after 'for'"))
+++        
+++        if stripped.startswith("while") and not stripped.endswith("do"):
+++            issues.append((i, "Missing 'do' after 'while'"))
+++        
+++        if stripped.startswith("case") and not stripped.endswith("in"):
+++            issues.append((i, "Missing 'in' after 'case'"))
+++        
+++        if stripped.startswith("function") and not stripped.endswith("("):
+++            issues.append((i, "Missing '(' after 'function'"))
+++        
+++        if stripped.startswith("do") and not stripped.endswith("done"):
+++            issues.append((i, "Missing 'done' after 'do'"))
+++        
+++        if stripped.startswith("then") and not stripped.endswith("fi"):
+++            issues.append((i, "Missing 'fi' after 'then'"))
+++        
+++        if stripped.startswith("else") and not stripped.endswith("fi"):
+++            issues.append((i, "Missing 'fi' after 'else'"))
+++    
+++    return issues
+++
+++def main():
+++    args = parse_args()
+++    
+++    if args.list:
+++        for kw in sorted(KEYWORDS):
+++            print(kw)
+++        return 0
+++    
+++    if args.file is None:
+++        print("Usage: shellharden [OPTIONS] [FILE]", file=sys.stderr)
+++        print("Analyze a bash script for syntax issues.", file=sys.stderr)
+++        return 1
+++    
+++    filepath = args.file
+++    issues = analyze_file(filepath, args.suggest, args.fix)
+++    
+++    if issues:
+++        print(f"Found {len(issues)} issue(s) in {filepath}:")
+++        for line_num, msg in issues:
+++            print(f"  Line {line_num}: {msg}")
+++        return 1
+++    else:
+++        print(f"No issues found in {filepath}")
+++        return 0
+++
+++if __name__ == "__main__":
+++    sys.exit(main())
+++PYEOF
+++
+++chmod +x executable
+diff --git a/shellharden.py b/shellharden.py
+new file mode 100755
+index 0000000..5bb09f0
+--- /dev/null
++++ b/shellharden.py
+@@ -0,0 +1,687 @@
++#!/usr/bin/env python3
++<<<<<<< ours
++import sys
++import argparse
++
++VERSION = "4.3.1"
++RESET = "\033[0m"
++COLORS = {
++    'keyword': "\033[38;5;134m",
++    'string': "\033[38;5;113m",
++    'variable': "\033[38;5;208m",
++    'comment': "\033[38;5;244m",
++    'operator': "\033[38;5;203m",
++    'builtin': "\033[38;5;196m",
++    'default': "\033[38;5;250m",
++    'bg_suggest': "\033[48;5;226m",
++}
++
++def parse_args():
++    parser = argparse.ArgumentParser(
++        description="Shellharden: The corrective bash syntax highlighter.",
++        formatter_class=argparse.RawDescriptionHelpFormatter,
++        epilog="""
++The changes suggested by Shellharden inhibits word splitting and indirect
++pathname expansion. This will make your script ShellCheck compliant in terms
++of quoting. Whether your script will work afterwards is a different question:
++If your script was using those features on purpose, it obviously won't anymore!
++
++Every script is possible to write without using word splitting or indirect
++pathname expansion, but it may involve doing things differently.
++See the accompanying file how_to_do_things_safely_in_bash.md or online:
++https://github.com/anordal/shellharden/blob/master/how_to_do_things_safely_in_bash.md
++"""
++    )
++    parser.add_argument('--suggest', action='store_true')
++    parser.add_argument('--syntax', action='store_true')
++    parser.add_argument('--syntax-suggest', action='store_true')
++    parser.add_argument('--transform', action='store_true')
++    parser.add_argument('--check', action='store_true')
++    parser.add_argument('--replace', action='store_true')
++    parser.add_argument('--', nargs='*', metavar='files', dest='after_dash')
++    parser.add_argument('--version', action='store_true')
++    parser.add_argument('files', nargs='*')
++    return parser.parse_args()
++
++def read_input(files):
++    if files:
++        for f in files:
++            with open(f, 'r') as fh:
++                for line in fh:
++                    yield line
++    else:
++        for line in sys.stdin:
++            yield line
++
++def transform_line(line):
++    result = []
++    i = 0
++    while i < len(line):
++        if line[i].isspace():
++            result.append(line[i])
++            i += 1
++            continue
++        if line[i] == '#':
++            result.append(line[i:])
++            i = len(line)
++            continue
++        if line[i] in ('"', "'"):
++            quote = line[i]
++            result.append(quote)
++            i += 1
++            while i < len(line) and line[i] != quote:
++                result.append(line[i])
++                i += 1
++            if i < len(line):
++                result.append(quote)
++                i += 1
++            continue
++        if line[i] == '$':
++            result.append('"')
++            result.append(line[i])
++            i += 1
++            if i < len(line) and line[i] == '{':
++                result.append('{')
++                i += 1
++                while i < len(line) and line[i] != '}':
++                    result.append(line[i])
++                    i += 1
++                if i < len(line):
++                    result.append('}')
++                    i += 1
++            elif i < len(line) and (line[i].isalnum() or line[i] == '_'):
++                while i < len(line) and (line[i].isalnum() or line[i] == '_'):
++                    result.append(line[i])
++                    i += 1
++            result.append('"')
++            continue
++        if line[i] in '()[]{}|;&<>':
++            result.append(line[i])
++            i += 1
++            continue
++        result.append(line[i])
++        i += 1
++    return ''.join(result)
++
++def format_suggest(line):
++    result = []
++    i = 0
++    while i < len(line):
++        if line[i].isspace():
++            result.append(line[i])
++            i += 1
++            continue
++        if line[i] == '#':
++            result.append(line[i:])
++            i = len(line)
++            continue
++        if line[i] in ('"', "'"):
++            quote = line[i]
++            result.append(quote)
++            i += 1
++            while i < len(line) and line[i] != quote:
++                result.append(line[i])
++                i += 1
++            if i < len(line):
++                result.append(quote)
++                i += 1
++            continue
++        if line[i] == '$':
++            result.append(line[i])
++            i += 1
++            if i < len(line) and line[i] == '{':
++                result.append(line[i])
++                i += 1
++                while i < len(line) and line[i] != '}':
++                    result.append(COLORS['bg_suggest'] + line[i] + RESET)
++                    i += 1
++                if i < len(line):
++                    result.append(line[i])
++                    i += 1
++            elif i < len(line) and (line[i].isalnum() or line[i] == '_'):
++                result.append(COLORS['bg_suggest'] + line[i] + RESET)
++                i += 1
++                while i < len(line) and (line[i].isalnum() or line[i] == '_'):
++                    result.append(COLORS['bg_suggest'] + line[i] + RESET)
++                    i += 1
++            continue
++        if line[i] in '()[]{}|;&<>':
++            result.append(line[i])
++            i += 1
++            continue
++        result.append(line[i])
++        i += 1
++    return ''.join(result)
++
++def format_syntax(line):
++    result = []
++    i = 0
++    while i < len(line):
++        if line[i].isspace():
++            result.append(COLORS['default'] + line[i] + RESET)
++            i += 1
++            continue
++        if line[i] == '#':
++            result.append(COLORS['comment'] + line[i:] + RESET)
++            i = len(line)
++            continue
++        if line[i] in ('"', "'"):
++            quote = line[i]
++            result.append(COLORS['string'] + quote + RESET)
++            i += 1
++            while i < len(line) and line[i] != quote:
++                result.append(COLORS['string'] + line[i] + RESET)
++                i += 1
++            if i < len(line):
++                result.append(COLORS['string'] + quote + RESET)
++                i += 1
++            continue
++        if line[i] == '$':
++            result.append(COLORS['variable'] + line[i] + RESET)
++            i += 1
++            if i < len(line) and line[i] == '{':
++                result.append(COLORS['variable'] + line[i] + RESET)
++                i += 1
++                while i < len(line) and line[i] != '}':
++                    result.append(COLORS['variable'] + line[i] + RESET)
++                    i += 1
++                if i < len(line):
++                    result.append(COLORS['variable'] + line[i] + RESET)
++                    i += 1
++            elif i < len(line) and (line[i].isalnum() or line[i] == '_'):
++                result.append(COLORS['variable'] + line[i] + RESET)
++                i += 1
++                while i < len(line) and (line[i].isalnum() or line[i] == '_'):
++                    result.append(COLORS['variable'] + line[i] + RESET)
++                    i += 1
++            continue
++        if line[i] in '()[]{}|;&<>':
++            result.append(COLORS['operator'] + line[i] + RESET)
++            i += 1
++            continue
++        result.append(COLORS['default'] + line[i] + RESET)
++        i += 1
++    return ''.join(result)
++=======
++"""
++Shellharden: The corrective bash syntax highlighter.
++Version 4.3.1
++"""
++
++import sys
++import re
++import argparse
++import os
++
++VERSION = "4.3.1"
++
++# ANSI color codes
++RESET = "\033[0m"
++BOLD = "\033[1m"
++KEYWORD_COLOR = "\033[0;38;2;192;0;128m"
++STRING_COLOR = "\033[0;38;2;255;0;0m"
++VARIABLE_COLOR = "\033[0;38;2;63;127;207m"
++NUMBER_COLOR = "\033[0;38;2;0;127;255m"
++COMMENT_COLOR = "\033[0;38;2;0;127;255m"
++SUGGEST_COLOR = "\033[0;42m"
++SUGGEST_RESET = "\033[0m"
++
++KEYWORDS = {"if", "then", "else", "fi", "for", "do", "done", "while", "esac",
++            "case", "in", "function", "return", "local", "export", "declare",
++            "readonly", "unset", "shift", "read", "echo", "printf", "test",
++            "[", "]", "true", "false", "exit", "break", "continue", "set",
++            "alias", "unalias", "type", "which", "where", "hash",
++            "command", "builtin", "enable", "disable", "trap", "exec", "cd",
++            "pwd", "pushd", "popd", "dirs", "eval", "source", ".",
++            "mapfile", "readarray", "getopts", "typeset", "nameref", "coproc",
++            "select", "times", "ulimit", "umask", "shopt", "opterr", "optreset",
++            "optplus", "optextglob", "optlocal", "optpipefail",
++            "optglobstar", "optnullglob", "optdotglob", "optfail", "optnocasematch",
++            "optglob", "optinherit", "optlastpipe", "optxpglob"}
++
++def parse_args():
++    parser = argparse.ArgumentParser(
++        prog="shellharden",
++        description="The corrective bash syntax highlighter.",
++        epilog="Version " + VERSION,
++        formatter_class=argparse.RawDescriptionHelpFormatter
++    )
++    parser.add_argument("file", nargs="?", help="Bash script file to analyze")
++    parser.add_argument("-v", "--version", action="version", version="shellharden " + VERSION)
++    parser.add_argument("-c", "--color", action="store_true", default=True,
++                        help="Enable color output (default)")
++    parser.add_argument("-n", "--no-color", action="store_true",
++                        help="Disable color output")
++    parser.add_argument("-q", "--quiet", action="store_true",
++                        help="Suppress all output except suggestions")
++    parser.add_argument("-s", "--suggest", action="store_true",
++                        help="Show suggestions for fixes")
++    parser.add_argument("-f", "--fix", action="store_true",
++                        help="Apply suggested fixes to the file")
++    parser.add_argument("-l", "--list", action="store_true",
++                        help="List all keywords")
++    return parser.parse_args()
++
++def highlight_line(line, suggest=False):
++    """Highlight a single line of bash code."""
++    result = []
++    pos = 0
++    line = line.rstrip()
++    
++    while pos < len(line):
++        # Check for comments
++        if line[pos] == "#":
++            result.append(COMMENT_COLOR + line[pos:])
++            break
++        # Check for strings
++        elif line[pos] in "\"\'":
++            quote = line[pos]
++            end = line.find(quote, pos + 1)
++            if end == -1:
++                end = len(line)
++            result.append(STRING_COLOR + line[pos:end + 1])
++            pos = end + 1
++            continue
++        # Check for variables
++        elif line[pos] == "$":
++            end = pos + 1
++            while end < len(line) and (line[end].isalnum() or line[end] in "_{}[]"):
++                end += 1
++            result.append(VARIABLE_COLOR + line[pos:end])
++            pos = end
++            continue
++        # Check for numbers
++        elif line[pos].isdigit():
++            end = pos
++            while end < len(line) and line[end].isdigit():
++                end += 1
++            result.append(NUMBER_COLOR + line[pos:end])
++            pos = end
++            continue
++        # Check for keywords
++        elif line[pos:].lower().startswith("if"):
++            result.append(KEYWORD_COLOR + "if")
++            pos += 2
++            continue
++        elif line[pos:].lower().startswith("then"):
++            result.append(KEYWORD_COLOR + "then")
++            pos += 4
++            continue
++        elif line[pos:].lower().startswith("else"):
++            result.append(KEYWORD_COLOR + "else")
++            pos += 4
++            continue
++        elif line[pos:].lower().startswith("fi"):
++            result.append(KEYWORD_COLOR + "fi")
++            pos += 2
++            continue
++        elif line[pos:].lower().startswith("for"):
++            result.append(KEYWORD_COLOR + "for")
++            pos += 3
++            continue
++        elif line[pos:].lower().startswith("do"):
++            result.append(KEYWORD_COLOR + "do")
++            pos += 2
++            continue
++        elif line[pos:].lower().startswith("done"):
++            result.append(KEYWORD_COLOR + "done")
++            pos += 4
++            continue
++        elif line[pos:].lower().startswith("while"):
++            result.append(KEYWORD_COLOR + "while")
++            pos += 5
++            continue
++        elif line[pos:].lower().startswith("esac"):
++            result.append(KEYWORD_COLOR + "esac")
++            pos += 4
++            continue
++        elif line[pos:].lower().startswith("case"):
++            result.append(KEYWORD_COLOR + "case")
++            pos += 4
++            continue
++        elif line[pos:].lower().startswith("in"):
++            result.append(KEYWORD_COLOR + "in")
++            pos += 2
++            continue
++        elif line[pos:].lower().startswith("function"):
++            result.append(KEYWORD_COLOR + "function")
++            pos += 9
++            continue
++        elif line[pos:].lower().startswith("return"):
++            result.append(KEYWORD_COLOR + "return")
++            pos += 6
++            continue
++        elif line[pos:].lower().startswith("local"):
++            result.append(KEYWORD_COLOR + "local")
++            pos += 5
++            continue
++        elif line[pos:].lower().startswith("export"):
++            result.append(KEYWORD_COLOR + "export")
++            pos += 6
++            continue
++        elif line[pos:].lower().startswith("declare"):
++            result.append(KEYWORD_COLOR + "declare")
++            pos += 7
++            continue
++        elif line[pos:].lower().startswith("readonly"):
++            result.append(KEYWORD_COLOR + "readonly")
++            pos += 8
++            continue
++        elif line[pos:].lower().startswith("unset"):
++            result.append(KEYWORD_COLOR + "unset")
++            pos += 5
++            continue
++        elif line[pos:].lower().startswith("shift"):
++            result.append(KEYWORD_COLOR + "shift")
++            pos += 5
++            continue
++        elif line[pos:].lower().startswith("read"):
++            result.append(KEYWORD_COLOR + "read")
++            pos += 4
++            continue
++        elif line[pos:].lower().startswith("echo"):
++            result.append(KEYWORD_COLOR + "echo")
++            pos += 4
++            continue
++        elif line[pos:].lower().startswith("printf"):
++            result.append(KEYWORD_COLOR + "printf")
++            pos += 6
++            continue
++        elif line[pos:].lower().startswith("test"):
++            result.append(KEYWORD_COLOR + "test")
++            pos += 4
++            continue
++        elif line[pos] == "[":
++            result.append(KEYWORD_COLOR + "[")
++            pos += 1
++            continue
++        elif line[pos] == "]":
++            result.append(KEYWORD_COLOR + "]")
++            pos += 1
++            continue
++        elif line[pos:].lower().startswith("true"):
++            result.append(KEYWORD_COLOR + "true")
++            pos += 4
++            continue
++        elif line[pos:].lower().startswith("false"):
++            result.append(KEYWORD_COLOR + "false")
++            pos += 5
++            continue
++        elif line[pos:].lower().startswith("exit"):
++            result.append(KEYWORD_COLOR + "exit")
++            pos += 4
++            continue
++        elif line[pos:].lower().startswith("break"):
++            result.append(KEYWORD_COLOR + "break")
++            pos += 5
++            continue
++        elif line[pos:].lower().startswith("continue"):
++            result.append(KEYWORD_COLOR + "continue")
++            pos += 8
++            continue
++        elif line[pos:].lower().startswith("set"):
++            result.append(KEYWORD_COLOR + "set")
++            pos += 3
++            continue
++        elif line[pos:].lower().startswith("alias"):
++            result.append(KEYWORD_COLOR + "alias")
++            pos += 5
++            continue
++        elif line[pos:].lower().startswith("unalias"):
++            result.append(KEYWORD_COLOR + "unalias")
++            pos += 7
++            continue
++        elif line[pos:].lower().startswith("type"):
++            result.append(KEYWORD_COLOR + "type")
++            pos += 4
++            continue
++        elif line[pos:].lower().startswith("which"):
++            result.append(KEYWORD_COLOR + "which")
++            pos += 5
++            continue
++        elif line[pos:].lower().startswith("where"):
++            result.append(KEYWORD_COLOR + "where")
++            pos += 5
++            continue
++        elif line[pos:].lower().startswith("hash"):
++            result.append(KEYWORD_COLOR + "hash")
++            pos += 4
++            continue
++        elif line[pos:].lower().startswith("command"):
++            result.append(KEYWORD_COLOR + "command")
++            pos += 7
++            continue
++        elif line[pos:].lower().startswith("builtin"):
++            result.append(KEYWORD_COLOR + "builtin")
++            pos += 7
++            continue
++        elif line[pos:].lower().startswith("enable"):
++            result.append(KEYWORD_COLOR + "enable")
++            pos += 6
++            continue
++        elif line[pos:].lower().startswith("disable"):
++            result.append(KEYWORD_COLOR + "disable")
++            pos += 7
++            continue
++        elif line[pos:].lower().startswith("trap"):
++            result.append(KEYWORD_COLOR + "trap")
++            pos += 4
++            continue
++        elif line[pos:].lower().startswith("exec"):
++            result.append(KEYWORD_COLOR + "exec")
++            pos += 4
++            continue
++        elif line[pos:].lower().startswith("cd"):
++            result.append(KEYWORD_COLOR + "cd")
++            pos += 2
++            continue
++        elif line[pos:].lower().startswith("pwd"):
++            result.append(KEYWORD_COLOR + "pwd")
++            pos += 3
++            continue
++        elif line[pos:].lower().startswith("pushd"):
++            result.append(KEYWORD_COLOR + "pushd")
++            pos += 5
++            continue
++        elif line[pos:].lower().startswith("popd"):
++            result.append(KEYWORD_COLOR + "popd")
++            pos += 4
++            continue
++        elif line[pos:].lower().startswith("dirs"):
++            result.append(KEYWORD_COLOR + "dirs")
++            pos += 4
++            continue
++        elif line[pos:].lower().startswith("eval"):
++            result.append(KEYWORD_COLOR + "eval")
++            pos += 4
++            continue
++        elif line[pos:].lower().startswith("source"):
++            result.append(KEYWORD_COLOR + "source")
++            pos += 6
++            continue
++        elif line[pos:].lower().startswith("mapfile"):
++            result.append(KEYWORD_COLOR + "mapfile")
++            pos += 7
++            continue
++        elif line[pos:].lower().startswith("readarray"):
++            result.append(KEYWORD_COLOR + "readarray")
++            pos += 9
++            continue
++        elif line[pos:].lower().startswith("getopts"):
++            result.append(KEYWORD_COLOR + "getopts")
++            pos += 7
++            continue
++        elif line[pos:].lower().startswith("typeset"):
++            result.append(KEYWORD_COLOR + "typeset")
++            pos += 7
++            continue
++        elif line[pos:].lower().startswith("nameref"):
++            result.append(KEYWORD_COLOR + "nameref")
++            pos += 7
++            continue
++        elif line[pos:].lower().startswith("coproc"):
++            result.append(KEYWORD_COLOR + "coproc")
++            pos += 6
++            continue
++        elif line[pos:].lower().startswith("select"):
++            result.append(KEYWORD_COLOR + "select")
++            pos += 6
++            continue
++        elif line[pos:].lower().startswith("times"):
++            result.append(KEYWORD_COLOR + "times")
++            pos += 5
++            continue
++        elif line[pos:].lower().startswith("ulimit"):
++            result.append(KEYWORD_COLOR + "ulimit")
++            pos += 6
++            continue
++        elif line[pos:].lower().startswith("umask"):
++            result.append(KEYWORD_COLOR + "umask")
++            pos += 5
++            continue
++        elif line[pos:].lower().startswith("shopt"):
++            result.append(KEYWORD_COLOR + "shopt")
++            pos += 5
++            continue
++        else:
++            result.append(line[pos])
++            pos += 1
++    
++    return "".join(result)
++
++def analyze_file(filepath, suggest=False, fix=False):
++    """Analyze a bash script file and return issues."""
++    issues = []
++    try:
++        with open(filepath, "r") as f:
++            lines = f.readlines()
++    except FileNotFoundError:
++        print(f"Error: File not found: {filepath}", file=sys.stderr)
++        return 1
++    except IOError as e:
++        print(f"Error reading file: {e}", file=sys.stderr)
++        return 1
++    
++    for i, line in enumerate(lines, 1):
++        stripped = line.strip()
++        if stripped.startswith("#") or stripped == "":
++            continue
++        
++        # Check for common issues
++        if stripped.startswith("if") and not stripped.startswith("if ["):
++            if not stripped.endswith("then"):
++                issues.append((i, "Missing 'then' after 'if'"))
++        
++        if stripped.startswith("for") and not stripped.endswith("do"):
++            issues.append((i, "Missing 'do' after 'for'"))
++        
++        if stripped.startswith("while") and not stripped.endswith("do"):
++            issues.append((i, "Missing 'do' after 'while'"))
++        
++        if stripped.startswith("case") and not stripped.endswith("in"):
++            issues.append((i, "Missing 'in' after 'case'"))
++        
++        if stripped.startswith("function") and not stripped.endswith("("):
++            issues.append((i, "Missing '(' after 'function'"))
++        
++        if stripped.startswith("do") and not stripped.endswith("done"):
++            issues.append((i, "Missing 'done' after 'do'"))
++        
++        if stripped.startswith("then") and not stripped.endswith("fi"):
++            issues.append((i, "Missing 'fi' after 'then'"))
++        
++        if stripped.startswith("else") and not stripped.endswith("fi"):
++            issues.append((i, "Missing 'fi' after 'else'"))
++    
++    return issues
++>>>>>>> theirs
++
++def main():
++    args = parse_args()
++    
++<<<<<<< ours
++    if args.version:
++        print(VERSION)
++        return 0
++    
++    if args.suggest or args.syntax or args.syntax_suggest or args.transform or args.check or args.replace:
++        if args.suggest and args.syntax:
++            mode = 'syntax_suggest'
++        elif args.suggest:
++            mode = 'suggest'
++        elif args.syntax:
++            mode = 'syntax'
++        elif args.transform:
++            mode = 'transform'
++        elif args.check:
++            mode = 'check'
++        elif args.replace:
++            mode = 'replace'
++        else:
++            mode = 'suggest'
++        
++        changed = False
++        for line in read_input(args.files):
++            if mode == 'transform':
++                transformed = transform_line(line)
++                print(transformed, end='')
++                changed = True
++            elif mode == 'suggest':
++                formatted = format_suggest(line)
++                print(formatted, end='')
++                changed = True
++            elif mode == 'syntax':
++                formatted = format_syntax(line)
++                print(formatted, end='')
++                changed = True
++            elif mode == 'syntax_suggest':
++                formatted = format_suggest(line)
++                print(formatted, end='')
++                changed = True
++            elif mode == 'check':
++                transformed = transform_line(line)
++                if transformed.rstrip('\n') != line.rstrip('\n'):
++                    changed = True
++                print(line, end='')
++        
++        if mode == 'check':
++            return 2 if changed else 0
++        elif mode == 'replace':
++            if changed:
++                for f in args.files:
++                    with open(f, 'w') as fh:
++                        fh.write('')
++            return 0
++        else:
++            return 0
++    else:
++        parser.print_help()
++        return 0
++
++if __name__ == '__main__':
++=======
++    if args.list:
++        for kw in sorted(KEYWORDS):
++            print(kw)
++        return 0
++    
++    if args.file is None:
++        print("Usage: shellharden [OPTIONS] [FILE]", file=sys.stderr)
++        print("Analyze a bash script for syntax issues.", file=sys.stderr)
++        return 1
++    
++    filepath = args.file
++    issues = analyze_file(filepath, args.suggest, args.fix)
++    
++    if issues:
++        print(f"Found {len(issues)} issue(s) in {filepath}:")
++        for line_num, msg in issues:
++            print(f"  Line {line_num}: {msg}")
++        return 1
++    else:
++        print(f"No issues found in {filepath}")
++        return 0
++
++if __name__ == "__main__":
++>>>>>>> theirs
++    sys.exit(main())

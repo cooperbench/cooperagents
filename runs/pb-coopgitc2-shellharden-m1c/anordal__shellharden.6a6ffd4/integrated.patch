@@ -1,0 +1,1068 @@
+diff --git a/shellharden.sh b/shellharden.sh
+new file mode 100755
+index 0000000..8e1de52
+--- /dev/null
++++ b/shellharden.sh
+@@ -0,0 +1,1062 @@
++#!/bin/bash
++VERSION="4.3.1"
++RESET='\033[0m'
++BOLD='\033[1m'
++<<<<<<< ours
++BLUE='\033[0;34m'
++CYAN='\033[0;36m'
++GREEN='\033[0;32m'
++MAGENTA='\033[0;35m'
++YELLOW='\033[0;33m'
++RED='\033[0;31m'
++WHITE='\033[0;37m'
++SYNTAX_CMD='\033[0;38;2;192;0;128m'
++SYNTAX_STRING='\033[0;38;2;255;0;0m'
++SYNTAX_VAR='\033[0;38;2;63;127;207m'
++SYNTAX_NUMBER='\033[0;38;2;255;140;0m'
++SYNTAX_COMMENT='\033[0;38;2;127;207;127m'
++SYNTAX_KEYWORD='\033[0;38;2;255;0;255m'
++SYNTAX_BACKTICK='\033[0;38;2;255;165;0m'
++SYNTAX_DOLLAR='\033[0;38;2;63;127;207m'
++SYNTAX_QUOTE='\033[0;38;2;255;0;0m'
++BG_SUGGEST='\033[0;42m'
++BG_SUGGEST_END='\033[m'
++SUGGEST=0 SYNTAX=0 SYNTAX_SUGGEST=0 TRANSFORM=0 CHECK=0 REPLACE=0 STOP_AT_DASH=0 HELP=0 VERSION_FLAG=0
++FILES=()
++
++show_help() {
++    cat << 'EOF'
++Shellharden: The corrective bash syntax highlighter.
++
++Usage:
++        shellharden [options] [files]
++        cat files | shellharden [options] ''
++
++Shellharden is a syntax highlighter and a tool to semi-automate the rewriting
++of scripts to ShellCheck conformance, mainly focused on quoting.
++
++The default mode of operation is like `cat`, but with syntax highlighting in
++foreground colors and suggestive changes in background colors.
++
++Options:
++        --suggest         Output a colored diff suggesting changes.
++        --syntax          Output syntax highlighting with ANSI colors.
++        --syntax-suggest  Diff with syntax highlighting (default mode).
++        --transform       Output suggested changes.
++        --check           No output; exit with 2 if changes are suggested.
++        --replace         Replace file contents with suggested changes.
++        --                Don't treat further arguments as options.
++        -h|--help         Show help text.
++        --version         Show version.
++
++The changes suggested by Shellharden inhibits word splitting and indirect
++pathname expansion. This will make your script ShellCheck compliant in terms of
++quoting. Whether your script will work afterwards is a different question:
++If your script was using those features on purpose, it obviously won't anymore!
++
++Every script is possible to write without using word splitting or indirect
++pathname expansion, but it may involve doing things differently.
++See the accompanying file how_to_do_things_safely_in_bash.md or online:
++https://github.com/anordal/shellharden/blob/master/how_to_do_things_safely_in_bash.md
++
++EOF
++}
++
++show_version() {
++    echo "4.3.1"
++}
++
++in_case_context() {
++    local line_num="$1"
++    local total_lines="${#ALL_LINES[@]}"
++    local i
++    for ((i=0; i<line_num; i++)); do
++        if [[ "${ALL_LINES[$i]}" =~ ^[[:space:]]*case[[:space:]] ]]; then
++            return 0
++        fi
++    done
++    return 1
++}
++
++in_double_bracket_context() {
++    local line_num="$1"
++    local total_lines="${#ALL_LINES[@]}"
++    local i
++    for ((i=0; i<line_num; i++)); do
++        if [[ "${ALL_LINES[$i]}" =~ \[\[ ]]; then
++            return 0
++        fi
++    done
++    return 1
++}
++
++transform_line() {
++=======
++CYAN='\033[0;38;2;120;144;96m'
++MAGENTA='\033[0;38;2;192;0;128m'
++GREEN='\033[0;38;2;255;0;0m'
++BLUE='\033[0;38;2;0;127;255m'
++YELLOW='\033[0;38;2;255;165;0m'
++ORANGE='\033[0;38;2;255;140;0m'
++WHITE='\033[0;38;2;255;255;255m'
++DARK_GREEN='\033[0;38;2;0;127;0m'
++DARK_RED='\033[0;38;2;128;0;0m'
++DARK_YELLOW='\033[0;38;2;255;215;0m'
++DARK_CYAN='\033[0;38;2;0;128;128m'
++DARK_MAGENTA='\033[0;38;2;128;0;128m'
++DARK_BLUE='\033[0;38;2;0;0;128m'
++DARK_WHITE='\033[0;38;2;255;255;255m'
++DARK_GRAY='\033[0;38;2;128;128;128m'
++DARK_ORANGE='\033[0;38;2;255;140;0m'
++DARK_PURPLE='\033[0;38;2;128;0;128m'
++DARK_BROWN='\033[0;38;2;165;42;42m'
++DARK_TEAL='\033[0;38;2;0;128;128m'
++DARK_PINK='\033[0;38;2;255;192;203m'
++DARK_LIME='\033[0;38;2;154;205;50m'
++DARK_AQUA='\033[0;38;2;0;255;255m'
++DARK_SALMON='\033[0;38;2;250;128;114m'
++DARK_ROSE='\033[0;38;2;255;182;193m'
++DARK_TAN='\033[0;38;2;210;180;140m'
++DARK_OLIVE='\033[0;38;2;128;128;0m'
++DARK_INDIAN='\033[0;38;2;205;92;92m'
++DARK_CORAL='\033[0;38;2;255;127;80m'
++DARK_GOLD='\033[0;38;2;255;215;0m'
++DARK_SILVER='\033[0;38;2;192;192;192m'
++DARK_SAGE='\033[0;38;2;125;165;0m'
++DARK_SKY='\033[0;38;2;135;206;235m'
++DARK_TOMATO='\033[0;38;2;255;99;71m'
++DARK_VIOLET='\033[0;38;2;148;0;211m'
++DARK_WHEAT='\033[0;38;2;245;222;179m'
++DARK_YELLOW_GREEN='\033[0;38;2;154;205;50m'
++DARK_YELLOW_ORANGE='\033[0;38;2;255;165;0m'
++DARK_YELLOW_RED='\033[0;38;2;255;69;0m'
++DARK_YELLOW_BLUE='\033[0;38;2;123;255;0m'
++DARK_YELLOW_PURPLE='\033[0;38;2;153;0;255m'
++DARK_YELLOW_CYAN='\033[0;38;2;0;255;255m'
++DARK_YELLOW_MAGENTA='\033[0;38;2;255;0;255m'
++
++# Function to print help
++print_help() {
++    echo "Shellharden: The corrective bash syntax highlighter."
++    echo ""
++    echo "Usage:"
++    echo "	shellharden [options] [files]"
++    echo "	cat files | shellharden [options] ''"
++    echo ""
++    echo "Shellharden is a syntax highlighter and a tool to semi-automate the rewriting"
++    echo "of scripts to ShellCheck conformance, mainly focused on quoting."
++    echo ""
++    echo "The default mode of operation is like \`cat\`, but with syntax highlighting in"
++    echo "foreground colors and suggestive changes in background colors."
++    echo ""
++    echo "Options:"
++    echo "	--suggest         Output a colored diff suggesting changes."
++    echo "	--syntax          Output syntax highlighting with ANSI colors."
++    echo "	--syntax-suggest  Diff with syntax highlighting (default mode)."
++    echo "	--transform       Output suggested changes."
++    echo "	--check           No output; exit with 2 if changes are suggested."
++    echo "	--replace         Replace file contents with suggested changes."
++    echo "	--                Don't treat further arguments as options."
++    echo "	-h|--help         Show help text."
++    echo "	--version         Show version."
++    echo ""
++    echo "The changes suggested by Shellharden inhibits word splitting and indirect"
++    echo "pathname expansion. This will make your script ShellCheck compliant in terms of"
++    echo "quoting. Whether your script will work afterwards is a different question:"
++    echo "If your script was using those features on purpose, it obviously won't anymore!"
++    echo ""
++    echo "Every script is possible to write without using word splitting or indirect"
++    echo "pathname expansion, but it may involve doing things differently."
++    echo "See the accompanying file how_to_do_things_safely_in_bash.md or online:"
++    echo "https://github.com/anordal/shellharden/blob/master/how_to_do_things_safely_in_bash.md"
++    echo ""
++}
++
++# Function to print version
++print_version() {
++    echo "$VERSION"
++}
++
++# Function to highlight a single line
++highlight_line() {
++>>>>>>> theirs
++    local line="$1"
++    local result=""
++    local i=0
++    local len=${#line}
++<<<<<<< ours
++    local in_string=0
++    local string_char=""
++    
++    while [[ $i -lt $len ]]; do
++        local char="${line:$i:1}"
++        local next_char="${line:$((i+1)):1}"
++        
++        if [[ $in_string -eq 1 && "$char" == "\\" ]]; then
++            result+="$char"
++            result+="${line:$((i+1)):1}"
++            ((i+=2))
++            continue
++        fi
++        
++        if [[ $in_string -eq 0 && ("$char" == '"' || "$char" == "'") ]]; then
++            if [[ "$char" == "$string_char" ]]; then
++                in_string=0
++            else
++                string_char="$char"
++                in_string=1
++            fi
++            result+="$char"
++            ((i++))
++            continue
++        fi
++        
++        if [[ "$char" == '`' && $in_string -eq 0 ]]; then
++            result+="${SYNTAX_BACKTICK}"
++            result+="$char"
++            ((i++))
++            continue
++        fi
++        
++        if [[ "$char" == '$' && $in_string -eq 0 ]]; then
++            if [[ "$next_char" == '?' || "$next_char" == '$' || "$next_char" == '!' || "$next_char" == '#' ]]; then
++                result+="${SYNTAX_DOLLAR}"
++                result+="$char"
++                result+="$next_char"
++                ((i+=2))
++                continue
++            fi
++            
++            if [[ "$next_char" == '{' ]]; then
++                local lookahead="${line:$i:20}"
++                if [[ "$lookahead" =~ ^\{#[a-zA-Z_][a-zA-Z0-9_]*\[@\} ]]; then
++                    result+="${SYNTAX_DOLLAR}"
++                    result+="$char"
++                    result+="$lookahead"
++                    ((i+=20))
++                    continue
++                fi
++            fi
++            
++            if [[ "$next_char" == '=' && $in_string -eq 0 ]]; then
++                result+="${SYNTAX_DOLLAR}"
++                result+="$char"
++                result+="$next_char"
++                ((i+=2))
++                continue
++            fi
++            
++            if in_case_context $i "${#ALL_LINES[@]}"; then
++                result+="${SYNTAX_DOLLAR}"
++                result+="$char"
++                ((i++))
++                continue
++            fi
++            
++            if in_double_bracket_context $i "${#ALL_LINES[@]}"; then
++                result+="${SYNTAX_DOLLAR}"
++                result+="$char"
++                ((i++))
++                continue
++            fi
++            
++            result+="${SYNTAX_DOLLAR}"
++            result+="$char"
++            ((i++))
++            continue
++        fi
++        
++        if [[ "$char" == '$' && "$next_char" == '(' && $in_string -eq 0 ]]; then
++            local depth=1
++            local j=$((i+2))
++            while [[ $j -lt $len && $depth -gt 0 ]]; do
++                if [[ "${line:$j:1}" == '$' && "${line:$((j+1)):1}" == '(' ]]; then
++                    ((depth++))
++                    ((j+=2))
++                elif [[ "${line:$j:1}" == ')' ]]; then
++                    ((depth--))
++                    ((j++))
++                else
++                    ((j++))
++                fi
++            done
++            result+="${SYNTAX_DOLLAR}"
++            result+="$char"
++            result+="$next_char"
++            ((i=j))
++            continue
++        fi
++        
++        if [[ "$char" == '`' && $in_string -eq 0 ]]; then
++            local depth=1
++            local j=$((i+1))
++            while [[ $j -lt $len && $depth -gt 0 ]]; do
++                if [[ "${line:$j:1}" == '`' ]]; then
++                    ((depth--))
++                    ((j++))
++                else
++                    ((j++))
++                fi
++            done
++            result+="${SYNTAX_BACKTICK}"
++            result+="$char"
++            ((i=j))
++            continue
++        fi
++        
++        if [[ "$char" == '#' && $in_string -eq 0 ]]; then
++            result+="${SYNTAX_COMMENT}"
++            result+="$char"
++            ((i++))
++            continue
++        fi
++        
++        if [[ "$char" == '"' || "$char" == "'" ]]; then
++            result+="${SYNTAX_QUOTE}"
++            result+="$char"
++            ((i++))
++            continue
++        fi
++        
++        if [[ "$char" =~ [a-zA-Z] ]]; then
++            local word=""
++            while [[ $i -lt $len && "${line:$i:1}" =~ [a-zA-Z0-9_] ]]; do
++                word+="${line:$i:1}"
++                ((i++))
++            done
++            case "$word" in
++                if|then|else|fi|for|do|done|while|until|in|function|case|esac|return|exit|break|continue|select|elif|readonly|declare|local|export|typeset|unset|read|printf|echo|test|[[|]]|true|false|shift|set|trap|wait|source|\.|alias|unalias|hash|getopts|eval|exec|cd|pwd|pushd|popd|dirs|builtin|help|time|ulimit|umask|shopt|enable|disable|compgen|complete|compopt|bind|bindkey)
++                    result+="${SYNTAX_KEYWORD}"
++                    result+="$word"
++                    continue
++                    ;;
++            esac
++        fi
++        
++        if [[ "$char" =~ [0-9] ]]; then
++            local num=""
++            while [[ $i -lt $len && "${line:$i:1}" =~ [0-9.] ]]; do
++                num+="${line:$i:1}"
++                ((i++))
++            done
++            result+="${SYNTAX_NUMBER}"
++            result+="$num"
++            continue
++        fi
++        
++        if [[ "$char" == '=' || "$char" == '!' || "$char" == '<' || "$char" == '>' || "$char" == '&' || "$char" == '|' || "$char" == ';' || "$char" == '(' || "$char" == ')' || "$char" == '{' || "$char" == '}' || "$char" == '[' || "$char" == ']' || "$char" == '~' || "$char" == '*' || "$char" == '?' || "$char" == '.' || "$char" == ',' || "$char" == ':' || "$char" == '+' || "$char" == '-' || "$char" == '/' ]]; then
++            result+="$char"
++            ((i++))
++            continue
++        fi
++        
++        if [[ "$char" == ' ' || "$char" == $'\t' || "$char" == $'\n' || "$char" == $'\r' ]]; then
++            result+="$char"
++            ((i++))
++            continue
++        fi
++        
++        result+="$char"
++        ((i++))
++    done
++    
++    echo -e "$result"
++}
++
++syntax_highlight_line() {
++    local line="$1"
++    local result=""
++    local i=0
++    local len=${#line}
++    local in_string=0
++    local string_char=""
++    
++    while [[ $i -lt $len ]]; do
++        local char="${line:$i:1}"
++        local next_char="${line:$((i+1)):1}"
++        
++        if [[ $in_string -eq 1 && "$char" == "\\" ]]; then
++            result+="$char"
++            result+="${line:$((i+1)):1}"
++            ((i+=2))
++            continue
++        fi
++        
++        if [[ $in_string -eq 0 && ("$char" == '"' || "$char" == "'") ]]; then
++            if [[ "$char" == "$string_char" ]]; then
++                in_string=0
++            else
++                string_char="$char"
++                in_string=1
++            fi
++            result+="${SYNTAX_STRING}"
++            result+="$char"
++            ((i++))
++            continue
++        fi
++        
++        if [[ "$char" == '`' && $in_string -eq 0 ]]; then
++            result+="${SYNTAX_BACKTICK}"
++            result+="$char"
++            ((i++))
++            continue
++        fi
++        
++        if [[ "$char" == '$' && $in_string -eq 0 ]]; then
++            if [[ "$next_char" == '?' || "$next_char" == '$' || "$next_char" == '!' || "$next_char" == '#' ]]; then
++                result+="${SYNTAX_DOLLAR}"
++                result+="$char"
++                result+="$next_char"
++                ((i+=2))
++                continue
++            fi
++            
++            if [[ "$next_char" == '{' ]]; then
++                local lookahead="${line:$i:20}"
++                if [[ "$lookahead" =~ ^\{#[a-zA-Z_][a-zA-Z0-9_]*\[@\} ]]; then
++                    result+="${SYNTAX_DOLLAR}"
++                    result+="$char"
++                    result+="$lookahead"
++                    ((i+=20))
++                    continue
++                fi
++            fi
++            
++            if [[ "$next_char" == '=' && $in_string -eq 0 ]]; then
++                result+="${SYNTAX_DOLLAR}"
++                result+="$char"
++                result+="$next_char"
++                ((i+=2))
++                continue
++            fi
++            
++            result+="${SYNTAX_DOLLAR}"
++            result+="$char"
++            ((i++))
++            continue
++        fi
++        
++        if [[ "$char" == '$' && "$next_char" == '(' && $in_string -eq 0 ]]; then
++            local depth=1
++            local j=$((i+2))
++            while [[ $j -lt $len && $depth -gt 0 ]]; do
++                if [[ "${line:$j:1}" == '$' && "${line:$((j+1)):1}" == '(' ]]; then
++                    ((depth++))
++                    ((j+=2))
++                elif [[ "${line:$j:1}" == ')' ]]; then
++                    ((depth--))
++                    ((j++))
++                else
++                    ((j++))
++                fi
++            done
++            result+="${SYNTAX_DOLLAR}"
++            result+="$char"
++            result+="$next_char"
++            ((i=j))
++            continue
++        fi
++        
++        if [[ "$char" == '`' && $in_string -eq 0 ]]; then
++            local depth=1
++            local j=$((i+1))
++            while [[ $j -lt $len && $depth -gt 0 ]]; do
++                if [[ "${line:$j:1}" == '`' ]]; then
++                    ((depth--))
++                    ((j++))
++                else
++                    ((j++))
++                fi
++            done
++            result+="${SYNTAX_BACKTICK}"
++            result+="$char"
++            ((i=j))
++            continue
++        fi
++        
++        if [[ "$char" == '#' && $in_string -eq 0 ]]; then
++            result+="${SYNTAX_COMMENT}"
++            result+="$char"
++            ((i++))
++            continue
++        fi
++        
++        if [[ "$char" == '"' || "$char" == "'" ]]; then
++            result+="${SYNTAX_QUOTE}"
++            result+="$char"
++            ((i++))
++            continue
++        fi
++        
++        if [[ "$char" =~ [a-zA-Z] ]]; then
++            local word=""
++            while [[ $i -lt $len && "${line:$i:1}" =~ [a-zA-Z0-9_] ]]; do
++                word+="${line:$i:1}"
++                ((i++))
++            done
++            case "$word" in
++                if|then|else|fi|for|do|done|while|until|in|function|case|esac|return|exit|break|continue|select|elif|readonly|declare|local|export|typeset|unset|read|printf|echo|test|[[|]]|true|false|shift|set|trap|wait|source|\.|alias|unalias|hash|getopts|eval|exec|cd|pwd|pushd|popd|dirs|builtin|help|time|ulimit|umask|shopt|enable|disable|compgen|complete|compopt|bind|bindkey)
++                    result+="${SYNTAX_KEYWORD}"
++                    result+="$word"
++                    continue
++                    ;;
++            esac
++        fi
++        
++        if [[ "$char" =~ [0-9] ]]; then
++            local num=""
++            while [[ $i -lt $len && "${line:$i:1}" =~ [0-9.] ]]; do
++                num+="${line:$i:1}"
++                ((i++))
++            done
++            result+="${SYNTAX_NUMBER}"
++            result+="$num"
++            continue
++        fi
++        
++        if [[ "$char" == '=' || "$char" == '!' || "$char" == '<' || "$char" == '>' || "$char" == '&' || "$char" == '|' || "$char" == ';' || "$char" == '(' || "$char" == ')' || "$char" == '{' || "$char" == '}' || "$char" == '[' || "$char" == ']' || "$char" == '~' || "$char" == '*' || "$char" == '?' || "$char" == '.' || "$char" == ',' || "$char" == ':' || "$char" == '+' || "$char" == '-' || "$char" == '/' ]]; then
++            result+="$char"
++            ((i++))
++            continue
++        fi
++        
++        if [[ "$char" == ' ' || "$char" == $'\t' || "$char" == $'\n' || "$char" == $'\r' ]]; then
++            result+="$char"
++            ((i++))
++            continue
++        fi
++        
++        result+="$char"
++        ((i++))
++    done
++    
++    echo -e "$result"
++}
++
++process_input() {
++    local input="$1"
++    local mode="$2"
++    local line_num=0
++    
++    while IFS= read -r line || [[ -n "$line" ]]; do
++        ((line_num++))
++        
++        if [[ "$mode" == "suggest" ]]; then
++            local transformed
++            transformed=$(transform_line "$line")
++            if [[ "$line" != "$transformed" ]]; then
++                echo -e "${BG_SUGGEST}${line}${BG_SUGGEST_END}"
++                echo -e "${BG_SUGGEST}${transformed}${BG_SUGGEST_END}"
++            else
++                echo "$line"
++            fi
++        elif [[ "$mode" == "syntax" ]]; then
++            syntax_highlight_line "$line"
++        elif [[ "$mode" == "syntax-suggest" ]]; then
++            local transformed
++            transformed=$(transform_line "$line")
++            if [[ "$line" != "$transformed" ]]; then
++                echo -e "${BG_SUGGEST}${line}${BG_SUGGEST_END}"
++                echo -e "${BG_SUGGEST}${transformed}${BG_SUGGEST_END}"
++            else
++                syntax_highlight_line "$line"
++            fi
++        elif [[ "$mode" == "transform" ]]; then
++            transform_line "$line"
++        fi
++    done <<< "$input"
++}
++
++while [[ $# -gt 0 ]]; do
++    case "$1" in
++        --suggest)
++            SUGGEST=1
++            shift
++            ;;
++        --syntax)
++            SYNTAX=1
++            shift
++            ;;
++        --syntax-suggest)
++            SYNTAX_SUGGEST=1
++            shift
++            ;;
++        --transform)
++            TRANSFORM=1
++            shift
++            ;;
++        --check)
++            CHECK=1
++            shift
++            ;;
++        --replace)
++            REPLACE=1
++            shift
++            ;;
++        --)
++            STOP_AT_DASH=1
++            shift
++            ;;
++        -h|--help)
++            HELP=1
++            shift
++            ;;
++        --version)
++            VERSION_FLAG=1
++            shift
++            ;;
++        -*)
++            echo "Unknown option: $1" >&2
++            exit 1
++            ;;
++        *)
++            FILES+=("$1")
++            shift
++            ;;
++    esac
++done
++
++if [[ $VERSION_FLAG -eq 1 ]]; then
++    show_version
++    exit 0
++fi
++
++if [[ $HELP -eq 1 ]]; then
++    show_help
++    exit 0
++fi
++
++if [[ ${#FILES[@]} -eq 0 ]]; then
++    ALL_LINES=$(cat)
++else
++    ALL_LINES=""
++    for file in "${FILES[@]}"; do
++        if [[ -f "$file" ]]; then
++            if [[ -n "$ALL_LINES" ]]; then
++                ALL_LINES+=$'\n'
++            fi
++            ALL_LINES+=$(cat "$file")
++        else
++            echo "Error: File not found: $file" >&2
++            exit 1
++        fi
++    done
++fi
++
++if [[ $SUGGEST -eq 1 ]]; then
++    process_input "$ALL_LINES" "suggest"
++elif [[ $SYNTAX -eq 1 ]]; then
++    process_input "$ALL_LINES" "syntax"
++elif [[ $SYNTAX_SUGGEST -eq 1 ]]; then
++    process_input "$ALL_LINES" "syntax-suggest"
++elif [[ $TRANSFORM -eq 1 ]]; then
++    process_input "$ALL_LINES" "transform"
++elif [[ $CHECK -eq 1 ]]; then
++    while IFS= read -r line || [[ -n "$line" ]]; do
++        transformed=$(transform_line "$line")
++        if [[ "$line" != "$transformed" ]]; then
++            exit 2
++        fi
++    done <<< "$ALL_LINES"
++    exit 0
++elif [[ $REPLACE -eq 1 ]]; then
++    if [[ ${#FILES[@]} -ne 1 ]]; then
++        echo "Error: --replace requires exactly one file" >&2
++        exit 1
++    fi
++    file="${FILES[0]}"
++    output=""
++    while IFS= read -r line || [[ -n "$line" ]]; do
++        transformed=$(transform_line "$line")
++        output+="$transformed"$'\n'
++    done <<< "$ALL_LINES"
++    printf '%s' "$output" > "$file"
++fi
++=======
++    
++    while [ $i -lt $len ]; do
++        local char="${line:$i:1}"
++        local next_char="${line:$((i+1)):1}"
++        
++        # Check for shebang
++        if [ $i -eq 0 ] && [ "$char" = "#" ] && [ "${line:1:6}" = "#!" ]; then
++            result+="$CYAN${line:0:7}$RESET"
++            i=$((i + 7))
++            continue
++        fi
++        
++        # Check for comments
++        if [ "$char" = "#" ]; then
++            result+="$CYAN#$RESET"
++            while [ $i -lt $len ] && [ "${line:$i:1}" != "" ]; do
++                result+="${line:$i:1}"
++                i=$((i + 1))
++            done
++            continue
++        fi
++        
++        # Check for quoted strings
++        if [ "$char" = '"' ] || [ "$char" = "'" ]; then
++            result+="$GREEN$char$RESET"
++            i=$((i + 1))
++            while [ $i -lt $len ] && [ "${line:$i:1}" != "$char" ]; do
++                result+="$GREEN${line:$i:1}$RESET"
++                i=$((i + 1))
++            done
++            if [ $i -lt $len ]; then
++                result+="$GREEN$char$RESET"
++                i=$((i + 1))
++            fi
++            continue
++        fi
++        
++        # Check for variables
++        if [ "$char" = '$' ]; then
++            result+="$MAGENTA$char$RESET"
++            i=$((i + 1))
++            # Check for special variables that should not be quoted
++            if [ "${line:$i:1}" = "?" ] || [ "${line:$i:1}" = "!" ] || [ "${line:$i:1}" = "#" ] || [ "${line:$i:1}" = "@" ] || [ "${line:$i:1}" = "*" ]; then
++                result+="$MAGENTA${line:$i:1}$RESET"
++                i=$((i + 1))
++                continue
++            fi
++            # Check for ${...}
++            if [ "${line:$i:1}" = "{" ]; then
++                result+="$MAGENTA${line:$i:1}$RESET"
++                i=$((i + 1))
++                while [ $i -lt $len ] && [ "${line:$i:1}" != "}" ]; do
++                    result+="$MAGENTA${line:$i:1}$RESET"
++                    i=$((i + 1))
++                done
++                if [ $i -lt $len ]; then
++                    result+="$MAGENTA${line:$i:1}$RESET"
++                    i=$((i + 1))
++                fi
++                continue
++            fi
++            # Regular variable
++            while [ $i -lt $len ] && [ "${line:$i:1}" != " " ] && [ "${line:$i:1}" != $'\t' ] && [ "${line:$i:1}" != $'\n' ] && [ "${line:$i:1}" != '"' ] && [ "${line:$i:1}" != "'" ] && [ "${line:$i:1}" != '$' ]; do
++                result+="$MAGENTA${line:$i:1}$RESET"
++                i=$((i + 1))
++            done
++            continue
++        fi
++        
++        # Check for keywords
++        if [ "$char" = "e" ] && [ "${line:$i:1}" = "x" ] && [ "${line:$i:2}" = "i" ] && [ "${line:$i:3}" = "t" ]; then
++            result+="$MAGENTA${line:$i:4}$RESET"
++            i=$((i + 4))
++            continue
++        fi
++        if [ "$char" = "b" ] && [ "${line:$i:1}" = "r" ] && [ "${line:$i:2}" = "e" ] && [ "${line:$i:3}" = "a" ] && [ "${line:$i:4}" = "k" ]; then
++            result+="$MAGENTA${line:$i:5}$RESET"
++            i=$((i + 5))
++            continue
++        fi
++        if [ "$char" = "c" ] && [ "${line:$i:1}" = "o" ] && [ "${line:$i:2}" = "n" ] && [ "${line:$i:3}" = "t" ] && [ "${line:$i:4}" = "i" ] && [ "${line:$i:5}" = "n" ] && [ "${line:$i:6}" = "u" ] && [ "${line:$i:7}" = "e" ]; then
++            result+="$MAGENTA${line:$i:8}$RESET"
++            i=$((i + 8))
++            continue
++        fi
++        if [ "$char" = "i" ] && [ "${line:$i:1}" = "f" ]; then
++            result+="$MAGENTA${line:$i:2}$RESET"
++            i=$((i + 2))
++            continue
++        fi
++        if [ "$char" = "w" ] && [ "${line:$i:1}" = "h" ] && [ "${line:$i:2}" = "i" ] && [ "${line:$i:3}" = "l" ] && [ "${line:$i:4}" = "e" ]; then
++            result+="$MAGENTA${line:$i:5}$RESET"
++            i=$((i + 5))
++            continue
++        fi
++        if [ "$char" = "f" ] && [ "${line:$i:1}" = "o" ] && [ "${line:$i:2}" = "r" ]; then
++            result+="$MAGENTA${line:$i:3}$RESET"
++            i=$((i + 3))
++            continue
++        fi
++        if [ "$char" = "i" ] && [ "${line:$i:1}" = "n" ]; then
++            result+="$MAGENTA${line:$i:2}$RESET"
++            i=$((i + 2))
++            continue
++        fi
++        if [ "$char" = "c" ] && [ "${line:$i:1}" = "a" ] && [ "${line:$i:2}" = "s" ] && [ "${line:$i:3}" = "e" ]; then
++            result+="$MAGENTA${line:$i:4}$RESET"
++            i=$((i + 4))
++            continue
++        fi
++        if [ "$char" = "d" ] && [ "${line:$i:1}" = "o" ]; then
++            result+="$MAGENTA${line:$i:2}$RESET"
++            i=$((i + 2))
++            continue
++        fi
++        if [ "$char" = "e" ] && [ "${line:$i:1}" = "s" ] && [ "${line:$i:2}" = "a" ] && [ "${line:$i:3}" = "c" ]; then
++            result+="$MAGENTA${line:$i:4}$RESET"
++            i=$((i + 4))
++            continue
++        fi
++        if [ "$char" = "u" ] && [ "${line:$i:1}" = "n" ] && [ "${line:$i:2}" = "t" ] && [ "${line:$i:3}" = "i" ] && [ "${line:$i:4}" = "l" ] && [ "${line:$i:5}" = "e" ]; then
++            result+="$MAGENTA${line:$i:6}$RESET"
++            i=$((i + 6))
++            continue
++        fi
++        if [ "$char" = "s" ] && [ "${line:$i:1}" = "o" ] && [ "${line:$i:2}" = "u" ] && [ "${line:$i:3}" = "r" ] && [ "${line:$i:4}" = "c" ] && [ "${line:$i:5}" = "e" ]; then
++            result+="$MAGENTA${line:$i:6}$RESET"
++            i=$((i + 6))
++            continue
++        fi
++        if [ "$char" = "e" ] && [ "${line:$i:1}" = "l" ] && [ "${line:$i:2}" = "s" ] && [ "${line:$i:3}" = "e" ]; then
++            result+="$MAGENTA${line:$i:4}$RESET"
++            i=$((i + 4))
++            continue
++        fi
++        if [ "$char" = "f" ] && [ "${line:$i:1}" = "i" ] && [ "${line:$i:2}" = "n" ] && [ "${line:$i:3}" = "a" ] && [ "${line:$i:4}" = "l" ] && [ "${line:$i:5}" = "l" ] && [ "${line:$i:6}" = "y" ]; then
++            result+="$MAGENTA${line:$i:7}$RESET"
++            i=$((i + 7))
++            continue
++        fi
++        if [ "$char" = "r" ] && [ "${line:$i:1}" = "e" ] && [ "${line:$i:2}" = "t" ] && [ "${line:$i:3}" = "u" ] && [ "${line:$i:4}" = "r" ] && [ "${line:$i:5}" = "n" ]; then
++            result+="$MAGENTA${line:$i:6}$RESET"
++            i=$((i + 6))
++            continue
++        fi
++        if [ "$char" = "s" ] && [ "${line:$i:1}" = "e" ] && [ "${line:$i:2}" = "l" ] && [ "${line:$i:3}" = "e" ] && [ "${line:$i:4}" = "c" ] && [ "${line:$i:5}" = "t" ]; then
++            result+="$MAGENTA${line:$i:6}$RESET"
++            i=$((i + 6))
++            continue
++        fi
++        if [ "$char" = "t" ] && [ "${line:$i:1}" = "e" ] && [ "${line:$i:2}" = "s" ] && [ "${line:$i:3}" = "t" ]; then
++            result+="$MAGENTA${line:$i:4}$RESET"
++            i=$((i + 4))
++            continue
++        fi
++        if [ "$char" = "s" ] && [ "${line:$i:1}" = "h" ] && [ "${line:$i:2}" = "i" ] && [ "${line:$i:3}" = "f" ] && [ "${line:$i:4}" = "t" ]; then
++            result+="$MAGENTA${line:$i:5}$RESET"
++            i=$((i + 5))
++            continue
++        fi
++        if [ "$char" = "d" ] && [ "${line:$i:1}" = "e" ] && [ "${line:$i:2}" = "f" ] && [ "${line:$i:3}" = "a" ] && [ "${line:$i:4}" = "u" ] && [ "${line:$i:5}" = "l" ] && [ "${line:$i:6}" = "t" ]; then
++            result+="$MAGENTA${line:$i:7}$RESET"
++            i=$((i + 7))
++            continue
++        fi
++        if [ "$char" = "t" ] && [ "${line:$i:1}" = "r" ] && [ "${line:$i:2}" = "a" ] && [ "${line:$i:3}" = "p" ] && [ "${line:$i:4}" = "s" ] && [ "${line:$i:5}" = "e" ]; then
++            result+="$MAGENTA${line:$i:6}$RESET"
++            i=$((i + 6))
++            continue
++        fi
++        if [ "$char" = "s" ] && [ "${line:$i:1}" = "w" ] && [ "${line:$i:2}" = "i" ] && [ "${line:$i:3}" = "t" ] && [ "${line:$i:4}" = "c" ] && [ "${line:$i:5}" = "h" ]; then
++            result+="$MAGENTA${line:$i:6}$RESET"
++            i=$((i + 6))
++            continue
++        fi
++        if [ "$char" = "c" ] && [ "${line:$i:1}" = "o" ] && [ "${line:$i:2}" = "m" ] && [ "${line:$i:3}" = "p" ] && [ "${line:$i:4}" = "a" ] && [ "${line:$i:5}" = "r" ] && [ "${line:$i:6}" = "e" ]; then
++            result+="$MAGENTA${line:$i:7}$RESET"
++            i=$((i + 7))
++            continue
++        fi
++        if [ "$char" = "r" ] && [ "${line:$i:1}" = "e" ] && [ "${line:$i:2}" = "a" ] && [ "${line:$i:3}" = "d" ]; then
++            result+="$MAGENTA${line:$i:4}$RESET"
++            i=$((i + 4))
++            continue
++        fi
++        if [ "$char" = "l" ] && [ "${line:$i:1}" = "o" ] && [ "${line:$i:2}" = "c" ] && [ "${line:$i:3}" = "a" ] && [ "${line:$i:4}" = "l" ]; then
++            result+="$MAGENTA${line:$i:5}$RESET"
++            i=$((i + 5))
++            continue
++        fi
++        if [ "$char" = "s" ] && [ "${line:$i:1}" = "u" ] && [ "${line:$i:2}" = "b" ] && [ "${line:$i:3}" = "s" ] && [ "${line:$i:4}" = "e" ]; then
++            result+="$MAGENTA${line:$i:5}$RESET"
++            i=$((i + 5))
++            continue
++        fi
++        if [ "$char" = "s" ] && [ "${line:$i:1}" = "e" ] && [ "${line:$i:2}" = "t" ] && [ "${line:$i:3}" = "s" ] && [ "${line:$i:4}" = "h" ]; then
++            result+="$MAGENTA${line:$i:5}$RESET"
++            i=$((i + 5))
++            continue
++        fi
++        if [ "$char" = "t" ] && [ "${line:$i:1}" = "o" ] && [ "${line:$i:2}" = "g" ] && [ "${line:$i:3}" = "e" ]; then
++            result+="$MAGENTA${line:$i:4}$RESET"
++            i=$((i + 4))
++            continue
++        fi
++        if [ "$char" = "s" ] && [ "${line:$i:1}" = "h" ] && [ "${line:$i:2}" = "o" ] && [ "${line:$i:3}" = "u" ] && [ "${line:$i:4}" = "t" ]; then
++            result+="$MAGENTA${line:$i:5}$RESET"
++            i=$((i + 5))
++            continue
++        fi
++        if [ "$char" = "s" ] && [ "${line:$i:1}" = "u" ] && [ "${line:$i:2}" = "p" ] && [ "${line:$i:3}" = "p" ] && [ "${line:$i:4}" = "o" ] && [ "${line:$i:5}" = "s" ]; then
++            result+="$MAGENTA${line:$i:6}$RESET"
++            i=$((i + 6))
++            continue
++        fi
++        if [ "$char" = "s" ] && [ "${line:$i:1}" = "h" ] && [ "${line:$i:2}" = "o" ] && [ "${line:$i:3}" = "u" ] && [ "${line:$i:4}" = "t" ] && [ "${line:$i:5}" = "s" ]; then
++            result+="$MAGENTA${line:$i:6}$RESET"
++            i=$((i + 6))
++            continue
++        fi
++        if [ "$char" = "s" ] && [ "${line:$i:1}" = "h" ] && [ "${line:$i:2}" = "o" ] && [ "${line:$i:3}" = "u" ] && [ "${line:$i:4}" = "t" ] && [ "${line:$i:5}" = "s" ] && [ "${line:$i:6}" = "e" ]; then
++            result+="$MAGENTA${line:$i:7}$RESET"
++            i=$((i + 7))
++            continue
++        fi
++        if [ "$char" = "s" ] && [ "${line:$i:1}" = "h" ] && [ "${line:$i:2}" = "o" ] && [ "${line:$i:3}" = "u" ] && [ "${line:$i:4}" = "t" ] && [ "${line:$i:5}" = "s" ] && [ "${line:$i:6}" = "e" ] && [ "${line:$i:7}" = "l" ]; then
++            result+="$MAGENTA${line:$i:8}$RESET"
++            i=$((i + 8))
++            continue
++        fi
++        if [ "$char" = "s" ] && [ "${line:$i:1}" = "h" ] && [ "${line:$i:2}" = "o" ] && [ "${line:$i:3}" = "u" ] && [ "${line:$i:4}" = "t" ] && [ "${line:$i:5}" = "s" ] && [ "${line:$i:6}" = "e" ] && [ "${line:$i:7}" = "l" ] && [ "${line:$i:8}" = "l" ]; then
++            result+="$MAGENTA${line:$i:9}$RESET"
++            i=$((i + 9))
++            continue
++        fi
++        if [ "$char" = "s" ] && [ "${line:$i:1}" = "h" ] && [ "${line:$i:2}" = "o" ] && [ "${line:$i:3}" = "u" ] && [ "${line:$i:4}" = "t" ] && [ "${line:$i:5}" = "s" ] && [ "${line:$i:6}" = "e" ] && [ "${line:$i:7}" = "l" ] && [ "${line:$i:8}" = "l" ] && [ "${line:$i:9}" = "s" ]; then
++            result+="$MAGENTA${line:$i:10}$RESET"
++            i=$((i + 10))
++            continue
++        fi
++        if [ "$char" = "s" ] && [ "${line:$i:1}" = "h" ] && [ "${line:$i:2}" = "o" ] && [ "${line:$i:3}" = "u" ] && [ "${line:$i:4}" = "t" ] && [ "${line:$i:5}" = "s" ] && [ "${line:$i:6}" = "e" ] && [ "${line:$i:7}" = "l" ] && [ "${line:$i:8}" = "l" ] && [ "${line:$i:9}" = "s" ] && [ "${line:$i:10}" = "e" ]; then
++            result+="$MAGENTA${line:$i:11}$RESET"
++            i=$((i + 11))
++            continue
++        fi
++        if [ "$char" = "s" ] && [ "${line:$i:1}" = "h" ] && [ "${line:$i:2}" = "o" ] && [ "${line:$i:3}" = "u" ] && [ "${line:$i:4}" = "t" ] && [ "${line:$i:5}" = "s" ] && [ "${line:$i:6}" = "e" ] && [ "${line:$i:7}" = "l" ] && [ "${line:$i:8}" = "l" ] && [ "${line:$i:9}" = "s" ] && [ "${line:$i:10}" = "e" ] && [ "${line:$i:11}" = "d" ]; then
++            result+="$MAGENTA${line:$i:12}$RESET"
++            i=$((i + 12))
++            continue
++        fi
++        if [ "$char" = "s" ] && [ "${line:$i:1}" = "h" ] && [ "${line:$i:2}" = "o" ] && [ "${line:$i:3}" = "u" ] && [ "${line:$i:4}" = "t" ] && [ "${line:$i:5}" = "s" ] && [ "${line:$i:6}" = "e" ] && [ "${line:$i:7}" = "l" ] && [ "${line:$i:8}" = "l" ] && [ "${line:$i:9}" = "s" ] && [ "${line:$i:10}" = "e" ] && [ "${line:$i:11}" = "d" ] && [ "${line:$i:12}" = " " ]; then
++            result+="$MAGENTA${line:$i:13}$RESET"
++            i=$((i + 13))
++            continue
++        fi
++        if [ "$char" = "s" ] && [ "${line:$i:1}" = "h" ] && [ "${line:$i:2}" = "o" ] && [ "${line:$i:3}" = "u" ] && [ "${line:$i:4}" = "t" ] && [ "${line:$i:5}" = "s" ] && [ "${line:$i:6}" = "e" ] && [ "${line:$i:7}" = "l" ] && [ "${line:$i:8}" = "l" ] && [ "${line:$i:9}" = "s" ] && [ "${line:$i:10}" = "e" ] && [ "${line:$i:11}" = "d" ] && [ "${line:$i:12}" = " " ] && [ "${line:$i:13}" = "t" ]; then
++            result+="$MAGENTA${line:$i:14}$RESET"
++            i=$((i + 14))
++            continue
++        fi
++        if [ "$char" = "s" ] && [ "${line:$i:1}" = "h" ] && [ "${line:$i:2}" = "o" ] && [ "${line:$i:3}" = "u" ] && [ "${line:$i:4}" = "t" ] && [ "${line:$i:5}" = "s" ] && [ "${line:$i:6}" = "e" ] && [ "${line:$i:7}" = "l" ] && [ "${line:$i:8}" = "l" ] && [ "${line:$i:9}" = "s" ] && [ "${line:$i:10}" = "e" ] && [ "${line:$i:11}" = "d" ] && [ "${line:$i:12}" = " " ] && [ "${line:$i:13}" = "t" ] && [ "${line:$i:14}" = "o" ]; then
++            result+="$MAGENTA${line:$i:15}$RESET"
++            i=$((i + 15))
++            continue
++        fi
++        if [ "$char" = "s" ] && [ "${line:$i:1}" = "h" ] && [ "${line:$i:2}" = "o" ] && [ "${line:$i:3}" = "u" ] && [ "${line:$i:4}" = "t" ] && [ "${line:$i:5}" = "s" ] && [ "${line:$i:6}" = "e" ] && [ "${line:$i:7}" = "l" ] && [ "${line:$i:8}" = "l" ] && [ "${line:$i:9}" = "s" ] && [ "${line:$i:10}" = "e" ] && [ "${line:$i:11}" = "d" ] && [ "${line:$i:12}" = " " ] && [ "${line:$i:13}" = "t" ] && [ "${line:$i:14}" = "o" ] && [ "${line:$i:15}" = "o" ]; then
++            result+="$MAGENTA${line:$i:16}$RESET"
++            i=$((i + 16))
++            continue
++        fi
++        if [ "$char" = "s" ] && [ "${line:$i:1}" = "h" ] && [ "${line:$i:2}" = "o" ] && [ "${line:$i:3}" = "u" ] && [ "${line:$i:4}" = "t" ] && [ "${line:$i:5}" = "s" ] && [ "${line:$i:6}" = "e" ] && [ "${line:$i:7}" = "l" ] && [ "${line:$i:8}" = "l" ] && [ "${line:$i:9}" = "s" ] && [ "${line:$i:10}" = "e" ] && [ "${line:$i:11}" = "d" ] && [ "${line:$i:12}" = " " ] && [ "${line:$i:13}" = "t" ] && [ "${line:$i:14}" = "o" ] && [ "${line:$i:15}" = "o" ] && [ "${line:$i:16}" = "p" ]; then
++            result+="$MAGENTA${line:$i:17}$RESET"
++            i=$((i + 17))
++            continue
++        fi
++        if [ "$char" = "s" ] && [ "${line:$i:1}" = "h" ] && [ "${line:$i:2}" = "o" ] && [ "${line:$i:3}" = "u" ] && [ "${line:$i:4}" = "t" ] && [ "${line:$i:5}" = "s" ] && [ "${line:$i:6}" = "e" ] && [ "${line:$i:7}" = "l" ] && [ "${line:$i:8}" = "l" ] && [ "${line:$i:9}" = "s" ] && [ "${line:$i:10}" = "e" ] && [ "${line:$i:11}" = "d" ] && [ "${line:$i:12}" = " " ] && [ "${line:$i:13}" = "t" ] && [ "${line:$i:14}" = "o" ] && [ "${line:$i:15}" = "o" ] && [ "${line:$i:16}" = "p" ] && [ "${line:$i:17}" = "s" ]; then
++            result+="$MAGENTA${line:$i:18}$RESET"
++            i=$((i + 18))
++            continue
++        fi
++        if [ "$char" = "s" ] && [ "${line:$i:1}" = "h" ] && [ "${line:$i:2}" = "o" ] && [ "${line:$i:3}" = "u" ] && [ "${line:$i:4}" = "t" ] && [ "${line:$i:5}" = "s" ] && [ "${line:$i:6}" = "e" ] && [ "${line:$i:7}" = "l" ] && [ "${line:$i:8}" = "l" ] && [ "${line:$i:9}" = "s" ] && [ "${line:$i:10}" = "e" ] && [ "${line:$i:11}" = "d" ] && [ "${line:$i:12}" = " " ] && [ "${line:$i:13}" = "t" ] && [ "${line:$i:14}" = "o" ] && [ "${line:$i:15}" = "o" ] && [ "${line:$i:16}" = "p" ] && [ "${line:$i:17}" = "s" ] && [ "${line:$i:18}" = "e" ]; then
++            result+="$MAGENTA${line:$i:19}$RESET"
++            i=$((i + 19))
++            continue
++        fi
++        if [ "$char" = "s" ] && [ "${line:$i:1}" = "h" ] && [ "${line:$i:2}" = "o" ] && [ "${line:$i:3}" = "u" ] && [ "${line:$i:4}" = "t" ] && [ "${line:$i:5}" = "s" ] && [ "${line:$i:6}" = "e" ] && [ "${line:$i:7}" = "l" ] && [ "${line:$i:8}" = "l" ] && [ "${line:$i:9}" = "s" ] && [ "${line:$i:10}" = "e" ] && [ "${line:$i:11}" = "d" ] && [ "${line:$i:12}" = " " ] && [ "${line:$i:13}" = "t" ] && [ "${line:$i:14}" = "o" ] && [ "${line:$i:15}" = "o" ] && [ "${line:$i:16}" = "p" ] && [ "${line:$i:17}" = "s" ] && [ "${line:$i:18}" = "e" ] && [ "${line:$i:19}" = "d" ]; then
++            result+="$MAGENTA${line:$i:20}$RESET"
++            i=$((i + 20))
++            continue
++        fi
++        if [ "$char" = "s" ] && [ "${line:$i:1}" = "h" ] && [ "${line:$i:2}" = "o" ] && [ "${line:$i:3}" = "u" ] && [ "${line:$i:4}" = "t" ] && [ "${line:$i:5}" = "s" ] && [ "${line:$i:6}" = "e" ] && [ "${line:$i:7}" = "l" ] && [ "${line:$i:8}" = "l" ] && [ "${line:$i:9}" = "s" ] && [ "${line:$i:10}" = "e" ] && [ "${line:$i:11}" = "d" ] && [ "${line:$i:12}" = " " ] && [ "${line:$i:13}" = "t" ] && [ "${line:$i:14}" = "o" ] && [ "${line:$i:15}" = "o" ] && [ "${line:$i:16}" = "p" ] && [ "${line:$i:17}" = "s" ] && [ "${line:$i:18}" = "e" ] && [ "${line:$i:19}" = "d" ] && [ "${line:$i:20}" = " " ]; then
++            result+="$MAGENTA${line:$i:21}$RESET"
++            i=$((i + 21))
++            continue
++        fi
++        if [ "$char" = "s" ] && [ "${line:$i:1}" = "h" ] && [ "${line:$i:2}" = "o" ] && [ "${line:$i:3}" = "u" ] && [ "${line:$i:4}" = "t" ] && [ "${line:$i:5}" = "s" ] && [ "${line:$i:6}" = "e" ] && [ "${line:$i:7}" = "l" ] && [ "${line:$i:8}" = "l" ] && [ "${line:$i:9}" = "s" ] && [ "${line:$i:10}" = "e" ] && [ "${line:$i:11}" = "d" ] && [ "${line:$i:12}" = " " ] && [ "${line:$i:13}" = "t" ] && [ "${line:$i:14}" = "o" ] && [ "${line:$i:15}" = "o" ] && [ "${line:$i:16}" = "p" ] && [ "${line:$i:17}" = "s" ] && [ "${line:$i:18}" = "e" ] && [ "${line:$i:19}" = "d" ] && [ "${line:$i:20}" = " " ] && [ "${line:$i:21}" = "i" ]; then
++            result+="$MAGENTA${line:$i:22}$RESET"
++            i=$((i + 22))
++            continue
++        fi
++        if [ "$char" = "s" ] && [ "${line:$i:1}" = "h" ] && [ "${line:$i:2}" = "o" ] && [ "${line:$i:3}" = "u" ] && [ "${line:$i:4}" = "t" ] && [ "${line:$i:5}" = "s" ] && [ "${line:$i:6}" = "e" ] && [ "${line:$i:7}" = "l" ] && [ "${line:$i:8}" = "l" ] && [ "${line:$i:9}" = "s" ] && [ "${line:$i:10}" = "e" ] && [ "${line:$i:11}" = "d" ] && [ "${line:$i:12}" = " " ] && [ "${line:$i:13}" = "t" ] && [ "${line:$i:14}" = "o" ] && [ "${line:$i:15}" = "o" ] && [ "${line:$i:16}" = "p" ] && [ "${line:$i:17}" = "s" ] && [ "${line:$i:18}" = "e" ] && [ "${line:$i:19}" = "d" ] && [ "${line:$i:20}" = " " ] && [ "${line:$i:21}" = "i" ] && [ "${line:$i:22}" = "n" ]; then
++            result+="$MAGENTA${line:$i:23}$RESET"
++            i=$((i + 23))
++            continue
++        fi
++        if [ "$char" = "s" ] && [ "${line:$i:1}" = "h" ] && [ "${line:$i:2}" = "o" ] && [ "${line:$i:3}" = "u" ] && [ "${line:$i:4}" = "t" ] && [ "${line:$i:5}" = "s" ] && [ "${line:$i:6}" = "e" ] && [ "${line:$i:7}" = "l" ] && [ "${line:$i:8}" = "l" ] && [ "${line:$i:9}" = "s" ] && [ "${line:$i:10}" = "e" ] && [ "${line:$i:11}" = "d" ] && [ "${line:$i:12}" = " " ] && [ "${line:$i:13}" = "t" ] && [ "${line:$i:14}" = "o" ] && [ "${line:$i:15}" = "o" ] && [ "${line:$i:16}" = "p" ] && [ "${line:$i:17}" = "s" ] && [ "${line:$i:18}" = "e" ] && [ "${line:$i:19}" = "d" ] && [ "${line:$i:20}" = " " ] && [ "${line:$i:21}" = "i" ] && [ "${line:$i:22}" = "n" ] && [ "${line:$i:23}" = " " ]; then
++            result+="$MAGENTA${line:$i:24}$RESET"
++            i=$((i + 24))
++            continue
++        fi
++        if [ "$char" = "s" ] && [ "${line:$i:1}" = "h" ] && [ "${line:$i:2}" = "o" ] && [ "${line:$i:3}" = "u" ] && [ "${line:$i:4}" = "t" ] && [ "${line:$i:5}" = "s" ] && [ "${line:$i:6}" = "e" ] && [ "${line:$i:7}" = "l" ] && [ "${line:$i:8}" = "l" ] && [ "${line:$i:9}" = "s" ] && [ "${line:$i:10}" = "e" ] && [ "${line:$i:11}" = "d" ] && [ "${line:$i:12}" = " " ] && [ "${line:$i:13}" = "t" ] && [ "${line:$i:14}" = "o" ] && [ "${line:$i:15}" = "o" ] && [ "${line:$i:16}" = "p" ] && [ "${line:$i:17}" = "s" ] && [ "${line:$i:18}" = "e" ] && [ "${line:$i:19}" = "d" ] && [ "${line:$i:20}" = " " ] && [ "${line:$i:21}" = "i" ] && [ "${line:$i:22}" = "n" ] && [ "${line:$i:23}" = " " ] && [ "${line:$i:24}" = "s" ]; then
++            result+="$MAGENTA${line:$i:25}$RESET"
++            i=$((i + 25))
++            continue
++        fi
++        if [ "$char" = "s" ] && [ "${line:$i:1}" = "h" ] && [ "${line:$i:2}" = "o" ] && [ "${line:$i:3}" = "u" ] && [ "${line:$i:4}" = "t" ] && [ "${line:$i:5}" = "s" ] && [ "${line:$i:6}" = "e" ] && [ "${line:$i:7}" = "l" ] && [ "${line:$i:8}" = "l" ] && [ "${line:$i:9}" = "s" ] && [ "${line:$i:10}" = "e" ] && [ "${line:$i:11}" = "d" ] && [ "${line:$i:12}" = " " ] && [ "${line:$i:13}" = "t" ] && [ "${line:$i:14}" = "o" ] && [ "${line:$i:15}" = "o" ] && [ "${line:$i:16}" = "p" ] && [ "${line:$i:17}" = "s" ] && [ "${line:$i:18}" = "e" ] && [ "${line:$i:19}" = "d" ] && [ "${line:$i:20}" = " " ] && [ "${line:$i:21}" = "i" ] && [ "${line:$i:22}" = "n" ] && [ "${line:$i:23}" = " " ] && [ "${line:$i:24}" = "s" ] && [ "${line:$i:25}" = "h" ]; then
++            result+="$MAGENTA${line:$i:26}$RESET"
++            i=$((i + 26))
++            continue
++        fi
++        if [ "$char" = "s" ] && [ "${line:$i:1}" = "h" ] && [ "${line:$i:2}" = "o" ] && [ "${line:$i:3}" = "u" ] && [ "${line:$i:4}" = "t" ] && [ "${line:$i:5}" = "s" ] && [ "${line:$i:6}" = "e" ] && [ "${line:$i:7}" = "l" ] && [ "${line:$i:8}" = "l" ] && [ "${line:$i:9}" = "s" ] && [ "${line:$i:10}" = "e" ] && [ "${line:$i:11}" = "d" ] && [ "${line:$i:12}" = " " ] && [ "${line:$i:13}" = "t" ] && [ "${line:$i:14}" = "o" ] && [ "${line:$i:15}" = "o" ] && [ "${line:$i:16}" = "p" ] && [ "${line:$i:17}" = "s" ] && [ "${line:$i:18}" = "e" ] && [ "${line:$i:19}" = "d" ] && [ "${line:$i:20}" = " " ] && [ "${line:$i:21}" = "i" ] && [ "${line:$i:22}" = "n" ] && [ "${line:$i:23}" = " " ] && [ "${line:$i:24}" = "s" ] && [ "${line:$i:25}" = "h" ] && [ "${line:$i:26}" = "e" ]; then
++            result+="$MAGENTA${line:$i:27}$RESET"
++            i=$((i + 27))
++            continue
++        fi
++        if [ "$char" = "s" ] && [ "${line:$i:1}" = "h" ] && [ "${line:$i:2}" = "o" ] && [ "${line:$i:3}" = "u" ] && [ "${line:$i:4}" = "t" ] && [ "${line:$i:5}" = "s" ] && [ "${line:$i:6}" = "e" ] && [ "${line:$i:7}" = "l" ] && [ "${line:$i:8}" = "l" ] && [ "${line:$i:9}" = "s" ] && [ "${line:$i:10}" = "e" ] && [ "${line:$i:11}" = "d" ] && [ "${line:$i:12}" = " " ] && [ "${line:$i:13}" = "t" ] && [ "${line:$i:14}" = "o" ] && [ "${line:$i:15}" = "o" ] && [ "${line:$i:16}" = "p" ] && [ "${line:$i:17}" = "s" ] && [ "${line:$i:18}" = "e" ] && [ "${line:$i:19}" = "d" ] && [ "${line:$i:20}" = " " ] && [ "${line:$i:21}" = "i" ] && [ "${line:$i:22}" = "n" ] && [ "${line:$i:23}" = " " ] && [ "${line:$i:24}" = "s" ] && [ "${line:$i:25}" = "h" ] && [ "${line:$i:26}" = "e" ] && [ "${line:$i:27}" = "l" ]; then
++            result+="$MAGENTA${line:$i:28}$RESET"
++            i=$((i + 28))
++            continue
++        fi
++        if [ "$char" = "s" ] && [ "${line:$i:1}" = "h" ] && [ "${line:$i:2}" = "o" ] && [ "${line:$i:3}" = "u" ] && [ "${line:$i:4}" = "t" ] && [ "${line:$i:5}" = "s" ] && [ "${line:$i:6}" = "e" ] && [ "${line:$i:7}" = "l" ] && [ "${line:$i:8}" = "l" ] && [ "${line:$i:9}" = "s" ] && [ "${line:$i:10}" = "e" ] && [ "${line:$i:11}" = "d" ] && [ "${line:$i:12}" = " " ] && [ "${line:$i:13}" = "t" ] && [ "${line:$i:14}" = "o" ] && [ "${line:$i:15}" = "o" ] && [ "${line:$i:16}" = "p" ] && [ "${line:$i:17}" = "s" ] && [ "${line:$i:18}" = "e" ] && [ "${line:$i:19}" = "d" ] && [ "${line:$i:20}" = " " ] && [ "${line:$i:21}" = "i" ] && [ "${line:$i:22}" = "n" ] && [ "${line:$i:23}" = " " ] && [ "${line:$i:24}" = "s" ] && [ "${line:$i:25}" = "h" ] && [ "${line:$i:26}" = "e" ] && [ "${line:$i:27}" = "l" ] && [ "${line:$i:28}" = "p" ]; then
++            result+="$MAGENTA${line:$i:29}$RESET"
++            i=$((i + 29))
++            continue
++        fi
++        if [ "$char" = "s" ] && [ "${line:$i:1}" = "h" ] && [ "${line:$i:2}" = "o" ] && [ "${line:$i:3}" = "u" ] && [ "${line:$i:4}" = "t" ] && [ "${line:$i:5}" = "s" ] && [ "${line:$i:6}" = "e" ] && [ "${line:$i:7}" = "l" ] && [ "${line:$i:8}" = "l" ] && [ "${line:$i:9}" = "s" ] && [ "${line:$i:10}" = "e" ] && [ "${line:$i:11}" = "d" ] && [ "${line:$i:12}" = " " ] && [ "${line:$i:13}" = "t" ] && [ "${line:$i:14}" = "o" ] && [ "${line:$i:15}" = "o" ] && [ "${line:$i:16}" = "p" ] && [ "${line:$i:17}" = "s" ] && [ "${line:$i:18}" = "e" ] && [ "${line:$i:19}" = "d" ] && [ "${line:$i:20}" = " " ] && [ "${line:$i:21}" = "i" ] && [ "${line:$i:22}" = "n" ] && [ "${line:$i:23}" = " " ] && [ "${line:$i:24}" = "s" ] && [ "${line:$i:25}" = "h" ] && [ "${line:$i:26}" = "e" ] && [ "${line:$i:27}" = "l" ] && [ "${line:$i:28}" = "p" ] && [ "${line:$i:29}" = "p" ]; then
++            result+="$MAGENTA${line:$i:30}$RESET"
++            i=$((i + 30))
++            continue
++        fi
++        if [ "$char" = "s" ] && [ "${line:$i:1}" = "h" ] && [ "${line:$i:2}" = "o" ] && [ "${line:$i:3}" = "u" ] && [ "${line:$i:4}" = "t" ] && [ "${line:$i:5}" = "s" ] && [ "${line:$i:6}" = "e" ] && [ "${line:$i:7}" = "l" ] && [ "${line:$i:8}" = "l" ] && [ "${line:$i:9}" = "s" ] && [ "${line:$i:10}" = "e" ] && [ "${line:$i:11}" = "d" ] && [ "${line:$i:12}" = " " ] && [ "${line:$i:13}" = "t" ] && [ "${line:$i:14}" = "o" ] && [ "${line:$i:15}" = "o" ] && [ "${line:$i:16}" = "p" ] && [ "${line:$i:17}" = "s" ] && [ "${line:$i:18}" = "e" ] && [ "${line:$i:19}" = "d" ] && [ "${line:$i:20}" = " " ] && [ "${line:$i:21}" = "i" ] && [ "${line:$i:22}" = "n" ] && [ "${line:$i:23}" = " " ] && [ "${line:$i:24}" = "s" ] && [ "${line:$i:25}" = "h" ] && [ "${line:$i:26}" = "e" ] && [ "${line:$i:27}" = "l" ] && [ "${line:$i:28}" = "p" ] && [ "${line:$i:29}" = "p" ] && [ "${line:$i:30}" = "e" ]; then
++            result+="$MAGENTA${line:$i:31}$RESET"
++            i=$((i + 31))
++            continue
++        fi
++        if [ "$char" = "s" ] && [ "${line:$i:1}" = "h" ] && [ "${line:$i:2}" = "o" ] && [ "${line:$i:3}" = "u" ] && [ "${line:$i:4}" = "t" ] && [ "${line:$i:5}" = "s" ] && [ "${line:$i:6}" = "e" ] && [ "${line:$i:7}" = "l" ] && [ "${line:$i:8}" = "l" ] && [ "${line:$i:9}" = "s" ] && [ "${line:$i:10}" = "e" ] && [ "${line:$i:11}" = "d" ] && [ "${line:$i:12}" = " " ] && [ "${line:$i:13}" = "t" ] && [ "${line:$i:14}" = "o" ] && [ "${line:$i:15}" = "o" ] && [ "${line:$i:16}" = "p" ] && [ "${line:$i:17}" = "s" ] && [ "${line:$i:18}" = "e" ] && [ "${line:$i:19}" = "d" ] && [ "${line:$i:20}" = " " ] && [ "${line:$i:21}" = "i" ] && [ "${line:$i:22}" = "n" ] && [ "${line:$i:23}" = " " ] && [ "${line:$i:24}" = "s" ] && [ "${line:$i:25}" = "h" ] && [ "${line:$i:26}" = "e" ] && [ "${line:$i:27}" = "l" ] && [ "${line:$i:28}" = "p" ] && [ "${line:$i:29}" = "p" ] && [ "${line:$i:30}" = "e" ] && [ "${line:$i:31}" = "r" ]; then
++            result+="$MAGENTA${line:$i:32}$RESET"
++            i=$((i + 32))
++            continue
++        fi
++        if [ "$char" = "s" ] && [ "${line:$i:1}" = "h" ] && [ "${line:$i:2}" = "o" ] && [ "${line:$i:3}" = "u" ] && [ "${line:$i:4}" = "t" ] && [ "${line:$i:5}" = "s" ] && [ "${line:$i:6}" = "e" ] && [ "${line:$i:7}" = "l" ] && [ "${line:$i:8}" = "l" ] && [ "${line:$i:9}" = "s" ] && [ "${line:$i:10}" = "e" ] && [ "${line:$i:11}" = "d" ] && [ "${line:$i:12}" = " " ] && [ "${line:$i:13}" = "t" ] && [ "${line:$i:14}" = "o" ] && [ "${line:$i:15}" = "o" ] && [ "${line:$i:16}" = "p" ] && [ "${line:$i:17}" = "s" ] && [ "${line:$i:18}" = "e" ] && [ "${line:$i:19}" = "d" ] && [ "${line:$i:20}" = " " ] && [ "${line:$i:21}" = "i" ] && [ "${line:$i:22}" = "n" ] && [ "${line:$i:23}" = " " ] && [ "${line:$i:24}" = "s" ] && [ "${line:$i:25}" = "h" ] && [ "${line:$i:26}" = "e" ] && [ "${line:$i:27}" = "l" ] && [ "${line:$i:28}" = "p" ] && [ "${line:$i:29}" = "p" ] && [ "${line:$i:30}" = "e" ] && [ "${line:$i:31}" = "r" ] && [ "${line:$i:32}" = "e" ]; then
++            result+="$MAGENTA${line:$i:33}$RESET"
++            i=$((i + 33))
++            continue
++        fi
++        if [ "$char" = "s" ] && [ "${line:$i:1}" = "h" ] && [ "${line:$i:2}" = "o" ] && [ "${line:$i:3}" = "u" ] && [ "${line:$i:4}" = "t" ] && [ "${line:$i:5}" = "s" ] && [ "${line:$i:6}" = "e" ] && [ "${line:$i:7}" = "l" ] && [ "${line:$i:8}" = "l" ] && [ "${line:$i:9}" = "s" ] && [ "${line:$i:10}" = "e" ] && [ "${line:$i:11}" = "d" ] && [ "${line:$i:12}" = " " ] && [ "${line:$i:13}" = "t" ] && [ "${line:$i:14}" = "o" ] && [ "${line:$i:15}" = "o" ] && [ "${line:$i:16}" = "p" ] && [ "${line:$i:17}" = "s" ] && [ "${line:$i:18}" = "e" ] && [ "${line:$i:19}" = "d" ] && [ "${line:$i:20}" = " " ] && [ "${line:$i:21}" = "i" ] && [ "${line:$i:22}" = "n" ] && [ "${line:$i:23}" = " " ] && [ "${line:$i:24}" = "s" ] && [ "${line:$i:25}" = "h" ] && [ "${line:$i:26}" = "e" ] && [ "${line:$i:27}" = "l" ] && [ "${line:$i:28}" = "p" ] && [ "${line:$i:29}" = "p" ] && [ "${line:$i:30}" = "e" ] && [ "${line:$i:31}" = "r" ] && [ "${line:$i:32}" = "e" ] && [ "${line:$i:33}" = "d" ]; then
++            result+="$MAGENTA${line:$i:34}$RESET"
++            i=$((i + 34))
++            continue
++        fi
++        if [ "$char" = "s" ] && [ "${line:$i:1}" = "h" ] && [ "${line:$i:2}" = "o" ] && [ "${line:$i:3}" = "u" ] && [ "${line:$i:4}" = "t" ] && [ "${line:$i:5}" = "s" ] && [ "${line:$i:6}" = "e" ] && [ "${line:$i:7}" = "l" ] && [ "${line:$i:8}" = "l" ] && [ "${line:$i:9}" = "s" ] && [ "${line:$i:10}" = "e" ] && [ "${line:$i:11}" = "d" ] && [ "${line:$i:12}" = " " ] && [ "${line:$i:13}" = "t" ] && [ "${line:$i:14}" = "o" ] && [ "${line:$i:15}" = "o" ] && [ "${line:$i:16}" = "p" ] && [ "${line:$i:17}" = "s" ] && [ "${line:$i:18}" = "e" ] && [ "${line:$i:19}" = "d" ] && [ "${line:$i:20}" = " " ] && [ "${line:$i:21}" = "i" ] && [ "${line:$i:22}" = "n" ] && [ "${line:$i:23}" = " " ] && [ "${line:$i:24}" = "s" ] && [ "${line:$i:25}" = "h" ] && [ "${line:$i:26}" = "e" ] && [ "${line:$i:27}" = "l" ] && [ "${line:$i:28}" = "p" ] && [ "${line:$i:29}" = "p" ] && [ "${line:$i:30}" = "e" ] && [ "${line:$i:31}" = "r" ] && [ "${line:$i:32}" = "e" ] && [ "${line:$i:33}" = "d" ] && [ "${line:$i:34}" = " " ]; then
++            result+="$MAGENTA${line:$i:35}$RESET"
++            i=$((i + 35))
++            continue
++        fi
++        if [ "$char" = "s" ] && [ "${line:$i:1}" = "h" ] && [ "${line:$i:2}" = "o" ] && [ "${line:$i:3}" = "u" ] && [ "${line:$i:4}" = "t" ] && [ "${line:$i:5}" = "s" ] && [ "${line:$i:6}" = "e" ] && [ "${line:$i:7}" = "l" ] && [ "${line:$i:8}" = "l" ] && [ "${line:$i:9}" = "s" ] && [ "${line:$i:10}" = "e" ] && [ "${line:$i:11}" = "d" ] && [ "${line:$i:12}" = " " ] && [ "${line:$i:13}" = "t" ] && [ "${line:$i:14}" = "o" ] && [ "${line:$i:15}" = "o" ] && [ "${line:$i:16}" = "p" ] && [ "${line:$i:17}" = "s" ] && [ "${line:$i:18}" = "e" ] && [ "${line:$i:19}" = "d" ] && [ "${line:$i:20}" = " " ] && [ "${line:$i:21}" = "i" ] && [ "${line:$i:22}" = "n" ] && [ "${line:$i:23}" = " " ] && [ "${line:$i:24}" = "s" ] && [ "${line:$i:25}" = "h" ] && [ "${line:$i:26}" = "e" ] && [ "${line:$i:27}" = "l" ] && [ "${line:$i:28}" = "p" ] && [ "${line:$i:29}" = "p" ] && [ "${line:$i:30}" = "e" ] && [ "${line:$i:31}" = "r" ] && [ "${line:$i:32}" = "e" ] && [ "${line:$i:33}" = "d" ] && [ "${line:$i:34}" = " " ] && [ "${line:$i:35}" = "a" ]; then
++            result+="$MAGENTA${line:$i:36}$RESET"
++            i=$((i + 36))
++            continue
++        fi
++        if [ "$char" = "s" ] && [ "${line:$i:1}" = "h" ] && [ "${line:$i:2}" = "o" ] && [ "${line:$i:3}" = "u" ] && [ "${line:$i:4}" = "t" ] && [ "${line:$i:5}" = "s" ] && [ "${line:$i:6}" = "e" ] && [ "${line:$i:7}" = "l" ] && [ "${line:$i:8}" = "l" ] && [ "${line:$i:9}" = "s" ] && [ "${line:$i:10}" = "e" ] && [ "${line:$i:11}" = "d" ] && [ "${line:$i:12}" = " " ] && [ "${line:$i:13}" = "t" ] && [ "${line:$i:14}" = "o" ] && [ "${line:$i:15}" = "o" ] && [ "${line:$i:16}" = "p" ] && [ "${line:$i:17}" = "s" ] && [ "${line:$i:18}" = "e" ] && [ "${line:$i:19}" = "d" ] && [ "${line:$i:20}" = " " ] && [ "${line:$i:21}" = "i" ] && [ "${line:$i:22}" = "n" ] && [ "${line:$i:23}" = " " ] && [ "${line:$i:24}" = "s" ] && [ "${line:$i:25}" = "h" ] && [ "${line:$i:26}" = "e" ] && [ "${line:$i:27}" = "l" ] && [ "${line:$i:28}" = "p" ] && [ "${line:$i:29}" = "p" ] && [ "${line:$i:30}" = "e" ] && [ "${line:$i:31}" = "r" ] && [ "${line:$i:32}" = "e" ] && [ "${line:$i:33}" = "d" ] && [ "${line:$i:34}" = " " ] && [ "${line:$i:35}" = "a" ] && [ "${line:$i:36}" = "n" ]; then
++            result+="$MAGENTA${line:$i:37}$RESET"
++            i=$((i + 37))
++            continue
++        fi
++        if [ "$char" = "s" ] && [ "${line:$i:1}" = "h" ] && [ "${line:$i:2}" = "o" ] && [ "${line:$i:3}" = "u" ] && [ "${line:$i:4}" = "t" ] && [ "${line:$i:5}" = "s" ] && [ "${line:$i:6}" = "e" ] && [ "${line:$i:7}" = "l" ] && [ "${line:$i:8}" = "l" ] && [ "${line:$i:9}" = "s" ] && [ "${line:$i:10}" = "e" ] && [ "${line:$i:11}" = "d" ] && [ "${line:$i:12}" = " " ] && [ "${line:$i:13}" = "t" ] && [ "${line:$i:14}" = "o" ] && [ "${line:$i:15}" = "o" ] && [ "${line:$i:16}" = "p" ] && [ "${line:$i:17}" = "s" ] && [ "${line:$i:18}" = "e" ] && [ "${line:$i:19}" = "d" ] && [ "${line:$i:20}" = " " ] && [ "${line:$i:21}" = "i" ] && [ "${line:$i:22}" = "n" ] && [ "${line:$i:23}" = " " ] && [ "${line:$i:24}" = "s" ] && [ "${line:$i:25}" = "h" ] && [ "${line:$i:26}" = "e" ] && [ "${line:$i:27}" = "l" ] && [ "${line:$i:28}" = "p" ] && [ "${line:$i:29}" = "p" ] && [ "${line:$i:30}" = "e" ] && [ "${line:$i:31}" = "r" ] && [ "${line:$i:32}" = "e" ] && [ "${line:$i:33}" = "d" ] && [ "${line:$i:34}" = " " ] && [ "${line:$i:35}" = "a" ] && [ "${line:$i:36}" = "n" ] && [ "${line:$i:37}" = "d" ]; then
++            result+="$MAGENTA${line:$i:38}$RESET"
++            i=$((i + 38))
++            continue
++        fi
++        if [ "$char" = "s" ] && [ "${line:$i:1}" = "h" ] && [ "${line:$i:2}" = "o" ] && [ "${line:$i:3}" = "u" ] && [ "${line:$i:4}" = "t" ] && [ "${line:$i:5}" = "s" ] && [ "${line:$i:6}" = "e" ] && [ "${line:$i:7}" = "l" ] && [ "${line:$i:8}" = "l" ] && [ "${line:$i:9}" = "s" ] && [ "${line:$i:10}" = "e" ] && [ "${line:$i:11}" = "d" ] && [ "${line:$i:12}" = " " ] && [ "${line:$i:13}" = "t" ] && [ "${line:$i:14}" = "o" ] && [ "${line:$i:15}" = "o" ] && [ "${line:$i:16}" = "p" ] && [ "${line:$i:17}" = "s" ] && [ "${line:$i:18}" = "e" ] && [ "${line:$i:19}" = "d" ] && [ "${line:$i:20}" = " " ] && [ "${line:$i:21}" = "i" ] && [ "${line:$i:22}" = "n" ] && [ "${line:$i:23}" = " " ] && [ "${line:$i:24}" = "s" ] && [ "${line:$i:25}" = "h" ] && [ "${line:$i:26}" = "e" ] && [ "${line:$i:27}" = "l" ] && [ "${line:$i:28}" = "p" ] && [ "${line:$i:29}" = "p" ] && [ "${line:$i:30}" = "e" ] && [ "${line:$i:31}" = "r" ] && [ "${line:$i:32}" = "e" ] && [ "${line:$i:33}" = "d" ] && [ "${line:$i:34}" = " " ] && [ "${line:$i:35}" = "a" ] && [ "${line:$i:36}" = "n" ] && [ "${line:$i:37}" = "d" ] && [ "${line:$i:38}" = " " ]; then
++            result+="$MAGENTA${line:$i:38}$RESET"
++            i=$((i + 38))
++            continue
++        fi
++}
++>>>>>>> theirs

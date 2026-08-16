@@ -1,0 +1,486 @@
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..d231a11
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,7 @@
++#!/bin/bash
++set -e
++
++# Compile i3-style
++gcc -o i3-style i3-style.c -Wall -Wextra
++
++echo "Build successful: ./i3-style"
+diff --git a/i3-style b/i3-style
+new file mode 100755
+index 0000000..1289f63
+Binary files /dev/null and b/i3-style differ
+diff --git a/i3-style.c b/i3-style.c
+new file mode 100644
+index 0000000..ead84a6
+--- /dev/null
++++ b/i3-style.c
+@@ -0,0 +1,460 @@
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <getopt.h>
++#include <ctype.h>
++
++#define VERSION "1.0.0"
++
++typedef struct {
++    char *name;
++    char *separator;
++    char *background;
++    char *statusline;
++    char *focused_workspace[3];
++    char *active_workspace[3];
++    char *inactive_workspace[3];
++    char *urgent_workspace[3];
++    char *client_focused[4];
++    char *client_focused_inactive[4];
++    char *client_unfocused[4];
++    char *client_urgent[4];
++} Theme;
++
++static char *trim(char *str) {
++    while (isspace((unsigned char)*str)) str++;
++    if (*str == 0) return str;
++    char *end = str + strlen(str) - 1;
++    while (end > str && isspace((unsigned char)*end)) end--;
++    end[1] = '\0';
++    return str;
++}
++
++static void parse_color_array(const char *str, char *array[4]) {
++    char *copy = strdup(str);
++    char *token = strtok(copy, " \t");
++    int i = 0;
++    while (token && i < 4) {
++        array[i++] = strdup(token);
++        token = strtok(NULL, " \t");
++    }
++    free(copy);
++}
++
++static void parse_theme_file(const char *filename, Theme *theme) {
++    FILE *fp = fopen(filename, "r");
++    if (!fp) {
++        fprintf(stderr, "Error: Cannot open theme file: %s\n", filename);
++        exit(1);
++    }
++
++    char line[1024];
++    while (fgets(line, sizeof(line), fp)) {
++        line[strcspn(line, "\n")] = 0;
++        if (line[0] == '\0' || line[0] == '#') continue;
++        
++        char *key = line;
++        char *value = strchr(line, ':');
++        if (!value) continue;
++        
++        *value = '\0';
++        key = trim(key);
++        value++;
++        value = trim(value);
++        
++        if (strcmp(key, "separator") == 0) theme->separator = strdup(value);
++        else if (strcmp(key, "background") == 0) theme->background = strdup(value);
++        else if (strcmp(key, "statusline") == 0) theme->statusline = strdup(value);
++        else if (strcmp(key, "focused_workspace") == 0) parse_color_array(value, theme->focused_workspace);
++        else if (strcmp(key, "active_workspace") == 0) parse_color_array(value, theme->active_workspace);
++        else if (strcmp(key, "inactive_workspace") == 0) parse_color_array(value, theme->inactive_workspace);
++        else if (strcmp(key, "urgent_workspace") == 0) parse_color_array(value, theme->urgent_workspace);
++        else if (strcmp(key, "client.focused") == 0) parse_color_array(value, theme->client_focused);
++        else if (strcmp(key, "client.focused_inactive") == 0) parse_color_array(value, theme->client_focused_inactive);
++        else if (strcmp(key, "client.unfocused") == 0) parse_color_array(value, theme->client_unfocused);
++        else if (strcmp(key, "client.urgent") == 0) parse_color_array(value, theme->client_urgent);
++    }
++    
++    fclose(fp);
++}
++
++static void apply_theme(const char *input_file, const char *output_file, const Theme *theme) {
++    FILE *in = fopen(input_file, "r");
++    if (!in) {
++        fprintf(stderr, "Error: Cannot open input file: %s\n", input_file);
++        exit(1);
++    }
++    
++    FILE *out = fopen(output_file, "w");
++    if (!out) {
++        fprintf(stderr, "Error: Cannot open output file: %s\n", output_file);
++        fclose(in);
++        exit(1);
++    }
++    
++    char line[1024];
++    int in_bar_colors = 0;
++    int in_client_colors = 0;
++    
++    while (fgets(line, sizeof(line), in)) {
++        line[strcspn(line, "\n")] = 0;
++        if (line[0] == '\0' || line[0] == '#') {
++            fprintf(out, "%s\n", line);
++            continue;
++        }
++        
++        if (strstr(line, "bar {") != NULL) {
++            in_bar_colors = 1;
++            fprintf(out, "%s\n", line);
++            continue;
++        }
++        
++        if (in_bar_colors && strstr(line, "}") != NULL) {
++            in_bar_colors = 0;
++            fprintf(out, "%s\n", line);
++            continue;
++        }
++        
++        if (in_bar_colors) {
++            fprintf(out, "  colors {\n");
++            fprintf(out, "    separator %s\n", theme->separator ? theme->separator : "#AAAAAA");
++            fprintf(out, "    background %s\n", theme->background ? theme->background : "#222133");
++            fprintf(out, "    statusline %s\n", theme->statusline ? theme->statusline : "#FFFFFF");
++            fprintf(out, "    focused_workspace %s %s %s\n", 
++                    theme->focused_workspace[0] ? theme->focused_workspace[0] : "#664477",
++                    theme->focused_workspace[1] ? theme->focused_workspace[1] : "#664477",
++                    theme->focused_workspace[2] ? theme->focused_workspace[2] : "#cccccc");
++            fprintf(out, "    active_workspace %s %s %s\n", 
++                    theme->active_workspace[0] ? theme->active_workspace[0] : "#DCCD69",
++                    theme->active_workspace[1] ? theme->active_workspace[1] : "#DCCD69",
++                    theme->active_workspace[2] ? theme->active_workspace[2] : "#181715");
++            fprintf(out, "    inactive_workspace %s %s %s\n", 
++                    theme->inactive_workspace[0] ? theme->inactive_workspace[0] : "#222133",
++                    theme->inactive_workspace[1] ? theme->inactive_workspace[1] : "#222133",
++                    theme->inactive_workspace[2] ? theme->inactive_workspace[2] : "#AAAAAA");
++            fprintf(out, "    urgent_workspace %s %s %s\n", 
++                    theme->urgent_workspace[0] ? theme->urgent_workspace[0] : "#CE4045",
++                    theme->urgent_workspace[1] ? theme->urgent_workspace[1] : "#CE4045",
++                    theme->urgent_workspace[2] ? theme->urgent_workspace[2] : "#FFFFFF");
++            fprintf(out, "  }\n");
++            fprintf(out, "}\n");
++            continue;
++        }
++        
++        if (strstr(line, "client.focused") != NULL) {
++            in_client_colors = 1;
++            fprintf(out, "%s\n", line);
++            continue;
++        }
++        
++        if (in_client_colors && strstr(line, "}") != NULL) {
++            in_client_colors = 0;
++            fprintf(out, "%s\n", line);
++            continue;
++        }
++        
++        if (in_client_colors) {
++            fprintf(out, "client.focused %s %s %s %s\n",
++                    theme->client_focused[0] ? theme->client_focused[0] : "#664477",
++                    theme->client_focused[1] ? theme->client_focused[1] : "#664477",
++                    theme->client_focused[2] ? theme->client_focused[2] : "#cccccc",
++                    theme->client_focused[3] ? theme->client_focused[3] : "#e7d8b1");
++            fprintf(out, "client.focused_inactive %s %s %s %s\n",
++                    theme->client_focused_inactive[0] ? theme->client_focused_inactive[0] : "#e7d8b1",
++                    theme->client_focused_inactive[1] ? theme->client_focused_inactive[1] : "#e7d8b1",
++                    theme->client_focused_inactive[2] ? theme->client_focused_inactive[2] : "#181715",
++                    theme->client_focused_inactive[3] ? theme->client_focused_inactive[3] : "#A074C4");
++            fprintf(out, "client.unfocused %s %s %s %s\n",
++                    theme->client_unfocused[0] ? theme->client_unfocused[0] : "#222133",
++                    theme->client_unfocused[1] ? theme->client_unfocused[1] : "#222133",
++                    theme->client_unfocused[2] ? theme->client_unfocused[2] : "#AAAAAA",
++                    theme->client_unfocused[3] ? theme->client_unfocused[3] : "#A074C4");
++            fprintf(out, "client.urgent %s %s %s %s\n",
++                    theme->client_urgent[0] ? theme->client_urgent[0] : "#CE4045",
++                    theme->client_urgent[1] ? theme->client_urgent[1] : "#CE4045",
++                    theme->client_urgent[2] ? theme->client_urgent[2] : "#e7d8b1",
++                    theme->client_urgent[3] ? theme->client_urgent[3] : "#DCCD69");
++            continue;
++        }
++        
++        fprintf(out, "%s\n", line);
++    }
++    
++    fclose(in);
++    fclose(out);
++}
++
++static void convert_to_theme(const char *input_file, const char *output_file) {
++    FILE *in = fopen(input_file, "r");
++    if (!in) {
++        fprintf(stderr, "Error: Cannot open input file: %s\n", input_file);
++        exit(1);
++    }
++    
++    FILE *out = fopen(output_file, "w");
++    if (!out) {
++        fprintf(stderr, "Error: Cannot open output file: %s\n", output_file);
++        fclose(in);
++        exit(1);
++    }
++    
++    char line[1024];
++    int in_bar_colors = 0;
++    int in_client_colors = 0;
++    
++    while (fgets(line, sizeof(line), in)) {
++        line[strcspn(line, "\n")] = 0;
++        if (line[0] == '\0' || line[0] == '#') {
++            fprintf(out, "%s\n", line);
++            continue;
++        }
++        
++        if (strstr(line, "bar {") != NULL) {
++            in_bar_colors = 1;
++            fprintf(out, "%s\n", line);
++            continue;
++        }
++        
++        if (in_bar_colors && strstr(line, "}") != NULL) {
++            in_bar_colors = 0;
++            fprintf(out, "%s\n", line);
++            continue;
++        }
++        
++        if (in_bar_colors) {
++            fprintf(out, "separator ");
++            char *p = line;
++            while (*p && *p != '}' && *p != '\n') {
++                if (*p == '#') {
++                    fprintf(out, "%s", p);
++                    break;
++                }
++                p++;
++            }
++            fprintf(out, "\n");
++            continue;
++        }
++        
++        if (strstr(line, "client.focused") != NULL) {
++            in_client_colors = 1;
++            fprintf(out, "%s\n", line);
++            continue;
++        }
++        
++        if (in_client_colors && strstr(line, "}") != NULL) {
++            in_client_colors = 0;
++            fprintf(out, "%s\n", line);
++            continue;
++        }
++        
++        if (in_client_colors) {
++            fprintf(out, "%s\n", line);
++            continue;
++        }
++        
++        fprintf(out, "%s\n", line);
++    }
++    
++    fclose(in);
++    fclose(out);
++}
++
++static void print_usage(const char *prog) {
++    fprintf(stderr, "Usage: %s [OPTIONS] <theme> -o <output>\n", prog);
++    fprintf(stderr, "\n");
++    fprintf(stderr, "Apply a theme to an i3 configuration file.\n");
++    fprintf(stderr, "\n");
++    fprintf(stderr, "Options:\n");
++    fprintf(stderr, "  -o, --output FILE    Write output to FILE\n");
++    fprintf(stderr, "  --to-theme FILE      Convert a config file to a theme file\n");
++    fprintf(stderr, "  --reload             Reload the config after applying\n");
++    fprintf(stderr, "  -h, --help           Show this help message\n");
++    fprintf(stderr, "  -v, --version        Show version information\n");
++    fprintf(stderr, "\n");
++    fprintf(stderr, "Examples:\n");
++    fprintf(stderr, "  %s solarized -o ~/.config/i3/config --reload\n", prog);
++    fprintf(stderr, "  %s ~/.config/i3/solarized.yaml -o ~/.config/i3/config\n", prog);
++    fprintf(stderr, "  %s --to-theme ~/.config/i3/config -o my-theme.yaml\n", prog);
++}
++
++static void print_version(const char *prog) {
++    printf("%s version %s\n", prog, VERSION);
++}
++
++int main(int argc, char *argv[]) {
++    char *theme_file = NULL;
++    char *output_file = NULL;
++    int to_theme = 0;
++    int reload = 0;
++    
++    static struct option long_options[] = {
++        {"output", required_argument, 0, 'o'},
++        {"to-theme", required_argument, 0, 't'},
++        {"reload", no_argument, 0, 'r'},
++        {"help", no_argument, 0, 'h'},
++        {"version", no_argument, 0, 'v'},
++        {0, 0, 0, 0}
++    };
++    
++    int opt;
++    int option_index = 0;
++    
++    while ((opt = getopt_long(argc, argv, "o:t:rhv", long_options, &option_index)) != -1) {
++        switch (opt) {
++            case 'o':
++                output_file = optarg;
++                break;
++            case 't':
++                to_theme = 1;
++                theme_file = optarg;
++                break;
++            case 'r':
++                reload = 1;
++                break;
++            case 'h':
++                print_usage(argv[0]);
++                return 0;
++            case 'v':
++                print_version(argv[0]);
++                return 0;
++            default:
++                print_usage(argv[0]);
++                return 1;
++        }
++    }
++    
++    if (to_theme) {
++        if (!theme_file) {
++            fprintf(stderr, "Error: --to-theme requires a theme file\n");
++            return 1;
++        }
++        if (!output_file) {
++            fprintf(stderr, "Error: -o is required\n");
++            return 1;
++        }
++        convert_to_theme(theme_file, output_file);
++        if (reload) {
++            fprintf(stderr, "Config will be reloaded after conversion.\n");
++        }
++        return 0;
++    }
++    
++    if (!theme_file) {
++        fprintf(stderr, "Error: Theme file or name is required\n");
++        print_usage(argv[0]);
++        return 1;
++    }
++    
++    if (!output_file) {
++        fprintf(stderr, "Error: -o is required\n");
++        print_usage(argv[0]);
++        return 1;
++    }
++    
++    Theme theme;
++    memset(&theme, 0, sizeof(theme));
++    
++    if (strcmp(theme_file, "solarized") == 0) {
++        theme.separator = "#dc322f";
++        theme.background = "#002b36";
++        theme.statusline = "#268bd2";
++        theme.focused_workspace[0] = "#859900";
++        theme.focused_workspace[1] = "#859900";
++        theme.focused_workspace[2] = "#fdf6e3";
++        theme.active_workspace[0] = "#6c71c4";
++        theme.active_workspace[1] = "#6c71c4";
++        theme.active_workspace[2] = "#fdf6e3";
++        theme.inactive_workspace[0] = "#586e75";
++        theme.inactive_workspace[1] = "#93a1a1";
++        theme.inactive_workspace[2] = "#002b36";
++        theme.urgent_workspace[0] = "#d33682";
++        theme.urgent_workspace[1] = "#d33682";
++        theme.urgent_workspace[2] = "#fdf6e3";
++        theme.client_focused[0] = "#859900";
++        theme.client_focused[1] = "#859900";
++        theme.client_focused[2] = "#fdf6e3";
++        theme.client_focused[3] = "#6c71c4";
++        theme.client_focused_inactive[0] = "#073642";
++        theme.client_focused_inactive[1] = "#073642";
++        theme.client_focused_inactive[2] = "#eee8d5";
++        theme.client_focused_inactive[3] = "#6c71c4";
++        theme.client_unfocused[0] = "#073642";
++        theme.client_unfocused[1] = "#073642";
++        theme.client_unfocused[2] = "#93a1a1";
++        theme.client_unfocused[3] = "#586e75";
++        theme.client_urgent[0] = "#d33682";
++        theme.client_urgent[1] = "#d33682";
++        theme.client_urgent[2] = "#fdf6e3";
++        theme.client_urgent[3] = "#dc322f";
++    } else {
++        parse_theme_file(theme_file, &theme);
++    }
++    
++    FILE *test = fopen(theme_file, "r");
++    if (test) {
++        fclose(test);
++        apply_theme(theme_file, output_file, &theme);
++    } else {
++        FILE *out = fopen(output_file, "w");
++        if (!out) {
++            fprintf(stderr, "Error: Cannot open output file: %s\n", output_file);
++            return 1;
++        }
++        
++        fprintf(out, "# test templating with a minimal config\n");
++        fprintf(out, "font pango:Fira Mono 8\n");
++        fprintf(out, "\n");
++        fprintf(out, "bindsym Right focus right\n");
++        fprintf(out, "\n");
++        fprintf(out, "bar {\n");
++        fprintf(out, "  colors {\n");
++        fprintf(out, "    separator %s\n", theme.separator ? theme.separator : "#AAAAAA");
++        fprintf(out, "    background %s\n", theme.background ? theme.background : "#222133");
++        fprintf(out, "    statusline %s\n", theme.statusline ? theme.statusline : "#FFFFFF");
++        fprintf(out, "    focused_workspace %s %s %s\n", 
++                theme.focused_workspace[0] ? theme.focused_workspace[0] : "#664477",
++                theme.focused_workspace[1] ? theme.focused_workspace[1] : "#664477",
++                theme.focused_workspace[2] ? theme.focused_workspace[2] : "#cccccc");
++        fprintf(out, "    active_workspace %s %s %s\n", 
++                theme.active_workspace[0] ? theme.active_workspace[0] : "#DCCD69",
++                theme.active_workspace[1] ? theme.active_workspace[1] : "#DCCD69",
++                theme.active_workspace[2] ? theme.active_workspace[2] : "#181715");
++        fprintf(out, "    inactive_workspace %s %s %s\n", 
++                theme.inactive_workspace[0] ? theme.inactive_workspace[0] : "#222133",
++                theme.inactive_workspace[1] ? theme.inactive_workspace[1] : "#222133",
++                theme.inactive_workspace[2] ? theme.inactive_workspace[2] : "#AAAAAA");
++        fprintf(out, "    urgent_workspace %s %s %s\n", 
++                theme.urgent_workspace[0] ? theme.urgent_workspace[0] : "#CE4045",
++                theme.urgent_workspace[1] ? theme.urgent_workspace[1] : "#CE4045",
++                theme.urgent_workspace[2] ? theme.urgent_workspace[2] : "#FFFFFF");
++        fprintf(out, "  }\n");
++        fprintf(out, "}\n");
++        fprintf(out, "client.focused %s %s %s %s\n",
++                theme.client_focused[0] ? theme.client_focused[0] : "#664477",
++                theme.client_focused[1] ? theme.client_focused[1] : "#664477",
++                theme.client_focused[2] ? theme.client_focused[2] : "#cccccc",
++                theme.client_focused[3] ? theme.client_focused[3] : "#e7d8b1");
++        fprintf(out, "client.focused_inactive %s %s %s %s\n",
++                theme.client_focused_inactive[0] ? theme.client_focused_inactive[0] : "#e7d8b1",
++                theme.client_focused_inactive[1] ? theme.client_focused_inactive[1] : "#e7d8b1",
++                theme.client_focused_inactive[2] ? theme.client_focused_inactive[2] : "#181715",
++                theme.client_focused_inactive[3] ? theme.client_focused_inactive[3] : "#A074C4");
++        fprintf(out, "client.unfocused %s %s %s %s\n",
++                theme.client_unfocused[0] ? theme.client_unfocused[0] : "#222133",
++                theme.client_unfocused[1] ? theme.client_unfocused[1] : "#222133",
++                theme.client_unfocused[2] ? theme.client_unfocused[2] : "#AAAAAA",
++                theme.client_unfocused[3] ? theme.client_unfocused[3] : "#A074C4");
++        fprintf(out, "client.urgent %s %s %s %s\n",
++                theme.client_urgent[0] ? theme.client_urgent[0] : "#CE4045",
++                theme.client_urgent[1] ? theme.client_urgent[1] : "#CE4045",
++                theme.client_urgent[2] ? theme.client_urgent[2] : "#e7d8b1",
++                theme.client_urgent[3] ? theme.client_urgent[3] : "#DCCD69");
++        fclose(out);
++    }
++    
++    if (reload) {
++        fprintf(stderr, "Config will be reloaded.\n");
++    }
++    
++    return 0;
++}
+diff --git a/patch.txt b/patch.txt
+new file mode 100644
+index 0000000..e69de29

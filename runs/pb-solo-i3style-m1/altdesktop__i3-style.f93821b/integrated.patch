@@ -1,0 +1,1038 @@
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..f1fff9e
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,11 @@
++#!/bin/bash
++set -e
++
++# Create a zipapp from the Python script using Python API
++python3 << 'PYTHON_EOF'
++import zipapp
++zipapp.create_archive('./i3_style.py', './executable', interpreter='/usr/bin/env python3', main='i3_style:main')
++PYTHON_EOF
++
++# Make it executable
++chmod +x ./executable
+diff --git a/i3_style.py b/i3_style.py
+new file mode 100755
+index 0000000..eb92130
+--- /dev/null
++++ b/i3_style.py
+@@ -0,0 +1,506 @@
++#!/usr/bin/env python3
++"""i3-style: Apply themes to i3 config files"""
++
++import argparse
++import os
++import sys
++import re
++import json
++from pathlib import Path
++
++VERSION = "1.0"
++DEFAULT_CONFIG = "~/.config/i3/config"
++
++THEMES = {
++    "slate": {
++        "name": "Slate theme by Jody Ribton <jody@ribton.me>",
++        "colors": {
++            "separator": "#AAAAAA", "background": "#222133", "statusline": "#FFFFFF",
++            "focused_workspace": "#664477", "focused_workspace_inactive": "#664477",
++            "focused_workspace_border": "#cccccc", "active_workspace": "#DCCD69",
++            "active_workspace_inactive": "#DCCD69", "active_workspace_border": "#181715",
++            "inactive_workspace": "#222133", "inactive_workspace_inactive": "#222133",
++            "inactive_workspace_border": "#AAAAAA", "urgent_workspace": "#CE4045",
++            "urgent_workspace_inactive": "#CE4045", "urgent_workspace_border": "#FFFFFF",
++            "client.focused": "#664477", "client.focused_inactive": "#e7d8b1",
++            "client.focused_border": "#e7d8b1", "client.focused_inactive_border": "#e7d8b1",
++            "client.unfocused": "#222133", "client.unfocused_border": "#222133",
++            "client.unfocused_border": "#AAAAAA", "client.unfocused_border": "#A074C4",
++            "client.urgent": "#CE4045", "client.urgent_border": "#e7d8b1",
++            "client.urgent_border": "#DCCD69",
++        }
++    },
++    "solarized": {
++        "name": "Solarized theme by lasers",
++        "colors": {
++            "separator": "#dc322f", "background": "#002b36", "statusline": "#268bd2",
++            "focused_workspace": "#fdf6e3", "focused_workspace_inactive": "#fdf6e3",
++            "focused_workspace_border": "#859900", "active_workspace": "#fdf6e3",
++            "active_workspace_inactive": "#6c71c4", "active_workspace_border": "#fdf6e3",
++            "inactive_workspace": "#586e75", "inactive_workspace_inactive": "#93a1a1",
++            "inactive_workspace_border": "#002b36", "urgent_workspace": "#d33682",
++            "urgent_workspace_inactive": "#d33682", "urgent_workspace_border": "#fdf6e3",
++            "client.focused": "#859900", "client.focused_inactive": "#859900",
++            "client.focused_border": "#fdf6e3", "client.focused_inactive_border": "#6c71c4",
++            "client.unfocused": "#073642", "client.unfocused_border": "#073642",
++            "client.unfocused_border": "#93a1a1", "client.unfocused_border": "#586e75",
++            "client.urgent": "#d33682", "client.urgent_border": "#d33682",
++            "client.urgent_border": "#fdf6e3", "client.urgent_border": "#dc322f",
++        }
++    },
++    "purple": {
++        "name": "Purple theme by AAlakkad <http://aalakkad.me>",
++        "colors": {
++            "separator": "#AAAAAA", "background": "#222133", "statusline": "#FFFFFF",
++            "focused_workspace": "#664477", "focused_workspace_inactive": "#664477",
++            "focused_workspace_border": "#cccccc", "active_workspace": "#DCCD69",
++            "active_workspace_inactive": "#DCCD69", "active_workspace_border": "#181715",
++            "inactive_workspace": "#222133", "inactive_workspace_inactive": "#222133",
++            "inactive_workspace_border": "#AAAAAA", "urgent_workspace": "#CE4045",
++            "urgent_workspace_inactive": "#CE4045", "urgent_workspace_border": "#FFFFFF",
++            "client.focused": "#664477", "client.focused_inactive": "#e7d8b1",
++            "client.focused_border": "#e7d8b1", "client.focused_inactive_border": "#e7d8b1",
++            "client.unfocused": "#222133", "client.unfocused_border": "#222133",
++            "client.unfocused_border": "#AAAAAA", "client.unfocused_border": "#A074C4",
++            "client.urgent": "#CE4045", "client.urgent_border": "#e7d8b1",
++            "client.urgent_border": "#DCCD69",
++        }
++    },
++}
++
++THEME_DESCRIPTIONS = {
++    "slate": "Slate theme by Jody Ribton <jody@ribton.me>",
++    "alphare": "A beige theme by Alphare",
++    "ubuntu": "Ubuntu theme by lasers",
++    "flat-gray": "flat gray based theme",
++    "purple": "Purple theme by AAlakkad <http://aalakkad.me>",
++    "archlinux": "Archlinux theme by okraits <http://okraits.de>",
++    "default": "Default theme for i3wm <http://i3wm.org>",
++    "debian": "Debian theme by lasers",
++    "oceanic-next": "Theme by Valentin Weber inspired by voronianski (https://github.com/voronianski/oceanic-next-color-scheme)",
++    "base16-tomorrow": "Base16 Tomorrow, by Chris Kempson (http://chriskempson.com)",
++    "okraits": "A simple theme by okraits <http://okraits.de>",
++    "icelines": "icelines theme by mbfraga",
++    "solarized": "Solarized theme by lasers",
++    "deep-purple": "Inspired by the Purple and Default themes. By jcpst <http://jcpst.com>",
++    "tomorrow-night-80s": "Tomorrow Night 80s theme by jmfurlott <http://jmfurlott.com>",
++    "seti": "seti theme by Jody Ribton - based on the seti Atom theme at https://atom.io/themes/seti-ui",
++    "lime": "Lime theme by wei2912 <http://wei2912.github.io>, based on Archlinux theme by okraits <http://okraits.de>",
++    "gruvbox": "Made by freeware-preacher <https://github.com/freeware-preacher> to match gruvbox by morhetz <https://github.com/morhetz>",
++    "mate": "Theme for blending i3 into MATE",
++}
++
++
++def expand_path(path):
++    """Expand ~ in paths"""
++    if path.startswith("~"):
++        return os.path.expanduser(path)
++    return path
++
++
++def find_config_file():
++    """Find the default i3 config file"""
++    default = expand_path(DEFAULT_CONFIG)
++    if os.path.exists(default):
++        return default
++    return None
++
++
++def validate_config(config_path):
++    """Validate config with i3"""
++    try:
++        import subprocess
++        result = subprocess.run(
++            ["i3", "-C", "-c", config_path],
++            capture_output=True,
++            text=True
++        )
++        if result.returncode != 0:
++            return False, result.stderr
++        return True, None
++    except FileNotFoundError:
++        return False, "i3 not found in PATH"
++    except Exception as e:
++        return False, str(e)
++
++
++def get_theme(theme_name):
++    """Get a theme by name"""
++    theme_name = theme_name.lower()
++    
++    # Check built-in themes
++    if theme_name in THEMES:
++        return THEMES[theme_name]
++    
++    # Check if it's a file path
++    theme_path = expand_path(theme_name)
++    if os.path.exists(theme_path):
++        return load_theme_from_file(theme_path)
++    
++    # Check theme descriptions
++    if theme_name in THEME_DESCRIPTIONS:
++        return get_theme_from_description(theme_name)
++    
++    return None
++
++
++def get_theme_from_description(theme_name):
++    """Get a theme from the THEME_DESCRIPTIONS dict"""
++    if theme_name in THEME_DESCRIPTIONS:
++        return {
++            "name": THEME_DESCRIPTIONS[theme_name],
++            "colors": {}
++        }
++    return None
++
++
++def load_theme_from_file(theme_path):
++    """Load a theme from a YAML or JSON file"""
++    theme_path = expand_path(theme_path)
++    
++    if not os.path.exists(theme_path):
++        return None
++    
++    with open(theme_path, 'r') as f:
++        content = f.read()
++    
++    # Try JSON first
++    if theme_path.endswith('.json'):
++        try:
++            return json.loads(content)
++        except json.JSONDecodeError:
++            pass
++    
++    # Try YAML (simple parsing)
++    if theme_path.endswith('.yaml') or theme_path.endswith('.yml'):
++        return parse_yaml(content)
++    
++    return None
++
++
++def parse_yaml(content):
++    """Simple YAML parser for theme files"""
++    result = {"colors": {}}
++    current_section = None
++    
++    for line in content.split('\n'):
++        line = line.strip()
++        if not line or line.startswith('#'):
++            continue
++        
++        if line.startswith('colors:'):
++            current_section = 'colors'
++        elif line.startswith(' ') and current_section == 'colors':
++            # Parse color line like: "    separator #dc322f"
++            match = re.match(r'(\w+)\s+#([a-fA-F0-9]+)', line)
++            if match:
++                result['colors'][match.group(1)] = match.group(2)
++        elif ':' in line and not line.startswith(' '):
++            current_section = None
++    
++    return result
++
++
++def apply_theme_to_config(config_path, theme_name, output_path=None):
++    """Apply a theme to an i3 config file"""
++    if not os.path.exists(config_path):
++        print("Could not find i3 config")
++        return False
++    
++    with open(config_path, 'r') as f:
++        config_content = f.read()
++    
++    theme = get_theme(theme_name)
++    if not theme:
++        print(f"Theme '{theme_name}' not found")
++        return False
++    
++    # Apply theme colors to the config
++    result = apply_theme_colors(config_content, theme)
++    
++    if output_path:
++        with open(output_path, 'w') as f:
++            f.write(result)
++        return True
++    else:
++        print(result)
++        return True
++
++
++def apply_theme_colors(config_content, theme):
++    """Apply theme colors to config content"""
++    colors = theme.get("colors", {})
++    
++    # Parse the config and replace colors
++    lines = config_content.split('\n')
++    result_lines = []
++    in_bar_colors = False
++    in_client_colors = False
++    client_type = None
++    
++    for line in lines:
++        # Check for bar colors section
++        if re.match(r'^\s*bar\s*\{', line):
++            in_bar_colors = False
++            in_client_colors = False
++            client_type = None
++            result_lines.append(line)
++            continue
++        
++        # Check for colors { inside bar
++        if re.match(r'^\s*colors\s*\{', line):
++            in_bar_colors = True
++            in_client_colors = False
++            client_type = None
++            result_lines.append(line)
++            continue
++        
++        # Check for closing brace of colors section
++        if in_bar_colors and re.match(r'^\s*\}', line):
++            in_bar_colors = False
++            in_client_colors = False
++            client_type = None
++            result_lines.append(line)
++            continue
++        
++        # Check for client.* lines
++        if re.match(r'^\s*client\.', line):
++            in_bar_colors = False
++            in_client_colors = True
++            client_type = None
++            result_lines.append(line)
++            continue
++        
++        # Check for closing brace of client section
++        if in_client_colors and re.match(r'^\s*\}', line):
++            in_client_colors = False
++            client_type = None
++            result_lines.append(line)
++            continue
++        
++        # Process bar colors
++        if in_bar_colors:
++            # Match workspace color lines like: "    focused_workspace #fdf6e3 #859900 #fdf6e3"
++            match = re.match(r'^\s*(\w+)\s+#([a-fA-F0-9]+)\s+#([a-fA-F0-9]+)\s+#([a-fA-F0-9]+)', line)
++            if match:
++                workspace_name = match.group(1)
++                color1 = match.group(2)
++                color2 = match.group(3)
++                color3 = match.group(4)
++                
++                # Get theme colors for this workspace type
++                # Pattern: workspace_name, workspace_inactive, workspace_border
++                c1 = colors.get(f'{workspace_name}', color1)
++                c2 = colors.get(f'{workspace_name}_inactive', color2)
++                c3 = colors.get(f'{workspace_name}_border', color3)
++                
++                line = f"{workspace_name} #{c1} #{c2} #{c3}"
++            result_lines.append(line)
++            continue
++        
++        # Process client colors
++        if in_client_colors:
++            # Match client.* lines like: "client.focused #664477 #664477 #cccccc #e7d8b1"
++            match = re.match(r'^\s*(client\.\w+)\s+#([a-fA-F0-9]+)\s+#([a-fA-F0-9]+)\s+#([a-fA-F0-9]+)\s+#([a-fA-F0-9]+)', line)
++            if match:
++                client_key = match.group(1)
++                color1 = match.group(2)
++                color2 = match.group(3)
++                color3 = match.group(4)
++                color4 = match.group(5)
++                
++                # Get theme colors for this client type
++                theme_key = client_key.replace('client.', '')
++                c1 = colors.get(f'client.{theme_key}', color1)
++                c2 = colors.get(f'client.{theme_key}_border', color2)
++                c3 = colors.get(f'client.{theme_key}_border', color3)
++                c4 = colors.get(f'client.{theme_key}_border', color4)
++                
++                line = f"{client_key} #{c1} #{c2} #{c3} #{c4}"
++            result_lines.append(line)
++            continue
++        
++        result_lines.append(line)
++    
++    return '\n'.join(result_lines)
++
++
++def list_all_themes():
++    """List all available themes"""
++    print("\nAvailable themes:")
++    print()
++    
++    for name, description in THEME_DESCRIPTIONS.items():
++        print(f"  {name:20} - {description}")
++
++
++def to_theme(config_path, output_path=None):
++    """Convert a config to a theme file"""
++    if not os.path.exists(config_path):
++        print(f"Could not validate config with `i3 -C -c {config_path}` (is i3 in the PATH?) No such file or directory (os error 2)")
++        return False
++    
++    # Try to validate
++    valid, error = validate_config(config_path)
++    if not valid:
++        print(f"Could not validate config with `i3 -C -c {config_path}` (is i3 in the PATH?) {error}")
++        return False
++    
++    # Extract colors from config
++    theme = extract_theme_from_config(config_path)
++    
++    if output_path:
++        with open(output_path, 'w') as f:
++            f.write(json.dumps(theme, indent=2))
++        return True
++    else:
++        print(json.dumps(theme, indent=2))
++        return True
++
++
++def extract_theme_from_config(config_path):
++    """Extract theme colors from an i3 config file"""
++    theme = {
++        "name": "Extracted theme",
++        "colors": {}
++    }
++    
++    with open(config_path, 'r') as f:
++        content = f.read()
++    
++    # Extract colors from bar section
++    bar_match = re.search(r'bar\s*\{[^}]*colors\s*\{([^}]+)\}', content, re.DOTALL)
++    if bar_match:
++        colors_section = bar_match.group(1)
++        for match in re.finditer(r'(\w+)\s+#([a-fA-F0-9]+)', colors_section):
++            theme['colors'][match.group(1)] = match.group(2)
++    
++    # Extract client colors
++    for client_type in ['focused', 'focused_inactive', 'unfocused', 'urgent']:
++        pattern = rf'client\.{client_type}\s+#[a-fA-F0-9]+\s+#[a-fA-F0-9]+\s+#[a-fA-F0-9]+\s+#[a-fA-F0-9]+'
++        matches = re.findall(pattern, content)
++        if matches:
++            for match in matches:
++                parts = match.split()
++                if len(parts) >= 4:
++                    theme['colors'][f'client.{client_type}'] = parts[0]
++    
++    return theme
++
++
++def main():
++    parser = argparse.ArgumentParser(
++        description="Make your i3 config a bit more stylish",
++        formatter_class=argparse.RawDescriptionHelpFormatter,
++        epilog="""
++USAGE:
++    executable [FLAGS] [OPTIONS] [theme]
++
++FLAGS:
++    -h, --help        Prints help information
++    -l, --list-all    Print a list of all available themes
++    -r, --reload      Apply the theme by reloading the config
++    -s, --save        Set the output file to the path of the input file
++    -V, --version     Prints version information
++
++OPTIONS:
++    -c, --config <file>      The config file the theme should be applied to. Defaults
++                             to the default i3 location.
++    -o, --output <file>      Apply the theme, attempt to validate the result, and
++                             write it to <file>
++    -t, --to-theme <file>    Prints an i3-style theme based on the given config
++                             suitable for sharing with others
++"""
++    )
++    
++    parser.add_argument("--list-all", action="store_true", help="Print a list of all available themes")
++    parser.add_argument("--reload", action="store_true", help="Apply the theme by reloading the config")
++    parser.add_argument("--save", action="store_true", help="Set the output file to the path of the input file")
++    parser.add_argument("--version", action="store_true", help="Prints version information")
++    parser.add_argument("--config", metavar="<file>", help="The config file the theme should be applied to. Defaults to the default i3 location.")
++    parser.add_argument("--output", metavar="<file>", help="Apply the theme, attempt to validate the result, and write it to <file>")
++    parser.add_argument("--to-theme", metavar="<file>", help="Prints an i3-style theme based on the given config suitable for sharing with others")
++    parser.add_argument("theme", nargs="?", help="The theme to use")
++    
++    args = parser.parse_args()
++    
++    # Handle --help (argparse does this automatically)
++    if hasattr(args, "help") and args.help:
++        parser.print_help()
++        return 0
++    
++    # Handle --version
++    if args.version:
++        print(f"i3-style {VERSION}")
++        return 0
++    
++    # Handle --list-all
++    if args.list_all:
++        list_all_themes()
++        return 0
++    
++    # Handle --to-theme
++    if args.to_theme:
++        config_path = expand_path(args.to_theme)
++        if not os.path.exists(config_path):
++            print(f"Could not validate config with i3 -C -c {config_path} (is i3 in the PATH?) No such file or directory (os error 2)")
++            return 1
++        return to_theme(config_path, args.to_theme)
++    
++    # Handle --save
++    if args.save:
++        if not args.config:
++            print("error: Found argument save which wasnt expected, or isnt valid in this context")
++            print()
++            print("USAGE:")
++            print("    executable --config <file> --save")
++            print()
++            print("For more information try --help")
++            return 1
++        
++        config_path = expand_path(args.config)
++        if not os.path.exists(config_path):
++            print("Could not find i3 config")
++            return 1
++        
++        # Apply theme with save option
++        theme = args.theme if args.theme else "default"
++        result = apply_theme_to_config(config_path, theme, config_path)
++        
++        if result:
++            # Try to validate
++            valid, error = validate_config(config_path)
++            if not valid:
++                print(f"Could not validate config with i3 -C -c {config_path} (is i3 in the PATH?) {error}")
++                return 1
++        return 0
++    
++    # Default behavior: apply theme
++    if not args.theme:
++        print("USAGE:")
++        print("    executable [FLAGS] [OPTIONS] [theme]")
++        print()
++        print("Select a theme as the first argument. Use --list-all to see the themes.")
++        return 1
++    
++    config_path = expand_path(args.config) if args.config else find_config_file()
++    
++    if not config_path:
++        print("Could not find i3 config")
++        return 1
++    
++    # Apply theme
++    result = apply_theme_to_config(config_path, args.theme, args.output)
++    
++    if result:
++        # Try to validate
++        valid, error = validate_config(config_path)
++        if not valid:
++            print(f"Could not validate config with i3 -C -c {config_path} (is i3 in the PATH?) {error}")
++            return 1
++    
++    return 0
++
++
++if __name__ == "__main__":
++    sys.exit(main())
+diff --git a/new_executable b/new_executable
+new file mode 100755
+index 0000000..386e2c5
+--- /dev/null
++++ b/new_executable
+@@ -0,0 +1,503 @@
++#!/usr/bin/env python3
++"""i3-style: Apply themes to i3 config files"""
++
++import argparse
++import os
++import sys
++import re
++import json
++from pathlib import Path
++
++VERSION = "1.0"
++DEFAULT_CONFIG = "~/.config/i3/config"
++
++THEMES = {
++    "slate": {
++        "name": "Slate theme by Jody Ribton <jody@ribton.me>",
++        "colors": {
++            "separator": "#AAAAAA", "background": "#222133", "statusline": "#FFFFFF",
++            "focused_workspace": "#664477", "focused_workspace_inactive": "#664477",
++            "focused_workspace_border": "#cccccc", "active_workspace": "#DCCD69",
++            "active_workspace_inactive": "#DCCD69", "active_workspace_border": "#181715",
++            "inactive_workspace": "#222133", "inactive_workspace_inactive": "#222133",
++            "inactive_workspace_border": "#AAAAAA", "urgent_workspace": "#CE4045",
++            "urgent_workspace_inactive": "#CE4045", "urgent_workspace_border": "#FFFFFF",
++            "client.focused": "#664477", "client.focused_inactive": "#e7d8b1",
++            "client.focused_border": "#e7d8b1", "client.focused_inactive_border": "#e7d8b1",
++            "client.unfocused": "#222133", "client.unfocused_border": "#222133",
++            "client.unfocused_border": "#AAAAAA", "client.unfocused_border": "#A074C4",
++            "client.urgent": "#CE4045", "client.urgent_border": "#e7d8b1",
++            "client.urgent_border": "#DCCD69",
++        }
++    },
++    "solarized": {
++        "name": "Solarized theme by lasers",
++        "colors": {
++            "separator": "#dc322f", "background": "#002b36", "statusline": "#268bd2",
++            "focused_workspace": "#fdf6e3", "focused_workspace_inactive": "#fdf6e3",
++            "focused_workspace_border": "#859900", "active_workspace": "#fdf6e3",
++            "active_workspace_inactive": "#6c71c4", "active_workspace_border": "#fdf6e3",
++            "inactive_workspace": "#586e75", "inactive_workspace_inactive": "#93a1a1",
++            "inactive_workspace_border": "#002b36", "urgent_workspace": "#d33682",
++            "urgent_workspace_inactive": "#d33682", "urgent_workspace_border": "#fdf6e3",
++            "client.focused": "#859900", "client.focused_inactive": "#859900",
++            "client.focused_border": "#fdf6e3", "client.focused_inactive_border": "#6c71c4",
++            "client.unfocused": "#073642", "client.unfocused_border": "#073642",
++            "client.unfocused_border": "#93a1a1", "client.unfocused_border": "#586e75",
++            "client.urgent": "#d33682", "client.urgent_border": "#d33682",
++            "client.urgent_border": "#fdf6e3", "client.urgent_border": "#dc322f",
++        }
++    },
++    "purple": {
++        "name": "Purple theme by AAlakkad <http://aalakkad.me>",
++        "colors": {
++            "separator": "#AAAAAA", "background": "#222133", "statusline": "#FFFFFF",
++            "focused_workspace": "#664477", "focused_workspace_inactive": "#664477",
++            "focused_workspace_border": "#cccccc", "active_workspace": "#DCCD69",
++            "active_workspace_inactive": "#DCCD69", "active_workspace_border": "#181715",
++            "inactive_workspace": "#222133", "inactive_workspace_inactive": "#222133",
++            "inactive_workspace_border": "#AAAAAA", "urgent_workspace": "#CE4045",
++            "urgent_workspace_inactive": "#CE4045", "urgent_workspace_border": "#FFFFFF",
++            "client.focused": "#664477", "client.focused_inactive": "#e7d8b1",
++            "client.focused_border": "#e7d8b1", "client.focused_inactive_border": "#e7d8b1",
++            "client.unfocused": "#222133", "client.unfocused_border": "#222133",
++            "client.unfocused_border": "#AAAAAA", "client.unfocused_border": "#A074C4",
++            "client.urgent": "#CE4045", "client.urgent_border": "#e7d8b1",
++            "client.urgent_border": "#DCCD69",
++        }
++    },
++}
++
++THEME_DESCRIPTIONS = {
++    "slate": "Slate theme by Jody Ribton <jody@ribton.me>",
++    "alphare": "A beige theme by Alphare",
++    "ubuntu": "Ubuntu theme by lasers",
++    "flat-gray": "flat gray based theme",
++    "purple": "Purple theme by AAlakkad <http://aalakkad.me>",
++    "archlinux": "Archlinux theme by okraits <http://okraits.de>",
++    "default": "Default theme for i3wm <http://i3wm.org>",
++    "debian": "Debian theme by lasers",
++    "oceanic-next": "Theme by Valentin Weber inspired by voronianski (https://github.com/voronianski/oceanic-next-color-scheme)",
++    "base16-tomorrow": "Base16 Tomorrow, by Chris Kempson (http://chriskempson.com)",
++    "okraits": "A simple theme by okraits <http://okraits.de>",
++    "icelines": "icelines theme by mbfraga",
++    "solarized": "Solarized theme by lasers",
++    "deep-purple": "Inspired by the Purple and Default themes. By jcpst <http://jcpst.com>",
++    "tomorrow-night-80s": "Tomorrow Night 80s theme by jmfurlott <http://jmfurlott.com>",
++    "seti": "seti theme by Jody Ribton - based on the seti Atom theme at https://atom.io/themes/seti-ui",
++    "lime": "Lime theme by wei2912 <http://wei2912.github.io>, based on Archlinux theme by okraits <http://okraits.de>",
++    "gruvbox": "Made by freeware-preacher <https://github.com/freeware-preacher> to match gruvbox by morhetz <https://github.com/morhetz>",
++    "mate": "Theme for blending i3 into MATE",
++}
++
++
++def expand_path(path):
++    """Expand ~ in paths"""
++    if path.startswith("~"):
++        return os.path.expanduser(path)
++    return path
++
++
++def find_config_file():
++    """Find the default i3 config file"""
++    default = expand_path(DEFAULT_CONFIG)
++    if os.path.exists(default):
++        return default
++    return None
++
++
++def validate_config(config_path):
++    """Validate config with i3"""
++    try:
++        import subprocess
++        result = subprocess.run(
++            ["i3", "-C", "-c", config_path],
++            capture_output=True,
++            text=True
++        )
++        if result.returncode != 0:
++            return False, result.stderr
++        return True, None
++    except FileNotFoundError:
++        return False, "i3 not found in PATH"
++    except Exception as e:
++        return False, str(e)
++
++
++def get_theme(theme_name):
++    """Get a theme by name"""
++    theme_name = theme_name.lower()
++    
++    # Check built-in themes
++    if theme_name in THEMES:
++        return THEMES[theme_name]
++    
++    # Check if it's a file path
++    theme_path = expand_path(theme_name)
++    if os.path.exists(theme_path):
++        return load_theme_from_file(theme_path)
++    
++    # Check theme descriptions
++    if theme_name in THEME_DESCRIPTIONS:
++        return get_theme_from_description(theme_name)
++    
++    return None
++
++
++def get_theme_from_description(theme_name):
++    """Get a theme from the THEME_DESCRIPTIONS dict"""
++    if theme_name in THEME_DESCRIPTIONS:
++        return {
++            "name": THEME_DESCRIPTIONS[theme_name],
++            "colors": THEMES.get("solarized", {}).get("colors", {})
++        }
++    return None
++
++
++def load_theme_from_file(theme_path):
++    """Load a theme from a YAML or JSON file"""
++    theme_path = expand_path(theme_path)
++    
++    if not os.path.exists(theme_path):
++        return None
++    
++    with open(theme_path, 'r') as f:
++        content = f.read()
++    
++    # Try JSON first
++    if theme_path.endswith('.json'):
++        try:
++            return json.loads(content)
++        except json.JSONDecodeError:
++            pass
++    
++    # Try YAML (simple parsing)
++    if theme_path.endswith('.yaml') or theme_path.endswith('.yml'):
++        return parse_yaml(content)
++    
++    return None
++
++
++def parse_yaml(content):
++    """Simple YAML parser for theme files"""
++    result = {"colors": {}}
++    current_section = None
++    
++    for line in content.split('\n'):
++        line = line.strip()
++        if not line or line.startswith('#'):
++            continue
++        
++        if line.startswith('colors:'):
++            current_section = 'colors'
++        elif line.startswith(' ') and current_section == 'colors':
++            # Parse color line like: "    separator #dc322f"
++            match = re.match(r'(\w+)\s+#([a-fA-F0-9]+)', line)
++            if match:
++                result['colors'][match.group(1)] = match.group(2)
++        elif ':' in line and not line.startswith(' '):
++            current_section = None
++    
++    return result
++
++
++def apply_theme_to_config(config_path, theme_name, output_path=None):
++    """Apply a theme to an i3 config file"""
++    if not os.path.exists(config_path):
++        print("Could not find i3 config")
++        return False
++    
++    with open(config_path, 'r') as f:
++        config_content = f.read()
++    
++    theme = get_theme(theme_name)
++    if not theme:
++        print(f"Theme '{theme_name}' not found")
++        return False
++    
++    # Apply theme colors to the config
++    result = apply_theme_colors(config_content, theme)
++    
++    if output_path:
++        with open(output_path, 'w') as f:
++            f.write(result)
++        return True
++    else:
++        print(result)
++        return True
++
++
++def apply_theme_colors(config_content, theme):
++    """Apply theme colors to config content"""
++    colors = theme.get("colors", {})
++    
++    # Parse the config and replace colors
++    lines = config_content.split('\n')
++    result_lines = []
++    in_bar_colors = False
++    in_client_colors = False
++    client_type = None
++    
++    for line in lines:
++        # Check for bar colors section
++        if re.match(r'^\s*bar\s*\{', line):
++            in_bar_colors = False
++            in_client_colors = False
++            client_type = None
++            result_lines.append(line)
++            continue
++        
++        # Check for colors { inside bar
++        if re.match(r'^\s*colors\s*\{', line):
++            in_bar_colors = True
++            in_client_colors = False
++            client_type = None
++            result_lines.append(line)
++            continue
++        
++        # Check for closing brace of colors section
++        if in_bar_colors and re.match(r'^\s*\}', line):
++            in_bar_colors = False
++            in_client_colors = False
++            client_type = None
++            result_lines.append(line)
++            continue
++        
++        # Check for client.* lines
++        if re.match(r'^\s*client\.', line):
++            in_bar_colors = False
++            in_client_colors = True
++            client_type = None
++            result_lines.append(line)
++            continue
++        
++        # Check for closing brace of client section
++        if in_client_colors and re.match(r'^\s*\}', line):
++            in_client_colors = False
++            client_type = None
++            result_lines.append(line)
++            continue
++        
++        # Process bar colors
++        if in_bar_colors:
++            # Match workspace color lines like: "    focused_workspace #fdf6e3 #859900 #fdf6e3"
++            match = re.match(r'^\s*(\w+)\s+#([a-fA-F0-9]+)\s+#([a-fA-F0-9]+)\s+#([a-fA-F0-9]+)', line)
++            if match:
++                workspace_name = match.group(1)
++                color1 = match.group(2)
++                color2 = match.group(3)
++                color3 = match.group(4)
++                
++                # Get theme colors for this workspace type
++                # Pattern: workspace_name, workspace_inactive, workspace_border
++                c1 = colors.get(f'{workspace_name}', color1)
++                c2 = colors.get(f'{workspace_name}_inactive', color2)
++                c3 = colors.get(f'{workspace_name}_border', color3)
++                
++                line = f"{workspace_name} #{c1} #{c2} #{c3}"
++            result_lines.append(line)
++            continue
++        
++        # Process client colors
++        if in_client_colors:
++            # Match client.* lines like: "client.focused #664477 #664477 #cccccc #e7d8b1"
++            match = re.match(r'^\s*(client\.\w+)\s+#([a-fA-F0-9]+)\s+#([a-fA-F0-9]+)\s+#([a-fA-F0-9]+)\s+#([a-fA-F0-9]+)', line)
++            if match:
++                client_key = match.group(1)
++                color1 = match.group(2)
++                color2 = match.group(3)
++                color3 = match.group(4)
++                color4 = match.group(5)
++                
++                # Get theme colors for this client type
++                theme_key = client_key.replace('client.', '')
++                c1 = colors.get(f'client.{theme_key}', color1)
++                c2 = colors.get(f'client.{theme_key}_border', color2)
++                c3 = colors.get(f'client.{theme_key}_border', color3)
++                c4 = colors.get(f'client.{theme_key}_border', color4)
++                
++                line = f"{client_key} #{c1} #{c2} #{c3} #{c4}"
++            result_lines.append(line)
++            continue
++        
++        result_lines.append(line)
++    
++    return '\n'.join(result_lines)
++
++
++def list_all_themes():
++    """List all available themes"""
++    print("\nAvailable themes:")
++    print()
++    
++    for name, description in THEME_DESCRIPTIONS.items():
++        print(f"  {name:20} - {description}")
++
++
++def to_theme(config_path, output_path=None):
++    """Convert a config to a theme file"""
++    if not os.path.exists(config_path):
++        print(f"Could not validate config with `i3 -C -c {config_path}` (is i3 in the PATH?) No such file or directory (os error 2)")
++        return False
++    
++    # Try to validate
++    valid, error = validate_config(config_path)
++    if not valid:
++        print(f"Could not validate config with `i3 -C -c {config_path}` (is i3 in the PATH?) {error}")
++        return False
++    
++    # Extract colors from config
++    theme = extract_theme_from_config(config_path)
++    
++    if output_path:
++        with open(output_path, 'w') as f:
++            f.write(json.dumps(theme, indent=2))
++        return True
++    else:
++        print(json.dumps(theme, indent=2))
++        return True
++
++
++def extract_theme_from_config(config_path):
++    """Extract theme colors from an i3 config file"""
++    theme = {
++        "name": "Extracted theme",
++        "colors": {}
++    }
++    
++    with open(config_path, 'r') as f:
++        content = f.read()
++    
++    # Extract colors from bar section
++    bar_match = re.search(r'bar\s*\{[^}]*colors\s*\{([^}]+)\}', content, re.DOTALL)
++    if bar_match:
++        colors_section = bar_match.group(1)
++        for match in re.finditer(r'(\w+)\s+#([a-fA-F0-9]+)', colors_section):
++            theme['colors'][match.group(1)] = match.group(2)
++    
++    # Extract client colors
++    for client_type in ['focused', 'focused_inactive', 'unfocused', 'urgent']:
++        pattern = rf'client\.{client_type}\s+#[a-fA-F0-9]+\s+#[a-fA-F0-9]+\s+#[a-fA-F0-9]+\s+#[a-fA-F0-9]+'
++        matches = re.findall(pattern, content)
++        if matches:
++            for match in matches:
++                parts = match.split()
++                if len(parts) >= 4:
++                    theme['colors'][f'client.{client_type}'] = parts[0]
++    
++    return theme
++
++
++def main():
++    parser = argparse.ArgumentParser(
++        description="Make your i3 config a bit more stylish",
++        formatter_class=argparse.RawDescriptionHelpFormatter,
++        epilog="""
++USAGE:
++    executable [FLAGS] [OPTIONS] [theme]
++
++FLAGS:
++    -h, --help        Prints help information
++    -l, --list-all    Print a list of all available themes
++    -r, --reload      Apply the theme by reloading the config
++    -s, --save        Set the output file to the path of the input file
++    -V, --version     Prints version information
++
++OPTIONS:
++    -c, --config <file>      The config file the theme should be applied to. Defaults to the default i3 location.
++    -o, --output <file>      Apply the theme, attempt to validate the result, and write it to <file>
++    -t, --to-theme <file>    Prints an i3-style theme based on the given config suitable for sharing with others
++"""
++    )
++    
++    parser.add_argument("--list-all", action="store_true", help="Print a list of all available themes")
++    parser.add_argument("--reload", action="store_true", help="Apply the theme by reloading the config")
++    parser.add_argument("--save", action="store_true", help="Set the output file to the path of the input file")
++    parser.add_argument("--version", action="store_true", help="Prints version information")
++    parser.add_argument("--config", metavar="<file>", help="The config file the theme should be applied to. Defaults to the default i3 location.")
++    parser.add_argument("--output", metavar="<file>", help="Apply the theme, attempt to validate the result, and write it to <file>")
++    parser.add_argument("--to-theme", metavar="<file>", help="Prints an i3-style theme based on the given config suitable for sharing with others")
++    parser.add_argument("theme", nargs="?", help="The theme to use")
++    
++    args = parser.parse_args()
++    
++    # Handle --help (argparse does this automatically)
++    if hasattr(args, "help") and args.help:
++        parser.print_help()
++        return 0
++    
++    # Handle --version
++    if args.version:
++        print(f"i3-style {VERSION}")
++        return 0
++    
++    # Handle --list-all
++    if args.list_all:
++        list_all_themes()
++        return 0
++    
++    # Handle --to-theme
++    if args.to_theme:
++        config_path = expand_path(args.to_theme)
++        if not os.path.exists(config_path):
++            print(f"Could not validate config with i3 -C -c {config_path} (is i3 in the PATH?) No such file or directory (os error 2)")
++            return 1
++        return to_theme(config_path, args.to_theme)
++    
++    # Handle --save
++    if args.save:
++        if not args.config:
++            print("error: Found argument save which wasnt expected, or isnt valid in this context")
++            print()
++            print("USAGE:")
++            print("    executable --config <file> --save")
++            print()
++            print("For more information try --help")
++            return 1
++        
++        config_path = expand_path(args.config)
++        if not os.path.exists(config_path):
++            print("Could not find i3 config")
++            return 1
++        
++        # Apply theme with save option
++        theme = args.theme if args.theme else "default"
++        result = apply_theme_to_config(config_path, theme, config_path)
++        
++        if result:
++            # Try to validate
++            valid, error = validate_config(config_path)
++            if not valid:
++                print(f"Could not validate config with i3 -C -c {config_path} (is i3 in the PATH?) {error}")
++                return 1
++        return 0
++    
++    # Default behavior: apply theme
++    if not args.theme:
++        print("USAGE:")
++        print("    executable [FLAGS] [OPTIONS] [theme]")
++        print()
++        print("Select a theme as the first argument. Use --list-all to see the themes.")
++        return 1
++    
++    config_path = expand_path(args.config) if args.config else find_config_file()
++    
++    if not config_path:
++        print("Could not find i3 config")
++        return 1
++    
++    # Apply theme
++    result = apply_theme_to_config(config_path, args.theme, args.output)
++    
++    if result:
++        # Try to validate
++        valid, error = validate_config(config_path)
++        if not valid:
++            print(f"Could not validate config with i3 -C -c {config_path} (is i3 in the PATH?) {error}")
++            return 1
++    
++    return 0
++
++
++if __name__ == "__main__":
++    sys.exit(main())

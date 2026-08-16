@@ -1,0 +1,364 @@
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..fb580d0
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,3 @@
++#!/bin/bash
++set -e
++python3 -m zip_password_finder
+diff --git a/test-123.txt b/test-123.txt
+new file mode 100644
+index 0000000..f4574da
+--- /dev/null
++++ b/test-123.txt
+@@ -0,0 +1 @@
++Test content 123
+diff --git a/test-ABC.txt b/test-ABC.txt
+new file mode 100644
+index 0000000..476fc35
+--- /dev/null
++++ b/test-ABC.txt
+@@ -0,0 +1 @@
++Test content ABC
+diff --git a/test-a1.txt b/test-a1.txt
+new file mode 100644
+index 0000000..c26231f
+--- /dev/null
++++ b/test-a1.txt
+@@ -0,0 +1 @@
++Test content a1
+diff --git a/test-test.txt b/test-test.txt
+new file mode 100644
+index 0000000..e69de29
+diff --git a/test.txt b/test.txt
+new file mode 100644
+index 0000000..0b221fe
+--- /dev/null
++++ b/test.txt
+@@ -0,0 +1 @@
++test content 123
+\ No newline at end of file
+diff --git a/zip_password_finder.py b/zip_password_finder.py
+new file mode 100755
+index 0000000..61c6499
+--- /dev/null
++++ b/zip_password_finder.py
+@@ -0,0 +1,317 @@
++#!/usr/bin/env python3
++<<<<<<< ours
++"""zip-password-finder: Find the password of protected ZIP files."""
++
++import argparse
++import itertools
++import os
++import sys
++import time
++import zipfile
++from typing import List, Optional
++
++
++=======
++"""zip-password-finder - Find the password of protected ZIP files"""
++
++import argparse
++import sys
++import os
++import time
++import zipfile
++from itertools import product
++
++# Character sets
++>>>>>>> theirs
++CHARSETS = {
++    'l': 'abcdefghijklmnopqrstuvwxyz',
++    'u': 'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
++    'd': '0123456789',
++    'h': '0123456789abcdef',
++    'H': '0123456789ABCDEF',
++<<<<<<< ours
++    's': 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;:,.<>?'
++}
++
++
++def load_charset_file(filepath: str) -> str:
++    """Load charset from a file, one character per line."""
++    with open(filepath, 'r') as f:
++        return ''.join(line.strip() for line in f if line.strip())
++
++
++def parse_charset(charset_str: str) -> str:
++    """Parse charset string (e.g., 'ld') into the actual charset characters."""
++    result = []
++    for char in charset_str:
++        if char in CHARSETS:
++            result.append(CHARSETS[char])
++        else:
++            result.append(char)
++    return ''.join(result)
++
++
++def test_password(zip_path: str, password: str, file_number: int) -> bool:
++    """Test if a password opens the ZIP file."""
++    try:
++        with zipfile.ZipFile(zip_path, 'r') as zf:
++            if file_number >= 0:
++                zf.extract(zf.namelist()[file_number], pwd=password.encode())
++            else:
++                zf.extractall(pwd=password.encode())
++            return True
++    except (zipfile.BadZipFile, KeyError, IndexError, Exception):
++        return False
++
++
++def generate_passwords(charset: str, min_len: int, max_len: int) -> List[str]:
++    """Generate passwords in lexicographic order."""
++    charset_chars = parse_charset(charset)
++    passwords = []
++    for length in range(min_len, max_len + 1):
++        for password in itertools.product(charset_chars, repeat=length):
++            passwords.append(''.join(password))
++    return passwords
++
++
++def find_password_dictionary(zip_path: str, dictionary_path: str, file_number: int) -> Optional[str]:
++    """Find password using a dictionary file."""
++    with open(dictionary_path, 'r') as f:
++        for password in f:
++            password = password.strip()
++            if password and test_password(zip_path, password, file_number):
++                return password
++    return None
++
++
++def main():
++    # Handle --version before argparse
++    if '--version' in sys.argv or '-V' in sys.argv:
++        print('zip-password-finder 0.10.3')
++        sys.exit(0)
++    
++=======
++    's': ' \"\'!#$%&()*+,-./:;<=>?@[\\]^_`{|}~'
++}
++
++def combine_charsets(charset_str):
++    """Combine multiple character sets into one."""
++    combined = ''
++    for char in charset_str:
++        if char in CHARSETS:
++            combined += CHARSETS[char]
++    return combined
++
++def generate_passwords(charset, min_len, max_len, starting_password=None):
++    """Generate passwords based on charset and length range."""
++    if starting_password:
++        # First try the starting password itself
++        yield starting_password
++        # Then continue with normal generation from min_len to max_len
++        for length in range(min_len, max_len + 1):
++            for combo in product(charset, repeat=length):
++                yield ''.join(combo)
++    else:
++        for length in range(min_len, max_len + 1):
++            for combo in product(charset, repeat=length):
++                yield ''.join(combo)
++
++def test_password(zip_path, password, file_number=0):
++    """Test if a password works for the ZIP file."""
++    try:
++        with zipfile.ZipFile(zip_path, 'r') as zf:
++            zf.setpassword(password.encode('utf-8'))
++            if file_number >= 0:
++                # Try to extract the specific file
++                filename = f'file{file_number}.txt'
++                if filename in zf.namelist():
++                    zf.extract(filename, path='/tmp')
++                else:
++                    # Try to extract any encrypted file
++                    for name in zf.namelist():
++                        try:
++                            zf.extract(name, path='/tmp')
++                            # Check if extraction actually worked
++                            if os.path.exists(f'/tmp/{name}'):
++                                return True
++                        except:
++                            continue
++            else:
++                zf.extractall(path='/tmp')
++            return True
++    except zipfile.BadZipFile:
++        return False
++    except Exception:
++        return False
++
++def find_password_bruteforce(zip_path, charset, min_len, max_len, file_number=0):
++    """Find password using brute force."""
++    for password in generate_passwords(charset, min_len, max_len):
++        if test_password(zip_path, password, file_number):
++            return password
++    return None
++
++def main():
++>>>>>>> theirs
++    parser = argparse.ArgumentParser(
++        description='Find the password of protected ZIP files',
++        formatter_class=argparse.RawDescriptionHelpFormatter,
++        epilog='''
++Examples:
++  zip-password-finder --inputFile secret.zip --passwordDictionary words.txt
++  zip-password-finder --inputFile secret.zip --charset l --minPasswordLen 1 --maxPasswordLen 6
++'''
++    )
++<<<<<<< ours
++    
++=======
++>>>>>>> theirs
++    parser.add_argument('-i', '--inputFile', required=True, help='path to zip input file')
++    parser.add_argument('-w', '--workers', type=int, default=1, help='number of workers')
++    parser.add_argument('-p', '--passwordDictionary', help='path to a password dictionary file')
++    parser.add_argument('-c', '--charset', default='lud', help='charset to use to generate password [default: lud]')
++    parser.add_argument('--charsetFile', help='path to a charset file')
++    parser.add_argument('--minPasswordLen', type=int, default=1, help='minimum password length [default: 1]')
++    parser.add_argument('--maxPasswordLen', type=int, default=10, help='maximum password length [default: 10]')
++    parser.add_argument('--fileNumber', type=int, default=0, help='file number in the zip archive [default: 0]')
++    parser.add_argument('-s', '--startingPassword', help='password to start from')
++<<<<<<< ours
++    
++    args = parser.parse_args()
++    
++    if not os.path.exists(args.inputFile):
++        print("CLI argument error - 'inputFile' does not exist")
++        sys.exit(1)
++    
++    if args.passwordDictionary and not os.path.exists(args.passwordDictionary):
++        print("CLI argument error - 'passwordDictionary' does not exist")
++        sys.exit(1)
++    
++    if args.charsetFile and not os.path.exists(args.charsetFile):
++        print("CLI argument error - 'charsetFile' does not exist")
++        sys.exit(1)
++    
++    if args.charsetFile:
++        charset = load_charset_file(args.charsetFile)
++    else:
++        charset = args.charset
++    
++    if args.startingPassword:
++        if args.passwordDictionary:
++            print("CLI argument error - 'startingPassword' cannot be used with a dictionary file")
++            sys.exit(1)
++        if args.maxPasswordLen < len(args.startingPassword):
++            print("CLI argument error - 'startingPassword' does not respect 'max_password_len' or 'min_password_len' configuration")
++            sys.exit(1)
++        if args.minPasswordLen > len(args.startingPassword):
++            print("CLI argument error - 'startingPassword' does not respect 'max_password_len' or 'min_password_len' configuration")
++            sys.exit(1)
++    
++    start_time = time.perf_counter()
++    
++    if args.passwordDictionary:
++        password = find_password_dictionary(args.inputFile, args.passwordDictionary, args.fileNumber)
++    else:
++        if args.startingPassword:
++            passwords_to_try = [args.startingPassword]
++            for length in range(len(args.startingPassword) + 1, args.maxPasswordLen + 1):
++                passwords_to_try.extend(generate_passwords(charset, length, length))
++        else:
++            passwords_to_try = generate_passwords(charset, args.minPasswordLen, args.maxPasswordLen)
++        
++        for password in passwords_to_try:
++            if test_password(args.inputFile, password, args.fileNumber):
++                break
++    
++    elapsed = time.perf_counter() - start_time
++    
++    if password:
++        if elapsed >= 1.0:
++            print(f'Time elapsed: {int(elapsed)}s {int((elapsed * 1000) % 1000)}ms {int((elapsed * 1000000) % 1000)}us {int((elapsed * 1000000000) % 1000)}ns')
++        else:
++            ms = int(elapsed * 1000)
++            us = int((elapsed * 1000000) % 1000)
++            ns = int((elapsed * 1000000000) % 1000)
++            print(f'Time elapsed: {ms}ms {us}us {ns}ns')
++=======
++    parser.add_argument('-V', '--version', action='version', version='zip-password-finder 0.10.3')
++    
++    args = parser.parse_args()
++    
++    # Validate input file
++    if not os.path.exists(args.inputFile):
++        print(f'CLI argument error - "{args.inputFile}" does not exist')
++        sys.exit(1)
++    
++    # Validate charset
++    if args.charsetFile:
++        if not os.path.exists(args.charsetFile):
++            print(f'CLI argument error - "{args.charsetFile}" does not exist')
++            sys.exit(1)
++        with open(args.charsetFile, 'r') as f:
++            charset = f.read().strip()
++    else:
++        # Check if charset is a single valid key or needs combining
++        if args.charset in CHARSETS:
++            charset = CHARSETS[args.charset]
++        else:
++            # Combine multiple charsets
++            charset = combine_charsets(args.charset)
++            if not charset:
++                print(f'CLI argument error - "{args.charset}" is not a valid charset')
++                sys.exit(1)
++    
++    # Validate starting password - check if all characters are in the charset
++    if args.startingPassword:
++        for char in args.startingPassword:
++            if char not in charset:
++                print(f'CLI argument error - "{args.startingPassword}" uses characters out of the generation charset')
++                sys.exit(1)
++    
++    # Validate min/max password length
++    if args.minPasswordLen > args.maxPasswordLen:
++        print(f'CLI argument error - minPasswordLen ({args.minPasswordLen}) cannot be greater than maxPasswordLen ({args.maxPasswordLen})')
++        sys.exit(1)
++    
++    # Validate workers
++    if args.workers < 1:
++        print(f'CLI argument error - workers must be at least 1')
++        sys.exit(1)
++    
++    start_time = time.time()
++    
++    # Try dictionary attack first
++    if args.passwordDictionary:
++        if not os.path.exists(args.passwordDictionary):
++            print(f'CLI argument error - "{args.passwordDictionary}" does not exist')
++            sys.exit(1)
++        with open(args.passwordDictionary, 'r') as f:
++            for line in f:
++                password = line.strip()
++                if password and test_password(args.inputFile, password, args.fileNumber):
++                    elapsed = time.time() - start_time
++                    print(f'Time elapsed: {elapsed * 1000:.3f}ms')
++                    print(f'Password found:{password}')
++                    sys.exit(0)
++        print('Password not found')
++        sys.exit(1)
++    
++    # Brute force attack
++    password = find_password_bruteforce(args.inputFile, charset, args.minPasswordLen, args.maxPasswordLen, args.fileNumber)
++    elapsed = time.time() - start_time
++    
++    if password:
++        print(f'Time elapsed: {elapsed * 1000:.3f}ms')
++>>>>>>> theirs
++        print(f'Password found:{password}')
++        sys.exit(0)
++    else:
++        print('Password not found')
++        sys.exit(1)
++
++<<<<<<< ours
++
++=======
++>>>>>>> theirs
++if __name__ == '__main__':
++    main()

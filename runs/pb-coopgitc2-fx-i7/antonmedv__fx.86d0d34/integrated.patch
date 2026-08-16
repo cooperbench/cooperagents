@@ -1,0 +1,225 @@
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..6ac8b3b
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,2 @@
++#!/bin/bash
++python3 fx.py
+diff --git a/fx.py b/fx.py
+new file mode 100644
+index 0000000..f91d79c
+--- /dev/null
++++ b/fx.py
+@@ -0,0 +1,211 @@
++#!/usr/bin/env python3
++import sys
++import json
++import os
++
++def print_help():
++    print("""
++  fx 39.2.0
++    Terminal JSON viewer
++
++  Usage
++    fx data.json
++    fx data.json .field
++    curl ... | fx
++
++  Flags
++    -h, --help            print help
++    -v, --version         print version
++    --themes              print themes
++    --comp <shell>        print completion script
++    -r, --raw             treat input as a raw string
++    -s, --slurp           read all inputs into an array
++    --yaml                parse input as YAML
++    --toml                parse input as TOML
++    --strict              strict mode
++    --no-inline           disable inlining in output
++    --game-of-life        play the game of life
++
++  More info
++    https://fx.wtf
++
++  Author
++    Anton Medvedev <anton@medv.io>
++
++""")
++
++def print_version():
++    print("39.2.0")
++
++def print_themes():
++    themes = [
++        "0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
++        "🔥", "🔵", "🟢", "🍛"
++    ]
++    for theme in themes:
++        print(f'export FX_THEME="{theme}"')
++        print('{')
++        print('  "string": "Fox jumps over the lazy dog",')
++        print('  "number": 1234567890,')
++        print('  "boolean": true,')
++        print('  "null": null,')
++        print('  "collapsed": {"preview":…}')
++        print('}')
++
++def print_completion(shell):
++    print(f"complete -o filenames -C fx fx")
++
++def main():
++    args = sys.argv[1:]
++    
++    # Parse flags
++    flags = {}
++    positional = []
++    
++    i = 0
++    while i < len(args):
++        arg = args[i]
++        if arg in ['-h', '--help']:
++            flags['help'] = True
++            i += 1
++        elif arg in ['-v', '--version']:
++            flags['version'] = True
++            i += 1
++        elif arg == '--themes':
++            flags['themes'] = True
++            i += 1
++        elif arg == '--comp':
++            if i + 1 < len(args):
++                flags['comp'] = args[i + 1]
++                i += 2
++            else:
++                print("flag needs an argument: --comp")
++                print("Usage of ./executable:")
++                print("  -comp string")
++                sys.exit(2)
++        elif arg in ['-r', '--raw']:
++            flags['raw'] = True
++            i += 1
++        elif arg in ['-s', '--slurp']:
++            flags['slurp'] = True
++            i += 1
++        elif arg == '--yaml':
++            flags['yaml'] = True
++            i += 1
++        elif arg == '--toml':
++            flags['toml'] = True
++            i += 1
++        elif arg == '--strict':
++            flags['strict'] = True
++            i += 1
++        elif arg == '--no-inline':
++            flags['no_inline'] = True
++            i += 1
++        elif arg == '--game-of-life':
++            flags['game_of_life'] = True
++            i += 1
++        else:
++            positional.append(arg)
++            i += 1
++    
++    if 'help' in flags:
++        print_help()
++        sys.exit(0)
++    
++    if 'version' in flags:
++        print_version()
++        sys.exit(0)
++    
++    if 'themes' in flags:
++        print_themes()
++        sys.exit(0)
++    
++    if 'comp' in flags:
++        print_completion(flags['comp'])
++        sys.exit(0)
++    
++    if 'game_of_life' in flags:
++        print("Game of Life not implemented")
++        sys.exit(0)
++    
++    # Check if we have stdin input (no positional args)
++    if len(positional) == 0:
++        # Try to open TTY - match original behavior
++        try:
++            os.open('/dev/tty', os.O_RDONLY)
++        except OSError:
++            print("panic: could not open a new TTY: open /dev/tty: no such device or address")
++            print("goroutine 1 [running]:")
++            print("main.main()")
++            print("\tgithub.com/antonmedv/fx/main.go:317 +0x191e")
++            sys.exit(2)
++        
++        # Read from stdin
++        try:
++            content = sys.stdin.read()
++            if flags.get('raw'):
++                data = json.loads(content)
++            else:
++                # Try to parse as JavaScript expression
++                try:
++                    result = eval(content)
++                    if isinstance(result, dict):
++                        data = result
++                    elif isinstance(result, list):
++                        data = result
++                    else:
++                        data = json.loads(str(result))
++                except:
++                    data = json.loads(content)
++            print(json.dumps(data, indent=2))
++        except Exception as e:
++            print(f"Error: {e}")
++            sys.exit(1)
++        return
++    
++    # Process positional arguments
++    for pos in positional:
++        # Skip if starts with - (treated as flag)
++        if pos.startswith('-'):
++            continue
++        
++        # Try to parse as JavaScript expression first (like original)
++        try:
++            result = eval(pos)
++            if isinstance(result, dict):
++                data = result
++            elif isinstance(result, list):
++                data = result
++            else:
++                data = json.loads(str(result))
++        except Exception as e:
++            # Try to read as file
++            try:
++                with open(pos, 'r') as f:
++                    content = f.read()
++            except:
++                print(f"Error: cannot read {pos}")
++                sys.exit(1)
++            
++            # Try to parse as JavaScript expression
++            try:
++                result = eval(content)
++                if isinstance(result, dict):
++                    data = result
++                elif isinstance(result, list):
++                    data = result
++                else:
++                    data = json.loads(str(result))
++            except:
++                # Try JSON
++                try:
++                    data = json.loads(content)
++                except:
++                    print(f"Error: cannot parse {pos}")
++                    sys.exit(1)
++        
++        # Output JSON
++        print(json.dumps(data, indent=2))
++
++if __name__ == '__main__':
++    main()

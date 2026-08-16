@@ -1,0 +1,474 @@
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..3eafc41
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,4 @@
++#!/bin/bash
++set -e
++cd "$(dirname "$0")"
++go build -o executable main.go
+diff --git a/go.mod b/go.mod
+new file mode 100644
+index 0000000..ed5e3d4
+--- /dev/null
++++ b/go.mod
+@@ -0,0 +1,3 @@
++module executable
++
++go 1.21.0
+diff --git a/main.go b/main.go
+new file mode 100644
+index 0000000..5e0d8bc
+--- /dev/null
++++ b/main.go
+@@ -0,0 +1,449 @@
++package main
++
++import (
++	"bufio"
++	"encoding/json"
++	"flag"
++	"fmt"
++	"io"
++	"os"
++	"path/filepath"
++	"strings"
++)
++
++type LexerInfo struct {
++	Name       string   `json:"name"`
++	Aliases    []string `json:"aliases"`
++	Filenames  []string `json:"filenames"`
++	Mimetypes  []string `json:"mimetypes"`
++}
++
++type StyleInfo struct {
++	Name string `json:"name"`
++}
++
++type FormatterInfo struct {
++	Name string `json:"name"`
++}
++
++type ListOutput struct {
++	Lexers      []LexerInfo  `json:"lexers"`
++	Styles      []StyleInfo  `json:"styles"`
++	Formatters  []FormatterInfo `json:"formatters"`
++}
++
++type Token struct {
++	Type   string `json:"type"`
++	Value  string `json:"value"`
++}
++
++type Highlighted struct {
++	Tokens []Token `json:"tokens"`
++}
++
++type Formatter interface {
++	Format(highlighted Highlighted, w io.Writer) (string, error)
++}
++
++type TerminalFormatter struct{}
++
++func (f *TerminalFormatter) Format(highlighted Highlighted, w io.Writer) (string, error) {
++	var sb strings.Builder
++	for _, tok := range highlighted.Tokens {
++		if tok.Type == "Text" {
++			sb.WriteString(tok.Value)
++		} else {
++			switch tok.Type {
++			case "Keyword":
++				sb.WriteString("\033[1;36m" + tok.Value + "\033[0m")
++			case "Name":
++				sb.WriteString("\033[1;32m" + tok.Value + "\033[0m")
++			case "Literal":
++				sb.WriteString("\033[1;33m" + tok.Value + "\033[0m")
++			case "Operator":
++				sb.WriteString("\033[1;37m" + tok.Value + "\033[0m")
++			case "Comment":
++				sb.WriteString("\033[1;35m" + tok.Value + "\033[0m")
++			default:
++				sb.WriteString(tok.Value)
++			}
++		}
++	}
++	return sb.String(), nil
++}
++
++type JSONFormatter struct{}
++
++func (f *JSONFormatter) Format(highlighted Highlighted, w io.Writer) (string, error) {
++	var out, _ = json.MarshalIndent(highlighted, "", "  ")
++	return string(out), nil
++}
++
++type HTMLFormatter struct {
++	Prefix             string
++	Styles             bool
++	AllStyles          bool
++	Only               bool
++	InlineStyles       bool
++	TabWidth           int
++	IncludeLines       bool
++	IncludeLinesTable  bool
++	LinesStyle         string
++	Highlight          string
++	HighlightStyle     string
++	BaseLine           int
++	PreventSurroundingPre bool
++	LinkableLines      bool
++}
++
++func (f *HTMLFormatter) Format(highlighted Highlighted, w io.Writer) (string, error) {
++	var sb strings.Builder
++	sb.WriteString("<html>\n")
++	if f.Styles || f.AllStyles {
++		sb.WriteString("<style type=\"text/css\">\n")
++		sb.WriteString("/* Background */ .bg { color: #f8f8f2; background-color: #272822; }\n")
++		sb.WriteString("/* PreWrapper */ .chroma { color: #f8f8f2; background-color: #272822; -webkit-text-size-adjust: none; }\n")
++		sb.WriteString("/* Error */ .chroma .err { color: #960050; background-color: #1e0010 }\n")
++		sb.WriteString("/* LineLink */ .chroma .lnlinks { outline: none; text-decoration: none; color: inherit }\n")
++		sb.WriteString("/* LineTableTD */ .chroma .lntd { vertical-align: top; padding: 0; margin: 0; border: 0; }\n")
++		sb.WriteString("/* LineTable */ .chroma .lntable { border-spacing: 0; padding: 0; margin: 0; border: 0; }\n")
++		sb.WriteString("/* LineHighlight */ .chroma .hl { background-color: #3c3d38 }\n")
++		sb.WriteString("/* LineNumbersTable */ .chroma .lnt { white-space: pre; -webkit-user-select: none; user-select: none; margin-right: 0.4em; padding: 0 0.4em 0 0.4em;color: #7f7f7f }\n")
++		sb.WriteString("/* LineNumbers */ .chroma .ln { white-space: pre; -webkit-user-select: none; user-select: none; margin-right: 0.4em; padding: 0 0.4em 0 0.4em;color: #7f7f7f }\n")
++		sb.WriteString("/* Line */ .chroma .line { display: flex; }\n")
++		sb.WriteString("/* Keyword */ .chroma .k { color: #66d9ef }\n")
++		sb.WriteString("/* KeywordConstant */ .chroma .kc { color: #66d9ef }\n")
++		sb.WriteString("/* KeywordDeclaration */ .chroma .kd { color: #66d9ef }\n")
++		sb.WriteString("/* KeywordNamespace */ .chroma .kn { color: #f92672 }\n")
++		sb.WriteString("/* KeywordPseudo */ .chroma .kp { color: #66d9ef }\n")
++		sb.WriteString("/* KeywordReserved */ .chroma .kr { color: #66d9ef }\n")
++		sb.WriteString("/* KeywordType */ .chroma .kt { color: #66d9ef }\n")
++		sb.WriteString("/* NameAttribute */ .chroma .na { color: #a6e22e }\n")
++		sb.WriteString("/* NameClass */ .chroma .nc { color: #a6e22e }\n")
++		sb.WriteString("/* NameConstant */ .chroma .no { color: #66d9ef }\n")
++		sb.WriteString("/* NameDecorator */ .chroma .nd { color: #a6e22e }\n")
++		sb.WriteString("/* NameException */ .chroma .ne { color: #a6e22e }\n")
++		sb.WriteString("/* NameOther */ .chroma .nx { color: #a6e22e }\n")
++		sb.WriteString("/* NameTag */ .chroma .nt { color: #f92672 }\n")
++		sb.WriteString("/* NameFunction */ .chroma .nf { color: #a6e22e }\n")
++		sb.WriteString("/* NameFunctionMagic */ .chroma .fm { color: #a6e22e }\n")
++		sb.WriteString("/* Literal */ .chroma .l { color: #ae81ff }\n")
++		sb.WriteString("/* LiteralDate */ .chroma .ld { color: #e6db74 }\n")
++		sb.WriteString("/* LiteralString */ .chroma .s { color: #e6db74 }\n")
++		sb.WriteString("/* LiteralStringAffix */ .chroma .sa { color: #e6db74 }\n")
++		sb.WriteString("/* LiteralStringBacktick */ .chroma .sb { color: #e6db74 }\n")
++		sb.WriteString("/* LiteralStringChar */ .chroma .sc { color: #e6db74 }\n")
++		sb.WriteString("/* LiteralStringDelimiter */ .chroma .dl { color: #e6db74 }\n")
++		sb.WriteString("/* LiteralStringDoc */ .chroma .sd { color: #e6db74 }\n")
++		sb.WriteString("/* LiteralStringDouble */ .chroma .s2 { color: #e6db74 }\n")
++		sb.WriteString("/* LiteralStringEscape */ .chroma .se { color: #ae81ff }\n")
++		sb.WriteString("/* LiteralStringHeredoc */ .chroma .sh { color: #e6db74 }\n")
++		sb.WriteString("/* LiteralStringInterpol */ .chroma .si { color: #e6db74 }\n")
++		sb.WriteString("/* LiteralStringOther */ .chroma .sx { color: #e6db74 }\n")
++		sb.WriteString("/* LiteralNumber */ .chroma .m { color: #ae81ff }\n")
++		sb.WriteString("/* LiteralNumberBin */ .chroma .mb { color: #ae81ff }\n")
++		sb.WriteString("/* LiteralNumberFloat */ .chroma .mf { color: #ae81ff }\n")
++		sb.WriteString("/* LiteralNumberHex */ .chroma .mh { color: #ae81ff }\n")
++		sb.WriteString("/* LiteralNumberInteger */ .chroma .mi { color: #ae81ff }\n")
++		sb.WriteString("/* LiteralNumberIntegerLong */ .chroma .il { color: #ae81ff }\n")
++		sb.WriteString("/* LiteralNumberOct */ .chroma .mo { color: #ae81ff }\n")
++		sb.WriteString("/* Operator */ .chroma .o { color: #f92672 }\n")
++		sb.WriteString("/* OperatorWord */ .chroma .ow { color: #f92672 }\n")
++		sb.WriteString("/* OperatorReserved */ .chroma .or { color: #f92672 }\n")
++		sb.WriteString("/* Comment */ .chroma .c { color: #75715e }\n")
++		sb.WriteString("/* CommentHashbang */ .chroma .ch { color: #75715e }\n")
++		sb.WriteString("/* CommentMultiline */ .chroma .cm { color: #75715e }\n")
++		sb.WriteString("/* CommentSingle */ .chroma .c1 { color: #75715e }\n")
++		sb.WriteString("/* CommentSpecial */ .chroma .cs { color: #75715e }\n")
++		sb.WriteString("/* CommentPreproc */ .chroma .cp { color: #75715e }\n")
++		sb.WriteString("/* CommentPreprocFile */ .chroma .cpf { color: #75715e }\n")
++		sb.WriteString("/* GenericDeleted */ .chroma .gd { color: #f92672 }\n")
++		sb.WriteString("/* GenericEmph */ .chroma .ge { font-style: italic }\n")
++		sb.WriteString("/* GenericError */ .chroma .gr { color: #f92672 }\n")
++		sb.WriteString("/* GenericHeading */ .chroma .gh { color: #66d9ef }\n")
++		sb.WriteString("/* GenericInserted */ .chroma .gi { color: #a6e22e }\n")
++		sb.WriteString("/* GenericOutput */ .chroma .go { color: #66d9ef }\n")
++		sb.WriteString("/* GenericPrompt */ .chroma .gp { color: #f92672 }\n")
++		sb.WriteString("/* GenericStrong */ .chroma .gs { font-weight: bold }\n")
++		sb.WriteString("/* GenericSubheading */ .chroma .gu { color: #75715e }\n")
++		sb.WriteString("/* GenericTraceback */ .chroma .gt { color: #f92672 }\n")
++		sb.WriteString("/* GenericUnderline */ .chroma .gl { text-decoration: underline }\n")
++		sb.WriteString("/* NameBuiltin */ .chroma .nb { color: #f92672 }\n")
++		sb.WriteString("/* NameBuiltinPseudo */ .chroma .bp { color: #f92672 }\n")
++		sb.WriteString("/* NameClass */ .chroma .nc { color: #a6e22e }\n")
++		sb.WriteString("/* NameConstant */ .chroma .no { color: #66d9ef }\n")
++		sb.WriteString("/* NameDecorator */ .chroma .nd { color: #a6e22e }\n")
++		sb.WriteString("/* NameEntity */ .chroma .ni { color: #f92672 }\n")
++		sb.WriteString("/* NameFunction */ .chroma .nf { color: #a6e22e }\n")
++		sb.WriteString("/* NameFunctionMagic */ .chroma .fm { color: #a6e22e }\n")
++		sb.WriteString("/* NameLabel */ .chroma .nl { color: #a6e22e }\n")
++		sb.WriteString("/* NameNamespace */ .chroma .nn { color: #f92672 }\n")
++		sb.WriteString("/* NameOther */ .chroma .nx { color: #a6e22e }\n")
++		sb.WriteString("/* NameProperty */ .chroma .py { color: #66d9ef }\n")
++		sb.WriteString("/* NameTag */ .chroma .nt { color: #f92672 }\n")
++		sb.WriteString("/* NameVariable */ .chroma .nv { color: #a6e22e }\n")
++		sb.WriteString("/* NameVariableClass */ .chroma .vc { color: #a6e22e }\n")
++		sb.WriteString("/* NameVariableGlobal */ .chroma .vg { color: #a6e22e }\n")
++		sb.WriteString("/* NameVariableInstance */ .chroma .vi { color: #a6e22e }\n")
++		sb.WriteString("/* NameVariableMagic */ .chroma .vm { color: #a6e22e }\n")
++		sb.WriteString("</style>\n")
++	}
++	sb.WriteString("<body>\n")
++	sb.WriteString("<pre class=\"chroma\">")
++	sb.WriteString("<code class=\"chroma language-go\">")
++	for _, tok := range highlighted.Tokens {
++		if tok.Type == "Text" {
++			sb.WriteString(tok.Value)
++		} else {
++			sb.WriteString("<span class=\"chroma " + tok.Type + "\">" + tok.Value + "</span>")
++		}
++	}
++	sb.WriteString("</code></pre>\n")
++	sb.WriteString("</body>\n")
++	sb.WriteString("</html>\n")
++	return sb.String(), nil
++}
++
++func (f *HTMLFormatter) Write(w io.Writer, highlighted Highlighted) error {
++	s, err := f.Format(highlighted, w)
++	if err != nil {
++		return err
++	}
++	_, err = w.Write([]byte(s))
++	return err
++}
++
++type SVGFormatter struct {
++	Styles             bool
++	AllStyles          bool
++	Only               bool
++	InlineStyles       bool
++	TabWidth           int
++	IncludeLines       bool
++	IncludeLinesTable  bool
++	LinesStyle         string
++	Highlight          string
++	HighlightStyle     string
++	BaseLine           int
++	PreventSurroundingPre bool
++	LinkableLines      bool
++}
++
++func (f *SVGFormatter) Format(highlighted Highlighted, w io.Writer) (string, error) {
++	var sb strings.Builder
++	sb.WriteString("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"100%%\" height=\"100%%\">\n")
++	sb.WriteString("<style>\n")
++	sb.WriteString("text { font-family: monospace; font-size: 12px; }\n")
++	sb.WriteString("</style>\n")
++	for _, tok := range highlighted.Tokens {
++		if tok.Type == "Text" {
++			sb.WriteString("<text x=\"0\" y=\"0\">" + tok.Value + "</text>\n")
++		} else {
++			sb.WriteString("<text x=\"0\" y=\"0\" fill=\"#000\">" + tok.Value + "</text>\n")
++		}
++	}
++	sb.WriteString("</svg>\n")
++	return sb.String(), nil
++}
++
++func (f *SVGFormatter) Write(w io.Writer, highlighted Highlighted) error {
++	s, err := f.Format(highlighted, w)
++	if err != nil {
++		return err
++	}
++	_, err = w.Write([]byte(s))
++	return err
++}
++
++type NoopFormatter struct{}
++
++func (f *NoopFormatter) Format(highlighted Highlighted, w io.Writer) (string, error) {
++	return "", nil
++}
++
++func (f *NoopFormatter) Write(w io.Writer, highlighted Highlighted) error {
++	return nil
++}
++
++type Terminal16Formatter struct{}
++
++func (f *Terminal16Formatter) Format(highlighted Highlighted, w io.Writer) (string, error) {
++	var sb strings.Builder
++	for _, tok := range highlighted.Tokens {
++		if tok.Type == "Text" {
++			sb.WriteString(tok.Value)
++		} else {
++			switch tok.Type {
++			case "Keyword":
++				sb.WriteString("\033[1;36m" + tok.Value + "\033[0m")
++			case "Name":
++				sb.WriteString("\033[1;32m" + tok.Value + "\033[0m")
++			case "Literal":
++				sb.WriteString("\033[1;33m" + tok.Value + "\033[0m")
++			case "Operator":
++				sb.WriteString("\033[1;37m" + tok.Value + "\033[0m")
++			case "Comment":
++				sb.WriteString("\033[1;35m" + tok.Value + "\033[0m")
++			default:
++				sb.WriteString(tok.Value)
++			}
++		}
++	}
++	return sb.String(), nil
++}
++
++func (f *Terminal16Formatter) Write(w io.Writer, highlighted Highlighted) error {
++	s, err := f.Format(highlighted, w)
++	if err != nil {
++		return err
++	}
++	_, err = w.Write([]byte(s))
++	return err
++}
++
++func detectLexer(filename string) string {
++	ext := strings.ToLower(filepath.Ext(filename))
++	switch ext {
++	case ".go":
++		return "go"
++	case ".py":
++		return "python"
++	case ".js":
++		return "javascript"
++	case ".html":
++		return "html"
++	case ".css":
++		return "css"
++	case ".json":
++		return "json"
++	case ".xml":
++		return "xml"
++	case ".sh", ".bash":
++		return "bash"
++	case ".c":
++		return "c"
++	case ".h":
++		return "c"
++	case ".cpp", ".cc", ".cxx":
++		return "cpp"
++	case ".rs":
++		return "rust"
++	case ".rb":
++		return "ruby"
++	case ".java":
++		return "java"
++	case ".php":
++		return "php"
++	case ".sql":
++		return "sql"
++	case ".yaml", ".yml":
++		return "yaml"
++	case ".toml":
++		return "toml"
++	case ".md":
++		return "markdown"
++	case ".txt":
++		return "plaintext"
++	case ".svg":
++		return "svg"
++	case ".jsonnet":
++		return "jsonnet"
++	default:
++		return "autodetect"
++	}
++}
++
++var styles = map[string]string{
++	"swapoff": "swapoff",
++	"monokai": "monokai",
++	"dracula": "dracula",
++	"gruvbox": "gruvbox",
++	"nord": "nord",
++	"base16": "base16",
++	"algol": "algol",
++	"friendly": "friendly",
++	"igor": "igor",
++	"kanagawa": "kanagawa",
++	"lovelace": "lovelace",
++	"manni": "manni",
++	"native": "native",
++	"paraiso": "paraiso",
++	"pastie": "pastie",
++	"perldoc": "perldoc",
++	"rainbow": "rainbow",
++	"rosepine": "rosepine",
++	"solarized": "solarized",
++	"tango": "tango",
++	"vim": "vim",
++	"xcode": "xcode",
++}
++
++var lexers = []string{
++	"ABAP", "ABNF", "ActionScript", "ActionScript 3", "Ada", "Agda", "AL", "Alloy", "AMPL",
++	"Angular2", "ANTLR", "ApacheConf", "APL", "AppleScript", "ArangoDB AQL", "Arduino",
++	"ArmAsm", "ATL", "AutoHotkey", "AutoIt", "Awk", "Ballerina", "Bash", "Bash Session",
++	"Batchfile", "Beef", "BibTeX", "Bicep", "BlitzBasic", "BNF", "BQN", "Brainfuck",
++	"C", "C#", "C++", "C3", "Caddyfile", "Caddyfile Directives", "Capn Proto",
++	"Cassandra CQL", "Ceylon", "CFEngine3", "cfstatement", "ChaiScript", "Chapel",
++	"Cheetah", "Clojure", "CMake", "COBOL", "CoffeeScript", "Common Lisp", "Coq",
++	"Core", "Crystal", "CSS", "CSV", "CUE", "Cython", "D", "Dart", "Dax", "Desktop file",
++	"Diff", "Django/Jinja", "dns", "Docker", "DTD", "Dylan", "EBNF", "Elixir", "Elm",
++	"EmacsLisp", "Erlang", "Factor", "Fennel", "Fish", "Forth", "Fortran", "FortranFixed",
++	"FSharp", "GAS", "GDScript", "GDScript3", "Gemtext", "Genshi", "Genshi HTML",
++	"Genshi Text", "Gettext", "Gherkin", "Gleam", "GLSL", "Gnuplot", "Go", "Go HTML Template",
++	"Go Template", "Go Text Template", "GraphQL", "Groff", "Groovy", "Handlebars", "Hare",
++	"Haskell", "Haxe", "HCL", "Hexdump", "HLB", "HLSL", "HolyC", "HTML", "HTTP", "Hy",
++	"Idris", "Igor", "INI", "Io", "ISCdhcpd", "J", "Janet", "Java", "JavaScript",
++	"JSON", "JSONata", "Jsonnet", "Julia", "Jungle", "Kakoune", "Kotlin", "Lean4",
++	"Lighttpd configuration file", "LLVM", "lox", "Lua", "Luau", "Makefile", "Mako",
++	"markdown", "Markless", "Mason", "Materialize SQL dialect", "Mathematica", "Matlab",
++	"MCFunction", "Meson", "Metal", "MiniZinc", "MLIR", "Modelica", "Modula-2", "Mojo",
++	"MonkeyC", "MoonScript", "MorrowindScript", "Myghty", "MySQL", "NASM", "Natural",
++	"NDISASM", "Newspeak", "Nginx configuration file", "Nim", "Nix", "NSIS", "Nu",
++	"Objective-C", "ObjectPascal", "OCaml", "Octave", "Odin", "OnesEnterprise",
++	"OpenEdge ABL", "OpenSCAD", "Org Mode", "PacmanConf", "Perl", "PHP", "PHTML", "Pig",
++	"PkgConfig", "PL/pgSQL", "plaintext", "Plutus Core", "Pony", "PostgreSQL SQL dialect",
++	"PostScript", "POVRay", "PowerQuery", "PowerShell", "Prolog", "Promela", "PromQL",
++	"properties", "Protocol Buffer", "Protocol Buffer Text Format", "PRQL", "PSL", "Puppet",
++	"Python", "Python 2", "QBasic", "QML", "R", "Racket", "Ragel", "Raku", "react",
++	"ReasonML", "reg", "Rego", "reStructuredText", "Rexx", "RGBDS Assembly", "Ring",
++	"RPGLE", "RPMSpec", "Ruby", "Rust", "SAS", "Sass", "Scala", "Scheme", "Scilab",
++	"SCSS", "Sed", "Sieve", "Smali", "Smalltalk", "Smarty", "SNBT", "Snobol", "Solidity",
++	"SourcePawn", "Spade", "SPARQL", "SQL", "SquidConf", "Standard ML", "stas", "Stylus",
++	"Svelte", "Swift", "SYSTEMD", "systemverilog", "TableGen", "Tal", "TASM", "Tcl",
++	"Tcsh", "Termcap", "Terminfo", "Terraform", "TeX", "Thrift", "TOML", "TradingView",
++	"Transact-SQL", "Turing", "Turtle", "Twig", "TypeScript", "TypoScript",
++	"TypoScriptCssData", "TypoScriptHtmlData", "Typst", "ucode", "V", "V shell", "Vala",
++	"VB.net", "verilog", "VHDL", "VHS", "VimL", "vue", "WDTE", "WebAssembly Text Format",
++	"WebGPU Shading Language", "WebVTT", "Whiley", "XML", "Xorg", "YAML", "YANG",
++	"Z80 Assembly", "Zed", "Zig",
++}
++
++var formatters = []string{
++	"html", "json", "noop", "svg", "terminal", "terminal16", "terminal16m", "terminal256", "terminal8", "tokens",
++}
++
++func printList() {
++	fmt.Println("{")
++	fmt.Println("  \"lexers\": [")
++	for _, l := range lexers {
++		fmt.Printf("    \"%s\",", l)
++	}
++	fmt.Println("  ],")
++	fmt.Println("  \"styles\": [")
++	for _, s := range styles {
++		fmt.Printf("    \"%s\",", s)
++	}
++	fmt.Println("  ],")
++	fmt.Println("  \"formatters\": [")
++	for _, f := range formatters {
++		fmt.Printf("    \"%s\",", f)
++	}
++	fmt.Println("  ]")
++	fmt.Println("}")
++}
++
++func main() {
++	help := flag.Bool("h", false, "Show context-sensitive help.")
++	version := flag.Bool("version", false, "Show version.")
++	list := flag.Bool("list", false, "List

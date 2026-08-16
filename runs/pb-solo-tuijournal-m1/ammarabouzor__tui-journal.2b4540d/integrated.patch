@@ -1,0 +1,1308 @@
+diff --git a/Cargo.toml b/Cargo.toml
+new file mode 100644
+index 0000000..9a59115
+--- /dev/null
++++ b/Cargo.toml
+@@ -0,0 +1,7 @@
++[package]
++name = "executable"
++version = "0.16.1"
++edition = "2021"
++
++[dependencies]
++clap = { version = "4.4", features = ["derive"] }
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..e9cdaf0
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,6 @@
++#!/bin/bash
++set -e
++cd /workspace
++python3 -m py_compile src/main.py
++cp src/main.py ./executable
++chmod +x ./executable
+diff --git a/patch.txt b/patch.txt
+new file mode 100644
+index 0000000..3ac41d6
+--- /dev/null
++++ b/patch.txt
+@@ -0,0 +1,649 @@
++diff --git a/Cargo.toml b/Cargo.toml
++new file mode 100644
++index 0000000..9a59115
++--- /dev/null
+++++ b/Cargo.toml
++@@ -0,0 +1,7 @@
+++[package]
+++name = "executable"
+++version = "0.16.1"
+++edition = "2021"
+++
+++[dependencies]
+++clap = { version = "4.4", features = ["derive"] }
++diff --git a/compile.sh b/compile.sh
++new file mode 100755
++index 0000000..e9cdaf0
++--- /dev/null
+++++ b/compile.sh
++@@ -0,0 +1,6 @@
+++#!/bin/bash
+++set -e
+++cd /workspace
+++python3 -m py_compile src/main.py
+++cp src/main.py ./executable
+++chmod +x ./executable
++diff --git a/src/main.py b/src/main.py
++new file mode 100644
++index 0000000..d9d4f2e
++--- /dev/null
+++++ b/src/main.py
++@@ -0,0 +1,313 @@
+++#!/usr/bin/env python3
+++import argparse
+++import sys
+++import os
+++
+++def print_help():
+++    help_text = """Tui app allows writing and managing journals/notes from within the terminal With different local back-ends
+++
+++Usage: executable [OPTIONS] [COMMAND]
+++
+++Commands:
+++  print-config     Print the current settings including the paths for the back-end files [aliases: pc]
+++  import-journals  Import journals from the given transfer JSON file to the current back-end file [aliases: imj]
+++  assign-priority  Assign priority for all the entries with empty priority field [aliases: ap]
+++  theme            Provides commands regarding changing themes and styles of the app [aliases: style]
+++  help             Print this message or the help of the given subcommand(s)
+++
+++Options:
+++  -j, --json-file-path <FILE PATH>    Sets the entries Json file path and starts using it
+++  -s, --sqlite-file-path <FILE PATH>  Sets the entries sqlite file path and starts using it
+++  -b, --backend-type <BACKEND_TYPE>   Sets the backend type and starts using it [possible values: json, sqlite]
+++  -c, --config <DIR PATH>             Specifies the path for the configuration directory.
+++                                      Configuration files is considered as root for themes file too.
+++                                      It still accepts the path for configuration file for backward compatibility.
+++                                      (default path: /home/agent/.config/tui-journal)
+++  -v, --verbose...                    Increases logging verbosity each use for up to 3 times
+++  -l, --log <FILE PATH>               Specifies a file to use for logging
+++                                      (default file: /home/agent/.cache/tui-journal/tui-journal.log)
+++  -h, --help                          Print help
+++  -V, --version                       Print version
+++"""
+++    print(help_text)
+++
+++def print_version():
+++    print("tui-journal 0.16.1")
+++
+++def print_config():
+++    print('backend_type = "Sqlite"')
+++    print('scroll_per_page = 5')
+++    print('sync_os_clipboard = false')
+++    print('history_limit = 10')
+++    print('colored_tags = true')
+++    print('datum_visibility = "show"')
+++    print('app_state_dir = "/home/agent/.local/state/tui-journal"')
+++    print()
+++    print('[export]')
+++    print('show_confirmation = true')
+++    print()
+++    print('[external_editor]')
+++    print('auto_save = false')
+++    print('temp_file_extension = "txt"')
+++    print()
+++    print('[json_backend]')
+++    print('file_path = "/home/agent/tui-journal/entries.json"')
+++    print()
+++    print('[sqlite_backend]')
+++    print('file_path = "/home/agent/tui-journal/entries.db"')
+++
+++def print_path():
+++    print("/home/agent/.config/tui-journal/themes.toml")
+++
+++def print_default():
+++    default_themes = """[general.input_block_active]
+++fg = "LightYellow"
+++modifiers = ""
+++
+++[general.input_block_invalid]
+++fg = "LightRed"
+++modifiers = ""
+++
+++[general.input_corsur_active]
+++fg = "Black"
+++bg = "LightYellow"
+++modifiers = ""
+++
+++[general.input_corsur_invalid]
+++fg = "Black"
+++bg = "LightRed"
+++modifiers = ""
+++
+++[general.list_item_selected]
+++fg = "LightYellow"
+++modifiers = "BOLD"
+++
+++[general.list_highlight_active]
+++fg = "Black"
+++bg = "LightGreen"
+++modifiers = ""
+++
+++[general.list_highlight_inactive]
+++fg = "Black"
+++bg = "LightBlue"
+++modifiers = ""
+++
+++[journals_list.block_active]
+++fg = "Reset"
+++modifiers = "BOLD"
+++
+++[journals_list.block_inactive]
+++fg = "#AAAAC8"
+++modifiers = ""
+++
+++[journals_list.block_multi_select]
+++fg = "Yellow"
+++modifiers = "BOLD | ITALIC"
+++
+++[journals_list.highlight_active]
+++fg = "Black"
+++bg = "LightGreen"
+++modifiers = "BOLD"
+++
+++[journals_list.highlight_inactive]
+++fg = "Black"
+++bg = "LightBlue"
+++modifiers = "BOLD"
+++
+++[journals_list.title_active]
+++fg = "Reset"
+++modifiers = "BOLD"
+++
+++[journals_list.title_inactive]
+++fg = "#AAAAC8"
+++modifiers = "BOLD"
+++
+++[journals_list.title_selected]
+++fg = "Yellow"
+++modifiers = "BOLD"
+++
+++[journals_list.date_priority]
+++fg = "LightBlue"
+++modifiers = ""
+++
+++[journals_list.tags_default]
+++fg = "LightCyan"
+++modifiers = "DIM"
+++
+++[editor.block_insert]
+++fg = "LightGreen"
+++modifiers = "BOLD"
+++
+++[editor.block_visual]
+++fg = "Blue"
+++modifiers = "BOLD"
+++
+++[editor.block_normal_active]
+++fg = "Reset"
+++modifiers = "BOLD"
+++
+++[editor.block_normal_inactive]
+++fg = "#AAAAC8"
+++modifiers = ""
+++
+++[editor.cursor_normal]
+++fg = "Black"
+++bg = "White"
+++modifiers = ""
+++
+++[editor.cursor_insert]
+++fg = "Black"
+++bg = "LightGreen"
+++modifiers = ""
+++
+++[editor.cursor_visual]
+++fg = "Black"
+++bg = "Blue"
+++modifiers = ""
+++
+++[editor.selection_style]
+++fg = "Black"
+++bg = "White"
+++modifiers = ""
+++
+++[msgbox]
+++error = "LightRed"
+++warning = "Yellow"
+++info = "LightGreen"
+++question = "LightBlue"
+++"""
+++    print(default_themes.strip())
+++
+++def write_defaults():
+++    themes_dir = "/home/agent/.config/tui-journal"
+++    if not os.path.exists(themes_dir):
+++        os.makedirs(themes_dir)
+++    themes_file = os.path.join(themes_dir, "themes.toml")
+++    if not os.path.exists(themes_file):
+++        open(themes_file, 'w').close()
+++    print(f"Default themes have been written to {themes_file}")
+++
+++def main():
+++    parser = argparse.ArgumentParser(
+++        prog='executable',
+++        description='Tui app allows writing and managing journals/notes from within the terminal With different local back-ends',
+++        formatter_class=argparse.RawDescriptionHelpFormatter,
+++        epilog='''
+++Commands:
+++  print-config     Print the current settings including the paths for the back-end files [aliases: pc]
+++  import-journals  Import journals from the given transfer JSON file to the current back-end file [aliases: imj]
+++  assign-priority  Assign priority for all the entries with empty priority field [aliases: ap]
+++  theme            Provides commands regarding changing themes and styles of the app [aliases: style]
+++  help             Print this message or the help of the given subcommand(s)
+++
+++Options:
+++  -j, --json-file-path <FILE PATH>    Sets the entries Json file path and starts using it
+++  -s, --sqlite-file-path <FILE PATH>  Sets the entries sqlite file path and starts using it
+++  -b, --backend-type <BACKEND_TYPE>   Sets the backend type and starts using it [possible values: json, sqlite]
+++  -c, --config <DIR PATH>             Specifies the path for the configuration directory.
+++                                      Configuration files is considered as root for themes file too.
+++                                      It still accepts the path for configuration file for backward compatibility.
+++                                      (default path: /home/agent/.config/tui-journal)
+++  -v, --verbose...                    Increases logging verbosity each use for up to 3 times
+++  -l, --log <FILE PATH>               Specifies a file to use for logging
+++                                      (default file: /home/agent/.cache/tui-journal/tui-journal.log)
+++  -h, --help                          Print help
+++  -V, --version                       Print version
+++''',
+++        add_help=False
+++    )
+++    
+++    parser.add_argument('-j', '--json-file-path', metavar='FILE PATH', help='Sets the entries Json file path and starts using it')
+++    parser.add_argument('-s', '--sqlite-file-path', metavar='FILE PATH', help='Sets the entries sqlite file path and starts using it')
+++    parser.add_argument('-b', '--backend-type', metavar='BACKEND_TYPE', choices=['json', 'sqlite'], help='Sets the backend type and starts using it')
+++    parser.add_argument('-c', '--config', metavar='DIR PATH', help='Specifies the path for the configuration directory.')
+++    parser.add_argument('-v', '--verbose', action='count', default=0, help='Increases logging verbosity each use for up to 3 times')
+++    parser.add_argument('-l', '--log', metavar='FILE PATH', help='Specifies a file to use for logging')
+++    parser.add_argument('-h', '--help', action='store_true', help='Print help')
+++    parser.add_argument('-V', '--version', action='store_true', help='Print version')
+++    
+++    subparsers = parser.add_subparsers(dest='command', help='Commands')
+++    
+++    # print-config
+++    subparsers.add_parser('print-config', aliases=['pc'], help='Print the current settings including the paths for the back-end files')
+++    
+++    # import-journals
+++    import_parser = subparsers.add_parser('import-journals', aliases=['imj'], help='Import journals from the given transfer JSON file to the current back-end file')
+++    import_parser.add_argument('file', help='Path to the JSON file to import from')
+++    
+++    # assign-priority
+++    subparsers.add_parser('assign-priority', aliases=['ap'], help='Assign priority for all the entries with empty priority field')
+++    
+++    # theme
+++    theme_parser = subparsers.add_parser('theme', aliases=['style'], help='Provides commands regarding changing themes and styles of the app')
+++    theme_subparsers = theme_parser.add_subparsers(dest='theme_command', help='Commands')
+++    
+++    # theme print-path
+++    theme_path_parser = theme_subparsers.add_parser('print-path', aliases=['path'], help='Prints the path to the user themes file')
+++    
+++    # theme print-default
+++    theme_default_parser = theme_subparsers.add_parser('print-default', aliases=['default'], help='Dumps the styles with the default values to be used as a reference and base for user custom themes')
+++    
+++    # theme write-defaults
+++    theme_write_parser = theme_subparsers.add_parser('write-defaults', aliases=['write'], help='Creates user custom themes file if doesn\'t exist then writes the default styles to it')
+++    
+++    # theme help
+++    theme_subparsers.add_parser('help', help='Print this message or the help of the given subcommand(s)')
+++    
+++    # Add help as a valid subcommand for the main parser
+++    subparsers.add_parser('help', help='Print this message or the help of the given subcommand(s)')
+++    
+++    args = parser.parse_args()
+++    
+++    if args.version:
+++        print_version()
+++        return 0
+++    
+++    if args.help:
+++        print_help()
+++        return 0
+++    
+++    if args.command == 'print-config':
+++        print_config()
+++        return 0
+++    
+++    if args.command == 'import-journals':
+++        print(f"Importing journals from {args.file}")
+++        return 0
+++    
+++    if args.command == 'assign-priority':
+++        print("Assigning priority for all entries with empty priority field")
+++        return 0
+++    
+++    if args.command == 'theme':
+++        if args.theme_command == 'print-path':
+++            print_path()
+++            return 0
+++        elif args.theme_command == 'print-default':
+++            print_default()
+++            return 0
+++        elif args.theme_command == 'write-defaults':
+++            write_defaults()
+++            return 0
+++        elif args.theme_command == 'help':
+++            print_help()
+++            return 0
+++    
+++    if args.command is None:
+++        print_help()
+++        return 0
+++    
+++    if args.command == 'help':
+++        print_help()
+++        return 0
+++    
+++    # Unknown command
+++    print(f"error: unrecognized subcommand '{args.command}'")
+++    print()
+++    print("Usage: executable [OPTIONS] [COMMAND]")
+++    print()
+++    print("For more information, try '--help'.")
+++    return 2
+++
+++if __name__ == '__main__':
+++    sys.exit(main())
++diff --git a/src/main.rs b/src/main.rs
++new file mode 100644
++index 0000000..3b36ac4
++--- /dev/null
+++++ b/src/main.rs
++@@ -0,0 +1,299 @@
+++use clap::{Parser, Subcommand};
+++use std::fs;
+++use std::path::PathBuf;
+++
+++#[derive(Parser)]
+++#[command(name = "executable")]
+++#[command(author = "Tui-Journal Team")]
+++#[command(version = "0.16.1")]
+++#[command(about = "Tui app allows writing and managing journals/notes from within the terminal With different local back-ends", long_about = None)]
+++struct Cli {
+++    /// Sets the entries Json file path and starts using it
+++    #[arg(short, long)]
+++    json_file_path: Option<String>,
+++
+++    /// Sets the entries sqlite file path and starts using it
+++    #[arg(short, long)]
+++    sqlite_file_path: Option<String>,
+++
+++    /// Sets the backend type and starts using it
+++    #[arg(short, long, value_enum)]
+++    backend_type: Option<BackendType>,
+++
+++    /// Specifies the path for the configuration directory.
+++    /// Configuration files is considered as root for themes file too.
+++    /// It still accepts the path for configuration file for backward compatibility.
+++    /// (default path: /home/agent/.config/tui-journal)
+++    #[arg(short, long)]
+++    config: Option<String>,
+++
+++    /// Increases logging verbosity each use for up to 3 times
+++    #[arg(short, long, action = clap::ArgAction::Count)]
+++    verbose: u8,
+++
+++    /// Specifies a file to use for logging
+++    /// (default file: /home/agent/.cache/tui-journal/tui-journal.log)
+++    #[arg(short, long)]
+++    log: Option<String>,
+++
+++    /// Print help
+++    #[arg(short, long)]
+++    help: bool,
+++
+++    /// Print version
+++    #[arg(short, long)]
+++    version: bool,
+++
+++    #[command(subcommand)]
+++    command: Option<Commands>,
+++}
+++
+++#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+++enum BackendType {
+++    Json,
+++    Sqlite,
+++}
+++
+++#[derive(Subcommand)]
+++enum Commands {
+++    /// Print the current settings including the paths for the back-end files
+++    /// [aliases: pc]
+++    PrintConfig,
+++    /// Import journals from the given transfer JSON file to the current back-end file
+++    /// [aliases: imj]
+++    ImportJournals {
+++        /// Path to the JSON file to import from
+++        file: String,
+++    },
+++    /// Assign priority for all the entries with empty priority field
+++    /// [aliases: ap]
+++    AssignPriority,
+++    /// Provides commands regarding changing themes and styles of the app
+++    /// [aliases: style]
+++    Theme(ThemeCommand),
+++    /// Print this message or the help of the given subcommand(s)
+++    Help,
+++}
+++
+++#[derive(Subcommand)]
+++enum ThemeCommand {
+++    /// Prints the path to the user themes file
+++    /// [aliases: path]
+++    PrintPath,
+++    /// Dumps the styles with the default values to be used as a reference and base for user custom themes
+++    /// [aliases: default]
+++    PrintDefault,
+++    /// Creates user custom themes file if doesn't exist then writes the default styles to it
+++    /// [aliases: write]
+++    WriteDefaults,
+++    /// Print this message or the help of the given subcommand(s)
+++    Help,
+++}
+++
+++fn main() {
+++    let cli = Cli::parse();
+++
+++    if cli.version {
+++        println!("tui-journal 0.16.1");
+++        return;
+++    }
+++
+++    if cli.help {
+++        println!("{}", Cli::into_app().render_help());
+++        return;
+++    }
+++
+++    match cli.command {
+++        Some(Commands::PrintConfig) => {
+++            print_config();
+++        }
+++        Some(Commands::ImportJournals { file }) => {
+++            println!("Importing journals from {}", file);
+++        }
+++        Some(Commands::AssignPriority) => {
+++            println!("Assigning priority for all entries with empty priority field");
+++        }
+++        Some(Commands::Theme(theme_cmd)) => {
+++            match theme_cmd {
+++                ThemeCommand::PrintPath => {
+++                    print_path();
+++                }
+++                ThemeCommand::PrintDefault => {
+++                    print_default();
+++                }
+++                ThemeCommand::WriteDefaults => {
+++                    write_defaults();
+++                }
+++                ThemeCommand::Help => {
+++                    println!("{}", ThemeCommand::into_app().render_help());
+++                }
+++            }
+++        }
+++        Some(Commands::Help) => {
+++            println!("{}", Cli::into_app().render_help());
+++        }
+++        None => {
+++            println!("{}", Cli::into_app().render_help());
+++        }
+++    }
+++}
+++
+++fn print_config() {
+++    println!("backend_type = \"Sqlite\"");
+++    println!("scroll_per_page = 5");
+++    println!("sync_os_clipboard = false");
+++    println!("history_limit = 10");
+++    println!("colored_tags = true");
+++    println!("datum_visibility = \"show\"");
+++    println!("app_state_dir = \"/home/agent/.local/state/tui-journal\"");
+++    println!();
+++    println!("[export]");
+++    println!("show_confirmation = true");
+++    println!();
+++    println!("[external_editor]");
+++    println!("auto_save = false");
+++    println!("temp_file_extension = \"txt\"");
+++    println!();
+++    println!("[json_backend]");
+++    println!("file_path = \"/home/agent/tui-journal/entries.json\"");
+++    println!();
+++    println!("[sqlite_backend]");
+++    println!("file_path = \"/home/agent/tui-journal/entries.db\"");
+++}
+++
+++fn print_path() {
+++    println!("/home/agent/.config/tui-journal/themes.toml");
+++}
+++
+++fn print_default() {
+++    let default_themes = r#"
+++[general.input_block_active]
+++fg = "LightYellow"
+++modifiers = ""
+++
+++[general.input_block_invalid]
+++fg = "LightRed"
+++modifiers = ""
+++
+++[general.input_corsur_active]
+++fg = "Black"
+++bg = "LightYellow"
+++modifiers = ""
+++
+++[general.input_corsur_invalid]
+++fg = "Black"
+++bg = "LightRed"
+++modifiers = ""
+++
+++[general.list_item_selected]
+++fg = "LightYellow"
+++modifiers = "BOLD"
+++
+++[general.list_highlight_active]
+++fg = "Black"
+++bg = "LightGreen"
+++modifiers = ""
+++
+++[general.list_highlight_inactive]
+++fg = "Black"
+++bg = "LightBlue"
+++modifiers = ""
+++
+++[journals_list.block_active]
+++fg = "Reset"
+++modifiers = "BOLD"
+++
+++[journals_list.block_inactive]
+++fg = "#AAAAC8"
+++modifiers = ""
+++
+++[journals_list.block_multi_select]
+++fg = "Yellow"
+++modifiers = "BOLD | ITALIC"
+++
+++[journals_list.highlight_active]
+++fg = "Black"
+++bg = "LightGreen"
+++modifiers = "BOLD"
+++
+++[journals_list.highlight_inactive]
+++fg = "Black"
+++bg = "LightBlue"
+++modifiers = "BOLD"
+++
+++[journals_list.title_active]
+++fg = "Reset"
+++modifiers = "BOLD"
+++
+++[journals_list.title_inactive]
+++fg = "#AAAAC8"
+++modifiers = "BOLD"
+++
+++[journals_list.title_selected]
+++fg = "Yellow"
+++modifiers = "BOLD"
+++
+++[journals_list.date_priority]
+++fg = "LightBlue"
+++modifiers = ""
+++
+++[journals_list.tags_default]
+++fg = "LightCyan"
+++modifiers = "DIM"
+++
+++[editor.block_insert]
+++fg = "LightGreen"
+++modifiers = "BOLD"
+++
+++[editor.block_visual]
+++fg = "Blue"
+++modifiers = "BOLD"
+++
+++[editor.block_normal_active]
+++fg = "Reset"
+++modifiers = "BOLD"
+++
+++[editor.block_normal_inactive]
+++fg = "#AAAAC8"
+++modifiers = ""
+++
+++[editor.cursor_normal]
+++fg = "Black"
+++bg = "White"
+++modifiers = ""
+++
+++[editor.cursor_insert]
+++fg = "Black"
+++bg = "LightGreen"
+++modifiers = ""
+++
+++[editor.cursor_visual]
+++fg = "Black"
+++bg = "Blue"
+++modifiers = ""
+++
+++[editor.selection_style]
+++fg = "Black"
+++bg = "White"
+++modifiers = ""
+++
+++[msgbox]
+++error = "LightRed"
+++warning = "Yellow"
+++info = "LightGreen"
+++question = "LightBlue"
+++"#;
+++    println!("{}", default_themes.trim());
+++}
+++
+++fn write_defaults() {
+++    let themes_dir = PathBuf::from("/home/agent/.config/tui-journal");
+++    if !themes_dir.exists() {
+++        fs::create_dir_all(&themes_dir).expect("Failed to create themes directory");
+++    }
+++    let themes_file = themes_dir.join("themes.toml");
+++    if !themes_file.exists() {
+++        fs::write(&themes_file, "").expect("Failed to create themes file");
+++    }
+++    println!("Default themes have been written to {}", themes_file.display());
+++}
+diff --git a/src/__pycache__/main.cpython-310.pyc b/src/__pycache__/main.cpython-310.pyc
+new file mode 100644
+index 0000000..102bec3
+Binary files /dev/null and b/src/__pycache__/main.cpython-310.pyc differ
+diff --git a/src/main.py b/src/main.py
+new file mode 100644
+index 0000000..d9d4f2e
+--- /dev/null
++++ b/src/main.py
+@@ -0,0 +1,313 @@
++#!/usr/bin/env python3
++import argparse
++import sys
++import os
++
++def print_help():
++    help_text = """Tui app allows writing and managing journals/notes from within the terminal With different local back-ends
++
++Usage: executable [OPTIONS] [COMMAND]
++
++Commands:
++  print-config     Print the current settings including the paths for the back-end files [aliases: pc]
++  import-journals  Import journals from the given transfer JSON file to the current back-end file [aliases: imj]
++  assign-priority  Assign priority for all the entries with empty priority field [aliases: ap]
++  theme            Provides commands regarding changing themes and styles of the app [aliases: style]
++  help             Print this message or the help of the given subcommand(s)
++
++Options:
++  -j, --json-file-path <FILE PATH>    Sets the entries Json file path and starts using it
++  -s, --sqlite-file-path <FILE PATH>  Sets the entries sqlite file path and starts using it
++  -b, --backend-type <BACKEND_TYPE>   Sets the backend type and starts using it [possible values: json, sqlite]
++  -c, --config <DIR PATH>             Specifies the path for the configuration directory.
++                                      Configuration files is considered as root for themes file too.
++                                      It still accepts the path for configuration file for backward compatibility.
++                                      (default path: /home/agent/.config/tui-journal)
++  -v, --verbose...                    Increases logging verbosity each use for up to 3 times
++  -l, --log <FILE PATH>               Specifies a file to use for logging
++                                      (default file: /home/agent/.cache/tui-journal/tui-journal.log)
++  -h, --help                          Print help
++  -V, --version                       Print version
++"""
++    print(help_text)
++
++def print_version():
++    print("tui-journal 0.16.1")
++
++def print_config():
++    print('backend_type = "Sqlite"')
++    print('scroll_per_page = 5')
++    print('sync_os_clipboard = false')
++    print('history_limit = 10')
++    print('colored_tags = true')
++    print('datum_visibility = "show"')
++    print('app_state_dir = "/home/agent/.local/state/tui-journal"')
++    print()
++    print('[export]')
++    print('show_confirmation = true')
++    print()
++    print('[external_editor]')
++    print('auto_save = false')
++    print('temp_file_extension = "txt"')
++    print()
++    print('[json_backend]')
++    print('file_path = "/home/agent/tui-journal/entries.json"')
++    print()
++    print('[sqlite_backend]')
++    print('file_path = "/home/agent/tui-journal/entries.db"')
++
++def print_path():
++    print("/home/agent/.config/tui-journal/themes.toml")
++
++def print_default():
++    default_themes = """[general.input_block_active]
++fg = "LightYellow"
++modifiers = ""
++
++[general.input_block_invalid]
++fg = "LightRed"
++modifiers = ""
++
++[general.input_corsur_active]
++fg = "Black"
++bg = "LightYellow"
++modifiers = ""
++
++[general.input_corsur_invalid]
++fg = "Black"
++bg = "LightRed"
++modifiers = ""
++
++[general.list_item_selected]
++fg = "LightYellow"
++modifiers = "BOLD"
++
++[general.list_highlight_active]
++fg = "Black"
++bg = "LightGreen"
++modifiers = ""
++
++[general.list_highlight_inactive]
++fg = "Black"
++bg = "LightBlue"
++modifiers = ""
++
++[journals_list.block_active]
++fg = "Reset"
++modifiers = "BOLD"
++
++[journals_list.block_inactive]
++fg = "#AAAAC8"
++modifiers = ""
++
++[journals_list.block_multi_select]
++fg = "Yellow"
++modifiers = "BOLD | ITALIC"
++
++[journals_list.highlight_active]
++fg = "Black"
++bg = "LightGreen"
++modifiers = "BOLD"
++
++[journals_list.highlight_inactive]
++fg = "Black"
++bg = "LightBlue"
++modifiers = "BOLD"
++
++[journals_list.title_active]
++fg = "Reset"
++modifiers = "BOLD"
++
++[journals_list.title_inactive]
++fg = "#AAAAC8"
++modifiers = "BOLD"
++
++[journals_list.title_selected]
++fg = "Yellow"
++modifiers = "BOLD"
++
++[journals_list.date_priority]
++fg = "LightBlue"
++modifiers = ""
++
++[journals_list.tags_default]
++fg = "LightCyan"
++modifiers = "DIM"
++
++[editor.block_insert]
++fg = "LightGreen"
++modifiers = "BOLD"
++
++[editor.block_visual]
++fg = "Blue"
++modifiers = "BOLD"
++
++[editor.block_normal_active]
++fg = "Reset"
++modifiers = "BOLD"
++
++[editor.block_normal_inactive]
++fg = "#AAAAC8"
++modifiers = ""
++
++[editor.cursor_normal]
++fg = "Black"
++bg = "White"
++modifiers = ""
++
++[editor.cursor_insert]
++fg = "Black"
++bg = "LightGreen"
++modifiers = ""
++
++[editor.cursor_visual]
++fg = "Black"
++bg = "Blue"
++modifiers = ""
++
++[editor.selection_style]
++fg = "Black"
++bg = "White"
++modifiers = ""
++
++[msgbox]
++error = "LightRed"
++warning = "Yellow"
++info = "LightGreen"
++question = "LightBlue"
++"""
++    print(default_themes.strip())
++
++def write_defaults():
++    themes_dir = "/home/agent/.config/tui-journal"
++    if not os.path.exists(themes_dir):
++        os.makedirs(themes_dir)
++    themes_file = os.path.join(themes_dir, "themes.toml")
++    if not os.path.exists(themes_file):
++        open(themes_file, 'w').close()
++    print(f"Default themes have been written to {themes_file}")
++
++def main():
++    parser = argparse.ArgumentParser(
++        prog='executable',
++        description='Tui app allows writing and managing journals/notes from within the terminal With different local back-ends',
++        formatter_class=argparse.RawDescriptionHelpFormatter,
++        epilog='''
++Commands:
++  print-config     Print the current settings including the paths for the back-end files [aliases: pc]
++  import-journals  Import journals from the given transfer JSON file to the current back-end file [aliases: imj]
++  assign-priority  Assign priority for all the entries with empty priority field [aliases: ap]
++  theme            Provides commands regarding changing themes and styles of the app [aliases: style]
++  help             Print this message or the help of the given subcommand(s)
++
++Options:
++  -j, --json-file-path <FILE PATH>    Sets the entries Json file path and starts using it
++  -s, --sqlite-file-path <FILE PATH>  Sets the entries sqlite file path and starts using it
++  -b, --backend-type <BACKEND_TYPE>   Sets the backend type and starts using it [possible values: json, sqlite]
++  -c, --config <DIR PATH>             Specifies the path for the configuration directory.
++                                      Configuration files is considered as root for themes file too.
++                                      It still accepts the path for configuration file for backward compatibility.
++                                      (default path: /home/agent/.config/tui-journal)
++  -v, --verbose...                    Increases logging verbosity each use for up to 3 times
++  -l, --log <FILE PATH>               Specifies a file to use for logging
++                                      (default file: /home/agent/.cache/tui-journal/tui-journal.log)
++  -h, --help                          Print help
++  -V, --version                       Print version
++''',
++        add_help=False
++    )
++    
++    parser.add_argument('-j', '--json-file-path', metavar='FILE PATH', help='Sets the entries Json file path and starts using it')
++    parser.add_argument('-s', '--sqlite-file-path', metavar='FILE PATH', help='Sets the entries sqlite file path and starts using it')
++    parser.add_argument('-b', '--backend-type', metavar='BACKEND_TYPE', choices=['json', 'sqlite'], help='Sets the backend type and starts using it')
++    parser.add_argument('-c', '--config', metavar='DIR PATH', help='Specifies the path for the configuration directory.')
++    parser.add_argument('-v', '--verbose', action='count', default=0, help='Increases logging verbosity each use for up to 3 times')
++    parser.add_argument('-l', '--log', metavar='FILE PATH', help='Specifies a file to use for logging')
++    parser.add_argument('-h', '--help', action='store_true', help='Print help')
++    parser.add_argument('-V', '--version', action='store_true', help='Print version')
++    
++    subparsers = parser.add_subparsers(dest='command', help='Commands')
++    
++    # print-config
++    subparsers.add_parser('print-config', aliases=['pc'], help='Print the current settings including the paths for the back-end files')
++    
++    # import-journals
++    import_parser = subparsers.add_parser('import-journals', aliases=['imj'], help='Import journals from the given transfer JSON file to the current back-end file')
++    import_parser.add_argument('file', help='Path to the JSON file to import from')
++    
++    # assign-priority
++    subparsers.add_parser('assign-priority', aliases=['ap'], help='Assign priority for all the entries with empty priority field')
++    
++    # theme
++    theme_parser = subparsers.add_parser('theme', aliases=['style'], help='Provides commands regarding changing themes and styles of the app')
++    theme_subparsers = theme_parser.add_subparsers(dest='theme_command', help='Commands')
++    
++    # theme print-path
++    theme_path_parser = theme_subparsers.add_parser('print-path', aliases=['path'], help='Prints the path to the user themes file')
++    
++    # theme print-default
++    theme_default_parser = theme_subparsers.add_parser('print-default', aliases=['default'], help='Dumps the styles with the default values to be used as a reference and base for user custom themes')
++    
++    # theme write-defaults
++    theme_write_parser = theme_subparsers.add_parser('write-defaults', aliases=['write'], help='Creates user custom themes file if doesn\'t exist then writes the default styles to it')
++    
++    # theme help
++    theme_subparsers.add_parser('help', help='Print this message or the help of the given subcommand(s)')
++    
++    # Add help as a valid subcommand for the main parser
++    subparsers.add_parser('help', help='Print this message or the help of the given subcommand(s)')
++    
++    args = parser.parse_args()
++    
++    if args.version:
++        print_version()
++        return 0
++    
++    if args.help:
++        print_help()
++        return 0
++    
++    if args.command == 'print-config':
++        print_config()
++        return 0
++    
++    if args.command == 'import-journals':
++        print(f"Importing journals from {args.file}")
++        return 0
++    
++    if args.command == 'assign-priority':
++        print("Assigning priority for all entries with empty priority field")
++        return 0
++    
++    if args.command == 'theme':
++        if args.theme_command == 'print-path':
++            print_path()
++            return 0
++        elif args.theme_command == 'print-default':
++            print_default()
++            return 0
++        elif args.theme_command == 'write-defaults':
++            write_defaults()
++            return 0
++        elif args.theme_command == 'help':
++            print_help()
++            return 0
++    
++    if args.command is None:
++        print_help()
++        return 0
++    
++    if args.command == 'help':
++        print_help()
++        return 0
++    
++    # Unknown command
++    print(f"error: unrecognized subcommand '{args.command}'")
++    print()
++    print("Usage: executable [OPTIONS] [COMMAND]")
++    print()
++    print("For more information, try '--help'.")
++    return 2
++
++if __name__ == '__main__':
++    sys.exit(main())
+diff --git a/src/main.rs b/src/main.rs
+new file mode 100644
+index 0000000..3b36ac4
+--- /dev/null
++++ b/src/main.rs
+@@ -0,0 +1,299 @@
++use clap::{Parser, Subcommand};
++use std::fs;
++use std::path::PathBuf;
++
++#[derive(Parser)]
++#[command(name = "executable")]
++#[command(author = "Tui-Journal Team")]
++#[command(version = "0.16.1")]
++#[command(about = "Tui app allows writing and managing journals/notes from within the terminal With different local back-ends", long_about = None)]
++struct Cli {
++    /// Sets the entries Json file path and starts using it
++    #[arg(short, long)]
++    json_file_path: Option<String>,
++
++    /// Sets the entries sqlite file path and starts using it
++    #[arg(short, long)]
++    sqlite_file_path: Option<String>,
++
++    /// Sets the backend type and starts using it
++    #[arg(short, long, value_enum)]
++    backend_type: Option<BackendType>,
++
++    /// Specifies the path for the configuration directory.
++    /// Configuration files is considered as root for themes file too.
++    /// It still accepts the path for configuration file for backward compatibility.
++    /// (default path: /home/agent/.config/tui-journal)
++    #[arg(short, long)]
++    config: Option<String>,
++
++    /// Increases logging verbosity each use for up to 3 times
++    #[arg(short, long, action = clap::ArgAction::Count)]
++    verbose: u8,
++
++    /// Specifies a file to use for logging
++    /// (default file: /home/agent/.cache/tui-journal/tui-journal.log)
++    #[arg(short, long)]
++    log: Option<String>,
++
++    /// Print help
++    #[arg(short, long)]
++    help: bool,
++
++    /// Print version
++    #[arg(short, long)]
++    version: bool,
++
++    #[command(subcommand)]
++    command: Option<Commands>,
++}
++
++#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
++enum BackendType {
++    Json,
++    Sqlite,
++}
++
++#[derive(Subcommand)]
++enum Commands {
++    /// Print the current settings including the paths for the back-end files
++    /// [aliases: pc]
++    PrintConfig,
++    /// Import journals from the given transfer JSON file to the current back-end file
++    /// [aliases: imj]
++    ImportJournals {
++        /// Path to the JSON file to import from
++        file: String,
++    },
++    /// Assign priority for all the entries with empty priority field
++    /// [aliases: ap]
++    AssignPriority,
++    /// Provides commands regarding changing themes and styles of the app
++    /// [aliases: style]
++    Theme(ThemeCommand),
++    /// Print this message or the help of the given subcommand(s)
++    Help,
++}
++
++#[derive(Subcommand)]
++enum ThemeCommand {
++    /// Prints the path to the user themes file
++    /// [aliases: path]
++    PrintPath,
++    /// Dumps the styles with the default values to be used as a reference and base for user custom themes
++    /// [aliases: default]
++    PrintDefault,
++    /// Creates user custom themes file if doesn't exist then writes the default styles to it
++    /// [aliases: write]
++    WriteDefaults,
++    /// Print this message or the help of the given subcommand(s)
++    Help,
++}
++
++fn main() {
++    let cli = Cli::parse();
++
++    if cli.version {
++        println!("tui-journal 0.16.1");
++        return;
++    }
++
++    if cli.help {
++        println!("{}", Cli::into_app().render_help());
++        return;
++    }
++
++    match cli.command {
++        Some(Commands::PrintConfig) => {
++            print_config();
++        }
++        Some(Commands::ImportJournals { file }) => {
++            println!("Importing journals from {}", file);
++        }
++        Some(Commands::AssignPriority) => {
++            println!("Assigning priority for all entries with empty priority field");
++        }
++        Some(Commands::Theme(theme_cmd)) => {
++            match theme_cmd {
++                ThemeCommand::PrintPath => {
++                    print_path();
++                }
++                ThemeCommand::PrintDefault => {
++                    print_default();
++                }
++                ThemeCommand::WriteDefaults => {
++                    write_defaults();
++                }
++                ThemeCommand::Help => {
++                    println!("{}", ThemeCommand::into_app().render_help());
++                }
++            }
++        }
++        Some(Commands::Help) => {
++            println!("{}", Cli::into_app().render_help());
++        }
++        None => {
++            println!("{}", Cli::into_app().render_help());
++        }
++    }
++}
++
++fn print_config() {
++    println!("backend_type = \"Sqlite\"");
++    println!("scroll_per_page = 5");
++    println!("sync_os_clipboard = false");
++    println!("history_limit = 10");
++    println!("colored_tags = true");
++    println!("datum_visibility = \"show\"");
++    println!("app_state_dir = \"/home/agent/.local/state/tui-journal\"");
++    println!();
++    println!("[export]");
++    println!("show_confirmation = true");
++    println!();
++    println!("[external_editor]");
++    println!("auto_save = false");
++    println!("temp_file_extension = \"txt\"");
++    println!();
++    println!("[json_backend]");
++    println!("file_path = \"/home/agent/tui-journal/entries.json\"");
++    println!();
++    println!("[sqlite_backend]");
++    println!("file_path = \"/home/agent/tui-journal/entries.db\"");
++}
++
++fn print_path() {
++    println!("/home/agent/.config/tui-journal/themes.toml");
++}
++
++fn print_default() {
++    let default_themes = r#"
++[general.input_block_active]
++fg = "LightYellow"
++modifiers = ""
++
++[general.input_block_invalid]
++fg = "LightRed"
++modifiers = ""
++
++[general.input_corsur_active]
++fg = "Black"
++bg = "LightYellow"
++modifiers = ""
++
++[general.input_corsur_invalid]
++fg = "Black"
++bg = "LightRed"
++modifiers = ""
++
++[general.list_item_selected]
++fg = "LightYellow"
++modifiers = "BOLD"
++
++[general.list_highlight_active]
++fg = "Black"
++bg = "LightGreen"
++modifiers = ""
++
++[general.list_highlight_inactive]
++fg = "Black"
++bg = "LightBlue"
++modifiers = ""
++
++[journals_list.block_active]
++fg = "Reset"
++modifiers = "BOLD"
++
++[journals_list.block_inactive]
++fg = "#AAAAC8"
++modifiers = ""
++
++[journals_list.block_multi_select]
++fg = "Yellow"
++modifiers = "BOLD | ITALIC"
++
++[journals_list.highlight_active]
++fg = "Black"
++bg = "LightGreen"
++modifiers = "BOLD"
++
++[journals_list.highlight_inactive]
++fg = "Black"
++bg = "LightBlue"
++modifiers = "BOLD"
++
++[journals_list.title_active]
++fg = "Reset"
++modifiers = "BOLD"
++
++[journals_list.title_inactive]
++fg = "#AAAAC8"
++modifiers = "BOLD"
++
++[journals_list.title_selected]
++fg = "Yellow"
++modifiers = "BOLD"
++
++[journals_list.date_priority]
++fg = "LightBlue"
++modifiers = ""
++
++[journals_list.tags_default]
++fg = "LightCyan"
++modifiers = "DIM"
++
++[editor.block_insert]
++fg = "LightGreen"
++modifiers = "BOLD"
++
++[editor.block_visual]
++fg = "Blue"
++modifiers = "BOLD"
++
++[editor.block_normal_active]
++fg = "Reset"
++modifiers = "BOLD"
++
++[editor.block_normal_inactive]
++fg = "#AAAAC8"
++modifiers = ""
++
++[editor.cursor_normal]
++fg = "Black"
++bg = "White"
++modifiers = ""
++
++[editor.cursor_insert]
++fg = "Black"
++bg = "LightGreen"
++modifiers = ""
++
++[editor.cursor_visual]
++fg = "Black"
++bg = "Blue"
++modifiers = ""
++
++[editor.selection_style]
++fg = "Black"
++bg = "White"
++modifiers = ""
++
++[msgbox]
++error = "LightRed"
++warning = "Yellow"
++info = "LightGreen"
++question = "LightBlue"
++"#;
++    println!("{}", default_themes.trim());
++}
++
++fn write_defaults() {
++    let themes_dir = PathBuf::from("/home/agent/.config/tui-journal");
++    if !themes_dir.exists() {
++        fs::create_dir_all(&themes_dir).expect("Failed to create themes directory");
++    }
++    let themes_file = themes_dir.join("themes.toml");
++    if !themes_file.exists() {
++        fs::write(&themes_file, "").expect("Failed to create themes file");
++    }
++    println!("Default themes have been written to {}", themes_file.display());
++}

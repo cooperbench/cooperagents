@@ -1,0 +1,47 @@
+Evaluating:   0%|                                                             | 0/1 [00:00<?, ?it/s]
+Fetching ... files: 0it [00:00, ?it/s][A
+Fetching ... files: 3it [00:00,  5.06it/s][A
+Fetching ... files: 11it [00:00, 14.50it/s][AFetching ... files: 18it [00:00, 19.36it/s]
+                                                                                                    [agourlay__zip-password-finder.704700d] branch 1fb751a1a8a1: attempt failed (results_read_failed); retrying (1 left)
+Evaluating:   0%|                                                             | 0/1 [21:18<?, ?it/s]                                                                                                    [agourlay__zip-password-finder.704700d] branch c865682e93ee: attempt failed (results_read_failed); retrying (1 left)
+Evaluating:   0%|                                                             | 0/1 [37:43<?, ?it/s]                                                                                                    [agourlay__zip-password-finder.704700d] branch c865682e93ee failed (results_read_failed), continuing with remaining branches
+Evaluating:   0%|                                                             | 0/1 [47:06<?, ?it/s]                                                                                                    Error evaluating agourlay__zip-password-finder.704700d: Command '['docker', 'run', '-d', '--init', '--name', 'programbench-ae3577eec57a', '-w', '/workspace', '--cpus', '10', '-e', 'PYTEST_XDIST_AUTO_NUM_WORKERS=10', '-e', 'PYTEST_ADDOPTS=--max-worker-restart=4', '--init', 'programbench-compiled/agourlay__zip-password-finder.704700d:733085658666', 'sleep', '2h']' timed out after 300 seconds
+Traceback (most recent call last):
+  File "/home/ubuntu/ProgramBench/src/programbench/eval/eval_batch.py", line 322, in _evaluate_instance
+    result = evaluator.run()
+  File "/home/ubuntu/ProgramBench/src/programbench/eval/eval.py", line 855, in run
+    self._evaluate_branch(branch, image_for_branches)
+    ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/ProgramBench/src/programbench/eval/eval.py", line 710, in _evaluate_branch
+    raw_xml = self._run_test_branch(branch, image, attempt_log, serial_pytest=serial_retry)
+  File "/home/ubuntu/ProgramBench/src/programbench/eval/eval.py", line 626, in _run_test_branch
+    env = self._new_env(image, serial_pytest=serial_pytest)
+  File "/home/ubuntu/ProgramBench/src/programbench/eval/eval.py", line 460, in _new_env
+    return ContainerEnvironment(
+        image=image,
+    ...<5 lines>...
+        run_args=[*DOCKER_RUN_ARGS, "--init"],
+    )
+  File "/home/ubuntu/ProgramBench/src/programbench/container.py", line 60, in __init__
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=DOCKER_RUN_TIMEOUT)
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.13.13-linux-x86_64-gnu/lib/python3.13/subprocess.py", line 556, in run
+    stdout, stderr = process.communicate(input, timeout=timeout)
+                     ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.13.13-linux-x86_64-gnu/lib/python3.13/subprocess.py", line 1222, in communicate
+    stdout, stderr = self._communicate(input, endtime, timeout)
+                     ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.13.13-linux-x86_64-gnu/lib/python3.13/subprocess.py", line 2155, in _communicate
+    self._check_timeout(endtime, orig_timeout, stdout, stderr)
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.13.13-linux-x86_64-gnu/lib/python3.13/subprocess.py", line 1269, in _check_timeout
+    raise TimeoutExpired(
+    ...<2 lines>...
+            stderr=b''.join(stderr_seq) if stderr_seq else None)
+subprocess.TimeoutExpired: Command '['docker', 'run', '-d', '--init', '--name', 'programbench-ae3577eec57a', '-w', '/workspace', '--cpus', '10', '-e', 'PYTEST_XDIST_AUTO_NUM_WORKERS=10', '-e', 'PYTEST_ADDOPTS=--max-worker-restart=4', '--init', 'programbench-compiled/agourlay__zip-password-finder.704700d:733085658666', 'sleep', '2h']' timed out after 300 seconds
+Evaluating:   0%|                                                             | 0/1 [57:54<?, ?it/s]Evaluating: 100%|███████████████████████████████████████████████████| 1/1 [57:56<00:00, 3476.29s/it]                                                                                                    
+[3m                         Evaluation Summary                          [0m
+[1m [0m[1mInstance                             [0m[1m [0m[1m [0m[1mScore[0m[1m [0m[1m [0m[1mComment              [0m[1m [0m
+[1m [0m[1magourlay__zip-password-finder.704700d[0m[1m [0m [31m    0[0m  [1;31mERROR: TimeoutExpired[0m 
+[1m [0m[1mAverage                              [0m[1m [0m [1m    0[0m  1 instances           
+[2mNote: A score of 100 does not mean solved (due to rounding). Only ✅ indicates a[0m
+[2msolved task.[0m

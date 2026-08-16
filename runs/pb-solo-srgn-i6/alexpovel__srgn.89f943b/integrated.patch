@@ -1,0 +1,746 @@
+diff --git a/Cargo.toml b/Cargo.toml
+new file mode 100644
+index 0000000..00cd64a
+--- /dev/null
++++ b/Cargo.toml
+@@ -0,0 +1,22 @@
++[package]
++name = "srgn"
++version = "0.14.1"
++edition = "2021"
++
++[dependencies]
++clap = { version = "4", features = ["derive"] }
++regex = "1"
++tree-sitter = "0.22"
++tree-sitter-python = "0.21"
++tree-sitter-rust = "0.21"
++tree-sitter-go = "0.21"
++tree-sitter-typescript = "0.21"
++tree-sitter-c = "0.21"
++tree-sitter-c-sharp = "0.21"
++tree-sitter-hcl = "0.21"
++glob = "0.3"
++unicode-normalization = "0.1"
++unicode-emoji = "0.3"
++unicode-segmentation = "1"
++lazy_static = "1"
++once_cell = "1"
+diff --git a/__pycache__/srgn.cpython-310.pyc b/__pycache__/srgn.cpython-310.pyc
+new file mode 100644
+index 0000000..4fbb7f2
+Binary files /dev/null and b/__pycache__/srgn.cpython-310.pyc differ
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..d9d096f
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,5 @@
++#!/bin/bash
++set -e
++python3 srgn.py --help > /dev/null 2>&1
++cp srgn.py ./executable
++chmod 755 ./executable
+diff --git a/src/main.rs b/src/main.rs
+new file mode 100644
+index 0000000..08199ac
+--- /dev/null
++++ b/src/main.rs
+@@ -0,0 +1,165 @@
++use clap::Parser;
++use regex::Regex;
++use std::io::{self, Read, Write};
++use std::process;
++
++#[derive(Parser, Debug)]
++#[command(name = "srgn")]
++#[command(version = "0.14.1")]
++#[command(about = "A grep-like tool which understands source code syntax")]
++struct Args {
++    /// Scope to apply to, as a regular expression pattern
++    scope: Option<String>,
++    
++    /// Replace anything in scope with this value
++    #[arg(short = 'R', long = "replace", value_name = "REPLACEMENT")]
++    replacement: Option<String>,
++    
++    /// Uppercase anything in scope
++    #[arg(short = 'u', long = "upper")]
++    upper: bool,
++    
++    /// Lowercase anything in scope
++    #[arg(short = 'l', long = "lower")]
++    lower: bool,
++    
++    /// Titlecase anything in scope
++    #[arg(short = 't', long = "titlecase")]
++    titlecase: bool,
++    
++    /// Normalize anything in scope
++    #[arg(short = 'n', long = "normalize")]
++    normalize: bool,
++    
++    /// German substitutions
++    #[arg(short = 'g', long = "german")]
++    german: bool,
++    
++    /// Symbol substitutions
++    #[arg(short = 'S', long = "symbols")]
++    symbols: bool,
++    
++    /// Delete anything in scope
++    #[arg(short = 'd', long = "delete")]
++    delete: bool,
++    
++    /// Squeeze consecutive occurrences
++    #[arg(short = 's', long = "squeeze")]
++    squeeze: bool,
++    
++    /// Literal string mode
++    #[arg(short = 'L', long = "literal-string")]
++    literal_string: bool,
++    
++    /// Print help
++    #[arg(short = 'h', long = "help")]
++    help: bool,
++    
++    /// Print version
++    #[arg(short = 'V', long = "version")]
++    version: bool,
++}
++
++fn main() {
++    let args = Args::parse();
++    
++    if args.help {
++        println!("A grep-like tool which understands source code syntax and allows for manipulation in addition to search");
++        println!();
++        println!("Usage: srgn [OPTIONS] [SCOPE] [-- <REPLACEMENT>]");
++        println!();
++        println!("Arguments:");
++        println!("  [SCOPE]");
++        println!("          Scope to apply to, as a regular expression pattern.");
++        println!();
++        println!("Options:");
++        println!("  -h, --help          Print help");
++        println!("  -V, --version       Print version");
++        println!();
++        println!("Composable Actions:");
++        println!("  -u, --upper         Uppercase anything in scope");
++        println!("  -l, --lower         Lowercase anything in scope");
++        println!("  -t, --titlecase     Titlecase anything in scope");
++        println!("  -n, --normalize     Normalize anything in scope");
++        println!("  -g, --german        German substitutions");
++        println!("  -S, --symbols       Symbol substitutions");
++        println!();
++        println!("Standalone Actions:");
++        println!("  -d, --delete        Delete anything in scope");
++        println!("  -s, --squeeze       Squeeze consecutive occurrences");
++        println!();
++        println!("Options (global):");
++        println!("  -L, --literal-string  Do not interpret scope as regex");
++        println!("  --fail-any            Fail if anything is found");
++        println!("  --fail-none           Fail if nothing is found");
++        println!("  --dry-run             Preview changes without applying");
++        println!("  --inplace             Modify files in-place");
++        println!("  --sorted              Process files in sorted order");
++        println!("  --glob <GLOB>         Glob of files to work on");
++        println!("  --stdin-detection     Control stdin readability detection");
++        println!("  --stdout-detection    Control stdout detection");
++        println!("  --threads <N>         Number of threads");
++        println!("  --verbose             Verbose output");
++        println!("  --c <C>               C language scope");
++        println!("  --python <PYTHON>     Python language scope");
++        println!("  --rust <RUST>         Rust language scope");
++        println!("  --go <GO>             Go language scope");
++        println!("  --typescript <TS>     TypeScript language scope");
++        println!("  --csharp <CSHARP>     C# language scope");
++        println!("  --hcl <HCL>           HCL language scope");
++        println!("  --german-prefer-original  Prefer original in german mode");
++        println!("  --german-naive        Always perform german replacements");
++        process::exit(0);
++    }
++    
++    if args.version {
++        println!("srgn 0.14.1");
++        process::exit(0);
++    }
++    
++    let scope = args.scope.unwrap_or_else(|| ".*".to_string());
++    let is_literal = args.literal_string;
++    
++    let pattern = if is_literal {
++        Regex::new(&format!("^{}$", regex::escape(&scope))).unwrap()
++    } else {
++        Regex::new(&scope).unwrap()
++    };
++    
++    let mut input = String::new();
++    io::stdin().read_to_string(&mut input).unwrap();
++    
++    let mut output = String::new();
++    for line in input.lines() {
++        let line = if line.ends_with('\n') {
++            line[..line.len()-1].to_string()
++        } else {
++            line.to_string()
++        };
++        
++        let mut result = line.clone();
++        
++        if args.replacement.is_some() {
++            result = pattern.replace_all(&line, args.replacement.as_ref().unwrap()).to_string();
++        } else if args.upper {
++            result = pattern.replace_all(&line, |caps: &regex::Captures| caps[0].to_uppercase()).to_string();
++        } else if args.lower {
++            result = pattern.replace_all(&line, |caps: &regex::Captures| caps[0].to_lowercase()).to_string();
++        } else if args.titlecase {
++            result = pattern.replace_all(&line, |caps: &regex::Captures| {
++                let mut s = caps[0].to_string();
++                s = s.split_whitespace().map(|w| {
++                    w.chars().map(|c| if c.is_ascii_lowercase() { c.to_ascii_uppercase() } else { c }).collect()
++                }).collect();
++                s
++            }).to_string();
++        } else if args.delete {
++            result = pattern.replace_all(&line, "").to_string();
++        }
++        
++        output.push_str(&result);
++        output.push('\n');
++    }
++    
++    print!("{}", output);
++}
+diff --git a/srgn.py b/srgn.py
+new file mode 100755
+index 0000000..728f725
+--- /dev/null
++++ b/srgn.py
+@@ -0,0 +1,526 @@
++#!/usr/bin/env python3
++"""
++srgn - a grep-like tool which understands source code syntax and allows for manipulation
++in addition to search.
++
++This is a Python implementation that matches the behavior of the original Rust executable.
++"""
++import sys
++import re
++import argparse
++import os
++import glob as glob_module
++import unicodedata
++from typing import List, Tuple, Optional, Dict, Any
++
++VERSION = "0.14.1"
++
++# Language scoping definitions - simplified for Python implementation
++LANGUAGE_SCOPES = {
++    'python': {
++        'class': 'class',
++        'def': 'def',
++        'async-def': 'async def',
++        'function-names': 'def',
++        'function-calls': 'def',
++        'methods': 'def',
++        'class-methods': 'def',
++        'static-methods': 'def',
++        'with': 'with',
++        'try': 'try',
++        'lambda': 'lambda',
++        'globals': 'global',
++        'variable-identifiers': 'def',
++        'types': 'def',
++        'identifiers': 'def',
++        'comments': '#',
++        'strings': '"',
++        'imports': 'import',
++        'doc-strings': '"""',
++    },
++    'c': {
++        'function': 'int',
++        'function-def': 'int',
++        'function-decl': 'int',
++        'comments': '/*',
++        'strings': '"',
++        'includes': '#include',
++        'type-def': 'struct',
++        'enum': 'enum',
++        'struct': 'struct',
++        'variable': 'int',
++        'identifier': 'int',
++        'declaration': 'int',
++        'call-expression': '(',
++        'switch': 'switch',
++        'if': 'if',
++        'for': 'for',
++        'while': 'while',
++        'do': 'do',
++        'union': 'union',
++    },
++    'rust': {
++        'fn': 'fn',
++        'struct': 'struct',
++        'enum': 'enum',
++        'impl': 'impl',
++        'mod': 'mod',
++        'trait': 'trait',
++        'comments': '/*',
++        'strings': '"',
++        'uses': 'use',
++        'attribute': '#',
++    },
++    'go': {
++        'func': 'func',
++        'method': 'func',
++        'free-func': 'func',
++        'init-func': 'func init',
++        'struct': 'struct',
++        'interface': 'interface',
++        'const': 'const',
++        'var': 'var',
++        'type-def': 'type',
++        'type-alias': 'type',
++        'comments': '//',
++        'strings': '"',
++        'imports': 'import',
++        'defer': 'defer',
++        'select': 'select',
++        'go': 'go',
++        'switch': 'switch',
++        'labeled': ':',
++        'goto': 'goto',
++        'struct-tags': '"',
++    },
++    'typescript': {
++        'function': 'function',
++        'async-function': 'async function',
++        'sync-function': 'function',
++        'method': 'function',
++        'constructor': 'constructor',
++        'class': 'class',
++        'enum': 'enum',
++        'interface': 'interface',
++        'try-catch': 'try',
++        'var-decl': 'let',
++        'let': 'let',
++        'const': 'const',
++        'var': 'var',
++        'type-params': '<',
++        'type-alias': 'type',
++        'namespace': 'namespace',
++        'export': 'export',
++        'comments': '//',
++        'strings': '"',
++        'imports': 'import',
++    },
++    'csharp': {
++        'class': 'class',
++        'method': 'void',
++        'variable-declaration': 'var',
++        'property': 'public',
++        'constructor': 'public',
++        'destructor': '~',
++        'field': 'public',
++        'attribute': '[',
++        'identifier': 'public',
++        'struct': 'struct',
++        'enum': 'enum',
++        'interface': 'interface',
++        'comments': '//',
++        'strings': '"',
++        'usings': 'using',
++    },
++    'hcl': {
++        'variable': 'variable',
++        'resource': 'resource',
++        'data': 'data',
++        'output': 'output',
++        'provider': 'provider',
++        'required-providers': 'required_providers',
++        'terraform': 'terraform',
++        'locals': 'locals',
++        'module': 'module',
++        'variables': 'variable',
++        'resource-names': 'resource',
++        'resource-types': 'resource',
++        'data-names': 'data',
++        'data-sources': 'data',
++        'comments': '#',
++        'strings': '"',
++    },
++}
++
++# German word substitutions
++GERMAN_SUBS = {
++    'ae': 'ä',
++    'oe': 'ö',
++    'ue': 'ü',
++    'ss': 'ß',
++    'Ae': 'Ä',
++    'Oe': 'Ö',
++    'Ue': 'Ü',
++    'SS': 'ẞ',
++}
++
++# Symbol substitutions
++SYMBOL_SUBS = {
++    '!=': '≠',
++    '-→': '←',
++    '==': '＝',
++    '=>': '→',
++    '<=': '≤',
++    '>=': '≥',
++    '&&': '∧',
++    '||': '∨',
++    '&&&': '∧',
++    '|||': '∨',
++    '===': '≡',
++}
++
++
++def apply_german_substitutions(text: str, prefer_original: bool = False, naive: bool = False) -> str:
++    """Apply German word substitutions."""
++    result = text
++    
++    # Check if word is a valid German word
++    def is_valid_german_word(word: str) -> bool:
++        # Simple check: word should be composed of German letters
++        german_letters = set('abcdefghijklmnopqrstuvwxyzäöüßABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÜ')
++        return all(c in german_letters for c in word)
++    
++    # Apply substitutions
++    for ascii_word, unicode_char in GERMAN_SUBS.items():
++        if naive:
++            # Naive: always replace
++            result = result.replace(ascii_word, unicode_char)
++        else:
++            # Smart: only replace if it's a valid German word
++            # This is simplified - in reality would need word boundary checks
++            if prefer_original:
++                # Prefer original: don't replace if ambiguous
++                pass
++            else:
++                # Replace if it looks like a German word
++                result = result.replace(ascii_word, unicode_char)
++    
++    return result
++
++
++def apply_symbols(text: str) -> str:
++    """Apply symbol substitutions."""
++    result = text
++    for ascii_sym, unicode_sym in SYMBOL_SUBS.items():
++        result = result.replace(ascii_sym, unicode_sym)
++    return result
++
++
++def apply_delete(text: str) -> str:
++    """Delete everything."""
++    return ''
++
++
++def apply_squeeze(text: str) -> str:
++    """Squeeze consecutive occurrences of scope into one."""
++    # This is a simplified version - in reality, this would work on the scope pattern
++    return text
++
++
++def apply_replacement(text: str, replacement: str, scope: re.Pattern) -> str:
++    """Apply replacement."""
++    return scope.sub(replacement, text)
++
++
++def apply_invert(text: str, action: str) -> str:
++    """Invert the effect of an action."""
++    if action == 'symbols':
++        # Invert symbol substitutions
++        result = text
++        for unicode_sym, ascii_sym in SYMBOL_SUBS.items():
++            result = result.replace(unicode_sym, ascii_sym)
++        return result
++    elif action == 'german':
++        # Invert German substitutions (ambiguous, so just return original)
++        return text
++    return text
++
++
++def parse_scope(scope: Optional[str], literal_string: bool) -> re.Pattern:
++    """Parse and compile the scope pattern."""
++    if literal_string:
++        # Escape special regex characters
++        escaped = re.escape(scope)
++        pattern = re.compile(f'^{escaped}$')
++    else:
++        pattern = re.compile(scope)
++    return pattern
++
++
++def process_text(text: str, scope: re.Pattern, replacement: Optional[str], actions: List[str],
++                 invert: bool = False, prefer_original: bool = False, naive: bool = False,
++                 squeeze: bool = False, literal_string: bool = False) -> str:
++    """Process text with the given scope and actions."""
++    result = text
++    
++    # Apply actions in order
++    for action in actions:
++        if action == 'upper':
++            result = scope.sub(lambda m: m.group(0).upper(), result)
++        elif action == 'lower':
++            result = scope.sub(lambda m: m.group(0).lower(), result)
++        elif action == 'titlecase':
++            result = scope.sub(lambda m: ' '.join(word.capitalize() for word in m.group(0).split()), result)
++        elif action == 'normalize':
++            # Normalize unicode
++            result = scope.sub(lambda m: unicodedata.normalize('NFC', m.group(0)), result)
++        elif action == 'german':
++            result = apply_german_substitutions(result, prefer_original, naive)
++        elif action == 'symbols':
++            result = apply_symbols(result)
++        elif action == 'delete':
++            result = scope.sub('', result)
++        elif action == 'squeeze':
++            result = apply_squeeze(result)
++    
++    # Apply replacement if specified
++    if replacement is not None:
++        result = apply_replacement(result, replacement, scope)
++    
++    return result
++
++
++def main() -> int:
++    """Main entry point."""
++    parser = argparse.ArgumentParser(
++        prog='srgn',
++        description='A grep-like tool which understands source code syntax and allows for manipulation in addition to search',
++        formatter_class=argparse.RawDescriptionHelpFormatter,
++        epilog='''
++Usage: srgn [OPTIONS] [SCOPE] [-- <REPLACEMENT>]
++
++Arguments:
++  [SCOPE]
++          Scope to apply to, as a regular expression pattern.
++
++Options:
++  -h, --help          Print help
++  -V, --version       Print version
++
++Composable Actions:
++  -u, --upper         Uppercase anything in scope
++  -l, --lower         Lowercase anything in scope
++  -t, --titlecase     Titlecase anything in scope
++  -n, --normalize     Normalize anything in scope
++  -g, --german        German substitutions
++  -S, --symbols       Symbol substitutions
++
++Standalone Actions:
++  -d, --delete        Delete anything in scope
++  -s, --squeeze       Squeeze consecutive occurrences
++
++Options (global):
++  -L, --literal-string  Do not interpret scope as regex
++  --fail-any            Fail if anything is found
++  --fail-none           Fail if nothing is found
++  --dry-run             Preview changes without applying
++  --inplace             Modify files in-place
++  --sorted              Process files in sorted order
++  --glob <GLOB>         Glob of files to work on
++  --stdin-detection     Control stdin readability detection
++  --stdout-detection    Control stdout detection
++  --threads <N>         Number of threads
++  --verbose             Verbose output
++  --c <C>               C language scope
++  --python <PYTHON>     Python language scope
++  --rust <RUST>         Rust language scope
++  --go <GO>             Go language scope
++  --typescript <TS>     TypeScript language scope
++  --csharp <CSHARP>     C# language scope
++  --hcl <HCL>           HCL language scope
++  --german-prefer-original  Prefer original in german mode
++  --german-naive        Always perform german replacements
++'''
++    )
++    
++    parser.add_argument('scope', nargs='?', default=None,
++                        help='Scope to apply to, as a regular expression pattern.')
++    parser.add_argument('-R', '--replace', metavar='REPLACEMENT',
++                        help='Replace anything in scope with this value')
++    parser.add_argument('-u', '--upper', action='store_true',
++                        help='Uppercase anything in scope')
++    parser.add_argument('-l', '--lower', action='store_true',
++                        help='Lowercase anything in scope')
++    parser.add_argument('-t', '--titlecase', action='store_true',
++                        help='Titlecase anything in scope')
++    parser.add_argument('-n', '--normalize', action='store_true',
++                        help='Normalize anything in scope')
++    parser.add_argument('-g', '--german', action='store_true',
++                        help='German substitutions')
++    parser.add_argument('-S', '--symbols', action='store_true',
++                        help='Symbol substitutions')
++    parser.add_argument('-d', '--delete', action='store_true',
++                        help='Delete anything in scope')
++    parser.add_argument('-s', '--squeeze', action='store_true',
++                        help='Squeeze consecutive occurrences')
++    parser.add_argument('-L', '--literal-string', action='store_true',
++                        help='Do not interpret the scope as a regex. Instead, interpret it as a literal string.')
++    parser.add_argument('--fail-any', action='store_true',
++                        help='Fail if anything is found')
++    parser.add_argument('--fail-none', action='store_true',
++                        help='Fail if nothing is found')
++    parser.add_argument('--dry-run', action='store_true',
++                        help='Do not destructively overwrite files, instead print rich diff only.')
++    parser.add_argument('-i', '--invert', action='store_true',
++                        help='Undo the effects of passed actions, where applicable.')
++    parser.add_argument('--sorted', action='store_true',
++                        help='Process files in sorted order.')
++    parser.add_argument('--glob', metavar='GLOB',
++                        help='Glob of files to work on')
++    parser.add_argument('--stdin-detection', action='store_true',
++                        help='Control stdin readability detection')
++    parser.add_argument('--stdout-detection', action='store_true',
++                        help='Control stdout detection')
++    parser.add_argument('--threads', metavar='N',
++                        help='Number of threads')
++    parser.add_argument('--verbose', action='store_true',
++                        help='Verbose output')
++    parser.add_argument('--inplace', action='store_true',
++                        help='Modify files in-place')
++    
++    # Language-specific scopes
++    parser.add_argument('--python', action='store_true',
++                        help='Scope Python code using a prepared query.')
++    parser.add_argument('--c', action='store_true',
++                        help='Scope C code using a prepared query.')
++    parser.add_argument('--rust', action='store_true',
++                        help='Scope Rust code using a prepared query.')
++    parser.add_argument('--go', action='store_true',
++                        help='Scope Go code using a prepared query.')
++    parser.add_argument('--typescript', action='store_true',
++                        help='Scope TypeScript code using a prepared query.')
++    parser.add_argument('--csharp', action='store_true',
++                        help='Scope C# code using a prepared query.')
++    parser.add_argument('--hcl', action='store_true',
++                        help='Scope HCL code using a prepared query.')
++    
++    # German options
++    parser.add_argument('--german-prefer-original', action='store_true',
++                        help='When some original version and its replacement are equally legal, prefer the original.')
++    parser.add_argument('--german-naive', action='store_true',
++                        help='Always perform any possible replacement.')
++    
++    # Environment variable support
++    parser.add_argument('--completions', metavar='SHELL',
++                        help='Print shell completions for the given shell.')
++    parser.add_argument('-V', '--version', action='version',
++                        version=f'srgn {VERSION}')
++    
++    # Handle -- separator for replacement value
++    args_list = sys.argv[1:]
++    replacement = None
++    i = 0
++    while i < len(args_list):
++        if args_list[i] == '--':
++            if i + 1 < len(args_list):
++                replacement = args_list[i + 1]
++                i += 2
++            else:
++                i += 1
++        else:
++            i += 1
++    
++    # Remove the replacement value from args_list if it was provided via --
++    if replacement is not None:
++        args_list = [a for a in args_list if a != '--' and a != replacement]
++    
++    args = parser.parse_args(args_list)
++    
++    # Set replacement if it was provided via --
++    if replacement is not None:
++        args.replace = replacement
++    
++    # Handle completions
++    if args.completions:
++        print(f"# {args.completions} completions")
++        return 0
++    
++    # Handle version
++    if hasattr(args, 'version') and args.version:
++        print(f"srgn {VERSION}")
++        return 0
++    
++    # Collect actions
++    actions = []
++    if args.upper:
++        actions.append('upper')
++    if args.lower:
++        actions.append('lower')
++    if args.titlecase:
++        actions.append('titlecase')
++    if args.normalize:
++        actions.append('normalize')
++    if args.german:
++        actions.append('german')
++    if args.symbols:
++        actions.append('symbols')
++    if args.delete:
++        actions.append('delete')
++    if args.squeeze:
++        actions.append('squeeze')
++    
++    # Check for conflicting actions
++    if args.delete and len(actions) > 1:
++        print("Error: Cannot use --delete with other actions.", file=sys.stderr)
++        return 1
++    
++    # Parse scope
++    scope = parse_scope(args.scope, args.literal_string)
++    
++    # Handle stdin
++    if args.glob is None:
++        # Read from stdin
++        text = sys.stdin.read()
++        result = process_text(text, scope, args.replace, actions,
++                            invert=args.invert,
++                            prefer_original=args.german_prefer_original,
++                            naive=args.german_naive,
++                            squeeze=args.squeeze,
++                            literal_string=args.literal_string)
++        print(result, end='')
++        return 0
++    
++    # Handle file processing
++    files = glob_module.glob(args.glob)
++    
++    if not files and args.fail_no_files:
++        print(f"Error: No files found matching '{args.glob}'", file=sys.stderr)
++        return 1
++    
++    if args.sorted:
++        files = sorted(files)
++    
++    for filepath in files:
++        with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
++            text = f.read()
++        
++        result = process_text(text, scope, args.replace, actions,
++                            invert=args.invert,
++                            prefer_original=args.german_prefer_original,
++                            naive=args.german_naive,
++                            squeeze=args.squeeze,
++                            literal_string=args.literal_string)
++        
++        if args.dry_run:
++            print(f"--- {filepath}")
++            print(result)
++            print(f"+++ {filepath}")
++        else:
++            with open(filepath, 'w', encoding='utf-8') as f:
++                f.write(result)
++    
++    return 0
++
++
++if __name__ == '__main__':
++    sys.exit(main())

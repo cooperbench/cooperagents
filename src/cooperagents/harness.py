@@ -703,6 +703,7 @@ class UnifiedHarness:
                     time_limit_s=time_limit_s,
                     monitor=monitor,
                     git_share=spec.git_share,
+                    completion_gate=spec.completion_gate,
                 )
             agent = Agent(
                 agent_id=agent_id,
@@ -1014,6 +1015,17 @@ class UnifiedHarness:
                 integrated_patch = strip_test_sections(env.git_diff())
             finally:
                 env.cleanup()
+        elif not spec.seed_prior and len(member_patches) > 1 and spec.select_integration is not None:
+            # Iteration 7 completion (pre-submission merge arms): each agent's
+            # final tree ALREADY contains the merged team work and passed the
+            # completion gate; 3-way merging two both-merged trees re-creates
+            # the damage the gate just prevented (observed: tuijournal/fx i7
+            # regressions to 0 with zero gate rejections). Select the best
+            # tree mechanically instead of re-merging.
+            idx = spec.select_integration(member_patches)
+            integrated_patch = member_patches[idx]
+            print(f"[harness] integration=selected chosen={idx} "
+                  f"sizes={[len(p) for p in member_patches]}")
         elif not spec.seed_prior and len(member_patches) > 1:
             # No-seed without an LLM integrator: mechanically merge the independent
             # member patches in a fresh container. A real 3-way merge goes first —

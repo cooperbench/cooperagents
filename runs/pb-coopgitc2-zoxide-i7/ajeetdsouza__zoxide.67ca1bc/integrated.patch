@@ -1,0 +1,940 @@
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..6c0e168
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,7 @@
++#!/bin/bash
++set -e
++
++# Compile zoxide
++gcc -o zoxide zoxide.c -Wall -Wextra -O2
++
++echo "Build successful: ./zoxide"
+diff --git a/patch.txt b/patch.txt
+new file mode 100644
+index 0000000..adb3a68
+--- /dev/null
++++ b/patch.txt
+@@ -0,0 +1,465 @@
++diff --git a/compile.sh b/compile.sh
++new file mode 100755
++index 0000000..6c0e168
++--- /dev/null
+++++ b/compile.sh
++@@ -0,0 +1,7 @@
+++#!/bin/bash
+++set -e
+++
+++# Compile zoxide
+++gcc -o zoxide zoxide.c -Wall -Wextra -O2
+++
+++echo "Build successful: ./zoxide"
++diff --git a/zoxide.c b/zoxide.c
++new file mode 100644
++index 0000000..5f5a574
++--- /dev/null
+++++ b/zoxide.c
++@@ -0,0 +1,446 @@
+++#include <stdio.h>
+++#include <stdlib.h>
+++#include <string.h>
+++#include <unistd.h>
+++#include <sys/stat.h>
+++#include <sys/types.h>
+++#include <dirent.h>
+++#include <pwd.h>
+++#include <errno.h>
+++#include <libgen.h>
+++#include <getopt.h>
+++#include <time.h>
+++
+++#define VERSION "0.0.0"
+++#define DEFAULT_MAXAGE 10000
+++#define DEFAULT_DATA_DIR "~/.local/share/zoxide"
+++
+++typedef struct {
+++    char *path;
+++    long score;
+++    long last_access;
+++} Entry;
+++
+++typedef struct {
+++    Entry *entries;
+++    int count;
+++    int capacity;
+++} Database;
+++
+++static char *get_data_dir(void) {
+++    static char data_dir[PATH_MAX];
+++    char *home = getenv("HOME");
+++    if (home) {
+++        snprintf(data_dir, sizeof(data_dir), "%s/.local/share/zoxide", home);
+++    } else {
+++        snprintf(data_dir, sizeof(data_dir), "%s", DEFAULT_DATA_DIR);
+++    }
+++    return data_dir;
+++}
+++
+++static char *get_db_path(void) {
+++    static char db_path[PATH_MAX];
+++    char *data_dir = get_data_dir();
+++    snprintf(db_path, sizeof(db_path), "%s/db", data_dir);
+++    return db_path;
+++}
+++
+++static Database *db_create(void) {
+++    Database *db = malloc(sizeof(Database));
+++    db->entries = NULL;
+++    db->count = 0;
+++    db->capacity = 0;
+++    return db;
+++}
+++
+++static void db_free(Database *db) {
+++    if (db) {
+++        for (int i = 0; i < db->count; i++) {
+++            free(db->entries[i].path);
+++        }
+++        free(db->entries);
+++        free(db);
+++    }
+++}
+++
+++static int db_add(Database *db, const char *path, long score, long last_access) {
+++    if (db->count >= db->capacity) {
+++        int new_capacity = db->capacity == 0 ? 100 : db->capacity * 2;
+++        Entry *new_entries = realloc(db->entries, new_capacity * sizeof(Entry));
+++        if (!new_entries) return -1;
+++        db->entries = new_entries;
+++        db->capacity = new_capacity;
+++    }
+++    
+++    db->entries[db->count].path = strdup(path);
+++    db->entries[db->count].score = score;
+++    db->entries[db->count].last_access = last_access;
+++    db->count++;
+++    return 0;
+++}
+++
+++static int db_load(Database *db, const char *db_path) {
+++    FILE *f = fopen(db_path, "r");
+++    if (!f) {
+++        // Create empty database if file doesn't exist
+++        return 0;
+++    }
+++    
+++    char line[1024];
+++    while (fgets(line, sizeof(line), f)) {
+++        char *path = line;
+++        char *score_str = strchr(line, ' ');
+++        if (!score_str) continue;
+++        *score_str = '\0';
+++        score_str++;
+++        
+++        char *last_access_str = strchr(score_str, ' ');
+++        if (!last_access_str) continue;
+++        *last_access_str = '\0';
+++        
+++        long score = atol(score_str);
+++        long last_access = atol(last_access_str + 1);
+++        
+++        db_add(db, path, score, last_access);
+++    }
+++    
+++    fclose(f);
+++    return 0;
+++}
+++
+++static int db_save(Database *db, const char *db_path) {
+++    FILE *f = fopen(db_path, "w");
+++    if (!f) return -1;
+++    
+++    for (int i = 0; i < db->count; i++) {
+++        fprintf(f, "%s %ld %ld\n", 
+++                db->entries[i].path,
+++                db->entries[i].score,
+++                db->entries[i].last_access);
+++    }
+++    
+++    fclose(f);
+++    return 0;
+++}
+++
+++static int is_directory(const char *path) {
+++    struct stat st;
+++    if (stat(path, &st) != 0) return 0;
+++    return S_ISDIR(st.st_mode);
+++}
+++
+++static char *normalize_path(const char *path) {
+++    char *resolved = realpath(path, NULL);
+++    if (!resolved) {
+++        char *copy = strdup(path);
+++        return copy;
+++    }
+++    return resolved;
+++}
+++
+++static long compute_score(const char *path, long last_access) {
+++    struct stat st;
+++    if (stat(path, &st) != 0) return 0;
+++    
+++    long now = time(NULL);
+++    long age = now - last_access;
+++    
+++    // Score based on recency and frequency
+++    long score = (long)(1000000000000000.0 / (age + 1));
+++    return score;
+++}
+++
+++static int find_best_match(const char *query, Database *db) {
+++    long best_score = 0;
+++    int best_idx = -1;
+++    
+++    for (int i = 0; i < db->count; i++) {
+++        const char *path = db->entries[i].path;
+++        long score = 0;
+++        
+++        // Check for prefix match
+++        if (strncmp(path, query, strlen(query)) == 0) {
+++            score = db->entries[i].score;
+++        } else {
+++            // Check for substring match
+++            char *p = strstr(path, query);
+++            if (p) {
+++                score = db->entries[i].score;
+++            }
+++        }
+++        
+++        if (score > best_score) {
+++            best_score = score;
+++            best_idx = i;
+++        }
+++    }
+++    
+++    return best_idx;
+++}
+++
+++static void print_usage(const char *prog) {
+++    fprintf(stderr, "Usage: %s <command> [options]\n", prog);
+++    fprintf(stderr, "\nCommands:\n");
+++    fprintf(stderr, "  add <path>              Add a directory to the database\n");
+++    fprintf(stderr, "  query <query>           Search for a directory\n");
+++    fprintf(stderr, "  remove <path>           Remove a directory from the database\n");
+++    fprintf(stderr, "  init <shell>            Generate shell configuration\n");
+++    fprintf(stderr, "  import --from=<app>     Import from another application\n");
+++    fprintf(stderr, "  --help                  Show this help message\n");
+++    fprintf(stderr, "  --version               Show version\n");
+++}
+++
+++static void print_version(void) {
+++    printf("zoxide version %s\n", VERSION);
+++}
+++
+++static int cmd_add(const char *path) {
+++    char *norm_path = normalize_path(path);
+++    if (!norm_path) {
+++        fprintf(stderr, "Error: Cannot resolve path\n");
+++        return 1;
+++    }
+++    
+++    if (!is_directory(norm_path)) {
+++        fprintf(stderr, "Error: Not a directory\n");
+++        free(norm_path);
+++        return 1;
+++    }
+++    
+++    char *data_dir = get_data_dir();
+++    char db_path[PATH_MAX];
+++    snprintf(db_path, sizeof(db_path), "%s/db", data_dir);
+++    
+++    Database *db = db_create();
+++    if (db_load(db, db_path) != 0) {
+++        db_free(db);
+++        fprintf(stderr, "Error: Cannot open database\n");
+++        free(norm_path);
+++        return 1;
+++    }
+++    
+++    long now = time(NULL);
+++    long score = compute_score(norm_path, now);
+++    
+++    if (db_add(db, norm_path, score, now) != 0) {
+++        db_free(db);
+++        free(norm_path);
+++        fprintf(stderr, "Error: Cannot add to database\n");
+++        return 1;
+++    }
+++    
+++    if (db_save(db, db_path) != 0) {
+++        db_free(db);
+++        free(norm_path);
+++        fprintf(stderr, "Error: Cannot save database\n");
+++        return 1;
+++    }
+++    
+++    db_free(db);
+++    free(norm_path);
+++    return 0;
+++}
+++
+++static int cmd_query(const char *query) {
+++    if (!query || strlen(query) == 0) {
+++        fprintf(stderr, "Error: Query cannot be empty\n");
+++        return 1;
+++    }
+++    
+++    char *data_dir = get_data_dir();
+++    char db_path[PATH_MAX];
+++    snprintf(db_path, sizeof(db_path), "%s/db", data_dir);
+++    
+++    Database *db = db_create();
+++    if (db_load(db, db_path) != 0) {
+++        db_free(db);
+++        fprintf(stderr, "Error: Cannot open database\n");
+++        return 1;
+++    }
+++    
+++    int idx = find_best_match(query, db);
+++    if (idx < 0) {
+++        db_free(db);
+++        fprintf(stderr, "Error: No matching directory found\n");
+++        return 1;
+++    }
+++    
+++    const char *path = db->entries[idx].path;
+++    printf("%s\n", path);
+++    
+++    db_free(db);
+++    return 0;
+++}
+++
+++static int cmd_remove(const char *path) {
+++    char *norm_path = normalize_path(path);
+++    if (!norm_path) {
+++        fprintf(stderr, "Error: Cannot resolve path\n");
+++        return 1;
+++    }
+++    
+++    char *data_dir = get_data_dir();
+++    char db_path[PATH_MAX];
+++    snprintf(db_path, sizeof(db_path), "%s/db", data_dir);
+++    
+++    Database *db = db_create();
+++    if (db_load(db, db_path) != 0) {
+++        db_free(db);
+++        fprintf(stderr, "Error: Cannot open database\n");
+++        free(norm_path);
+++        return 1;
+++    }
+++    
+++    int found = 0;
+++    int new_count = 0;
+++    for (int i = 0; i < db->count; i++) {
+++        if (strcmp(db->entries[i].path, norm_path) == 0) {
+++            found = 1;
+++        } else {
+++            db->entries[new_count++] = db->entries[i];
+++        }
+++    }
+++    
+++    if (!found) {
+++        db_free(db);
+++        free(norm_path);
+++        fprintf(stderr, "Error: Directory not found in database\n");
+++        return 1;
+++    }
+++    
+++    db->count = new_count;
+++    db->entries = realloc(db->entries, new_count * sizeof(Entry));
+++    
+++    if (db_save(db, db_path) != 0) {
+++        db_free(db);
+++        free(norm_path);
+++        fprintf(stderr, "Error: Cannot save database\n");
+++        return 1;
+++    }
+++    
+++    db_free(db);
+++    free(norm_path);
+++    return 0;
+++}
+++
+++static int cmd_init(const char *shell) {
+++    if (!shell) {
+++        fprintf(stderr, "Error: Shell type required\n");
+++        return 1;
+++    }
+++    
+++    if (strcmp(shell, "bash") == 0) {
+++        printf("eval \"$(zoxide init bash)\"\n");
+++    } else if (strcmp(shell, "zsh") == 0) {
+++        printf("eval \"$(zoxide init zsh)\"\n");
+++    } else if (strcmp(shell, "fish") == 0) {
+++        printf("zoxide init fish | source\n");
+++    } else if (strcmp(shell, "posix") == 0) {
+++        printf("eval \"$(zoxide init posix --hook prompt)\"\n");
+++    } else {
+++        fprintf(stderr, "Error: Unknown shell: %s\n", shell);
+++        return 1;
+++    }
+++    
+++    return 0;
+++}
+++
+++static int cmd_import(const char *from, const char *path) {
+++    if (!from || !path) {
+++        fprintf(stderr, "Error: --from=<app> and <path> required\n");
+++        return 1;
+++    }
+++    
+++    char *data_dir = get_data_dir();
+++    char db_path[PATH_MAX];
+++    snprintf(db_path, sizeof(db_path), "%s/db", data_dir);
+++    
+++    Database *db = db_create();
+++    if (db_load(db, db_path) != 0) {
+++        db_free(db);
+++        fprintf(stderr, "Error: Cannot open database\n");
+++        return 1;
+++    }
+++    
+++    // Simple import - just add the path
+++    long now = time(NULL);
+++    long score = compute_score(path, now);
+++    
+++    if (db_add(db, path, score, now) != 0) {
+++        db_free(db);
+++        fprintf(stderr, "Error: Cannot add to database\n");
+++        return 1;
+++    }
+++    
+++    if (db_save(db, db_path) != 0) {
+++        db_free(db);
+++        fprintf(stderr, "Error: Cannot save database\n");
+++        return 1;
+++    }
+++    
+++    db_free(db);
+++    return 0;
+++}
+++
+++int main(int argc, char *argv[]) {
+++    if (argc < 2) {
+++        print_usage(argv[0]);
+++        return 1;
+++    }
+++    
+++    const char *cmd = argv[1];
+++    
+++    if (strcmp(cmd, "--help") == 0) {
+++        print_usage(argv[0]);
+++        return 0;
+++    }
+++    
+++    if (strcmp(cmd, "--version") == 0) {
+++        print_version();
+++        return 0;
+++    }
+++    
+++    if (strcmp(cmd, "add") == 0) {
+++        if (argc < 3) {
+++            fprintf(stderr, "Error: Path required\n");
+++            return 1;
+++        }
+++        return cmd_add(argv[2]);
+++    }
+++    
+++    if (strcmp(cmd, "query") == 0) {
+++        if (argc < 3) {
+++            fprintf(stderr, "Error: Query required\n");
+++            return 1;
+++        }
+++        return cmd_query(argv[2]);
+++    }
+++    
+++    if (strcmp(cmd, "remove") == 0) {
+++        if (argc < 3) {
+++            fprintf(stderr, "Error: Path required\n");
+++            return 1;
+++        }
+++        return cmd_remove(argv[2]);
+++    }
+++    
+++    if (strcmp(cmd, "init") == 0) {
+++        if (argc < 3) {
+++            fprintf(stderr, "Error: Shell type required\n");
+++            return 1;
+++        }
+++        return cmd_init(argv[2]);
+++    }
+++    
+++    if (strcmp(cmd, "import") == 0) {
+++        if (argc < 4) {
+++            fprintf(stderr, "Error: --from=<app> and <path> required\n");
+++            return 1;
+++        }
+++        return cmd_import(argv[2], argv[3]);
+++    }
+++    
+++    fprintf(stderr, "Error: Unknown command: %s\n", cmd);
+++    print_usage(argv[0]);
+++    return 1;
+++}
+diff --git a/zoxide b/zoxide
+new file mode 100755
+index 0000000..13ef7e6
+Binary files /dev/null and b/zoxide differ
+diff --git a/zoxide.c b/zoxide.c
+new file mode 100644
+index 0000000..5f5a574
+--- /dev/null
++++ b/zoxide.c
+@@ -0,0 +1,446 @@
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++#include <sys/stat.h>
++#include <sys/types.h>
++#include <dirent.h>
++#include <pwd.h>
++#include <errno.h>
++#include <libgen.h>
++#include <getopt.h>
++#include <time.h>
++
++#define VERSION "0.0.0"
++#define DEFAULT_MAXAGE 10000
++#define DEFAULT_DATA_DIR "~/.local/share/zoxide"
++
++typedef struct {
++    char *path;
++    long score;
++    long last_access;
++} Entry;
++
++typedef struct {
++    Entry *entries;
++    int count;
++    int capacity;
++} Database;
++
++static char *get_data_dir(void) {
++    static char data_dir[PATH_MAX];
++    char *home = getenv("HOME");
++    if (home) {
++        snprintf(data_dir, sizeof(data_dir), "%s/.local/share/zoxide", home);
++    } else {
++        snprintf(data_dir, sizeof(data_dir), "%s", DEFAULT_DATA_DIR);
++    }
++    return data_dir;
++}
++
++static char *get_db_path(void) {
++    static char db_path[PATH_MAX];
++    char *data_dir = get_data_dir();
++    snprintf(db_path, sizeof(db_path), "%s/db", data_dir);
++    return db_path;
++}
++
++static Database *db_create(void) {
++    Database *db = malloc(sizeof(Database));
++    db->entries = NULL;
++    db->count = 0;
++    db->capacity = 0;
++    return db;
++}
++
++static void db_free(Database *db) {
++    if (db) {
++        for (int i = 0; i < db->count; i++) {
++            free(db->entries[i].path);
++        }
++        free(db->entries);
++        free(db);
++    }
++}
++
++static int db_add(Database *db, const char *path, long score, long last_access) {
++    if (db->count >= db->capacity) {
++        int new_capacity = db->capacity == 0 ? 100 : db->capacity * 2;
++        Entry *new_entries = realloc(db->entries, new_capacity * sizeof(Entry));
++        if (!new_entries) return -1;
++        db->entries = new_entries;
++        db->capacity = new_capacity;
++    }
++    
++    db->entries[db->count].path = strdup(path);
++    db->entries[db->count].score = score;
++    db->entries[db->count].last_access = last_access;
++    db->count++;
++    return 0;
++}
++
++static int db_load(Database *db, const char *db_path) {
++    FILE *f = fopen(db_path, "r");
++    if (!f) {
++        // Create empty database if file doesn't exist
++        return 0;
++    }
++    
++    char line[1024];
++    while (fgets(line, sizeof(line), f)) {
++        char *path = line;
++        char *score_str = strchr(line, ' ');
++        if (!score_str) continue;
++        *score_str = '\0';
++        score_str++;
++        
++        char *last_access_str = strchr(score_str, ' ');
++        if (!last_access_str) continue;
++        *last_access_str = '\0';
++        
++        long score = atol(score_str);
++        long last_access = atol(last_access_str + 1);
++        
++        db_add(db, path, score, last_access);
++    }
++    
++    fclose(f);
++    return 0;
++}
++
++static int db_save(Database *db, const char *db_path) {
++    FILE *f = fopen(db_path, "w");
++    if (!f) return -1;
++    
++    for (int i = 0; i < db->count; i++) {
++        fprintf(f, "%s %ld %ld\n", 
++                db->entries[i].path,
++                db->entries[i].score,
++                db->entries[i].last_access);
++    }
++    
++    fclose(f);
++    return 0;
++}
++
++static int is_directory(const char *path) {
++    struct stat st;
++    if (stat(path, &st) != 0) return 0;
++    return S_ISDIR(st.st_mode);
++}
++
++static char *normalize_path(const char *path) {
++    char *resolved = realpath(path, NULL);
++    if (!resolved) {
++        char *copy = strdup(path);
++        return copy;
++    }
++    return resolved;
++}
++
++static long compute_score(const char *path, long last_access) {
++    struct stat st;
++    if (stat(path, &st) != 0) return 0;
++    
++    long now = time(NULL);
++    long age = now - last_access;
++    
++    // Score based on recency and frequency
++    long score = (long)(1000000000000000.0 / (age + 1));
++    return score;
++}
++
++static int find_best_match(const char *query, Database *db) {
++    long best_score = 0;
++    int best_idx = -1;
++    
++    for (int i = 0; i < db->count; i++) {
++        const char *path = db->entries[i].path;
++        long score = 0;
++        
++        // Check for prefix match
++        if (strncmp(path, query, strlen(query)) == 0) {
++            score = db->entries[i].score;
++        } else {
++            // Check for substring match
++            char *p = strstr(path, query);
++            if (p) {
++                score = db->entries[i].score;
++            }
++        }
++        
++        if (score > best_score) {
++            best_score = score;
++            best_idx = i;
++        }
++    }
++    
++    return best_idx;
++}
++
++static void print_usage(const char *prog) {
++    fprintf(stderr, "Usage: %s <command> [options]\n", prog);
++    fprintf(stderr, "\nCommands:\n");
++    fprintf(stderr, "  add <path>              Add a directory to the database\n");
++    fprintf(stderr, "  query <query>           Search for a directory\n");
++    fprintf(stderr, "  remove <path>           Remove a directory from the database\n");
++    fprintf(stderr, "  init <shell>            Generate shell configuration\n");
++    fprintf(stderr, "  import --from=<app>     Import from another application\n");
++    fprintf(stderr, "  --help                  Show this help message\n");
++    fprintf(stderr, "  --version               Show version\n");
++}
++
++static void print_version(void) {
++    printf("zoxide version %s\n", VERSION);
++}
++
++static int cmd_add(const char *path) {
++    char *norm_path = normalize_path(path);
++    if (!norm_path) {
++        fprintf(stderr, "Error: Cannot resolve path\n");
++        return 1;
++    }
++    
++    if (!is_directory(norm_path)) {
++        fprintf(stderr, "Error: Not a directory\n");
++        free(norm_path);
++        return 1;
++    }
++    
++    char *data_dir = get_data_dir();
++    char db_path[PATH_MAX];
++    snprintf(db_path, sizeof(db_path), "%s/db", data_dir);
++    
++    Database *db = db_create();
++    if (db_load(db, db_path) != 0) {
++        db_free(db);
++        fprintf(stderr, "Error: Cannot open database\n");
++        free(norm_path);
++        return 1;
++    }
++    
++    long now = time(NULL);
++    long score = compute_score(norm_path, now);
++    
++    if (db_add(db, norm_path, score, now) != 0) {
++        db_free(db);
++        free(norm_path);
++        fprintf(stderr, "Error: Cannot add to database\n");
++        return 1;
++    }
++    
++    if (db_save(db, db_path) != 0) {
++        db_free(db);
++        free(norm_path);
++        fprintf(stderr, "Error: Cannot save database\n");
++        return 1;
++    }
++    
++    db_free(db);
++    free(norm_path);
++    return 0;
++}
++
++static int cmd_query(const char *query) {
++    if (!query || strlen(query) == 0) {
++        fprintf(stderr, "Error: Query cannot be empty\n");
++        return 1;
++    }
++    
++    char *data_dir = get_data_dir();
++    char db_path[PATH_MAX];
++    snprintf(db_path, sizeof(db_path), "%s/db", data_dir);
++    
++    Database *db = db_create();
++    if (db_load(db, db_path) != 0) {
++        db_free(db);
++        fprintf(stderr, "Error: Cannot open database\n");
++        return 1;
++    }
++    
++    int idx = find_best_match(query, db);
++    if (idx < 0) {
++        db_free(db);
++        fprintf(stderr, "Error: No matching directory found\n");
++        return 1;
++    }
++    
++    const char *path = db->entries[idx].path;
++    printf("%s\n", path);
++    
++    db_free(db);
++    return 0;
++}
++
++static int cmd_remove(const char *path) {
++    char *norm_path = normalize_path(path);
++    if (!norm_path) {
++        fprintf(stderr, "Error: Cannot resolve path\n");
++        return 1;
++    }
++    
++    char *data_dir = get_data_dir();
++    char db_path[PATH_MAX];
++    snprintf(db_path, sizeof(db_path), "%s/db", data_dir);
++    
++    Database *db = db_create();
++    if (db_load(db, db_path) != 0) {
++        db_free(db);
++        fprintf(stderr, "Error: Cannot open database\n");
++        free(norm_path);
++        return 1;
++    }
++    
++    int found = 0;
++    int new_count = 0;
++    for (int i = 0; i < db->count; i++) {
++        if (strcmp(db->entries[i].path, norm_path) == 0) {
++            found = 1;
++        } else {
++            db->entries[new_count++] = db->entries[i];
++        }
++    }
++    
++    if (!found) {
++        db_free(db);
++        free(norm_path);
++        fprintf(stderr, "Error: Directory not found in database\n");
++        return 1;
++    }
++    
++    db->count = new_count;
++    db->entries = realloc(db->entries, new_count * sizeof(Entry));
++    
++    if (db_save(db, db_path) != 0) {
++        db_free(db);
++        free(norm_path);
++        fprintf(stderr, "Error: Cannot save database\n");
++        return 1;
++    }
++    
++    db_free(db);
++    free(norm_path);
++    return 0;
++}
++
++static int cmd_init(const char *shell) {
++    if (!shell) {
++        fprintf(stderr, "Error: Shell type required\n");
++        return 1;
++    }
++    
++    if (strcmp(shell, "bash") == 0) {
++        printf("eval \"$(zoxide init bash)\"\n");
++    } else if (strcmp(shell, "zsh") == 0) {
++        printf("eval \"$(zoxide init zsh)\"\n");
++    } else if (strcmp(shell, "fish") == 0) {
++        printf("zoxide init fish | source\n");
++    } else if (strcmp(shell, "posix") == 0) {
++        printf("eval \"$(zoxide init posix --hook prompt)\"\n");
++    } else {
++        fprintf(stderr, "Error: Unknown shell: %s\n", shell);
++        return 1;
++    }
++    
++    return 0;
++}
++
++static int cmd_import(const char *from, const char *path) {
++    if (!from || !path) {
++        fprintf(stderr, "Error: --from=<app> and <path> required\n");
++        return 1;
++    }
++    
++    char *data_dir = get_data_dir();
++    char db_path[PATH_MAX];
++    snprintf(db_path, sizeof(db_path), "%s/db", data_dir);
++    
++    Database *db = db_create();
++    if (db_load(db, db_path) != 0) {
++        db_free(db);
++        fprintf(stderr, "Error: Cannot open database\n");
++        return 1;
++    }
++    
++    // Simple import - just add the path
++    long now = time(NULL);
++    long score = compute_score(path, now);
++    
++    if (db_add(db, path, score, now) != 0) {
++        db_free(db);
++        fprintf(stderr, "Error: Cannot add to database\n");
++        return 1;
++    }
++    
++    if (db_save(db, db_path) != 0) {
++        db_free(db);
++        fprintf(stderr, "Error: Cannot save database\n");
++        return 1;
++    }
++    
++    db_free(db);
++    return 0;
++}
++
++int main(int argc, char *argv[]) {
++    if (argc < 2) {
++        print_usage(argv[0]);
++        return 1;
++    }
++    
++    const char *cmd = argv[1];
++    
++    if (strcmp(cmd, "--help") == 0) {
++        print_usage(argv[0]);
++        return 0;
++    }
++    
++    if (strcmp(cmd, "--version") == 0) {
++        print_version();
++        return 0;
++    }
++    
++    if (strcmp(cmd, "add") == 0) {
++        if (argc < 3) {
++            fprintf(stderr, "Error: Path required\n");
++            return 1;
++        }
++        return cmd_add(argv[2]);
++    }
++    
++    if (strcmp(cmd, "query") == 0) {
++        if (argc < 3) {
++            fprintf(stderr, "Error: Query required\n");
++            return 1;
++        }
++        return cmd_query(argv[2]);
++    }
++    
++    if (strcmp(cmd, "remove") == 0) {
++        if (argc < 3) {
++            fprintf(stderr, "Error: Path required\n");
++            return 1;
++        }
++        return cmd_remove(argv[2]);
++    }
++    
++    if (strcmp(cmd, "init") == 0) {
++        if (argc < 3) {
++            fprintf(stderr, "Error: Shell type required\n");
++            return 1;
++        }
++        return cmd_init(argv[2]);
++    }
++    
++    if (strcmp(cmd, "import") == 0) {
++        if (argc < 4) {
++            fprintf(stderr, "Error: --from=<app> and <path> required\n");
++            return 1;
++        }
++        return cmd_import(argv[2], argv[3]);
++    }
++    
++    fprintf(stderr, "Error: Unknown command: %s\n", cmd);
++    print_usage(argv[0]);
++    return 1;
++}

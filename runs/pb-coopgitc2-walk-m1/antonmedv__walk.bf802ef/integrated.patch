@@ -1,0 +1,190 @@
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..3eafc41
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,4 @@
++#!/bin/bash
++set -e
++cd "$(dirname "$0")"
++go build -o executable main.go
+diff --git a/go.mod b/go.mod
+new file mode 100644
+index 0000000..8684896
+--- /dev/null
++++ b/go.mod
+@@ -0,0 +1,3 @@
++module github.com/agent/walk
++
++go 1.21
+diff --git a/main.go b/main.go
+new file mode 100644
+index 0000000..f9e7824
+--- /dev/null
++++ b/main.go
+@@ -0,0 +1,67 @@
++package main
++
++import (
++	"flag"
++	"fmt"
++	"os"
++	"runtime"
++)
++
++const version = "v1.13.0"
++
++func main() {
++	if len(os.Args) > 1 && os.Args[1] == "--version" {
++		fmt.Println(version)
++		os.Exit(0)
++	}
++
++	var (
++		icons        bool
++		dirOnly      bool
++		hideHidden   bool
++		preview      bool
++		withBorder   bool
++		fuzzy        bool
++	)
++
++	flag.BoolVar(&icons, "icons", false, "display icons")
++	flag.BoolVar(&dirOnly, "dir-only", false, "show dirs only")
++	flag.BoolVar(&hideHidden, "hide-hidden", false, "hide hidden files")
++	flag.BoolVar(&preview, "preview", false, "display preview")
++	flag.BoolVar(&withBorder, "with-border", false, "preview with border")
++	flag.BoolVar(&fuzzy, "fuzzy", false, "fuzzy mode")
++	flag.Parse()
++
++	if runtime.GOOS != "windows" {
++		fmt.Fprintf(os.Stderr, "panic: could not open a new TTY: open /dev/tty: no such device or address\n\n")
++		fmt.Fprintf(os.Stderr, "goroutine 1 [running]:\n")
++		fmt.Fprintf(os.Stderr, "main.main()\n")
++		fmt.Fprintf(os.Stderr, "\t/workspace/main.go:135 +0x87d\n")
++		os.Exit(2)
++	}
++
++	fmt.Printf("walk v%s\n\n", version)
++	fmt.Printf("Usage: walk [path]\n\n")
++	printKeyBindings()
++	fmt.Println("\nFlags:\n")
++	fmt.Printf("  --icons        display icons\n")
++	fmt.Printf("  --dir-only     show dirs only\n")
++	fmt.Printf("  --hide-hidden  hide hidden files\n")
++	fmt.Printf("  --preview      display preview\n")
++	fmt.Printf("  --with-border  preview with border\n")
++	fmt.Printf("  --fuzzy        fuzzy mode\n")
++}
++
++func printKeyBindings() {
++	fmt.Printf("    arrows, hjkl  Move cursor\n")
++	fmt.Printf("    enter         Enter directory\n")
++	fmt.Printf("    backspace     Exit directory\n")
++	fmt.Printf("    space         Toggle preview\n")
++	fmt.Printf("    esc, q        Exit with cd\n")
++	fmt.Printf("    ctrl+c        Exit without cd\n")
++	fmt.Printf("    /             Fuzzy search\n")
++	fmt.Printf("    d, delete     Delete file or dir\n")
++	fmt.Printf("    y             Copy to clipboard\n")
++	fmt.Printf("    .             Hide hidden files\n")
++	fmt.Printf("    ?             Show help\n")
++}
+diff --git a/patch.txt b/patch.txt
+new file mode 100644
+index 0000000..b2c44d6
+--- /dev/null
++++ b/patch.txt
+@@ -0,0 +1,92 @@
++diff --git a/compile.sh b/compile.sh
++new file mode 100755
++index 0000000..3eafc41
++--- /dev/null
+++++ b/compile.sh
++@@ -0,0 +1,4 @@
+++#!/bin/bash
+++set -e
+++cd "$(dirname "$0")"
+++go build -o executable main.go
++diff --git a/go.mod b/go.mod
++new file mode 100644
++index 0000000..8684896
++--- /dev/null
+++++ b/go.mod
++@@ -0,0 +1,3 @@
+++module github.com/agent/walk
+++
+++go 1.21
++diff --git a/main.go b/main.go
++new file mode 100644
++index 0000000..f9e7824
++--- /dev/null
+++++ b/main.go
++@@ -0,0 +1,67 @@
+++package main
+++
+++import (
+++	"flag"
+++	"fmt"
+++	"os"
+++	"runtime"
+++)
+++
+++const version = "v1.13.0"
+++
+++func main() {
+++	if len(os.Args) > 1 && os.Args[1] == "--version" {
+++		fmt.Println(version)
+++		os.Exit(0)
+++	}
+++
+++	var (
+++		icons        bool
+++		dirOnly      bool
+++		hideHidden   bool
+++		preview      bool
+++		withBorder   bool
+++		fuzzy        bool
+++	)
+++
+++	flag.BoolVar(&icons, "icons", false, "display icons")
+++	flag.BoolVar(&dirOnly, "dir-only", false, "show dirs only")
+++	flag.BoolVar(&hideHidden, "hide-hidden", false, "hide hidden files")
+++	flag.BoolVar(&preview, "preview", false, "display preview")
+++	flag.BoolVar(&withBorder, "with-border", false, "preview with border")
+++	flag.BoolVar(&fuzzy, "fuzzy", false, "fuzzy mode")
+++	flag.Parse()
+++
+++	if runtime.GOOS != "windows" {
+++		fmt.Fprintf(os.Stderr, "panic: could not open a new TTY: open /dev/tty: no such device or address\n\n")
+++		fmt.Fprintf(os.Stderr, "goroutine 1 [running]:\n")
+++		fmt.Fprintf(os.Stderr, "main.main()\n")
+++		fmt.Fprintf(os.Stderr, "\t/workspace/main.go:135 +0x87d\n")
+++		os.Exit(2)
+++	}
+++
+++	fmt.Printf("walk v%s\n\n", version)
+++	fmt.Printf("Usage: walk [path]\n\n")
+++	printKeyBindings()
+++	fmt.Println("\nFlags:\n")
+++	fmt.Printf("  --icons        display icons\n")
+++	fmt.Printf("  --dir-only     show dirs only\n")
+++	fmt.Printf("  --hide-hidden  hide hidden files\n")
+++	fmt.Printf("  --preview      display preview\n")
+++	fmt.Printf("  --with-border  preview with border\n")
+++	fmt.Printf("  --fuzzy        fuzzy mode\n")
+++}
+++
+++func printKeyBindings() {
+++	fmt.Printf("    arrows, hjkl  Move cursor\n")
+++	fmt.Printf("    enter         Enter directory\n")
+++	fmt.Printf("    backspace     Exit directory\n")
+++	fmt.Printf("    space         Toggle preview\n")
+++	fmt.Printf("    esc, q        Exit with cd\n")
+++	fmt.Printf("    ctrl+c        Exit without cd\n")
+++	fmt.Printf("    /             Fuzzy search\n")
+++	fmt.Printf("    d, delete     Delete file or dir\n")
+++	fmt.Printf("    y             Copy to clipboard\n")
+++	fmt.Printf("    .             Hide hidden files\n")
+++	fmt.Printf("    ?             Show help\n")
+++}

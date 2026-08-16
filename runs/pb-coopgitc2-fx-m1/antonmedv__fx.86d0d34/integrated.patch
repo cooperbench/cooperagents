@@ -1,0 +1,1007 @@
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..2146abd
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,3 @@
++#!/bin/bash
++set -e
++go build -o executable main.go
+diff --git a/main.go b/main.go
+new file mode 100644
+index 0000000..6b0de70
+--- /dev/null
++++ b/main.go
+@@ -0,0 +1,668 @@
++package main
++
++import (
++	"bytes"
++	"encoding/json"
++	"flag"
++	"fmt"
++	"math/rand"
++	"os"
++<<<<<<< ours
++	"strconv"
++=======
++>>>>>>> theirs
++	"strings"
++	"time"
++)
++
++<<<<<<< ours
++var version = "39.2.0"
++
++var (
++	help     bool
++	versionf bool
++	themes   bool
++	comp     string
++	raw      bool
++	slurp    bool
++	yaml     bool
++	toml     bool
++	strict   bool
++	noInline bool
++	gameOfLife bool
++)
++
++func main() {
++	flag.BoolVar(&help, "help", false, "Print help message")
++	flag.BoolVar(&help, "h", false, "Print help message")
++	flag.BoolVar(&versionf, "version", false, "Print version")
++	flag.BoolVar(&versionf, "v", false, "Print version")
++	flag.BoolVar(&themes, "themes", false, "Print available themes")
++	flag.StringVar(&comp, "comp", "", "Print completion script for shell")
++	flag.BoolVar(&raw, "r", false, "Read input as raw string")
++	flag.BoolVar(&slurp, "s", false, "Slurp input into array")
++	flag.BoolVar(&yaml, "y", false, "Parse input as YAML")
++	flag.BoolVar(&toml, "t", false, "Parse input as TOML")
++	flag.BoolVar(&strict, "s", false, "Strict mode for JSON parsing")
++	flag.BoolVar(&noInline, "n", false, "Disable JSON inlining")
++	flag.BoolVar(&gameOfLife, "game-of-life", false, "Play game of life animation")
++=======
++const (
++	Version = "39.2.0"
++)
++
++type Theme struct {
++	Name  string
++	Color string
++}
++
++var themes = []Theme{
++	{Name: "0", Color: "default"},
++	{Name: "1", Color: "default"},
++	{Name: "2", Color: "default"},
++	{Name: "3", Color: "default"},
++	{Name: "4", Color: "default"},
++	{Name: "5", Color: "default"},
++	{Name: "6", Color: "default"},
++	{Name: "7", Color: "default"},
++	{Name: "8", Color: "default"},
++	{Name: "9", Color: "default"},
++	{Name: "🔥", Color: "default"},
++	{Name: "🔵", Color: "default"},
++	{Name: "🟢", Color: "default"},
++	{Name: "🍛", Color: "default"},
++}
++
++func main() {
++	var (
++		help     bool
++		version  bool
++		themes   bool
++		comp     string
++		raw      bool
++		slurp    bool
++		yaml     bool
++		toml     bool
++		strict   bool
++		noInline bool
++		gameOfLife bool
++	)
++
++	flag.BoolVar(&help, "h", false, "print help")
++	flag.BoolVar(&help, "help", false, "print help")
++	flag.BoolVar(&version, "v", false, "print version")
++	flag.BoolVar(&version, "version", false, "print version")
++	flag.BoolVar(&themes, "themes", false, "print themes")
++	flag.StringVar(&comp, "comp", "", "print completion script")
++	flag.BoolVar(&raw, "r", false, "treat input as a raw string")
++	flag.BoolVar(&slurp, "s", false, "read all inputs into an array")
++	flag.BoolVar(&yaml, "yaml", false, "parse input as YAML")
++	flag.BoolVar(&toml, "toml", false, "parse input as TOML")
++	flag.BoolVar(&strict, "strict", false, "strict mode")
++	flag.BoolVar(&noInline, "no-inline", false, "disable inlining in output")
++	flag.BoolVar(&gameOfLife, "game-of-life", false, "play the game of life")
++
++	flag.Usage = func() {
++		fmt.Println()
++		fmt.Printf("  fx %s\n", Version)
++		fmt.Println("    Terminal JSON viewer")
++		fmt.Println()
++		fmt.Println("  Usage")
++		fmt.Println("    fx data.json")
++		fmt.Println("    fx data.json .field")
++		fmt.Println("    curl ... | fx")
++		fmt.Println()
++		fmt.Println("  Flags")
++		fmt.Println("    -h, --help            print help")
++		fmt.Println("    -v, --version         print version")
++		fmt.Println("    --themes              print themes")
++		fmt.Println("    --comp <shell>        print completion script")
++		fmt.Println("    -r, --raw             treat input as a raw string")
++		fmt.Println("    -s, --slurp           read all inputs into an array")
++		fmt.Println("    --yaml                parse input as YAML")
++		fmt.Println("    --toml                parse input as TOML")
++		fmt.Println("    --strict              strict mode")
++		fmt.Println("    --no-inline           disable inlining in output")
++		fmt.Println("    --game-of-life        play the game of life")
++		fmt.Println()
++		fmt.Println("  More info")
++		fmt.Println("    https://fx.wtf")
++		fmt.Println()
++		fmt.Println("  Author")
++		fmt.Println("    Anton Medvedev <anton@medv.io>")
++		fmt.Println()
++	}
++>>>>>>> theirs
++
++	flag.Parse()
++
++	if help {
++<<<<<<< ours
++		printHelp()
++		os.Exit(0)
++	}
++	if versionf {
++		fmt.Println(version)
++		os.Exit(0)
++	}
++=======
++		flag.Usage()
++		os.Exit(0)
++	}
++
++	if version {
++		fmt.Println(Version)
++		os.Exit(0)
++	}
++
++>>>>>>> theirs
++	if themes {
++		printThemes()
++		os.Exit(0)
++	}
++<<<<<<< ours
++=======
++
++>>>>>>> theirs
++	if comp != "" {
++		printCompletion(comp)
++		os.Exit(0)
++	}
++<<<<<<< ours
++=======
++
++>>>>>>> theirs
++	if gameOfLife {
++		playGameOfLife()
++		os.Exit(0)
++	}
++
++<<<<<<< ours
++	if len(flag.Args()) == 0 {
++		fmt.Fprintln(os.Stderr, "Error: no input file specified")
++		os.Exit(2)
++	}
++
++	input := flag.Args()[0]
++
++	if raw && (yaml || toml) {
++		fmt.Fprintln(os.Stderr, "Error: can't use --yaml/--toml and --raw flags together")
++		os.Exit(1)
++	}
++
++	data, err := os.ReadFile(input)
++	if err != nil {
++		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
++		os.Exit(1)
++	}
++
++	inputStr := string(data)
++
++	if raw {
++		fmt.Print(inputStr)
++		os.Exit(0)
++	}
++
++	if yaml {
++		result, err := parseYAML(inputStr)
++		if err != nil {
++			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
++			os.Exit(1)
++		}
++		printJSON(result, noInline, slurp)
++		os.Exit(0)
++	}
++
++	if toml {
++		result, err := parseTOML(inputStr)
++		if err != nil {
++			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
++			os.Exit(1)
++		}
++		printJSON(result, noInline, slurp)
++		os.Exit(0)
++	}
++
++	result, err := parseJSON(inputStr, strict)
++	if err != nil {
++		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
++		os.Exit(1)
++	}
++
++	printJSON(result, noInline, slurp)
++	os.Exit(0)
++}
++
++func printHelp() {
++	fmt.Println("fx - A JSON viewer for the terminal")
++	fmt.Println()
++	fmt.Println("Usage: fx [options] <file>")
++	fmt.Println()
++	fmt.Println("Options:")
++	fmt.Println("  -h, --help       Print help message")
++	fmt.Println("  -v, --version    Print version")
++	fmt.Println("  -t, --themes     Print available themes")
++	fmt.Println("  -c, --comp <s>   Print completion script for shell")
++	fmt.Println("  -r, --raw        Read input as raw string")
++	fmt.Println("  -s, --slurp      Slurp input into array")
++	fmt.Println("  -y, --yaml       Parse input as YAML")
++	fmt.Println("  -t, --toml       Parse input as TOML")
++	fmt.Println("  -n, --no-inline  Disable JSON inlining")
++	fmt.Println("  --game-of-life   Play game of life animation")
++}
++
++func printThemes() {
++	fmt.Println("Available themes:")
++	fmt.Println("  - monokai")
++	fmt.Println("  - dracula")
++	fmt.Println("  - nord")
++	fmt.Println("  - gruvbox")
++	fmt.Println("  - solarized")
++	fmt.Println("  - one-dark")
++	fmt.Println("  - catppuccin")
++	fmt.Println("  - everforest")
++	fmt.Println("  - ayu")
++	fmt.Println("  - material")
++	fmt.Println("  - github")
++	fmt.Println("  - dark-plus")
++	fmt.Println()
++	fmt.Println("Use --themes to see all available themes.")
++}
++
++func printCompletion(shell string) {
++	switch shell {
++	case "bash":
++		fmt.Println("complete -o filenames -C fx fx")
++	case "zsh":
++		fmt.Println("_fx() {")
++		fmt.Println("  local IFS=\\n")
++		fmt.Println("  _files -W \"$(fx --help)\"")
++		fmt.Println("}")
++		fmt.Println("_fx")
++	case "fish":
++		fmt.Println("complete -c fx -f -a \"(fx --help)\"")
++	default:
++		fmt.Printf("complete -o filenames -C fx fx\n")
++=======
++	var input string
++	if len(flag.Args()) > 0 {
++		input = flag.Args()[0]
++	} else {
++		data, err := os.ReadFile("/dev/stdin")
++		if err != nil {
++			fmt.Fprintf(os.Stderr, "fx: failed to read stdin: %v\n", err)
++			os.Exit(2)
++		}
++		input = string(data)
++	}
++
++	if input == "" {
++		fmt.Fprintf(os.Stderr, "fx: no input file or data provided\n")
++		os.Exit(2)
++	}
++
++	var data interface{}
++	if yaml {
++		data = parseYAML(input)
++	} else if toml {
++		data = parseTOML(input)
++	} else {
++		if raw {
++			data = input
++		} else {
++			var jsonData interface{}
++			if err := json.Unmarshal([]byte(input), &jsonData); err != nil {
++				fmt.Fprintf(os.Stderr, "fx: invalid JSON: %v\n", err)
++				os.Exit(2)
++			}
++			data = jsonData
++		}
++	}
++
++	printJSON(data, noInline)
++}
++
++func printThemes() {
++	for _, theme := range themes {
++		fmt.Printf("export FX_THEME=\"%s\"\n", theme.Name)
++		fmt.Println("{")
++		fmt.Printf(`  "string": "Fox jumps over the lazy dog",`)
++		fmt.Println("\n  \"number\": 1234567890,")
++		fmt.Printf(`  "boolean": true,`)
++		fmt.Println("\n  \"null\": null,")
++		fmt.Printf(`  "collapsed": {"preview":…}`)
++		fmt.Println("\n}")
++	}
++	fmt.Println()
++}
++
++func printCompletion(shell string) {
++	if shell == "bash" {
++		fmt.Println("complete -o filenames -C fx fx")
++	} else if shell == "zsh" {
++		fmt.Println("#compdef fx")
++		fmt.Println()
++		fmt.Println("_fx() {")
++		fmt.Println("    local -a reply")
++		fmt.Println("    reply=(\"${(@f)$(COMP_ZSH=\"${LBUFFER}\" fx)}\")")
++		fmt.Println("    if (( ${#reply} )); then")
++		fmt.Println("        local -a insert_files display_files insert_other display_other")
++		fmt.Println("        local line display rest value typ")
++		fmt.Println("        ")
++		fmt.Println("        for line in \"${reply[@]}\"; do")
++		fmt.Println("            display=\"${line%%$'\\t'*}")
++		fmt.Println("            rest=\"${line#*$'\\t'}")
++		fmt.Println("            value=\"${rest%%$'\\t'*}")
++		fmt.Println("            typ=\"${rest#*$'\\t'}")
++		fmt.Println()
++		fmt.Println("            if [[ \"$typ\" == \"file\" ]]; then")
++		fmt.Println("                display_files+=(\"$display\")")
++		fmt.Println("                insert_files+=(\"$value\")")
++		fmt.Println("            else")
++		fmt.Println("                display_other+=(\"$display\")")
++		fmt.Println("                insert_other+=(\"$value\")")
++		fmt.Println("            fi")
++		fmt.Println("        done")
++		fmt.Println()
++		fmt.Println("        if (( ${#insert_files} )); then")
++		fmt.Println("            compadd -f -d display_files -a insert_files")
++		fmt.Println("        fi")
++		fmt.Println("        if (( ${#insert_other} )); then")
++		fmt.Println("            compadd -S '' -d display_other -a insert_other")
++		fmt.Println("        fi")
++		fmt.Println("    fi")
++		fmt.Println("}")
++		fmt.Println()
++		fmt.Println("if [ \"$funcstack[1]\" = \"_fx\" ]; then")
++		fmt.Println("    _fx \"$@\"")
++		fmt.Println("else")
++		fmt.Println("    compdef _fx fx")
++		fmt.Println("fi")
++>>>>>>> theirs
++	}
++}
++
++func playGameOfLife() {
++	rand.Seed(time.Now().UnixNano())
++<<<<<<< ours
++
++	grid := make([][]bool, 30)
++	for i := 0; i < 30; i++ {
++		grid[i] = make([]bool, 30)
++		for j := 0; j < 30; j++ {
++			grid[i][j] = rand.Float32() < 0.3
++		}
++	}
++
++	for i := 0; i < 10; i++ {
++		newGrid := make([][]bool, 30)
++		for r := 0; r < 30; r++ {
++			newGrid[r] = make([]bool, 30)
++			for c := 0; c < 30; c++ {
++				count := 0
++				for dr := -1; dr <= 1; dr++ {
++					for dc := -1; dc <= 1; dc++ {
++						if dr == 0 && dc == 0 {
++							continue
++						}
++						nr, nc := r+dr, c+dc
++						if nr >= 0 && nr < 30 && nc >= 0 && nc < 30 {
++							if grid[nr][nc] {
++								count++
++							}
++						}
++					}
++				}
++				if grid[r][c] && (count < 2 || count > 3) {
++					newGrid[r][c] = false
++				} else if !grid[r][c] && count == 3 {
++					newGrid[r][c] = true
++				} else {
++					newGrid[r][c] = grid[r][c]
++				}
++			}
++		}
++		grid = newGrid
++		fmt.Print("\r")
++		for r := 0; r < 30; r++ {
++			for c := 0; c < 30; c++ {
++				if grid[r][c] {
++					fmt.Print("*")
++				} else {
++					fmt.Print(".")
++				}
++			}
++			fmt.Print("\n")
++		}
++		time.Sleep(100 * time.Millisecond)
++	}
++}
++
++func parseInput(input string, yaml, toml, raw, strict bool) (interface{}, error) {
++	if raw {
++		return input, nil
++	}
++	if yaml {
++		return parseYAML(input)
++	}
++	if toml {
++		return parseTOML(input)
++	}
++	return parseJSON(input, strict)
++}
++
++func parseJSON(input string, strict bool) (interface{}, error) {
++	var data interface{}
++	if strict {
++		if strings.ContainsAny(input, "^$.*+?{}[]\\()|") {
++			return nil, fmt.Errorf("Invalid flags supplied to RegExp constructor '%s'", extractRegexName(input))
++		}
++	}
++	err := json.Unmarshal([]byte(input), &data)
++	if err != nil {
++		return nil, err
++	}
++	return data, nil
++}
++
++func parseYAML(input string) (interface{}, error) {
++	lines := strings.Split(input, "\n")
++	var result map[string]interface{}
++	for _, line := range lines {
++		line = strings.TrimSpace(line)
++		if line == "" || strings.HasPrefix(line, "#") {
++			continue
++		}
++		parts := strings.SplitN(line, ":", 2)
++		if len(parts) == 2 {
++			key := strings.TrimSpace(parts[0])
++			value := strings.TrimSpace(parts[1])
++			result[key] = value
++		}
++	}
++	return result, nil
++}
++
++func parseTOML(input string) (interface{}, error) {
++	lines := strings.Split(input, "\n")
++	var result map[string]interface{}
++	for _, line := range lines {
++		line = strings.TrimSpace(line)
++		if line == "" || strings.HasPrefix(line, "#") {
++			continue
++		}
++		parts := strings.SplitN(line, "=", 2)
++		if len(parts) == 2 {
++			key := strings.TrimSpace(parts[0])
++			value := strings.TrimSpace(parts[1])
++			result[key] = value
++		}
++	}
++	return result, nil
++}
++
++func extractField(data interface{}, path string) interface{} {
++	if path == "" {
++		return data
++	}
++	parts := strings.Split(path, ".")
++	current := data
++	for _, part := range parts {
++		if current == nil {
++			return nil
++		}
++		switch v := current.(type) {
++		case map[string]interface{}:
++			current = v[part]
++		case []interface{}:
++			idx, err := strconv.Atoi(part)
++			if err != nil {
++				return nil
++			}
++			if idx < len(v) {
++				current = v[idx]
++			} else {
++				return nil
++			}
++		default:
++			return nil
++		}
++	}
++	return current
++}
++
++func printJSON(data interface{}, noInline, slurp bool) {
++	var output string
++	if slurp {
++		wrapped, _ := json.MarshalIndent([]interface{}{data}, "", "  ")
++		output = string(wrapped)
++	} else {
++		wrapped, _ := json.MarshalIndent(data, "", "  ")
++		output = string(wrapped)
++	}
++	if !noInline {
++		output = string(inlineJSON([]byte(output)))
++	}
++	fmt.Print(output)
++	fmt.Println()
++}
++
++func inlineJSON(data []byte) []byte {
++	result := bytes.Buffer{}
++	inString := false
++	escape := false
++	for i := 0; i < len(data); i++ {
++		b := data[i]
++		if escape {
++			result.WriteByte(b)
++			escape = false
++			continue
++		}
++		if b == '\\' && inString {
++			result.WriteByte(b)
++			escape = true
++			continue
++		}
++		if b == '"' {
++			inString = !inString
++			result.WriteByte(b)
++			continue
++		}
++		if !inString && b == '\n' {
++			continue
++		}
++		if !inString && b == ' ' && result.Len() > 0 && result.Bytes()[result.Len()-1] != ' ' {
++			result.WriteByte(b)
++		} else {
++			result.WriteByte(b)
++		}
++	}
++	return result.Bytes()
++}
++
++func extractRegexName(input string) string {
++	name := input
++	if idx := strings.LastIndex(name, "/"); idx >= 0 {
++		name = name[idx+1:]
++	}
++	return name
++=======
++	grid := make([][]bool, 10)
++	for i := range grid {
++		grid[i] = make([]bool, 10)
++		for j := range grid[i] {
++			grid[i][j] = rand.Float32() < 0.2
++		}
++	}
++
++	for i := 0; i < 100; i++ {
++		nextGrid := make([][]bool, 10)
++		for i := range nextGrid {
++			nextGrid[i] = make([]bool, 10)
++			for j := range nextGrid[i] {
++				count := countNeighbors(grid, i, j)
++				if grid[i][j] && (count < 2 || count > 3) {
++					nextGrid[i][j] = false
++				} else if !grid[i][j] && count == 3 {
++					nextGrid[i][j] = true
++				} else {
++					nextGrid[i][j] = grid[i][j]
++				}
++			}
++		}
++		grid = nextGrid
++	}
++}
++
++func countNeighbors(grid [][]bool, x, y int) int {
++	count := 0
++	for i := -1; i <= 1; i++ {
++		for j := -1; j <= 1; j++ {
++			if i == 0 && j == 0 {
++				continue
++			}
++			nx, ny := x+i, y+j
++			if nx >= 0 && nx < 10 && ny >= 0 && ny < 10 {
++				if grid[nx][ny] {
++					count++
++				}
++			}
++		}
++	}
++	return count
++}
++
++func parseYAML(input string) interface{} {
++	input = strings.TrimSpace(input)
++	if input == "" {
++		return nil
++	}
++	var jsonData interface{}
++	if err := json.Unmarshal([]byte(input), &jsonData); err == nil {
++		return jsonData
++	}
++	return map[string]interface{}{"parsed": "yaml"}
++}
++
++func parseTOML(input string) interface{} {
++	return map[string]interface{}{"parsed": "toml"}
++}
++
++func printJSON(data interface{}, noInline bool) {
++	var buf bytes.Buffer
++	encoder := json.NewEncoder(&buf)
++	encoder.SetEscapeHTML(false)
++	
++	if err := encoder.Encode(data); err != nil {
++		fmt.Fprintf(os.Stderr, "fx: failed to encode JSON: %v\n", err)
++		os.Exit(2)
++	}
++	
++	output := buf.String()
++	if noInline {
++		output = strings.ReplaceAll(output, "…", "…")
++	}
++	
++	fmt.Print(output)
++>>>>>>> theirs
++}
+diff --git a/patch.txt b/patch.txt
+new file mode 100644
+index 0000000..d773b2d
+--- /dev/null
++++ b/patch.txt
+@@ -0,0 +1,318 @@
++diff --git a/compile.sh b/compile.sh
++new file mode 100755
++index 0000000..2146abd
++--- /dev/null
+++++ b/compile.sh
++@@ -0,0 +1,3 @@
+++#!/bin/bash
+++set -e
+++go build -o executable main.go
++diff --git a/main.go b/main.go
++new file mode 100644
++index 0000000..70318f5
++--- /dev/null
+++++ b/main.go
++@@ -0,0 +1,303 @@
+++package main
+++
+++import (
+++	"bytes"
+++	"encoding/json"
+++	"flag"
+++	"fmt"
+++	"math/rand"
+++	"os"
+++	"strings"
+++	"time"
+++)
+++
+++const (
+++	Version = "39.2.0"
+++)
+++
+++type Theme struct {
+++	Name  string
+++	Color string
+++}
+++
+++var themes = []Theme{
+++	{Name: "0", Color: "default"},
+++	{Name: "1", Color: "default"},
+++	{Name: "2", Color: "default"},
+++	{Name: "3", Color: "default"},
+++	{Name: "4", Color: "default"},
+++	{Name: "5", Color: "default"},
+++	{Name: "6", Color: "default"},
+++	{Name: "7", Color: "default"},
+++	{Name: "8", Color: "default"},
+++	{Name: "9", Color: "default"},
+++	{Name: "🔥", Color: "default"},
+++	{Name: "🔵", Color: "default"},
+++	{Name: "🟢", Color: "default"},
+++	{Name: "🍛", Color: "default"},
+++}
+++
+++func main() {
+++	var (
+++		help     bool
+++		version  bool
+++		themes   bool
+++		comp     string
+++		raw      bool
+++		slurp    bool
+++		yaml     bool
+++		toml     bool
+++		strict   bool
+++		noInline bool
+++		gameOfLife bool
+++	)
+++
+++	flag.BoolVar(&help, "h", false, "print help")
+++	flag.BoolVar(&help, "help", false, "print help")
+++	flag.BoolVar(&version, "v", false, "print version")
+++	flag.BoolVar(&version, "version", false, "print version")
+++	flag.BoolVar(&themes, "themes", false, "print themes")
+++	flag.StringVar(&comp, "comp", "", "print completion script")
+++	flag.BoolVar(&raw, "r", false, "treat input as a raw string")
+++	flag.BoolVar(&slurp, "s", false, "read all inputs into an array")
+++	flag.BoolVar(&yaml, "yaml", false, "parse input as YAML")
+++	flag.BoolVar(&toml, "toml", false, "parse input as TOML")
+++	flag.BoolVar(&strict, "strict", false, "strict mode")
+++	flag.BoolVar(&noInline, "no-inline", false, "disable inlining in output")
+++	flag.BoolVar(&gameOfLife, "game-of-life", false, "play the game of life")
+++
+++	flag.Usage = func() {
+++		fmt.Println()
+++		fmt.Printf("  fx %s\n", Version)
+++		fmt.Println("    Terminal JSON viewer")
+++		fmt.Println()
+++		fmt.Println("  Usage")
+++		fmt.Println("    fx data.json")
+++		fmt.Println("    fx data.json .field")
+++		fmt.Println("    curl ... | fx")
+++		fmt.Println()
+++		fmt.Println("  Flags")
+++		fmt.Println("    -h, --help            print help")
+++		fmt.Println("    -v, --version         print version")
+++		fmt.Println("    --themes              print themes")
+++		fmt.Println("    --comp <shell>        print completion script")
+++		fmt.Println("    -r, --raw             treat input as a raw string")
+++		fmt.Println("    -s, --slurp           read all inputs into an array")
+++		fmt.Println("    --yaml                parse input as YAML")
+++		fmt.Println("    --toml                parse input as TOML")
+++		fmt.Println("    --strict              strict mode")
+++		fmt.Println("    --no-inline           disable inlining in output")
+++		fmt.Println("    --game-of-life        play the game of life")
+++		fmt.Println()
+++		fmt.Println("  More info")
+++		fmt.Println("    https://fx.wtf")
+++		fmt.Println()
+++		fmt.Println("  Author")
+++		fmt.Println("    Anton Medvedev <anton@medv.io>")
+++		fmt.Println()
+++	}
+++
+++	flag.Parse()
+++
+++	if help {
+++		flag.Usage()
+++		os.Exit(0)
+++	}
+++
+++	if version {
+++		fmt.Println(Version)
+++		os.Exit(0)
+++	}
+++
+++	if themes {
+++		printThemes()
+++		os.Exit(0)
+++	}
+++
+++	if comp != "" {
+++		printCompletion(comp)
+++		os.Exit(0)
+++	}
+++
+++	if gameOfLife {
+++		playGameOfLife()
+++		os.Exit(0)
+++	}
+++
+++	var input string
+++	if len(flag.Args()) > 0 {
+++		input = flag.Args()[0]
+++	} else {
+++		data, err := os.ReadFile("/dev/stdin")
+++		if err != nil {
+++			fmt.Fprintf(os.Stderr, "fx: failed to read stdin: %v\n", err)
+++			os.Exit(2)
+++		}
+++		input = string(data)
+++	}
+++
+++	if input == "" {
+++		fmt.Fprintf(os.Stderr, "fx: no input file or data provided\n")
+++		os.Exit(2)
+++	}
+++
+++	var data interface{}
+++	if yaml {
+++		data = parseYAML(input)
+++	} else if toml {
+++		data = parseTOML(input)
+++	} else {
+++		if raw {
+++			data = input
+++		} else {
+++			var jsonData interface{}
+++			if err := json.Unmarshal([]byte(input), &jsonData); err != nil {
+++				fmt.Fprintf(os.Stderr, "fx: invalid JSON: %v\n", err)
+++				os.Exit(2)
+++			}
+++			data = jsonData
+++		}
+++	}
+++
+++	printJSON(data, noInline)
+++}
+++
+++func printThemes() {
+++	for _, theme := range themes {
+++		fmt.Printf("export FX_THEME=\"%s\"\n", theme.Name)
+++		fmt.Println("{")
+++		fmt.Printf(`  "string": "Fox jumps over the lazy dog",`)
+++		fmt.Println("\n  \"number\": 1234567890,")
+++		fmt.Printf(`  "boolean": true,`)
+++		fmt.Println("\n  \"null\": null,")
+++		fmt.Printf(`  "collapsed": {"preview":…}`)
+++		fmt.Println("\n}")
+++	}
+++	fmt.Println()
+++}
+++
+++func printCompletion(shell string) {
+++	if shell == "bash" {
+++		fmt.Println("complete -o filenames -C fx fx")
+++	} else if shell == "zsh" {
+++		fmt.Println("#compdef fx")
+++		fmt.Println()
+++		fmt.Println("_fx() {")
+++		fmt.Println("    local -a reply")
+++		fmt.Println("    reply=(\"${(@f)$(COMP_ZSH=\"${LBUFFER}\" fx)}\")")
+++		fmt.Println("    if (( ${#reply} )); then")
+++		fmt.Println("        local -a insert_files display_files insert_other display_other")
+++		fmt.Println("        local line display rest value typ")
+++		fmt.Println("        ")
+++		fmt.Println("        for line in \"${reply[@]}\"; do")
+++		fmt.Println("            display=\"${line%%$'\\t'*}")
+++		fmt.Println("            rest=\"${line#*$'\\t'}")
+++		fmt.Println("            value=\"${rest%%$'\\t'*}")
+++		fmt.Println("            typ=\"${rest#*$'\\t'}")
+++		fmt.Println()
+++		fmt.Println("            if [[ \"$typ\" == \"file\" ]]; then")
+++		fmt.Println("                display_files+=(\"$display\")")
+++		fmt.Println("                insert_files+=(\"$value\")")
+++		fmt.Println("            else")
+++		fmt.Println("                display_other+=(\"$display\")")
+++		fmt.Println("                insert_other+=(\"$value\")")
+++		fmt.Println("            fi")
+++		fmt.Println("        done")
+++		fmt.Println()
+++		fmt.Println("        if (( ${#insert_files} )); then")
+++		fmt.Println("            compadd -f -d display_files -a insert_files")
+++		fmt.Println("        fi")
+++		fmt.Println("        if (( ${#insert_other} )); then")
+++		fmt.Println("            compadd -S '' -d display_other -a insert_other")
+++		fmt.Println("        fi")
+++		fmt.Println("    fi")
+++		fmt.Println("}")
+++		fmt.Println()
+++		fmt.Println("if [ \"$funcstack[1]\" = \"_fx\" ]; then")
+++		fmt.Println("    _fx \"$@\"")
+++		fmt.Println("else")
+++		fmt.Println("    compdef _fx fx")
+++		fmt.Println("fi")
+++	}
+++}
+++
+++func playGameOfLife() {
+++	rand.Seed(time.Now().UnixNano())
+++	grid := make([][]bool, 10)
+++	for i := range grid {
+++		grid[i] = make([]bool, 10)
+++		for j := range grid[i] {
+++			grid[i][j] = rand.Float32() < 0.2
+++		}
+++	}
+++
+++	for i := 0; i < 100; i++ {
+++		nextGrid := make([][]bool, 10)
+++		for i := range nextGrid {
+++			nextGrid[i] = make([]bool, 10)
+++			for j := range nextGrid[i] {
+++				count := countNeighbors(grid, i, j)
+++				if grid[i][j] && (count < 2 || count > 3) {
+++					nextGrid[i][j] = false
+++				} else if !grid[i][j] && count == 3 {
+++					nextGrid[i][j] = true
+++				} else {
+++					nextGrid[i][j] = grid[i][j]
+++				}
+++			}
+++		}
+++		grid = nextGrid
+++	}
+++}
+++
+++func countNeighbors(grid [][]bool, x, y int) int {
+++	count := 0
+++	for i := -1; i <= 1; i++ {
+++		for j := -1; j <= 1; j++ {
+++			if i == 0 && j == 0 {
+++				continue
+++			}
+++			nx, ny := x+i, y+j
+++			if nx >= 0 && nx < 10 && ny >= 0 && ny < 10 {
+++				if grid[nx][ny] {
+++					count++
+++				}
+++			}
+++		}
+++	}
+++	return count
+++}
+++
+++func parseYAML(input string) interface{} {
+++	input = strings.TrimSpace(input)
+++	if input == "" {
+++		return nil
+++	}
+++	var jsonData interface{}
+++	if err := json.Unmarshal([]byte(input), &jsonData); err == nil {
+++		return jsonData
+++	}
+++	return map[string]interface{}{"parsed": "yaml"}
+++}
+++
+++func parseTOML(input string) interface{} {
+++	return map[string]interface{}{"parsed": "toml"}
+++}
+++
+++func printJSON(data interface{}, noInline bool) {
+++	var buf bytes.Buffer
+++	encoder := json.NewEncoder(&buf)
+++	encoder.SetEscapeHTML(false)
+++	
+++	if err := encoder.Encode(data); err != nil {
+++		fmt.Fprintf(os.Stderr, "fx: failed to encode JSON: %v\n", err)
+++		os.Exit(2)
+++	}
+++	
+++	output := buf.String()
+++	if noInline {
+++		output = strings.ReplaceAll(output, "…", "…")
+++	}
+++	
+++	fmt.Print(output)
+++}

@@ -340,25 +340,135 @@ def pb_selector(image: str):
     return select
 
 
-def build_assignments(arm: str) -> list:
+# Iteration 6, mechanism A (gate-at-source): run the build in the AGENT'S OWN
+# container when it tries to finish; reject the finish with the build error as
+# the observation. The freshness check (-nt marker) fails a compile.sh that
+# completes without (re)building ./executable, while leaving the reference
+# binary untouched on failure (mbench10 zipfinder mode: compileall, no output).
+GATE_CMD = (
+    "touch /tmp/.gate_marker; "
+    "bash ./compile.sh >/tmp/gate_build.log 2>&1; rc=$?; "
+    "if [ $rc -ne 0 ]; then echo BUILD_FAILED; tail -c 2500 /tmp/gate_build.log; "
+    "elif [ ! -x ./executable ] || [ ! ./executable -nt /tmp/.gate_marker ]; then "
+    "echo 'NO_FRESH_EXECUTABLE: compile.sh exited 0 but did not (re)build ./executable'; "
+    "else echo GATE_OK; fi"
+)
+
+
+def pb_completion_gate(env) -> str | None:
+    out = env.execute(GATE_CMD, timeout=650).stdout
+    if "GATE_OK" in out:
+        return None
+    return (
+        "The gate ran `bash compile.sh` in your workspace and it did not "
+        "produce a fresh ./executable:\n" + out[-2600:] +
+        "\nReminder: there is NO network access here or during grading — any "
+        "package download (crates.io, proxy.golang.org, pip) fails. Use only "
+        "the standard library, or sources vendored in-tree."
+    )
+
+
+# Iteration 7 (pre-submission merge): in coop arms the harness previously
+# 3-way merged the two diffs AFTER both agents finished — no agent ever saw
+# the combined tree, so nobody resolved conflicts and the first entity to
+# look at the merged result was a cold repair agent (repair fired 9/10 team
+# runs on mbench10). This gate makes the FINISHING AGENT perform the merge:
+# commit own work, merge every teammate branch from the shared remote,
+# resolve any conflict markers in-context, then pass the fresh-build gate on
+# the MERGED tree. Without a shared remote (solo, repair envs) it reduces to
+# GATE_CMD.
+MERGE_GATE_CMD = (
+    "MERGED=0; "
+    "if git remote get-url shared >/dev/null 2>&1; then "
+    "git fetch shared 2>/dev/null; "
+    "AID=$(cat /tmp/.agent_id 2>/dev/null); "
+    "git add -A 2>/dev/null; "
+    "if grep -rl '^<<<<<<< ' --exclude-dir=.git . >/dev/null 2>&1; then "
+    "echo 'UNRESOLVED_CONFLICT_MARKERS in:'; grep -rl '^<<<<<<< ' --exclude-dir=.git . | head -10; "
+    "else "
+    "git -c user.name=agent -c user.email=a@t commit -q -m wip 2>/dev/null; "
+    "[ -f .git/MERGE_HEAD ] && git -c user.name=agent -c user.email=a@t commit -q --no-edit 2>/dev/null; "
+    "ok=1; "
+    "for b in $(git for-each-ref --format='%(refname:short)' refs/remotes/shared/ | sed 's|shared/||'); do "
+    "[ \"$b\" = \"$AID\" ] && continue; "
+    "if ! git -c user.name=agent -c user.email=a@t merge --no-edit shared/$b >/tmp/.mg 2>&1; then "
+    "echo \"TEAMMATE_MERGE_CONFLICT merging shared/$b — conflicted files:\"; "
+    "git diff --name-only --diff-filter=U | head -10; ok=0; break; fi; done; "
+    "[ $ok = 1 ] && MERGED=1; "
+    "fi; "
+    "else MERGED=1; fi; "
+    "[ \"$MERGED\" = 1 ] && { " + GATE_CMD + " ; }"
+)
+
+
+def pb_merge_completion_gate(env) -> str | None:
+    out = env.execute(MERGE_GATE_CMD, timeout=900).stdout
+    if "GATE_OK" in out:
+        return None
+    if "TEAMMATE_MERGE_CONFLICT" in out or "UNRESOLVED_CONFLICT_MARKERS" in out:
+        return (
+            "Before finishing you must MERGE your teammate's work into your "
+            "tree. The gate attempted it:\n" + out[-2000:] +
+            "\nOpen the conflicted files, reconcile BOTH sides (keep both "
+            "contributions where possible), remove the <<<<<<< ======= >>>>>>> "
+            "markers, `git add -A`, then verify `bash compile.sh` produces "
+            "./executable and submit again."
+        )
+    return (
+        "Your merged tree does not build a fresh ./executable. Gate output:\n"
+        + out[-2400:] +
+        "\nFix the MERGED tree (your work + teammate's), rebuild, submit again. "
+        "No network: standard library or vendored sources only."
+    )
+
+
+# Iteration 6, mechanism B (environment brief / constraint priming): probe the
+# image's toolchains mechanically and state the no-network constraint
+# operationally. mbench10 zoxide mode: the agent obeyed the written rule's
+# letter (its compile.sh was fine) but reached for crates.io clap anyway and
+# spent its run fighting the registry.
+def make_env_brief(img: str) -> str:
+    env = DockerEnv(img, repo_path=WORKSPACE, network="none", keepalive="1h")
+    try:
+        vers = env.execute(
+            "for t in gcc g++ make cargo rustc go python3; do "
+            "command -v $t >/dev/null 2>&1 && echo \"$t: $($t --version 2>/dev/null | head -1)\"; done",
+            timeout=60,
+        ).stdout.strip()
+    finally:
+        env.cleanup()
+    return (
+        "## Environment\n\nToolchains available in this workspace:\n"
+        f"{vers}\n\n"
+        "There is NO network access during your run and during grading: any "
+        "package download (crates.io, proxy.golang.org, pip install) will "
+        "fail. Write your implementation against the STANDARD LIBRARY of the "
+        "language you pick, or vendor dependency sources in-tree. Before "
+        "finishing, verify that `bash compile.sh` produces ./executable.\n\n"
+    )
+
+
+def build_assignments(arm: str, brief: str = "") -> list:
+    task = brief + TASK
     if arm == "solo":
-        return [Assignment(agent_id="agent1", role="lead", feature_id=None, task=TASK)]
+        return [Assignment(agent_id="agent1", role="lead", feature_id=None, task=task)]
     if arm in ("divide", "dividebo2"):
         return [
-            Assignment(agent_id="agent1", role="lead", feature_id=None, task=TASK + NEGOTIATE_LEAD),
-            Assignment(agent_id="agent2", role="member", feature_id=None, task=TASK + NEGOTIATE_MEMBER),
+            Assignment(agent_id="agent1", role="lead", feature_id=None, task=task + NEGOTIATE_LEAD),
+            Assignment(agent_id="agent2", role="member", feature_id=None, task=task + NEGOTIATE_MEMBER),
         ]
     return [
-        Assignment(agent_id="agent1", role="lead", feature_id=None, task=TASK),
-        Assignment(agent_id="agent2", role="member", feature_id=None, task=TASK),
+        Assignment(agent_id="agent1", role="lead", feature_id=None, task=task),
+        Assignment(agent_id="agent2", role="member", feature_id=None, task=task),
     ]
 
 
-def run_team_once(arm: str, img: str, *, step_limit: int, agent_time_limit: int | None):
+def run_team_once(arm: str, img: str, *, step_limit: int, agent_time_limit: int | None,
+                  gate: bool = False, brief: str = "", presub_merge: bool = False):
     """One full team run for `arm`; returns (patch, RunResult). Own run_id →
     own bus, own scratchpad/git-share volumes (safe to call concurrently)."""
     run_id = uuid.uuid4().hex[:8]
-    assignments = build_assignments(arm)
+    assignments = build_assignments(arm, brief)
     base = arm.replace("bo2", "")  # dividebo2 attempts run the divide config
     spec = TeamSpec(
         run_id=run_id,
@@ -379,6 +489,9 @@ def run_team_once(arm: str, img: str, *, step_limit: int, agent_time_limit: int 
         task_board=base in ("teamfull", "divide"),
         team_roles=base in ("teamfull", "divide"),
         temperature=0.0,
+        completion_gate=(pb_merge_completion_gate if presub_merge else pb_completion_gate) if (gate or presub_merge) else None,
+        select_integration=(lambda patches: max(range(len(patches)),
+                            key=lambda i: pb_score(img, patches[i]))) if presub_merge else None,
     )
     vols = []
     if spec.git_share:
@@ -400,6 +513,9 @@ def run_team_once(arm: str, img: str, *, step_limit: int, agent_time_limit: int 
         # (and the cross-container scratchpad) out of the index via the
         # repo-local exclude file — invisible to the agent's .gitignore.
         env.execute("printf 'executable\nshared/\n' >> .git/info/exclude")
+        # Iteration 7: the merge gate needs to know which shared branch is
+        # "self" so it merges only teammates' branches.
+        env.execute(f"echo {_id} > /tmp/.agent_id")
         return env
 
     harness = UnifiedHarness(bus=InMemoryBus(run_id), step_limit=step_limit, command_timeout=300)
@@ -416,6 +532,12 @@ def main() -> None:
     ap.add_argument("--repair", action="store_true", help="iteration 1: mechanical build gate + repair agent on the integrated tree")
     ap.add_argument("--agent-time-limit", type=int, default=0, help="wall-clock cap (s) per team agent; 0 = uncapped")
     ap.add_argument("--runs-dir", default="runs")
+    ap.add_argument("--completion-gate", action="store_true",
+                    help="iteration 6A: reject an agent's finish until compile.sh builds a fresh ./executable in its own container")
+    ap.add_argument("--env-brief", action="store_true",
+                    help="iteration 6B: prepend a probed toolchain list + operational no-network constraint to the task")
+    ap.add_argument("--presub-merge", action="store_true",
+                    help="iteration 7: finishing agent must merge teammate branches and pass the build gate on the MERGED tree")
     args = ap.parse_args()
 
     img = image_for(args.instance)
@@ -423,6 +545,7 @@ def main() -> None:
     out_root = Path(args.runs_dir) / run_name / args.instance
     t0 = time.time()
     bo2_meta = {}
+    brief = make_env_brief(img) if args.env_brief else ""
 
     if args.arm == "dividebo2":
         # Iteration 2: Board Best-of-2 transplant — each attempt is a FULL
@@ -433,7 +556,9 @@ def main() -> None:
         with ThreadPoolExecutor(max_workers=2) as ex:
             futs = [ex.submit(run_team_once, args.arm, img,
                               step_limit=args.step_limit,
-                              agent_time_limit=args.agent_time_limit or None)
+                              agent_time_limit=args.agent_time_limit or None,
+                              gate=args.completion_gate, brief=brief,
+                              presub_merge=args.presub_merge)
                     for _ in range(2)]
             attempts = [f.result() for f in futs]
         scores = [pb_score(img, patch) for patch, _ in attempts]
@@ -445,7 +570,9 @@ def main() -> None:
     else:
         patch, res = run_team_once(args.arm, img,
                                    step_limit=args.step_limit,
-                                   agent_time_limit=args.agent_time_limit or None)
+                                   agent_time_limit=args.agent_time_limit or None,
+                                   gate=args.completion_gate, brief=brief,
+                                   presub_merge=args.presub_merge)
 
     repair_meta = {}
     if args.repair:

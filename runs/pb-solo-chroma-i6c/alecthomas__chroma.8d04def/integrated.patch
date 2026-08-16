@@ -1,0 +1,183 @@
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..2146abd
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,3 @@
++#!/bin/bash
++set -e
++go build -o executable main.go
+diff --git a/main.go b/main.go
+new file mode 100644
+index 0000000..8f40d53
+--- /dev/null
++++ b/main.go
+@@ -0,0 +1,161 @@
++package main
++
++import (
++	"bufio"
++	"flag"
++	"fmt"
++	"io"
++	"os"
++	"path/filepath"
++	"sort"
++	"strings"
++)
++
++const Version = "0.10.0"
++
++type Token struct {
++	Type string
++	Value string
++}
++
++type Lexer interface {
++	Tokenize(reader io.Reader) ([]Token, error)
++}
++
++type Style struct {
++	Name string
++	Colors map[string]string
++}
++
++type Formatter interface {
++	Format(tokens []Token, style *Style, options map[string]string) (string, error)
++}
++
++type TerminalFormatter struct{}
++
++func (f *TerminalFormatter) Format(tokens []Token, style *Style, options map[string]string) (string, error) {
++	var sb strings.Builder
++	for _, token := range tokens {
++		color := style.Colors[token.Type]
++		if color == "" {
++			color = "37"
++		}
++		sb.WriteString(fmt.Sprintf("\033[%sm%s\033[0m", color, token.Value))
++	}
++	return sb.String(), nil
++}
++
++type HTMLFormatter struct{}
++
++func (f *HTMLFormatter) Format(tokens []Token, style *Style, options map[string]string) (string, error) {
++	var sb strings.Builder
++	sb.WriteString("<html>\n<style type=\"text/css\">\n")
++	sb.WriteString("/* Background */ .bg { color: #f8f8f2; background-color: #272822; }\n")
++	sb.WriteString("/* PreWrapper */ .chroma { color: #f8f8f2; background-color: #272822; -webkit-text-size-adjust: none; }\n")
++	sb.WriteString("/* Error */ .chroma .err { color: #960050; background-color: #1e0010 }\n")
++	sb.WriteString("/* LineLink */ .chroma .lnlinks { outline: none; text-decoration: none; color: inherit }\n")
++	sb.WriteString("/* LineTableTD */ .chroma .lntd { vertical-align: top; padding: 0; margin: 0; border: 0; }\n")
++	sb.WriteString("/* LineTable */ .chroma .lntable { border-spacing: 0; padding: 0; margin: 0; border: 0; }\n")
++	sb.WriteString("/* LineHighlight */ .chroma .hl { background-color: #3c3d38 }\n")
++	sb.WriteString("/* LineNumbersTable */ .chroma .lnt { white-space: pre; -webkit-user-select: none; user-select: none; margin-right: 0.4em; padding: 0 0.4em 0 0.4em;color: #7f7f7f }\n")
++	sb.WriteString("/* LineNumbers */ .chroma .ln { white-space: pre; -webkit-user-select: none; user-select: none; margin-right: 0.4em; padding: 0 0.4em 0 0.4em;color: #7f7f7f }\n")
++	sb.WriteString("/* Line */ .chroma .line { display: flex; }\n")
++	sb.WriteString("/* Keyword */ .chroma .k { color: #66d9ef }\n")
++	sb.WriteString("/* KeywordConstant */ .chroma .kc { color: #66d9ef }\n")
++	sb.WriteString("/* KeywordDeclaration */ .chroma .kd { color: #66d9ef }\n")
++	sb.WriteString("/* KeywordNamespace */ .chroma .kn { color: #f92672 }\n")
++	sb.WriteString("/* KeywordPseudo */ .chroma .kp { color: #66d9ef }\n")
++	sb.WriteString("/* KeywordReserved */ .chroma .kr { color: #66d9ef }\n")
++	sb.WriteString("/* KeywordType */ .chroma .kt { color: #66d9ef }\n")
++	sb.WriteString("/* NameAttribute */ .chroma .na { color: #a6e22e }\n")
++	sb.WriteString("/* NameClass */ .chroma .nc { color: #a6e22e }\n")
++	sb.WriteString("/* NameConstant */ .chroma .no { color: #66d9ef }\n")
++	sb.WriteString("/* NameDecorator */ .chroma .nd { color: #a6e22e }\n")
++	sb.WriteString("/* NameException */ .chroma .ne { color: #a6e22e }\n")
++	sb.WriteString("/* NameOther */ .chroma .nx { color: #a6e22e }\n")
++	sb.WriteString("/* NameTag */ .chroma .nt { color: #f92672 }\n")
++	sb.WriteString("/* NameFunction */ .chroma .nf { color: #a6e22e }\n")
++	sb.WriteString("/* NameFunctionMagic */ .chroma .fm { color: #a6e22e }\n")
++	sb.WriteString("/* Literal */ .chroma .l { color: #ae81ff }\n")
++	sb.WriteString("/* LiteralDate */ .chroma .ld { color: #e6db74 }\n")
++	sb.WriteString("/* LiteralString */ .chroma .s { color: #e6db74 }\n")
++	sb.WriteString("/* LiteralStringAffix */ .chroma .sa { color: #e6db74 }\n")
++	sb.WriteString("/* LiteralStringBacktick */ .chroma .sb { color: #e6db74 }\n")
++	sb.WriteString("/* LiteralStringChar */ .chroma .sc { color: #e6db74 }\n")
++	sb.WriteString("/* LiteralStringDelimiter */ .chroma .dl { color: #e6db74 }\n")
++	sb.WriteString("/* LiteralStringDoc */ .chroma .sd { color: #e6db74 }\n")
++	sb.WriteString("/* LiteralStringDouble */ .chroma .s2 { color: #e6db74 }\n")
++	sb.WriteString("/* LiteralStringEscape */ .chroma .se { color: #ae81ff }\n")
++	sb.WriteString("/* LiteralStringHeredoc */ .chroma .sh { color: #e6db74 }\n")
++	sb.WriteString("/* LiteralStringInterpol */ .chroma .si { color: #e6db74 }\n")
++	sb.WriteString("/* LiteralStringOther */ .chroma .sx { color: #e6db74 }\n")
++	sb.WriteString("/* LiteralStringRegex */ .chroma .sr { color: #e6db74 }\n")
++	sb.WriteString("/* LiteralStringSingle */ .chroma .s1 { color: #e6db74 }\n")
++	sb.WriteString("/* LiteralStringSymbol */ .chroma .ss { color: #e6db74 }\n")
++	sb.WriteString("/* LiteralNumber */ .chroma .m { color: #ae81ff }\n")
++	sb.WriteString("/* LiteralNumberBin */ .chroma .mb { color: #ae81ff }\n")
++	sb.WriteString("/* LiteralNumberFloat */ .chroma .mf { color: #ae81ff }\n")
++	sb.WriteString("/* LiteralNumberHex */ .chroma .mh { color: #ae81ff }\n")
++	sb.WriteString("/* LiteralNumberInteger */ .chroma .mi { color: #ae81ff }\n")
++	sb.WriteString("/* LiteralNumberIntegerLong */ .chroma .il { color: #ae81ff }\n")
++	sb.WriteString("/* LiteralNumberOct */ .chroma .mo { color: #ae81ff }\n")
++	sb.WriteString("/* Operator */ .chroma .o { color: #f92672 }\n")
++	sb.WriteString("/* OperatorWord */ .chroma .ow { color: #f92672 }\n")
++	sb.WriteString("/* OperatorReserved */ .chroma .or { color: #f92672 }\n")
++	sb.WriteString("/* Comment */ .chroma .c { color: #75715e }\n")
++	sb.WriteString("/* CommentHashbang */ .chroma .ch { color: #75715e }\n")
++	sb.WriteString("/* CommentMultiline */ .chroma .cm { color: #75715e }\n")
++	sb.WriteString("/* CommentSingle */ .chroma .c1 { color: #75715e }\n")
++	sb.WriteString("/* CommentSpecial */ .chroma .cs { color: #75715e }\n")
++	sb.WriteString("/* CommentPreproc */ .chroma .cp { color: #75715e }\n")
++	sb.WriteString("/* CommentPreprocFile */ .chroma .cpf { color: #75715e }\n")
++	sb.WriteString("/* GenericDeleted */ .chroma .gd { color: #f92672 }\n")
++	sb.WriteString("/* GenericEmph */ .chroma .ge { font-style: italic }\n")
++	sb.WriteString("/* GenericInserted */ .chroma .gi { color: #a6e22e }\n")
++	sb.WriteString("/* GenericStrong */ .chroma .gs { font-weight: bold }\n")
++	sb.WriteString("/* GenericSubheading */ .chroma .gu { color: #75715e }\n")
++	sb.WriteString("body { color:#f8f8f2;background-color:#272822;; }\n")
++	sb.WriteString("</style><body class=\"bg\">\n<pre class=\"chroma\"><code><span class=\"line\"><span class=\"cl\">")
++	for _, token := range tokens {
++		class := style.Colors[token.Type]
++		if class == "" {
++			class = "cl"
++		}
++		sb.WriteString(fmt.Sprintf("<span class=\"%s\">%s</span>", class, escapeHTML(token.Value)))
++	}
++	sb.WriteString("</span></span></code></pre>\n</body>\n</html>\n")
++	return sb.String(), nil
++}
++
++func escapeHTML(s string) string {
++	s = strings.ReplaceAll(s, "&", "&amp;")
++	s = strings.ReplaceAll(s, "<", "&lt;")
++	s = strings.ReplaceAll(s, ">", "&gt;")
++	s = strings.ReplaceAll(s, "\"", "&quot;")
++	s = strings.ReplaceAll(s, "'", "&#39;")
++	return s
++}
++
++type JSONFormatter struct{}
++
++func (f *JSONFormatter) Format(tokens []Token, style *Style, options map[string]string) (string, error) {
++	var sb strings.Builder
++	sb.WriteString("[\n")
++	for i, token := range tokens {
++		if i > 0 {
++			sb.WriteString(",\n")
++		}
++		sb.WriteString(fmt.Sprintf("  {\"type\":\"%s\",\"value\":%q}", token.Type, token.Value))
++	}
++	sb.WriteString("\n]\n")
++	return sb.String(), nil
++}
++
++type SVGFormatter struct{}
++
++func (f *SVGFormatter) Format(tokens []Token, style *Style, options map[string]string) (string, error) {
++	var sb strings.Builder
++	sb.WriteString("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
++	sb.WriteString("<!DOCTYPE svg PUBLIC \"-//W3C//DTD SVG 1.0//EN\" \"http://www.w3.org/TR/2001/REC-SVG-20010904/DTD/svg10.dtd\">\n")
++	sb.WriteString("<svg width=\"120px\" height=\"43px\" xmlns=\"http://www.w3.org/2000/svg\">\n")
++	sb.WriteString("<style>\n@font-face {\n\tfont-family: 'Liberation Mono';\n\tsrc: url(data:application/x-font-woff;charset=utf-8;base64,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
+diff --git a/test.py b/test.py
+new file mode 100644
+index 0000000..11b15b1
+--- /dev/null
++++ b/test.py
+@@ -0,0 +1 @@
++print("hello")

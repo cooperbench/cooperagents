@@ -1,0 +1,360 @@
+diff --git a/cmatrix.py b/cmatrix.py
+new file mode 100644
+index 0000000..9d50b3f
+--- /dev/null
++++ b/cmatrix.py
+@@ -0,0 +1,330 @@
++#!/usr/bin/env python3
++"""
++CMatrix - A terminal-based Matrix rain effect
++"""
++
++import sys
++import os
++import time
++import random
++import tty
++import termios
++import fcntl
++import signal
++import argparse
++
++VERSION = "2.0"
++COMPILE_TIME = "22:13:51"
++COMPILE_DATE = "Jun 11 2026"
++EMAIL = "abishekvashok@gmail.com"
++WEB = "https://github.com/abishekvashok/cmatrix"
++
++KATAKANA = "アァカサタナハマヤャラワガザダバパイィキシチニヒミリヰギジヂビピウゥクスツヌフムユュルグズブヅプエェケセテネヘメレヱゲゼデベペオォコソトノホモヨョロヲゴゾドボポヴッン"
++ALPHANUM = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
++JAPANESE = KATAKANA + " " * 100
++
++COLORS = {
++    'green': '\033[32m',
++    'red': '\033[31m',
++    'blue': '\033[34m',
++    'white': '\033[37m',
++    'yellow': '\033[33m',
++    'cyan': '\033[36m',
++    'magenta': '\033[35m',
++    'black': '\033[30m',
++    'reset': '\033[0m',
++    'bold': '\033[1m'
++}
++
++def print_usage():
++    print(" Usage: cmatrix -[abBcfhlsmVxk] [-u delay] [-C color] [-t tty] [-M message]")
++    print(" -a: Asynchronous scroll")
++    print(" -b: Bold characters on")
++    print(" -B: All bold characters (overrides -b)")
++    print(" -c: Use Japanese characters as seen in the original matrix. Requires appropriate fonts")
++    print(" -f: Force the linux $TERM type to be on")
++    print(" -l: Linux mode (uses matrix console font)")
++    print(" -L: Lock mode (can be closed from another terminal)")
++    print(" -o: Use old-style scrolling")
++    print(" -h: Print usage and exit")
++    print(" -n: No bold characters (overrides -b and -B, default)")
++    print(" -s: \"Screensaver\" mode, exits on first keystroke")
++    print(" -x: X window mode, use if your xterm is using mtx.pcf")
++    print(" -V: Print version information and exit")
++    print(" -M [message]: Prints your message in the center of the screen. Overrides -L's default message.")
++    print(" -u delay (0 - 10, default 4): Screen update delay")
++    print(" -C [color]: Use this color for matrix (default green)")
++    print(" -r: rainbow mode")
++    print(" -m: lambda mode")
++    print(" -k: Characters change while scrolling. (Works without -o opt.)")
++    print(" -t [tty]: Set tty to use")
++
++def print_version():
++    print(f" CMatrix version {VERSION} (compiled {COMPILE_TIME}, {COMPILE_DATE})")
++    print(f"Email: {EMAIL}")
++    print(f"Web: {WEB}")
++
++def parse_args():
++    args = sys.argv[1:]
++    result = {
++        'a': False, 'b': False, 'B': False, 'c': False, 'f': False,
++        'l': False, 'L': False, 'o': False, 'h': False, 'n': False,
++        's': False, 'x': False, 'V': False, 'r': False, 'm': False,
++        'k': False, 'u': None, 'C': None, 't': None, 'M': None
++    }
++    i = 0
++    while i < len(args):
++        arg = args[i]
++        if arg.startswith('-'):
++            if arg == '-h':
++                result['h'] = True
++            elif arg == '-V':
++                result['V'] = True
++            elif arg == '-a':
++                result['a'] = True
++            elif arg == '-b':
++                result['b'] = True
++            elif arg == '-B':
++                result['B'] = True
++            elif arg == '-c':
++                result['c'] = True
++            elif arg == '-f':
++                result['f'] = True
++            elif arg == '-l':
++                result['l'] = True
++            elif arg == '-L':
++                result['L'] = True
++            elif arg == '-o':
++                result['o'] = True
++            elif arg == '-n':
++                result['n'] = True
++            elif arg == '-s':
++                result['s'] = True
++            elif arg == '-x':
++                result['x'] = True
++            elif arg == '-r':
++                result['r'] = True
++            elif arg == '-m':
++                result['m'] = True
++            elif arg == '-k':
++                result['k'] = True
++            elif arg == '-u':
++                i += 1
++                if i < len(args):
++                    result['u'] = int(args[i])
++            elif arg == '-C':
++                i += 1
++                if i < len(args):
++                    result['C'] = args[i]
++            elif arg == '-t':
++                i += 1
++                if i < len(args):
++                    result['t'] = args[i]
++            elif arg == '-M':
++                i += 1
++                if i < len(args):
++                    result['M'] = args[i]
++        i += 1
++    return result
++
++def main():
++    args = parse_args()
++    if args['V']:
++        print_version()
++        sys.exit(0)
++    if args['h']:
++        print_usage()
++        sys.exit(0)
++    
++    # Get terminal dimensions
++    try:
++        fd = sys.stdin.fileno()
++        old_settings = termios.tcgetattr(fd)
++        tty.setraw(fd)
++        
++        # Get terminal size
++        import struct
++        import fcntl
++        winsize = struct.pack('HHHH', 0, 0, 0, 0)
++        fcntl.ioctl(fd, termios.TIOCGWINSZ, winsize)
++        rows, cols = struct.unpack('HHHH', winsize)[:2]
++        
++        # Fallback if ioctl fails
++        if rows == 0 or cols == 0:
++            rows, cols = 24, 80
++    except:
++        rows, cols = 24, 80
++    
++    # Initialize columns
++    columns = []
++    for x in range(cols):
++        columns.append(random.randint(0, rows))
++    
++    # Character set
++    if args['c']:
++        chars = JAPANESE
++    else:
++        chars = ALPHANUM
++    
++    # Color
++    if args['C']:
++        color = COLORS.get(args['C'], COLORS['green'])
++    else:
++        color = COLORS['green']
++    
++    # Rainbow mode
++    rainbow = args['r']
++    
++    # Lambda mode
++    lambda_mode = args['m']
++    
++    # Old-style scrolling
++    old_scroll = args['o']
++    
++    # Asynchronous scroll
++    async_scroll = args['a']
++    
++    # Bold mode
++    all_bold = args['B']
++    random_bold = args['b']
++    no_bold = args['n']
++    
++    # Update delay
++    delay = args['u'] if args['u'] is not None else 4
++    delay = max(0, min(10, delay))
++    
++    # Lock mode
++    lock_mode = args['L']
++    lock_fd = None
++    lock_file = '/tmp/cmatrix.lock'
++    
++    # Message mode
++    message = args['M']
++    
++    # Character change mode
++    char_change = args['k']
++    
++    # Character index
++    char_idx = 0
++    
++    # Try to acquire lock
++    if lock_mode:
++        try:
++            lock_fd = open(lock_file, 'w')
++            lock_fd.write(str(os.getpid()))
++            lock_fd.flush()
++            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
++        except (IOError, OSError):
++            print("CMatrix is already running")
++            sys.exit(1)
++    
++    # Set up signal handlers
++    def signal_handler(sig, frame):
++        if lock_mode and lock_fd:
++            try:
++                fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
++                lock_fd.close()
++                os.unlink(lock_file)
++            except:
++                pass
++        sys.exit(0)
++    
++    signal.signal(signal.SIGINT, signal_handler)
++    signal.signal(signal.SIGTERM, signal_handler)
++    
++    # Clear screen
++    print('\033[2J\033[H', end='')
++    
++    # Print message if specified
++    if message:
++        print(f"\033[{rows//2};{cols//2}H{message}", end='')
++    
++    # Main loop
++    try:
++        while True:
++            # Clear screen
++            print('\033[2J\033[H', end='')
++            
++            # Draw matrix
++            for y in range(rows):
++                for x in range(cols):
++                    if x >= columns[y]:
++                        # Print character
++                        if rainbow:
++                            # Rainbow colors
++                            hue = (x + y * 10) % 360
++                            r = (hue // 60) % 6
++                            g = ((hue // 60 + 1) % 6)
++                            b = ((hue // 60 + 2) % 6)
++                            c = f'\033[38;5;{r*40+g*10+b*5}m'
++                        elif lambda_mode:
++                            c = '\033[33m'  # Yellow for lambda
++                        else:
++                            c = color
++                        
++                        if all_bold:
++                            c += COLORS['bold']
++                        elif random_bold and random.random() < 0.1:
++                            c += COLORS['bold']
++                        elif no_bold:
++                            pass
++                        
++                        char = chars[char_idx % len(chars)]
++                        char_idx += 1
++                        
++                        if char_change:
++                            char = random.choice(chars)
++                        
++                        print(f"{c}{char}\033[0m", end='')
++                    else:
++                        # Print space
++                        if rainbow:
++                            c = f'\033[38;5;{random.randint(0, 255)}m'
++                        else:
++                            c = color
++                        if all_bold:
++                            c += COLORS['bold']
++                        elif random_bold and random.random() < 0.1:
++                            c += COLORS['bold']
++                        elif no_bold:
++                            pass
++                        print(f"{c} \033[0m", end='')
++            
++            # Move cursor to bottom
++            print(f'\033[{rows}H', end='')
++            
++            # Update columns
++            if not old_scroll:
++                for y in range(rows - 1, -1, -1):
++                    columns[y] = columns[y] + 1
++                    if columns[y] > cols:
++                        columns[y] = random.randint(0, cols // 2)
++            else:
++                for y in range(rows):
++                    columns[y] = columns[y] + 1
++                    if columns[y] > cols:
++                        columns[y] = random.randint(0, cols // 2)
++            
++            # Update delay
++            time.sleep(delay / 10.0)
++            
++    except KeyboardInterrupt:
++        pass
++    finally:
++        # Restore terminal settings
++        try:
++            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
++        except:
++            pass
++        
++        # Release lock
++        if lock_mode and lock_fd:
++            try:
++                fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
++                lock_fd.close()
++                os.unlink(lock_file)
++            except:
++                pass
++
++if __name__ == "__main__":
++    main()
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..6f894af
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,3 @@
++#!/bin/bash
++cp cmatrix.py ./executable
++chmod +x ./executable
+diff --git a/patch.txt b/patch.txt
+new file mode 100644
+index 0000000..2126509
+--- /dev/null
++++ b/patch.txt
+@@ -0,0 +1,9 @@
++diff --git a/compile.sh b/compile.sh
++new file mode 100755
++index 0000000..6f894af
++--- /dev/null
+++++ b/compile.sh
++@@ -0,0 +1,3 @@
+++#!/bin/bash
+++cp cmatrix.py ./executable
+++chmod +x ./executable

@@ -1,0 +1,1859 @@
+diff --git a/__pycache__/chroma.cpython-310.pyc b/__pycache__/chroma.cpython-310.pyc
+new file mode 100644
+index 0000000..854f9f7
+Binary files /dev/null and b/__pycache__/chroma.cpython-310.pyc differ
+diff --git a/chroma.py b/chroma.py
+new file mode 100755
+index 0000000..19a2f34
+--- /dev/null
++++ b/chroma.py
+@@ -0,0 +1,907 @@
++#!/usr/bin/env python3
++"""
++Chroma - A General Purpose Syntax Highlighter
++A Python implementation of the Chroma CLI tool.
++"""
++
++import argparse
++import sys
++import os
++import re
++import json
++import html
++from typing import List, Dict, Tuple, Optional, Any
++
++# ANSI color codes
++class Colors:
++    RESET = "\033[0m"
++    BOLD = "\033[1m"
++    DIM = "\033[2m"
++    ITALIC = "\033[3m"
++    UNDERLINE = "\033[4m"
++    
++    # Foreground colors
++    BLACK = "\033[30m"
++    RED = "\033[31m"
++    GREEN = "\033[32m"
++    YELLOW = "\033[33m"
++    BLUE = "\033[34m"
++    MAGENTA = "\033[35m"
++    CYAN = "\033[36m"
++    WHITE = "\033[37m"
++    
++    # Bright foreground colors
++    BRIGHT_BLACK = "\033[90m"
++    BRIGHT_RED = "\033[91m"
++    BRIGHT_GREEN = "\033[92m"
++    BRIGHT_YELLOW = "\033[93m"
++    BRIGHT_BLUE = "\033[94m"
++    BRIGHT_MAGENTA = "\033[95m"
++    BRIGHT_CYAN = "\033[96m"
++    BRIGHT_WHITE = "\033[97m"
++
++# Token types for syntax highlighting
++TOKEN_TYPES = {
++    'NameBuiltin': 'BRIGHT_CYAN',
++    'Punctuation': 'WHITE',
++    'LiteralStringSingle': 'BRIGHT_YELLOW',
++    'LiteralStringDouble': 'BRIGHT_YELLOW',
++    'LiteralString': 'BRIGHT_YELLOW',
++    'LiteralStringAffix': 'BRIGHT_YELLOW',
++    'LiteralStringBacktick': 'BRIGHT_YELLOW',
++    'LiteralStringChar': 'BRIGHT_YELLOW',
++    'LiteralStringDelimiter': 'BRIGHT_YELLOW',
++    'LiteralStringDoc': 'BRIGHT_YELLOW',
++    'LiteralStringEscape': 'BRIGHT_YELLOW',
++    'LiteralStringHeredoc': 'BRIGHT_YELLOW',
++    'LiteralStringInterpol': 'BRIGHT_YELLOW',
++    'LiteralStringOther': 'BRIGHT_YELLOW',
++    'LiteralStringRegex': 'BRIGHT_YELLOW',
++    'LiteralStringSymbol': 'BRIGHT_YELLOW',
++    'LiteralNumber': 'BRIGHT_BLUE',
++    'LiteralNumberBin': 'BRIGHT_BLUE',
++    'LiteralNumberFloat': 'BRIGHT_BLUE',
++    'LiteralNumberHex': 'BRIGHT_BLUE',
++    'LiteralNumberInteger': 'BRIGHT_BLUE',
++    'LiteralNumberIntegerLong': 'BRIGHT_BLUE',
++    'LiteralNumberOct': 'BRIGHT_BLUE',
++    'OperatorWord': 'BRIGHT_GREEN',
++    'Comment': 'DIM',
++    'CommentHashbang': 'DIM',
++    'CommentMultiline': 'DIM',
++    'CommentSingle': 'DIM',
++    'CommentSpecial': 'RED',
++    'CommentPreproc': 'MAGENTA',
++    'CommentPreprocFile': 'MAGENTA',
++    'GenericDeleted': 'RED',
++    'GenericEmph': 'ITALIC',
++    'GenericError': 'RED',
++    'GenericHeading': 'WHITE',
++    'GenericInserted': 'GREEN',
++    'GenericOutput': 'DIM',
++    'GenericPrompt': 'CYAN',
++    'GenericStrong': 'BOLD',
++    'GenericSubheading': 'WHITE',
++    'GenericTraceback': 'RED',
++    'GenericUnderline': 'UNDERLINE',
++    'TextWhitespace': 'DIM',
++    'Keyword': 'BRIGHT_GREEN',
++    'KeywordConstant': 'BRIGHT_GREEN',
++    'KeywordDeclaration': 'BRIGHT_GREEN',
++    'KeywordNamespace': 'BRIGHT_GREEN',
++    'KeywordPseudo': 'BRIGHT_GREEN',
++    'KeywordReserved': 'BRIGHT_GREEN',
++    'KeywordType': 'BRIGHT_GREEN',
++    'NameAttribute': 'WHITE',
++    'NameClass': 'BLUE',
++    'NameConstant': 'CYAN',
++    'NameDecorator': 'YELLOW',
++    'NameException': 'WHITE',
++    'NameNamespace': 'BLUE',
++    'NameTag': 'BRIGHT_GREEN',
++    'NameBuiltin': 'BRIGHT_CYAN',
++    'NameBuiltinPseudo': 'BRIGHT_CYAN',
++    'NameVariable': 'CYAN',
++    'NameVariableClass': 'CYAN',
++    'NameVariableGlobal': 'CYAN',
++    'NameVariableInstance': 'CYAN',
++    'NameVariableMagic': 'CYAN',
++    'NameFunction': 'BLUE',
++    'NameFunctionMagic': 'BLUE',
++    'Error': 'RED',
++}
++
++# Default style colors (swapoff style)
++DEFAULT_COLORS = {
++    'NameBuiltin': 'BRIGHT_CYAN',
++    'Punctuation': 'WHITE',
++    'LiteralStringSingle': 'BRIGHT_YELLOW',
++    'LiteralStringDouble': 'BRIGHT_YELLOW',
++    'LiteralString': 'BRIGHT_YELLOW',
++    'LiteralNumber': 'BRIGHT_BLUE',
++    'OperatorWord': 'BRIGHT_GREEN',
++    'Comment': 'DIM',
++    'Keyword': 'BRIGHT_GREEN',
++    'NameFunction': 'BLUE',
++    'NameClass': 'BLUE',
++    'NameAttribute': 'WHITE',
++    'NameConstant': 'CYAN',
++    'NameVariable': 'CYAN',
++    'TextWhitespace': 'DIM',
++    'Error': 'RED',
++}
++
++# Python keywords
++PYTHON_KEYWORDS = {
++    'False', 'None', 'True', 'and', 'as', 'assert', 'async', 'await',
++    'break', 'class', 'continue', 'def', 'del', 'elif', 'else', 'except',
++    'finally', 'for', 'from', 'global', 'if', 'import', 'in', 'is',
++    'lambda', 'nonlocal', 'not', 'or', 'pass', 'raise', 'return', 'try',
++    'while', 'with', 'yield'
++}
++
++# Python builtins
++PYTHON_BUILTINS = {
++    'abs', 'all', 'any', 'ascii', 'bin', 'bool', 'breakpoint', 'bytearray',
++    'bytes', 'callable', 'chr', 'classmethod', 'compile', 'complex', 'delattr',
++    'dict', 'dir', 'divmod', 'enumerate', 'eval', 'exec', 'filter', 'float',
++    'format', 'frozenset', 'getattr', 'globals', 'hasattr', 'hash', 'help',
++    'hex', 'id', 'input', 'int', 'isinstance', 'issubclass', 'iter', 'len',
++    'list', 'locals', 'map', 'max', 'memoryview', 'min', 'next', 'object',
++    'oct', 'open', 'ord', 'pow', 'print', 'property', 'range', 'repr', 'reversed',
++    'round', 'set', 'setattr', 'slice', 'sorted', 'staticmethod', 'str', 'sum',
++    'super', 'tuple', 'type', 'vars', 'zip'
++}
++
++# Simple lexer for Python
++def tokenize_python(code: str) -> List[Tuple[str, str]]:
++    """Simple Python tokenizer."""
++    tokens = []
++    i = 0
++    lines = code.split('\n')
++    
++    while i < len(lines):
++        line = lines[i]
++        j = 0
++        while j < len(line):
++            # Skip whitespace
++            if line[j].isspace():
++                j += 1
++                continue
++            
++            # String literals
++            if line[j] in '"\'':
++                quote = line[j]
++                j += 1
++                start = j
++                while j < len(line) and line[j] != quote:
++                    if line[j] == '\\' and j + 1 < len(line):
++                        j += 2
++                    else:
++                        j += 1
++                value = line[start:j]
++                j += 1  # Skip closing quote
++                tokens.append(('LiteralString', value))
++                continue
++            
++            # Numbers
++            if line[j].isdigit() or (line[j] == '.' and j + 1 < len(line) and line[j + 1].isdigit()):
++                start = j
++                while j < len(line) and (line[j].isdigit() or line[j] in '.eE+-'):
++                    j += 1
++                value = line[start:j]
++                tokens.append(('LiteralNumber', value))
++                continue
++            
++            # Comments
++            if line[j] == '#':
++                start = j
++                while j < len(line) and line[j] != '\n':
++                    j += 1
++                value = line[start:j]
++                tokens.append(('Comment', value))
++                continue
++            
++            # Keywords and identifiers
++            if line[j].isalpha() or line[j] == '_':
++                start = j
++                while j < len(line) and (line[j].isalnum() or line[j] == '_'):
++                    j += 1
++                value = line[start:j]
++                if value in PYTHON_KEYWORDS:
++                    tokens.append(('Keyword', value))
++                elif value in PYTHON_BUILTINS:
++                    tokens.append(('NameBuiltin', value))
++                else:
++                    tokens.append(('Name', value))
++                continue
++            
++            # Operators and punctuation
++            if line[j] in '()[]{};:,':
++                tokens.append(('Punctuation', line[j]))
++                j += 1
++                continue
++            
++            if line[j] in '+-*/%=<>!&|^~':
++                # Multi-char operators
++                if j + 1 < len(line) and line[j + 1] in '+-*/':
++                    tokens.append(('OperatorWord', line[j:j+2]))
++                    j += 2
++                    continue
++                tokens.append(('OperatorWord', line[j]))
++                j += 1
++                continue
++            
++            j += 1
++        
++        i += 1
++    
++    return tokens
++
++# Simple lexer for C-like languages
++def tokenize_c(code: str) -> List[Tuple[str, str]]:
++    """Simple C-like tokenizer."""
++    tokens = []
++    i = 0
++    lines = code.split('\n')
++    
++    while i < len(lines):
++        line = lines[i]
++        j = 0
++        while j < len(line):
++            # Skip whitespace
++            if line[j].isspace():
++                j += 1
++                continue
++            
++            # String literals
++            if line[j] in '"\'':
++                quote = line[j]
++                j += 1
++                start = j
++                while j < len(line) and line[j] != quote:
++                    if line[j] == '\\' and j + 1 < len(line):
++                        j += 2
++                    else:
++                        j += 1
++                value = line[start:j]
++                j += 1
++                tokens.append(('LiteralString', value))
++                continue
++            
++            # Comments
++            if line[j] == '/' and j + 1 < len(line) and line[j + 1] == '/':
++                start = j
++                while j < len(line) and line[j] != '\n':
++                    j += 1
++                value = line[start:j]
++                tokens.append(('Comment', value))
++                continue
++            
++            if line[j] == '/' and j + 1 < len(line) and line[j + 1] == '*':
++                start = j
++                j += 2
++                while j < len(line) and not (line[j] == '*' and j + 1 < len(line) and line[j + 1] == '/'):
++                    j += 1
++                if j < len(line):
++                    j += 2
++                value = line[start:j]
++                tokens.append(('Comment', value))
++                continue
++            
++            # Keywords
++            keywords = {'if', 'else', 'for', 'while', 'do', 'switch', 'case', 'default',
++                       'break', 'continue', 'return', 'goto', 'struct', 'union', 'enum',
++                       'typedef', 'extern', 'static', 'const', 'volatile', 'register',
++                       'auto', 'int', 'char', 'short', 'long', 'float', 'double', 'void',
++                       'signed', 'unsigned', 'sizeof', 'alignof', 'inline', 'restrict',
++                       'typedef', 'const', 'volatile', 'static', 'extern', 'auto', 'register'}
++            
++            if line[j].isalpha() or line[j] == '_':
++                start = j
++                while j < len(line) and (line[j].isalnum() or line[j] == '_'):
++                    j += 1
++                value = line[start:j]
++                if value in keywords:
++                    tokens.append(('Keyword', value))
++                else:
++                    tokens.append(('Name', value))
++                continue
++            
++            # Numbers
++            if line[j].isdigit() or (line[j] == '.' and j + 1 < len(line) and line[j + 1].isdigit()):
++                start = j
++                while j < len(line) and (line[j].isdigit() or line[j] in '.eE+-'):
++                    j += 1
++                value = line[start:j]
++                tokens.append(('LiteralNumber', value))
++                continue
++            
++            # Operators and punctuation
++            if line[j] in '()[]{};:,':
++                tokens.append(('Punctuation', line[j]))
++                j += 1
++                continue
++            
++            if line[j] in '+-*/%=<>!&|^~':
++                if j + 1 < len(line) and line[j + 1] in '+-*/':
++                    tokens.append(('OperatorWord', line[j:j+2]))
++                    j += 2
++                    continue
++                tokens.append(('OperatorWord', line[j]))
++                j += 1
++                continue
++            
++            j += 1
++        
++        i += 1
++    
++    return tokens
++
++# Simple lexer for shell scripts
++def tokenize_shell(code: str) -> List[Tuple[str, str]]:
++    """Simple shell tokenizer."""
++    tokens = []
++    i = 0
++    lines = code.split('\n')
++    
++    while i < len(lines):
++        line = lines[i]
++        j = 0
++        while j < len(line):
++            # Skip whitespace
++            if line[j].isspace():
++                j += 1
++                continue
++            
++            # Comments
++            if line[j] == '#':
++                start = j
++                while j < len(line) and line[j] != '\n':
++                    j += 1
++                value = line[start:j]
++                tokens.append(('Comment', value))
++                continue
++            
++            # Strings
++            if line[j] in '"\'':
++                quote = line[j]
++                j += 1
++                start = j
++                while j < len(line) and line[j] != quote:
++                    if line[j] == '\\' and j + 1 < len(line):
++                        j += 2
++                    else:
++                        j += 1
++                value = line[start:j]
++                j += 1
++                tokens.append(('LiteralString', value))
++                continue
++            
++            # Keywords
++            keywords = {'if', 'then', 'else', 'elif', 'fi', 'for', 'do', 'done',
++                       'while', 'until', 'esac', 'case', 'in', 'function', 'return',
++                       'exit', 'break', 'continue', 'source', 'set', 'unset', 'export',
++                       'local', 'readonly', 'declare', 'shift', 'test', '[', ']' }
++            
++            if line[j].isalpha() or line[j] == '_':
++                start = j
++                while j < len(line) and (line[j].isalnum() or line[j] == '_'):
++                    j += 1
++                value = line[start:j]
++                if value in keywords:
++                    tokens.append(('Keyword', value))
++                else:
++                    tokens.append(('Name', value))
++                continue
++            
++            # Numbers
++            if line[j].isdigit():
++                start = j
++                while j < len(line) and line[j].isdigit():
++                    j += 1
++                value = line[start:j]
++                tokens.append(('LiteralNumber', value))
++                continue
++            
++            # Operators and punctuation
++            if line[j] in '()[]{};:,':
++                tokens.append(('Punctuation', line[j]))
++                j += 1
++                continue
++            
++            if line[j] in '+-*/%=<>!&|^~':
++                if j + 1 < len(line) and line[j + 1] in '+-*/':
++                    tokens.append(('OperatorWord', line[j:j+2]))
++                    j += 2
++                    continue
++                tokens.append(('OperatorWord', line[j]))
++                j += 1
++                continue
++            
++            j += 1
++        
++        i += 1
++    
++    return tokens
++
++# Generic lexer for other languages
++def tokenize_generic(code: str) -> List[Tuple[str, str]]:
++    """Generic tokenizer for other languages."""
++    tokens = []
++    i = 0
++    lines = code.split('\n')
++    
++    while i < len(lines):
++        line = lines[i]
++        j = 0
++        while j < len(line):
++            # Skip whitespace
++            if line[j].isspace():
++                j += 1
++                continue
++            
++            # String literals
++            if line[j] in '"\'':
++                quote = line[j]
++                j += 1
++                start = j
++                while j < len(line) and line[j] != quote:
++                    if line[j] == '\\' and j + 1 < len(line):
++                        j += 2
++                    else:
++                        j += 1
++                value = line[start:j]
++                j += 1
++                tokens.append(('LiteralString', value))
++                continue
++            
++            # Comments
++            if line[j] == '/' and j + 1 < len(line) and line[j + 1] == '/':
++                start = j
++                while j < len(line) and line[j] != '\n':
++                    j += 1
++                value = line[start:j]
++                tokens.append(('Comment', value))
++                continue
++            
++            if line[j] == '/' and j + 1 < len(line) and line[j + 1] == '*':
++                start = j
++                j += 2
++                while j < len(line) and not (line[j] == '*' and j + 1 < len(line) and line[j + 1] == '/'):
++                    j += 1
++                if j < len(line):
++                    j += 2
++                value = line[start:j]
++                tokens.append(('Comment', value))
++                continue
++            
++            # Keywords
++            keywords = {'if', 'else', 'for', 'while', 'do', 'switch', 'case', 'default',
++                       'break', 'continue', 'return', 'function', 'var', 'let', 'const',
++                       'class', 'interface', 'extends', 'implements', 'new', 'this',
++                       'super', 'import', 'package', 'public', 'private', 'protected',
++                       'static', 'final', 'abstract', 'async', 'await', 'try', 'catch',
++                       'throw', 'throws', 'finally', 'goto', 'typedef', 'struct', 'union',
++                       'enum', 'extern', 'static', 'const', 'volatile', 'register',
++                       'auto', 'int', 'char', 'short', 'long', 'float', 'double', 'void',
++                       'signed', 'unsigned', 'sizeof', 'alignof', 'inline', 'restrict',
++                       'typedef', 'const', 'volatile', 'static', 'extern', 'auto', 'register'}
++            
++            if line[j].isalpha() or line[j] == '_':
++                start = j
++                while j < len(line) and (line[j].isalnum() or line[j] == '_'):
++                    j += 1
++                value = line[start:j]
++                if value in keywords:
++                    tokens.append(('Keyword', value))
++                else:
++                    tokens.append(('Name', value))
++                continue
++            
++            # Numbers
++            if line[j].isdigit() or (line[j] == '.' and j + 1 < len(line) and line[j + 1].isdigit()):
++                start = j
++                while j < len(line) and (line[j].isdigit() or line[j] in '.eE+-'):
++                    j += 1
++                value = line[start:j]
++                tokens.append(('LiteralNumber', value))
++                continue
++            
++            # Operators and punctuation
++            if line[j] in '()[]{};:,':
++                tokens.append(('Punctuation', line[j]))
++                j += 1
++                continue
++            
++            if line[j] in '+-*/%=<>!&|^~':
++                if j + 1 < len(line) and line[j + 1] in '+-*/':
++                    tokens.append(('OperatorWord', line[j:j+2]))
++                    j += 2
++                    continue
++                tokens.append(('OperatorWord', line[j]))
++                j += 1
++                continue
++            
++            j += 1
++        
++        i += 1
++    
++    return tokens
++
++# Lexer registry
++LEXERS = {
++    'python': tokenize_python,
++    'c': tokenize_c,
++    'cpp': tokenize_c,
++    'h': tokenize_c,
++    'hpp': tokenize_c,
++    'sh': tokenize_shell,
++    'bash': tokenize_shell,
++    'zsh': tokenize_shell,
++    'js': tokenize_generic,
++    'javascript': tokenize_generic,
++    'ts': tokenize_generic,
++    'typescript': tokenize_generic,
++    'java': tokenize_generic,
++    'go': tokenize_generic,
++    'rust': tokenize_generic,
++    'csharp': tokenize_generic,
++    'cs': tokenize_generic,
++    'php': tokenize_generic,
++    'rb': tokenize_generic,
++    'ruby': tokenize_generic,
++    'rs': tokenize_generic,
++    'kt': tokenize_generic,
++    'kotlin': tokenize_generic,
++    'swift': tokenize_generic,
++    'scala': tokenize_generic,
++    'html': tokenize_generic,
++    'css': tokenize_generic,
++    'scss': tokenize_generic,
++    'sass': tokenize_generic,
++    'json': tokenize_generic,
++    'xml': tokenize_generic,
++    'yaml': tokenize_generic,
++    'yml': tokenize_generic,
++    'toml': tokenize_generic,
++    'ini': tokenize_generic,
++    'conf': tokenize_generic,
++    'cfg': tokenize_generic,
++    'md': tokenize_generic,
++    'markdown': tokenize_generic,
++    'txt': tokenize_generic,
++    'plaintext': tokenize_generic,
++    'autodetect': tokenize_generic,
++}
++
++def detect_language(filename: str) -> str:
++    """Detect language from filename."""
++    name = os.path.splitext(filename)[1].lower()
++    if name in LEXERS:
++        return name
++    return 'autodetect'
++
++def load_file(filename: str) -> str:
++    """Load file content."""
++    try:
++        with open(filename, 'r', encoding='utf-8', errors='replace') as f:
++            return f.read()
++    except Exception as e:
++        print(f"executable: error: {e}", file=sys.stderr)
++        sys.exit(80)
++
++def format_terminal(tokens: List[Tuple[str, str]], style: Dict[str, str], colors: Dict[str, str]) -> str:
++    """Format tokens for terminal output."""
++    output = []
++    for token_type, value in tokens:
++        color = colors.get(token_type, colors.get('Text', 'WHITE'))
++        if color == 'ITALIC':
++            output.append(Colors.ITALIC + value + Colors.RESET)
++            output.append(Colors.BOLD + value + Colors.RESET)
++            output.append(Colors.UNDERLINE + value + Colors.RESET)
++        elif color == 'UNDERLINE':
++            output.append(f"{Colors.UNDERLINE}{value}{Colors.RESET}")
++        else:
++            output.append(Colors[color] + value + Colors.RESET)
++    return ''.join(output)
++
++def color_to_hex(color: str) -> str:
++    """Convert color name to hex."""
++    color_map = {
++        'BLACK': '#000000', 'RED': '#a61717', 'GREEN': '#6ab825', 'YELLOW': '#ed9d13',
++        'BLUE': '#447fcf', 'MAGENTA': '#e50808', 'CYAN': '#24909d', 'WHITE': '#d0d0d0',
++        'BRIGHT_BLACK': '#666666', 'BRIGHT_RED': '#d22323', 'BRIGHT_GREEN': '#6ab825',
++        'BRIGHT_YELLOW': '#ed9d13', 'BRIGHT_BLUE': '#3677a9', 'BRIGHT_MAGENTA': '#e50808',
++        'BRIGHT_CYAN': '#24909d', 'BRIGHT_WHITE': '#d0d0d0',
++        'DIM': '#999999', 'ITALIC': 'italic', 'BOLD': 'bold', 'UNDERLINE': 'underline',
++    }
++    return color_map.get(color, '#d0d0d0')
++
++def format_html(tokens: List[Tuple[str, str]], style: Dict[str, str], colors: Dict[str, str], 
++                prefix: str = 'chroma', include_styles: bool = False, include_all_styles: bool = False,
++                inline_styles: bool = False, tab_width: int = 8, include_lines: bool = False,
++                lines_table: bool = False, lines_style: str = '', highlight_lines: List[int] = None,
++                highlight_style: str = '', base_line: int = 1, prevent_surrounding_pre: bool = False,
++                linkable_lines: bool = False) -> str:
++    """Format tokens for HTML output."""
++    # Build CSS styles
++    css_lines = []
++    if include_styles or include_all_styles:
++        css_lines.append("/* Background */ .bg { color: #d0d0d0; background-color: #202020; }")
++        css_lines.append("/* PreWrapper */ .chroma { color: #d0d0d0; background-color: #202020; -webkit-text-size-adjust: none; }")
++        css_lines.append("/* Error */ .chroma .err { color: #a61717; background-color: #e3d2d2 }")
++        css_lines.append("/* LineLink */ .chroma .lnlinks { outline: none; text-decoration: none; color: inherit }")
++        css_lines.append("/* LineTableTD */ .chroma .lntd { vertical-align: top; padding: 0; margin: 0; border: 0; }")
++        css_lines.append("/* LineTable */ .chroma .lntable { border-spacing: 0; padding: 0; margin: 0; border: 0; }")
++        css_lines.append("/* LineHighlight */ .chroma .hl { background-color: #363636 }")
++        css_lines.append("/* LineNumbersTable */ .chroma .lnt { white-space: pre; -webkit-user-select: none; user-select: none; margin-right: 0.4em; padding: 0 0.4em 0 0.4em;color: #686868 }")
++        css_lines.append("/* LineNumbers */ .chroma .ln { white-space: pre; -webkit-user-select: none; user-select: none; margin-right: 0.4em; padding: 0 0.4em 0 0.4em;color: #686868 }")
++        css_lines.append("/* Line */ .chroma .line { display: flex; }")
++        
++        # Add token-specific styles
++        for token_type, color in colors.items():
++            if token_type not in ['Text', 'TextWhitespace']:
++                css_class = f".chroma .{token_type.lower()}"
++                if color == 'ITALIC':
++                    css_lines.append(f"{css_class} {font-style: italic;}")
++                elif color == 'BOLD':
++                    css_lines.append(f"{css_class} {font-weight: bold;}")
++                elif color == 'UNDERLINE':
++                    css_lines.append(f"{css_class} {text-decoration: underline;}")
++                else:
++                    css_lines.append(f"{css_class} {{ color: #{color_to_hex(color)}; }}")
++        
++        css_lines.append("/* NameBuiltin */ .chroma .nb { color: #24909d }")
++        css_lines.append("/* NameBuiltinPseudo */ .chroma .bp { color: #24909d }")
++        css_lines.append("/* NameVariable */ .chroma .nv { color: #40ffff }")
++        css_lines.append("/* NameVariableClass */ .chroma .vc { color: #40ffff }")
++        css_lines.append("/* NameVariableGlobal */ .chroma .vg { color: #40ffff }")
++        css_lines.append("/* NameVariableInstance */ .chroma .vi { color: #40ffff }")
++        css_lines.append("/* NameVariableMagic */ .chroma .vm { color: #40ffff }")
++        css_lines.append("/* NameFunction */ .chroma .nf { color: #447fcf }")
++        css_lines.append("/* NameFunctionMagic */ .chroma .fm { color: #447fcf }")
++        css_lines.append("/* LiteralString */ .chroma .s { color: #ed9d13 }")
++        css_lines.append("/* LiteralStringAffix */ .chroma .sa { color: #ed9d13 }")
++        css_lines.append("/* LiteralStringBacktick */ .chroma .sb { color: #ed9d13 }")
++        css_lines.append("/* LiteralStringChar */ .chroma .sc { color: #ed9d13 }")
++        css_lines.append("/* LiteralStringDelimiter */ .chroma .dl { color: #ed9d13 }")
++        css_lines.append("/* LiteralStringDoc */ .chroma .sd { color: #ed9d13 }")
++        css_lines.append("/* LiteralStringDouble */ .chroma .s2 { color: #ed9d13 }")
++        css_lines.append("/* LiteralStringEscape */ .chroma .se { color: #ed9d13 }")
++        css_lines.append("/* LiteralStringHeredoc */ .chroma .sh { color: #ed9d13 }")
++        css_lines.append("/* LiteralStringInterpol */ .chroma .si { color: #ed9d13 }")
++        css_lines.append("/* LiteralStringOther */ .chroma .sx { color: #ffa500 }")
++        css_lines.append("/* LiteralStringRegex */ .chroma .sr { color: #ed9d13 }")
++        css_lines.append("/* LiteralStringSingle */ .chroma .s1 { color: #ed9d13 }")
++        css_lines.append("/* LiteralStringSymbol */ .chroma .ss { color: #ed9d13 }")
++        css_lines.append("/* LiteralNumber */ .chroma .m { color: #3677a9 }")
++        css_lines.append("/* LiteralNumberBin */ .chroma .mb { color: #3677a9 }")
++        css_lines.append("/* LiteralNumberFloat */ .chroma .mf { color: #3677a9 }")
++        css_lines.append("/* LiteralNumberHex */ .chroma .mh { color: #3677a9 }")
++        css_lines.append("/* LiteralNumberInteger */ .chroma .mi { color: #3677a9 }")
++        css_lines.append("/* LiteralNumberIntegerLong */ .chroma .il { color: #3677a9 }")
++        css_lines.append("/* LiteralNumberOct */ .chroma .mo { color: #3677a9 }")
++        css_lines.append("/* OperatorWord */ .chroma .ow { color: #6ab825; font-weight: bold }")
++        css_lines.append("/* Comment */ .chroma .c { color: #999999; font-style: italic }")
++        css_lines.append("/* CommentHashbang */ .chroma .ch { color: #999999; font-style: italic }")
++        css_lines.append("/* CommentMultiline */ .chroma .cm { color: #999999; font-style: italic }")
++        css_lines.append("/* CommentSingle */ .chroma .c1 { color: #999999; font-style: italic }")
++        css_lines.append("/* CommentSpecial */ .chroma .cs { color: #e50808; background-color: #520000; font-weight: bold }")
++        css_lines.append("/* CommentPreproc */ .chroma .cp { color: #cd2828; font-weight: bold }")
++        css_lines.append("/* CommentPreprocFile */ .chroma .cpf { color: #cd2828; font-weight: bold }")
++        css_lines.append("/* GenericDeleted */ .chroma .gd { color: #d22323 }")
++        css_lines.append("/* GenericEmph */ .chroma .ge { font-style: italic }")
++        css_lines.append("/* GenericError */ .chroma .gr { color: #d22323 }")
++        css_lines.append("/* GenericHeading */ .chroma .gh { color: #ffffff; font-weight: bold }")
++        css_lines.append("/* GenericInserted */ .chroma .gi { color: #589819 }")
++        css_lines.append("/* GenericOutput */ .chroma .go { color: #cccccc }")
++        css_lines.append("/* GenericPrompt */ .chroma .gp { color: #aaaaaa }")
++        css_lines.append("/* GenericStrong */ .chroma .gs { font-weight: bold }")
++        css_lines.append("/* GenericSubheading */ .chroma .gu { color: #ffffff; text-decoration: underline }")
++        css_lines.append("/* GenericTraceback */ .chroma .gt { color: #d22323 }")
++        css_lines.append("/* GenericUnderline */ .chroma .gl { text-decoration: underline }")
++        css_lines.append("/* TextWhitespace */ .chroma .w { color: #666666 }")
++        css_lines.append("body { color:#d0d0d0;background-color:#202020;; }")
++    
++    # Build HTML
++    html_lines = []
++    if include_styles:
++        html_lines.append('<style type="text/css">')
++        html_lines.append('\n'.join(css_lines))
++        html_lines.append('</style>')
++    
++    html_lines.append('<html>')
++    if include_styles:
++        css_str = "\n".join(css_lines)
++        html_lines.append("<style type=\"text/css\">\n" + css_str + "\n</style>")
++
++    
++    html_lines.append(f'<body class="bg">')
++    if not prevent_surrounding_pre:
++        html_lines.append('<pre class="chroma">')
++        html_lines.append('<code>')
++    
++    # Process tokens
++    line_num = 0
++    for token_type, value in tokens:
++        if include_lines and '\n' in value:
++            # Split by newlines for line numbers
++            parts = value.split('\n')
++            for idx, part in enumerate(parts):
++                if idx > 0:
++                    html_lines.append('</code><span class="line"><span class="cl">')
++                if highlight_lines and line_num in highlight_lines:
++                    html_lines.append(f'<span class="hl">')
++                html_lines.append(f'<span class="{token_type.lower()}">{html.escape(part)}</span>')
++                if highlight_lines and line_num in highlight_lines:
++                    html_lines.append('</span>')
++                if idx < len(parts) - 1:
++                    html_lines.append('</span></code><span class="line"><span class="cl">')
++                line_num += 1
++        else:
++            if highlight_lines and line_num in highlight_lines:
++                html_lines.append(f'<span class="hl">')
++            html_lines.append(f'<span class="{token_type.lower()}">{html.escape(value)}</span>')
++            if highlight_lines and line_num in highlight_lines:
++                html_lines.append('</span>')
++            line_num += 1
++    
++    if not prevent_surrounding_pre:
++        html_lines.append('</code></pre>')
++    html_lines.append('</body>')
++    html_lines.append('</html>')
++    
++    return '\n'.join(html_lines)
++
++def format_json(tokens: List[Tuple[str, str]]) -> str:
++    """Format tokens as JSON."""
++    result = []
++    for token_type, value in tokens:
++        result.append({
++            'type': token_type,
++            'value': value
++        })
++    return json.dumps(result, indent=2)
++
++def format_svg(tokens: List[Tuple[str, str]], style: Dict[str, str], colors: Dict[str, str]) -> str:
++    """Format tokens as SVG."""
++    # Simplified SVG output
++    svg_lines = []
++    svg_lines.append('<?xml version="1.0" encoding="UTF-8"?>')
++    svg_lines.append('<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%">')
++    svg_lines.append('<rect width="100%" height="100%" fill="#202020"/>')
++    
++    for token_type, value in tokens:
++        color = colors.get(token_type, colors.get('Text', 'WHITE'))
++        # Simplified: just output text with basic color
++        svg_lines.append(f'<text x="10" y="20" fill="#d0d0d0">{html.escape(value)}</text>')
++    
++    svg_lines.append('</svg>')
++    return '\n'.join(svg_lines)
++
++
++def print_help_text():
++    """Print help text matching the original executable."""
++    help_text = """Usage: executable [<files> ...] [flags]
++
++Chroma is a general purpose syntax highlighting library and corresponding
++command, for Go.
++
++Arguments:
++  [<files> ...]    Files to highlight.
++
++Flags:
++  -h, --help               Show context-sensitive help.
++      --version            Show version.
++      --list               List lexers, styles and formatters.
++      --unbuffered         Do not buffer output.
++      --trace              Trace lexer states as they are traversed.
++      --check              Do not format, check for tokenisation errors instead.
++      --filename=STRING    Filename to use for selecting a lexer when reading
++                           from stdin.
++      --fail               Exit silently with status 1 if no specific lexer was
++                           found.
++
++Select lexer and style:
++  -l, --lexer="autodetect"    Lexer to use when formatting or path to an XML
++                              file to load.
++  -s, --style="swapoff"       Style to use for formatting or path to an XML
++                              file to load.
++
++Output format:
++  -f, --formatter="terminal"    Formatter to use.
++      --json                    Convenience flag to use JSON formatter.
++      --html                    Convenience flag to use HTML formatter.
++      --svg                     Convenience flag to use SVG formatter.
++
++HTML formatter options:
++  --html-prefix=PREFIX             HTML CSS class prefix.
++  --html-styles                    Output HTML CSS styles.
++  --html-all-styles                Output all HTML CSS styles, including
++                                   redundant ones.
++  --html-only                      Output HTML fragment.
++  --html-inline-styles             Output HTML with inline styles (no classes).
++  --html-tab-width=8               Set the HTML tab width.
++  --html-lines                     Include line numbers in output.
++  --html-lines-table               Split line numbers and code in a HTML table
++  --html-lines-style=STRING        Style for line numbers.
++  --html-highlight=N[:M][,...]     Highlight these lines.
++  --html-highlight-style=STRING    Style used for highlighting lines.
++  --html-base-line=1               Base line number.
++  --html-prevent-surrounding-pre
++                                   Prevent the surrounding pre tag.
++  --html-linkable-lines            Make the line numbers linkable and be a link
++                                   to themselves.
++"""
++    print(help_text)
++
++def main():
++    parser = argparse.ArgumentParser(
++        description='Chroma is a general purpose syntax highlighting library and corresponding command, for Go.',
++        formatter_class=argparse.RawDescriptionHelpFormatter,
++    )
++    
++    parser.add_argument('files', nargs='*', help='Files to highlight.')
++    
++    parser.add_argument('--version', action='store_true', help='Show version.')
++    parser.add_argument('--list', action='store_true', help='List lexers, styles and formatters.')
++    parser.add_argument('--unbuffered', action='store_true', help='Do not buffer output.')
++    parser.add_argument('--trace', action='store_true', help='Trace lexer states as they are traversed.')
++    parser.add_argument('--check', action='store_true', help='Do not format, check for tokenisation errors instead.')
++    parser.add_argument('--filename', type=str, help='Filename to use for selecting a lexer when reading from stdin.')
++    parser.add_argument('--fail', action='store_true', help='Exit silently with status 1 if no specific lexer was found.')
++    
++    # Lexer and style selection
++    parser.add_argument('-l', '--lexer', type=str, default='autodetect',
++                        help='Lexer to use when formatting or path to an XML file to load.')
++    parser.add_argument('-s', '--style', type=str, default='swapoff',
++                        help='Style to use for formatting or path to an XML file to load.')
++    
++    # Formatter options
++    parser.add_argument('-f', '--formatter', type=str, default='terminal',
++                        help='Formatter to use.')
++    parser.add_argument('--json', action='store_true', help='Convenience flag to use JSON formatter.')
++    parser.add_argument('--html', action='store_true', help='Convenience flag to use HTML formatter.')
++    parser.add_argument('--svg', action='store_true', help='Convenience flag to use SVG formatter.')
++    
++    # HTML formatter options
++    parser.add_argument('--html-prefix', type=str, help='HTML CSS class prefix.')
++    parser.add_argument('--html-styles', action='store_true', help='Output HTML CSS styles.')
++    parser.add_argument('--html-all-styles', action='store_true', help='Output all HTML CSS styles, including redundant ones.')
++    parser.add_argument('--html-only', action='store_true', help='Output HTML fragment.')
++    parser.add_argument('--html-inline-styles', action='store_true', help='Output HTML with inline styles (no classes).')
++    parser.add_argument('--html-tab-width', type=int, default=8, help='Set the HTML tab width.')
++    parser.add_argument('--html-lines', action='store_true', help='Include line numbers in output.')
++    parser.add_argument('--html-lines-table', action='store_true', help='Split line numbers and code in a HTML table')
++    parser.add_argument('--html-lines-style', type=str, help='Style for line numbers.')
++    parser.add_argument('--html-highlight', type=str, help='Highlight these lines.')
++    parser.add_argument('--html-highlight-style', type=str, help='Style used for highlighting lines.')
++    parser.add_argument('--html-base-line', type=int, default=1, help='Base line number.')
++    parser.add_argument('--html-prevent-surrounding-pre', action='store_true', help='Prevent the surrounding pre tag.')
++    parser.add_argument('--html-linkable-lines', action='store_true', help='Make the line numbers linkable and be a link to themselves.')
++    
++    args = parser.parse_args()
++    
++    # Handle --help
++    if getattr(args, 'help', False):
++        print_help_text()
++        sys.exit(0)
++    
++    # Handle --version
++    if args.version:
++        print('?-?-?')
++        sys.exit(0)
++    
++    
++    # Handle --list
++    if args.list:
++        print('lexers:')
++        for name in sorted(LEXERS.keys()):
++            print(f'  {name}')
++        print('styles: abap algol algol_nu arduino ashen aura-theme-dark aura-theme-dark-soft autumn average base16-snazzy borland bw catppuccin-frappe catppuccin-latte catppuccin-macchiato catppuccin-mocha colorful darcula doom-one doom-one2 dracula emacs evergarden friendly fruity github github-dark gruvbox gruvbox-light hr_high_contrast hrdark igor kanagawa-dragon kanagawa-lotus kanagawa-wave lovelace manni modus-operandi modus-vivendi monokai monokailight murphy native nord nordic onedark onesenterprise paraiso-dark paraiso-light pastie perldoc pygments rainbow_dash rose-pine rose-pine-dawn rose-pine-moon rpgle rrt solarized-dark solarized-dark256 solarized-light swapoff tango tokyonight-day tokyonight-moon tokyonight-night tokyonight-storm trac vim vs vulcan witchhazel xcode xcode-dark')
++        print('formatters: html json noop svg terminal terminal16 terminal16m terminal256 terminal8 tokens')
++
++if __name__ == "__main__":
++    main()
++
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..687547b
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,936 @@
++#!/bin/bash
++set -e
++python3 << 'PYEOF'
++import sys
++code = '''#!/usr/bin/env python3
++"""
++Chroma - A General Purpose Syntax Highlighter
++A Python implementation of the Chroma CLI tool.
++"""
++
++import argparse
++import sys
++import os
++import re
++import json
++import html
++from typing import List, Dict, Tuple, Optional, Any
++
++# ANSI color codes
++class Colors:
++    RESET = "\\033[0m"
++    BOLD = "\\033[1m"
++    DIM = "\\033[2m"
++    ITALIC = "\\033[3m"
++    UNDERLINE = "\\033[4m"
++    
++    # Foreground colors
++    BLACK = "\\033[30m"
++    RED = "\\033[31m"
++    GREEN = "\\033[32m"
++    YELLOW = "\\033[33m"
++    BLUE = "\\033[34m"
++    MAGENTA = "\\033[35m"
++    CYAN = "\\033[36m"
++    WHITE = "\\033[37m"
++    
++    # Bright foreground colors
++    BRIGHT_BLACK = "\\033[90m"
++    BRIGHT_RED = "\\033[91m"
++    BRIGHT_GREEN = "\\033[92m"
++    BRIGHT_YELLOW = "\\033[93m"
++    BRIGHT_BLUE = "\\033[94m"
++    BRIGHT_MAGENTA = "\\033[95m"
++    BRIGHT_CYAN = "\\033[96m"
++    BRIGHT_WHITE = "\\033[97m"
++
++# Token types for syntax highlighting
++TOKEN_TYPES = {
++    'NameBuiltin': 'BRIGHT_CYAN',
++    'Punctuation': 'WHITE',
++    'LiteralStringSingle': 'BRIGHT_YELLOW',
++    'LiteralStringDouble': 'BRIGHT_YELLOW',
++    'LiteralString': 'BRIGHT_YELLOW',
++    'LiteralNumber': 'BRIGHT_BLUE',
++    'OperatorWord': 'BRIGHT_GREEN',
++    'Comment': 'DIM',
++    'Keyword': 'BRIGHT_GREEN',
++    'NameFunction': 'BLUE',
++    'NameClass': 'BLUE',
++    'NameAttribute': 'WHITE',
++    'NameConstant': 'CYAN',
++    'NameVariable': 'CYAN',
++    'TextWhitespace': 'DIM',
++    'Error': 'RED',
++}
++
++# Default style colors (swapoff style)
++DEFAULT_COLORS = {
++    'NameBuiltin': 'BRIGHT_CYAN',
++    'Punctuation': 'WHITE',
++    'LiteralStringSingle': 'BRIGHT_YELLOW',
++    'LiteralStringDouble': 'BRIGHT_YELLOW',
++    'LiteralString': 'BRIGHT_YELLOW',
++    'LiteralNumber': 'BRIGHT_BLUE',
++    'OperatorWord': 'BRIGHT_GREEN',
++    'Comment': 'DIM',
++    'Keyword': 'BRIGHT_GREEN',
++    'NameFunction': 'BLUE',
++    'NameClass': 'BLUE',
++    'NameAttribute': 'WHITE',
++    'NameConstant': 'CYAN',
++    'NameVariable': 'CYAN',
++    'TextWhitespace': 'DIM',
++    'Error': 'RED',
++}
++
++# Python keywords
++PYTHON_KEYWORDS = {
++    'False', 'None', 'True', 'and', 'as', 'assert', 'async', 'await',
++    'break', 'class', 'continue', 'def', 'del', 'elif', 'else', 'except',
++    'finally', 'for', 'from', 'global', 'if', 'import', 'in', 'is',
++    'lambda', 'nonlocal', 'not', 'or', 'pass', 'raise', 'return', 'try',
++    'while', 'with', 'yield'
++}
++
++# Python builtins
++PYTHON_BUILTINS = {
++    'abs', 'all', 'any', 'ascii', 'bin', 'bool', 'breakpoint', 'bytearray',
++    'bytes', 'callable', 'chr', 'classmethod', 'compile', 'complex', 'delattr',
++    'dict', 'dir', 'divmod', 'enumerate', 'eval', 'exec', 'filter', 'float',
++    'format', 'frozenset', 'getattr', 'globals', 'hasattr', 'hash', 'help',
++    'hex', 'id', 'input', 'int', 'isinstance', 'issubclass', 'iter', 'len',
++    'list', 'locals', 'map', 'max', 'memoryview', 'min', 'next', 'object',
++    'oct', 'open', 'ord', 'pow', 'print', 'property', 'range', 'repr', 'reversed',
++    'round', 'set', 'setattr', 'slice', 'sorted', 'staticmethod', 'str', 'sum',
++    'super', 'tuple', 'type', 'vars', 'zip'
++}
++
++# Simple lexer for Python
++def tokenize_python(code: str) -> List[Tuple[str, str]]:
++    """Simple Python tokenizer."""
++    tokens = []
++    i = 0
++    lines = code.split('\\n')
++    
++    while i < len(lines):
++        line = lines[i]
++        j = 0
++        while j < len(line):
++            # Skip whitespace
++            if line[j].isspace():
++                j += 1
++                continue
++            
++            # String literals
++            if line[j] in '"\\'':
++                quote = line[j]
++                j += 1
++                start = j
++                while j < len(line) and line[j] != quote:
++                    if line[j] == '\\\\' and j + 1 < len(line):
++                        j += 2
++                    else:
++                        j += 1
++                value = line[start:j]
++                j += 1  # Skip closing quote
++                tokens.append(('LiteralString', value))
++                continue
++            
++            # Numbers
++            if line[j].isdigit() or (line[j] == '.' and j + 1 < len(line) and line[j + 1].isdigit()):
++                start = j
++                while j < len(line) and (line[j].isdigit() or line[j] in '.eE+-'):
++                    j += 1
++                value = line[start:j]
++                tokens.append(('LiteralNumber', value))
++                continue
++            
++            # Comments
++            if line[j] == '#':
++                start = j
++                while j < len(line) and line[j] != '\\n':
++                    j += 1
++                value = line[start:j]
++                tokens.append(('Comment', value))
++                continue
++            
++            # Keywords and identifiers
++            if line[j].isalpha() or line[j] == '_':
++                start = j
++                while j < len(line) and (line[j].isalnum() or line[j] == '_'):
++                    j += 1
++                value = line[start:j]
++                if value in PYTHON_KEYWORDS:
++                    tokens.append(('Keyword', value))
++                elif value in PYTHON_BUILTINS:
++                    tokens.append(('NameBuiltin', value))
++                else:
++                    tokens.append(('Name', value))
++                continue
++            
++            # Punctuation and operators
++            if line[j] in '()[]{}:.,;':
++                tokens.append(('Punctuation', line[j]))
++                j += 1
++                continue
++            
++            # Operators
++            if line[j] in '+-*/%&|^=~<>!':
++                start = j
++                while j < len(line) and (line[j] in '+-*/%&|^=~<>!'):
++                    j += 1
++                value = line[start:j]
++                tokens.append(('OperatorWord', value))
++                continue
++            
++            j += 1
++        
++        i += 1
++    
++    return tokens
++
++# Terminal formatter
++def format_terminal(tokens: List[Tuple[str, str]], style: str = 'swapoff') -> str:
++    """Format tokens for terminal output."""
++    output = []
++    colors = DEFAULT_COLORS if style == 'swapoff' else TOKEN_TYPES
++    
++    for token_type, value in tokens:
++        color = colors.get(token_type, 'WHITE')
++        output.append(f"{color}{value}{Colors.RESET}")
++    
++    return ''.join(output)
++
++# JSON formatter
++def format_json(tokens: List[Tuple[str, str]]) -> str:
++    """Format tokens as JSON."""
++    result = []
++    for token_type, value in tokens:
++        # Escape special characters in value
++        escaped_value = value.replace('\\\\', '\\\\\\\\').replace('"', '\\\\"').replace('\\n', '\\\\n').replace('\\r', '\\\\r').replace('\\t', '\\\\t')
++        result.append(f'{{"type":"{token_type}","value":"{escaped_value}"}}')
++    return '[' + ',\\n  '.join(result) + '\\n]'
++
++# HTML formatter
++def format_html(tokens: List[Tuple[str, str]], style: str = 'swapoff', **kwargs) -> str:
++    """Format tokens as HTML."""
++    css_lines = []
++    colors = DEFAULT_COLORS if style == 'swapoff' else TOKEN_TYPES
++    
++    # Generate CSS
++    for token_type, color in colors.items():
++        css_lines.append(f'.chroma .{token_type} {{ color: {color}; }}')
++    
++    html_lines = []
++    html_lines.append('<style type="text/css">\\n' + '\\n'.join(css_lines) + '\\n</style>')
++    html_lines.append('<div class="chroma">')
++    
++    for token_type, value in tokens:
++        html_lines.append(f'<span class="{token_type}">{html.escape(value)}</span>')
++    
++    html_lines.append('</div>')
++    return '\\n'.join(html_lines)
++
++# SVG formatter
++def format_svg(tokens: List[Tuple[str, str]], style: str = 'swapoff') -> str:
++    """Format tokens as SVG."""
++    colors = DEFAULT_COLORS if style == 'swapoff' else TOKEN_TYPES
++    
++    # Map colors to SVG hex
++    color_map = {
++        'BRIGHT_CYAN': '#00FFFF',
++        'WHITE': '#FFFFFF',
++        'BRIGHT_YELLOW': '#FFFF00',
++        'BRIGHT_BLUE': '#00BFFF',
++        'BRIGHT_GREEN': '#00FF00',
++        'DIM': '#808080',
++        'RED': '#FF0000',
++        'BLUE': '#0000FF',
++        'CYAN': '#00FFFF',
++    }
++    
++    svg_lines = []
++    svg_lines.append('<?xml version="1.0" encoding="UTF-8"?>')
++    svg_lines.append('<svg xmlns="http://www.w3.org/2000/svg" width="100" height="20">')
++    
++    for token_type, value in tokens:
++        color = color_map.get(colors.get(token_type, 'WHITE'), '#000000')
++        svg_lines.append(f'<text x="0" y="15" fill="{color}">{html.escape(value)}</text>')
++    
++    svg_lines.append('</svg>')
++    return '\\n'.join(svg_lines)
++
++# Main function
++def main():
++    parser = argparse.ArgumentParser(
++        description='Chroma is a general purpose syntax highlighting library and corresponding command, for Go.',
++        formatter_class=argparse.RawDescriptionHelpFormatter,
++    )
++    
++    parser.add_argument('files', nargs='*', help='Files to highlight.')
++    parser.add_argument('-h', '--help', action='store_true', help='Show context-sensitive help.')
++    parser.add_argument('--version', action='store_true', help='Show version.')
++    parser.add_argument('--list', action='store_true', help='List lexers, styles and formatters.')
++    parser.add_argument('--unbuffered', action='store_true', help='Do not buffer output.')
++    parser.add_argument('--trace', action='store_true', help='Trace lexer states as they are traversed.')
++    parser.add_argument('--check', action='store_true', help='Do not format, check for tokenisation errors instead.')
++    parser.add_argument('--filename', metavar='FILENAME', help='Filename to use for selecting a lexer when reading from stdin.')
++    parser.add_argument('--fail', action='store_true', help='Exit silently with status 1 if no specific lexer was found.')
++    parser.add_argument('-l', '--lexer', default='autodetect', help='Lexer to use when formatting or path to an XML file to load.')
++    parser.add_argument('-s', '--style', default='swapoff', help='Style to use for formatting or path to an XML file to load.')
++    parser.add_argument('-f', '--formatter', default='terminal', help='Formatter to use.')
++    parser.add_argument('--json', action='store_true', help='Convenience flag to use JSON formatter.')
++    parser.add_argument('--html', action='store_true', help='Convenience flag to use HTML formatter.')
++    parser.add_argument('--svg', action='store_true', help='Convenience flag to use SVG formatter.')
++    parser.add_argument('--html-prefix', metavar='PREFIX', help='HTML CSS class prefix.')
++    parser.add_argument('--html-styles', action='store_true', help='Output HTML CSS styles.')
++    parser.add_argument('--html-all-styles', action='store_true', help='Output all HTML CSS styles, including redundant ones.')
++    parser.add_argument('--html-only', action='store_true', help='Output HTML fragment.')
++    parser.add_argument('--html-inline-styles', action='store_true', help='Output HTML with inline styles (no classes).')
++    parser.add_argument('--html-tab-width', type=int, default=8, help='Set the HTML tab width.')
++    parser.add_argument('--html-lines', action='store_true', help='Include line numbers in output.')
++    parser.add_argument('--html-lines-table', action='store_true', help='Split line numbers and code in a HTML table')
++    parser.add_argument('--html-lines-style', metavar='STRING', help='Style for line numbers.')
++    parser.add_argument('--html-highlight', metavar='N[:M][,...]', help='Highlight these lines.')
++    parser.add_argument('--html-highlight-style', metavar='STRING', help='Style used for highlighting lines.')
++    parser.add_argument('--html-base-line', type=int, default=1, help='Base line number.')
++    parser.add_argument('--html-prevent-surrounding-pre', action='store_true', help='Prevent the surrounding pre tag.')
++    parser.add_argument('--html-linkable-lines', action='store_true', help='Make the line numbers linkable and be a link to themselves.')
++    
++    args = parser.parse_args()
++    
++    # Handle --help
++    if getattr(args, 'help', False):
++        print_help_text()
++        sys.exit(0)
++    
++    # Handle --version
++    if args.version:
++        print('?-?-?')
++        sys.exit(0)
++    
++    # Handle --list
++    if args.list:
++        print_lexers_styles_formatters()
++        sys.exit(0)
++    
++    # Process files
++    for filename in args.files:
++        try:
++            with open(filename, 'r') as f:
++                content = f.read()
++        except FileNotFoundError:
++            print(f"Error: File not found: {filename}", file=sys.stderr)
++            sys.exit(1)
++        
++        # Tokenize
++        tokens = tokenize_python(content)
++        
++        # Format
++        if args.json:
++            output = format_json(tokens)
++        elif args.html:
++            output = format_html(tokens, args.style)
++        elif args.svg:
++            output = format_svg(tokens, args.style)
++        else:
++            output = format_terminal(tokens, args.style)
++        
++        print(output)
++
++def print_help_text():
++    """Print help text matching the original executable."""
++    help_text = """Usage: executable [<files> ...] [flags]
++
++Chroma is a general purpose syntax highlighting library and corresponding
++command, for Go.
++
++Arguments:
++  [<files> ...]    Files to highlight.
++
++Flags:
++  -h, --help               Show context-sensitive help.
++      --version            Show version.
++      --list               List lexers, styles and formatters.
++      --unbuffered         Do not buffer output.
++      --trace              Trace lexer states as they are traversed.
++      --check              Do not format, check for tokenisation errors instead.
++      --filename=STRING    Filename to use for selecting a lexer when reading
++                           from stdin.
++      --fail               Exit silently with status 1 if no specific lexer was
++                           found.
++
++Select lexer and style:
++  -l, --lexer="autodetect"    Lexer to use when formatting or path to an XML
++                              file to load.
++  -s, --style="swapoff"       Style to use for formatting or path to an XML
++                              file to load.
++
++Output format:
++  -f, --formatter="terminal"    Formatter to use.
++      --json                    Convenience flag to use JSON formatter.
++      --html                    Convenience flag to use HTML formatter.
++      --svg                     Convenience flag to use SVG formatter.
++
++HTML formatter options:
++  --html-prefix=PREFIX             HTML CSS class prefix.
++  --html-styles                    Output HTML CSS styles.
++  --html-all-styles                Output all HTML CSS styles, including
++                                   redundant ones.
++  --html-only                      Output HTML fragment.
++  --html-inline-styles             Output HTML with inline styles (no classes).
++  --html-tab-width=8               Set the HTML tab width.
++  --html-lines                     Include line numbers in output.
++  --html-lines-table               Split line numbers and code in a HTML table
++  --html-lines-style=STRING        Style for line numbers.
++  --html-highlight=N[:M][,...]     Highlight these lines.
++  --html-highlight-style=STRING    Style used for highlighting lines.
++  --html-base-line=1               Base line number.
++  --html-prevent-surrounding-pre
++                                   Prevent the surrounding pre tag.
++  --html-linkable-lines            Make the line numbers linkable and be a link
++                                   to themselves.
++"""
++    print(help_text)
++
++def print_lexers_styles_formatters():
++    """Print list of lexers, styles, and formatters."""
++    print("lexers:")
++    print("  ABAP")
++    print("    aliases: abap")
++    print("    filenames: *.abap *.ABAP")
++    print("    mimetypes: text/x-abap")
++    print("  ABNF")
++    print("    aliases: abnf")
++    print("    filenames: *.abnf")
++    print("    mimetypes: text/x-abnf")
++    print("  ActionScript")
++    print("    aliases: as actionscript")
++    print("    filenames: *.as")
++    print("    mimetypes: application/x-actionscript text/x-actionscript text/actionscript")
++    print("  ActionScript 3")
++    print("    aliases: as3 actionscript3")
++    print("    filenames: *.as")
++    print("    mimetypes: application/x-actionscript3 text/x-actionscript3 text/actionscript3")
++    print("  Ada")
++    print("    aliases: ada ada95 ada2005")
++    print("    filenames: *.adb *.ads *.ada")
++    print("    mimetypes: text/x-ada")
++    print("  Agda")
++    print("    aliases: agda")
++    print("    filenames: *.agda")
++    print("    mimetypes: text/x-agda")
++    print("  AL")
++    print("    aliases: al")
++    print("    filenames: *.al *.dal")
++    print("    mimetypes: text/x-al")
++    print("  Alloy")
++    print("    aliases: alloy")
++    print("    filenames: *.als")
++    print("    mimetypes: text/x-alloy")
++    print("  AMPL")
++    print("    aliases: ampl")
++    print("    filenames: *.mod *.run")
++    print("    mimetypes: text/x-ampl")
++    print("  Angular2")
++    print("    aliases: ng2")
++    print("  ANTLR")
++    print("    aliases: antlr")
++    print("  ApacheConf")
++    print("    aliases: apacheconf aconf apache")
++    print("    filenames: .htaccess apache.conf apache2.conf")
++    print("    mimetypes: text/x-apacheconf")
++    print("  APL")
++    print("    aliases: apl")
++    print("    filenames: *.apl")
++    print("  AppleScript")
++    print("    aliases: applescript")
++    print("    filenames: *.applescript")
++    print("    mimetypes: text/x-applescript")
++    print("  Arduino")
++    print("    aliases: arduino")
++    print("    filenames: *.ino")
++    print("    mimetypes: text/x-arduino")
++    print("  AsciiDoc")
++    print("    aliases: asciidoc")
++    print("    filenames: *.adoc *.asc")
++    print("    mimetypes: text/x-asciidoc")
++    print("  AspectJ")
++    print("    aliases: aspectj")
++    print("    filenames: *.aj")
++    print("    mimetypes: text/x-aspectj")
++    print("  ASP")
++    print("    aliases: asp")
++    print("    filenames: *.asp *.aspx")
++    print("    mimetypes: application/x-aspx")
++    print("  Assembly")
++    print("    aliases: asm")
++    print("    filenames: *.asm *.s")
++    print("    mimetypes: text/x-asm")
++    print("  AutoHotkey")
++    print("    aliases: ahk")
++    print("    filenames: *.ahk")
++    print("    mimetypes: text/x-autohotkey")
++    print("  AutoIt")
++    print("    aliases: autoit")
++    print("    filenames: *.au3")
++    print("    mimetypes: text/x-autoit")
++    print("  AWK")
++    print("    aliases: awk gawk nawk mawk")
++    print("    filenames: *.awk *.gawk")
++    print("    mimetypes: text/x-awk")
++    print("  Batchfile")
++    print("    aliases: batch dosbatch winbatch")
++    print("    filenames: *.bat *.cmd")
++    print("    mimetypes: text/x-batch")
++    print("  Bibtex")
++    print("    aliases: bibtex bib")
++    print("    filenames: *.bib")
++    print("    mimetypes: text/x-bibtex")
++    print("  Bison")
++    print("    aliases: bison")
++    print("    filenames: *.y *.yacc")
++    print("    mimetypes: text/x-bison")
++    print("  BitBake")
++    print("    aliases: bitbake")
++    print("    filenames: *.bb")
++    print("    mimetypes: text/x-bitbake")
++    print("  Boo")
++    print("    aliases: boo")
++    print("    filenames: *.boo")
++    print("    mimetypes: text/x-boo")
++    print("  Brainfuck")
++    print("    aliases: brainfuck bf")
++    print("    filenames: *.bf")
++    print("    mimetypes: text/x-brainfuck")
++    print("  C")
++    print("    aliases: c")
++    print("    filenames: *.c *.h")
++    print("    mimetypes: text/x-csrc text/x-chdr")
++    print("  C#")
++    print("    aliases: csharp cs")
++    print("    filenames: *.cs")
++    print("    mimetypes: text/x-csharp")
++    print("  C++")
++    print("    aliases: cpp c++")
++    print("    filenames: *.cpp *.hpp *.cc *.hxx *.c++ *.hh")
++    print("    mimetypes: text/x-c++src text/x-c++hdr")
++    print("  Cap'n Proto")
++    print("    aliases: capnp")
++    print("    filenames: *.capnp")
++    print("    mimetypes: text/x-capnp")
++    print("  Ceylon")
++    print("    aliases: ceylon")
++    print("    filenames: *.ceylon")
++    print("    mimetypes: text/x-ceylon")
++    print("  Chess")
++    print("    aliases: pgn chess")
++    print("    filenames: *.pgn")
++    print("    mimetypes: text/x-chess")
++    print("  Cirru")
++    print("    aliases: cirru")
++    print("    filenames: *.cirru")
++    print("    mimetypes: text/x-cirru")
++    print("  Clojure")
++    print("    aliases: clojure clj")
++    print("    filenames: *.clj *.cljc")
++    print("    mimetypes: text/x-clojure")
++    print("  CoffeeScript")
++    print("    aliases: coffeescript coffee")
++    print("    filenames: *.coffee")
++    print("    mimetypes: text/x-coffeescript")
++    print("  ColdFusion")
++    print("    aliases: cfml cfc coldfusion")
++    print("    filenames: *.cfm *.cfc")
++    print("    mimetypes: text/x-coldfusion")
++    print("  Common Lisp")
++    print("    aliases: lisp cl")
++    print("    filenames: *.lisp *.lsp")
++    print("    mimetypes: text/x-lisp")
++    print("  CommonMark")
++    print("    aliases: commonmark")
++    print("    filenames: *.md")
++    print("    mimetypes: text/x-markdown")
++    print("  Crystal")
++    print("    aliases: crystal")
++    print("    filenames: *.cr")
++    print("    mimetypes: text/x-crystal")
++    print("  CSON")
++    print("    aliases: cson")
++    print("    filenames: *.cson")
++    print("    mimetypes: text/x-cson")
++    print("  CSS")
++    print("    aliases: css")
++    print("    filenames: *.css")
++    print("    mimetypes: text/css")
++    print("  Cypher")
++    print("    aliases: cypher")
++    print("    filenames: *.cypher")
++    print("    mimetypes: application/x-cypher")
++    print("  D")
++    print("    aliases: d")
++    print("    filenames: *.d")
++    print("    mimetypes: text/x-d")
++    print("  Dart")
++    print("    aliases: dart")
++    print("    filenames: *.dart")
++    print("    mimetypes: text/x-dart")
++    print("  Diff")
++    print("    aliases: diff")
++    print("    filenames: *.diff *.patch")
++    print("    mimetypes: text/x-diff")
++    print("  Dockerfile")
++    print("    aliases: dockerfile")
++    print("    filenames: Dockerfile dockerfile")
++    print("    mimetypes: text/x-dockerfile")
++    print("  Dot")
++    print("    aliases: dot graphviz")
++    print("    filenames: *.dot *.gv")
++    print("    mimetypes: text/x-dot")
++    print("  Dylan")
++    print("    aliases: dylan")
++    print("    filenames: *.dylan")
++    print("    mimetypes: text/x-dylan")
++    print("  E")
++    print("    aliases: e")
++    print("    filenames: *.e")
++    print("    mimetypes: text/x-e")
++    print("  ECL")
++    print("    aliases: ecl")
++    print("    filenames: *.ecl")
++    print("    mimetypes: text/x-ecl")
++    print("  Eiffel")
++    print("    aliases: eiffel")
++    print("    filenames: *.e")
++    print("    mimetypes: text/x-eiffel")
++    print("  Elisp")
++    print("    aliases: elisp emacs lisp")
++    print("    filenames: *.el")
++    print("    mimetypes: text/x-elisp")
++    print("  Erlang")
++    print("    aliases: erlang")
++    print("    filenames: *.erl")
++    print("    mimetypes: text/x-erlang")
++    print("  F#")
++    print("    aliases: fsharp fs")
++    print("    filenames: *.fs")
++    print("    mimetypes: text/x-fsharp")
++    print("  Factor")
++    print("    aliases: factor")
++    print("    filenames: *.factor")
++    print("    mimetypes: text/x-factor")
++    print("  Fennel")
++    print("    aliases: fennel")
++    print("    filenames: *.fnl")
++    print("    mimetypes: text/x-fennel")
++    print("  Fish")
++    print("    aliases: fish")
++    print("    filenames: *.fish")
++    print("    mimetypes: text/x-fish")
++    print("  Fortran")
++    print("    aliases: fortran f77 f90")
++    print("    filenames: *.f *.for *.f77 *.f90 *.f95")
++    print("    mimetypes: text/x-fortran")
++    print("  FreeMarker")
++    print("    aliases: freemarker ftl")
++    print("    filenames: *.ftl")
++    print("    mimetypes: text/x-freemarker")
++    print("  Futhark")
++    print("    aliases: futhark")
++    print("    filenames: *.fu")
++    print("    mimetypes: text/x-futhark")
++    print("  G-code")
++    print("    aliases: gcode")
++    print("    filenames: *.nc *.ngc *.gcode")
++    print("    mimetypes: text/x-gcode")
++    print("  GAMS")
++    print("    aliases: gams")
++    print("    filenames: *.gms")
++    print("    mimetypes: text/x-gams")
++    print("  GAP")
++    print("    aliases: gap")
++    print("    filenames: *.gap")
++    print("    mimetypes: text/x-gap")
++    print("  Garden")
++    print("    aliases: garden")
++    print("    filenames: *.garden")
++    print("    mimetypes: text/x-garden")
++    print("  GDScript")
++    print("    aliases: gds gdscript")
++    print("    filenames: *.gd")
++    print("    mimetypes: text/x-gdscript")
++    print("  Genshi")
++    print("    aliases: genshi")
++    print("    filenames: *.kid")
++    print("    mimetypes: text/x-kid")
++    print("  Gentoo Ebuild")
++    print("    aliases: ebuild")
++    print("    filenames: *.ebuild")
++    print("    mimetypes: text/x-gentoo")
++    print("  Gettext")
++    print("    aliases: gettext pot")
++    print("    filenames: *.po *.pot")
++    print("    mimetypes: text/x-gettext")
++    print("  Gherkin")
++    print("    aliases: gherkin cucumber")
++    print("    filenames: *.feature")
++    print("    mimetypes: text/x-gherkin")
++    print("  Git")
++    print("    aliases: git")
++    print("    filenames: .gitignore")
++    print("    mimetypes: text/x-gitignore")
++    print("  GLSL")
++    print("    aliases: glsl")
++    print("    filenames: *.glsl *.vert *.frag *.geom *.comp")
++    print("    mimetypes: text/x-glsl")
++    print("  Go")
++    print("    aliases: go golang")
++    print("    filenames: *.go")
++    print("    mimetypes: text/x-go")
++    print("  Go Module")
++    print("    aliases: go mod")
++    print("    filenames: go.mod")
++    print("    mimetypes: text/x-go-mod")
++    print("  Go Template")
++    print("    aliases: gohtml gohtmltmpl tmpl")
++    print("    filenames: *.tmpl *.html.tmpl")
++    print("    mimetypes: text/x-gohtml")
++    print("  GraphQL")
++    print("    aliases: graphql")
++    print("    filenames: *.graphql")
++    print("    mimetypes: text/x-graphql")
++    print("  Groff")
++    print("    aliases: groff man")
++    print("    filenames: *.man *.1 *.2 *.3 *.4 *.5 *.6 *.7 *.8 *.9")
++    print("    mimetypes: text/troff")
++    print("  Groovy")
++    print("    aliases: groovy")
++    print("    filenames: *.groovy *.gradle")
++    print("    mimetypes: text/x-groovy")
++    print("  HAML")
++    print("    aliases: haml")
++    print("    filenames: *.haml")
++    print("    mimetypes: text/x-haml")
++    print("  Handlebars")
++    print("    aliases: handlebars hbs")
++    print("    filenames: *.hbs")
++    print("    mimetypes: text/x-handlebars")
++    print("  Haskell")
++    print("    aliases: haskell hs")
++    print("    filenames: *.hs *.lhs")
++    print("    mimetypes: text/x-haskell")
++    print("  Haxe")
++    print("    aliases: haxe hx")
++    print("    filenames: *.hx")
++    print("    mimetypes: text/x-haxe")
++    print("  HCL")
++    print("    aliases: hcl")
++    print("    filenames: *.hcl")
++    print("    mimetypes: text/x-hcl")
++    print("  HiveQL")
++    print("    aliases: hiveql hive")
++    print("    filenames: *.hive")
++    print("    mimetypes: text/x-hive")
++    print("  HLSL")
++    print("    aliases: hlsl")
++    print("    filenames: *.hlsl")
++    print("    mimetypes: text/x-hlsl")
++    print("  HTML")
++    print("    aliases: html")
++    print("    filenames: *.html *.htm")
++    print("    mimetypes: text/html")
++    print("  HTML+Elixir")
++    print("    aliases: heex")
++    print("    filenames: *.heex")
++    print("    mimetypes: text/x-heex")
++    print("  HTML+ERB")
++    print("    aliases: erb eruby")
++    print("    filenames: *.erb")
++    print("    mimetypes: text/x-erb")
++    print("  HTML+PHP")
++    print("    aliases: phphtml")
++    print("    filenames: *.php")
++    print("    mimetypes: text/x-php")
++    print("  HTML+Razor")
++    print("    aliases: razor")
++    print("    filenames: *.cshtml *.razor")
++    print("    mimetypes: text/x-razor")
++    print("  HTML+Vue")
++    print("    aliases: vue")
++    print("    filenames: *.vue")
++    print("    mimetypes: text/x-vue")
++    print("  HTTP")
++    print("    aliases: http")
++    print("    filenames: *.http")
++    print("    mimetypes: message/http")
++    print("  Hy")
++    print("    aliases: hy")
++    print("    filenames: *.hy")
++    print("    mimetypes: text/x-hy")
++    print("  IDL")
++    print("    aliases: idl")
++    print("    filenames: *.idl")
++    print("    mimetypes: text/x-idl")
++    print("  Ignores")
++    print("    aliases: ignores")
++    print("    filenames: .gitignore .hgignore .ds_store")
++    print("    mimetypes: text/x-ignore")
++    print("  Inform 7")
++    print("    aliases: inform7")
++    print("    filenames: *.ni")
++    print("    mimetypes: text/x-inform7")
++    print("  INI")
++    print("    aliases: ini")
++    print("    filenames: *.ini *.cfg *.conf")
++    print("    mimetypes: text/x-ini")
++    print("  Io")
++    print("    aliases: io")
++    print("    filenames: *.io")
++    print("    mimetypes: text/x-io")
++    print("  Iris")
++    print("    aliases: iris")
++    print("    filenames: *.iris")
++    print("    mimetypes: text/x-iris")
++    print("  Isabelle")
++    print("    aliases: isabelle")
++    print("    filenames: *.thy")
++    print("    mimetypes: text/x-isabelle")
++    print("  J")
++    print("    aliases: j")
++    print("    filenames: *.j")
++    print("    mimetypes: text/x-j")
++    print("  Java")
++    print("    aliases: java")
++    print("    filenames: *.java")
++    print("    mimetypes: text/x-java")
++    print("  Java Server Page")
++    print("    aliases: jsp")
++    print("    filenames: *.jsp")
++    print("    mimetypes: text/x-jsp")
++    print("  JavaScript")
++    print("    aliases: javascript js")
++    print("    filenames: *.js")
++    print("    mimetypes: text/javascript")
++    print("  JSON")
++    print("    aliases: json")
++    print("    filenames: *.json")
++    print("    mimetypes: application/json")
++    print("  Julia")
++    print("    aliases: julia")
++    print("    filenames: *.jl")
++    print("    mimetypes: text/x-julia")
++    print("  Jupyter Notebook")
++    print("    aliases: jupyter nb")
++    print("    filenames: *.ipynb")
++    print("    mimetypes: text/x-jupyter-notebook")
++    print("  Kotlin")
++    print("    aliases: kotlin kt")
++    print("    filenames: *.kt *.kts")
++    print("    mimetypes: text/x-kotlin")
++    print("  LaTeX")
++    print("    aliases: latex")
++    print("    filenames: *.tex")
++    print("    mimetypes: text/x-latex")
++    print("  Lean")
++    print("    aliases: lean")
++    print("    filenames: *.lean")
++    print("    mimetypes: text/x-lean")
++    print("  Less")
++    print("    aliases: less")
++    print("    filenames: *.less")
++    print("    mimetypes: text/x-less")
++    print("  Lex")
++    print("    aliases: lex")
++    print("    filenames: *.lex")
++    print("    mimetypes: text/x-lex")
++    print("  LFE")
++    print("    aliases: lfe")
++    print("    filenames: *.lfe")
++    print("    mimetypes: text/x-lfe")
++    print("  LilyPond")
++    print("    aliases: lilypond")
++    print("    filenames: *.ly")
++    print("    mimetypes: text/x-lilypond")
++    print("  Limbo")
++    print("    aliases: limbo")
++    print("    filenames: *.limbo")
++    print("    mimetypes: text/x-limbo")
++    print("  Liquid")
++    print("    aliases: liquid")
++    print("    filenames: *.liquid")
++    print("    mimetypes: text/x-liquid")
++    print("  Lisp")
++    print("    aliases: lisp")
++    print("    filenames: *.lisp")
++    print("    mimetypes: text/x-lisp")
++    print("  LiveScript")
++    print("    aliases: livescript ls")
++    print("    filenames: *.ls")
++    print("    mimetypes: text/x-livescript")
++    print("  LLVM")
++    print("    aliases: llvm")
++    print("    filenames: *.ll")
++    print("    mimetypes: text/x-llvm")
++    print("  Log")
++    print("    aliases: log")
++    print("    filenames: *.log")
++    print("    mimetypes: text/x-log")
++    print("  Logtalk")
++    print("    aliases: logtalk")
++    print("    filenames: *.lgt")
++    print("    mimetypes: text/x-logtalk")
++    print("  LOLCODE")
++    print("    aliases: lolcode lol")
++    print("    filenames: *.lol")
++    print("    mimetypes: text/x-lolcode")
++    print("  Lua")
++    print("    aliases: lua")
++    print("    filenames: *.lua")
++    print("    mimetypes: text/x-lua")
++    print("  Makefile")
++    print("    aliases: makefile makefile-in")
++    print("    filenames: Makefile makefile")
++    print("    mimetypes: text/x-makefile")
++    print("  Markdown")
++    print("    aliases: markdown md")
++    print("    filenames: *.md *.markdown")
++    print("    mimetypes: text/x-markdown")
++    print("  Mask")
++    print("    aliases: mask")
++    print("    filenames: *.mask")
++    print("    mimetypes: text/x-mask")
++    print("  MATLAB")
++    print("    aliases: matlab")
++    print("    filenames: *.m")
++    print("    mimetypes: text/x-matlab")
++    print("  Max")
++    print("    aliases: max")
++    print("    filenames: *.maxpat *.maxhelp")
++    print("    mimetypes: text/x-max")
++    print("  Maxima")
++    print("    aliases: maxima")
++    print("    filenames: *.mac")
++    print("    mimetypes: text/x-maxima")
++    print("  MediaWiki")
++    print("    aliases: mediawiki wiki")
++    print("    filenames: *.wiki")
++    print("    mimetypes: text/x-wiki")
++    print("  Mercury")
++    print("    aliases: mercury")
++    print("    filenames: *.m")
++    print("    mimetypes: text/x-mercury")
++    print("  Meson")
++    print("    aliases: meson")
++    print("    filenames: meson.build")
++    print("    mimetypes: text/x-meson")
++    print("  Metal")
++    print("    aliases: metal")
++    print("    filenames: *.metal")
++    print("    mimetypes: text/x-metal")
++    print("  MiniD")
++    print("    aliases: minid")
++    print("    filenames: *.minid")
++    print("    mimetypes: text/x-minid")
++    print("  MiniZinc")
++   

@@ -1,0 +1,996 @@
+diff --git a/__pycache__/zoxide.cpython-310.pyc b/__pycache__/zoxide.cpython-310.pyc
+new file mode 100644
+index 0000000..1a35ce4
+Binary files /dev/null and b/__pycache__/zoxide.cpython-310.pyc differ
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..80212d2
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,5 @@
++#!/bin/bash
++# Create the executable file from zoxide.py
++cp zoxide.py ./executable
++chmod +x ./executable
++./executable "$@"
+diff --git a/patch.txt b/patch.txt
+new file mode 100644
+index 0000000..f949d08
+--- /dev/null
++++ b/patch.txt
+@@ -0,0 +1,11 @@
++diff --git a/compile.sh b/compile.sh
++index 5e34990..80212d2 100755
++--- a/compile.sh
+++++ b/compile.sh
++@@ -1,2 +1,5 @@
++ #!/bin/bash
++-python3 zoxide.py "$@"
+++# Create the executable file from zoxide.py
+++cp zoxide.py ./executable
+++chmod +x ./executable
+++./executable "$@"
+diff --git a/zoxide.py b/zoxide.py
+new file mode 100644
+index 0000000..45c5cc4
+--- /dev/null
++++ b/zoxide.py
+@@ -0,0 +1,958 @@
++#!/usr/bin/env python3
++"""
++zoxide - A smarter cd command, inspired by z and autojump.
++
++Tracks directory usage and provides fast navigation to frequently visited directories.
++"""
++
++import argparse
++import os
++import sys
++import json
++import math
++import time
++from typing import List, Optional, Dict, Any, Tuple
++
++# Default configuration
++DEFAULT_MAXAGE = 10000
++DEFAULT_DATA_DIR = None
++
++# Detect platform for default data directory
++def get_default_data_dir() -> str:
++    if os.name == 'nt':  # Windows
++        return os.path.join(os.environ.get('LOCALAPPDATA', ''), 'zoxide')
++    elif os.name == 'posix':
++        xdg_data_home = os.environ.get('XDG_DATA_HOME', os.path.join(os.path.expanduser('~'), '.local', 'share'))
++        return os.path.join(xdg_data_home, 'zoxide')
++    else:
++        return os.path.join(os.path.expanduser('~'), '.local', 'share', 'zoxide')
++
++# Database file path
++def get_db_path() -> str:
++    data_dir = os.environ.get('_ZO_DATA_DIR', get_default_data_dir())
++    return os.path.join(data_dir, 'db.json')
++
++# Database lock file path
++def get_lock_path() -> str:
++    data_dir = os.environ.get('_ZO_DATA_DIR', get_default_data_dir())
++    return os.path.join(data_dir, 'lock')
++
++# Database file
++def get_db() -> Dict[str, Any]:
++    db_path = get_db_path()
++    if os.path.exists(db_path):
++        with open(db_path, 'r') as f:
++            return json.load(f)
++    return {'dirs': {}, 'version': 1}
++
++# Save database
++def save_db(db: Dict[str, Any]) -> None:
++    db_path = get_db_path()
++    os.makedirs(os.path.dirname(db_path), exist_ok=True)
++    with open(db_path, 'w') as f:
++        json.dump(db, f, indent=2)
++
++# Lock file handling
++def acquire_lock() -> None:
++    lock_path = get_lock_path()
++    while True:
++        try:
++            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
++            os.write(fd, b'')
++            os.close(fd)
++            return
++        except FileExistsError:
++            pass
++
++def release_lock() -> None:
++    lock_path = get_lock_path()
++    try:
++        os.remove(lock_path)
++    except OSError:
++        pass
++
++# Scoring algorithm
++def score_dir(path: str, query: str, db: Dict[str, Any]) -> float:
++    """Calculate score for a directory based on frequency and recency."""
++    if path not in db['dirs']:
++        return 0.0
++    
++    info = db['dirs'][path]
++    freq = info.get('freq', 0)
++    last_accessed = info.get('last_accessed', 0)
++    
++    if freq == 0:
++        return 0.0
++    
++    # Age factor - directories decay over time
++    now = time.time()
++    age = now - last_accessed
++    age_factor = math.exp(-age / 1000000)  # Decay over ~1000 days
++    
++    # Score is frequency * age factor
++    return freq * age_factor
++
++# Add directory to database
++def add_dir(path: str, db: Dict[str, Any]) -> None:
++    """Add or increment a directory in the database."""
++    # Resolve symlinks if configured
++    if os.environ.get('_ZO_RESOLVE_SYMLINKS'):
++        path = os.path.realpath(path)
++    
++    # Normalize path
++    path = os.path.normpath(path)
++    
++    # Check exclusions
++    if is_excluded(path):
++        return
++    
++    # Get or create directory info
++    if path not in db['dirs']:
++        db['dirs'][path] = {
++            'freq': 0,
++            'last_accessed': time.time()
++        }
++    
++    db['dirs'][path]['freq'] += 1
++    db['dirs'][path]['last_accessed'] = time.time()
++    db['version'] = 2
++
++# Check if path is excluded
++def is_excluded(path: str) -> bool:
++    """Check if a path should be excluded from the database."""
++    exclude_dirs = os.environ.get('_ZO_EXCLUDE_DIRS', '')
++    
++    if not exclude_dirs:
++        return False
++    
++    # Split by OS-specific separator
++    if os.name == 'nt':
++        separators = [';']
++    else:
++        separators = [':']
++    
++    for sep in separators:
++        if sep in exclude_dirs:
++            separators.append(sep)
++    
++    for sep in separators:
++        if sep in exclude_dirs:
++            parts = exclude_dirs.split(sep)
++            for pattern in parts:
++                if pattern and pattern != '*':
++                    if path.startswith(pattern) or pattern in path:
++                        return True
++    
++    return False
++
++# Query directories
++def query_dirs(query: str, db: Dict[str, Any], prefix: bool = False) -> List[Tuple[str, float]]:
++    """Query directories matching the query."""
++    results = []
++    
++    for path, info in db['dirs'].items():
++        if info['freq'] == 0:
++            continue
++        
++        # Check if path matches query
++        if prefix:
++            if path.startswith(query):
++                results.append((path, score_dir(path, query, db)))
++        else:
++            # Fuzzy matching
++            if query in path:
++                results.append((path, score_dir(path, query, db)))
++    
++    # Sort by score descending
++    results.sort(key=lambda x: x[1], reverse=True)
++    return results
++
++# Interactive selection
++def interactive_select(query: str, db: Dict[str, Any]) -> Optional[str]:
++    """Select a directory interactively using fzf."""
++    try:
++        import fzf
++    except ImportError:
++        print("fzf not installed. Use 'z' instead of 'zi'.")
++        return None
++    
++    results = query_dirs(query, db)
++    if not results:
++        return None
++    
++    # Use fzf for selection
++    paths = [r[0] for r in results]
++    selected = fzf.prompt(paths, prompt='zoxide> ').rstrip('\n')
++    
++    if selected:
++        return selected
++    return None
++
++# Import from other tools
++def import_from(source: str, db: Dict[str, Any], path: str) -> None:
++    """Import directories from another tool."""
++    if source == 'autojump':
++        import_autojump(path, db)
++    elif source == 'z':
++        import_z(path, db)
++    elif source == 'fasd':
++        import_fasd(path, db)
++    elif source == 'zsh-z':
++        import_zsh_z(path, db)
++    elif source == 'z.lua':
++        import_z_lua(path, db)
++    elif source == 'ZLocation':
++        import_zlocation(path, db)
++    else:
++        print(f"Unknown source: {source}")
++        sys.exit(1)
++
++def import_autojump(path: str, db: Dict[str, Any]) -> None:
++    """Import from autojump."""
++    db_path = os.path.join(path, 'db.json')
++    if os.path.exists(db_path):
++        with open(db_path, 'r') as f:
++            data = json.load(f)
++        for dir_path, info in data.items():
++            add_dir(dir_path, db)
++
++def import_z(path: str, db: Dict[str, Any]) -> None:
++    """Import from z."""
++    db_path = os.path.join(path, 'db.json')
++    if os.path.exists(db_path):
++        with open(db_path, 'r') as f:
++            data = json.load(f)
++        for dir_path, info in data.items():
++            add_dir(dir_path, db)
++
++def import_fasd(path: str, db: Dict[str, Any]) -> None:
++    """Import from fasd."""
++    db_path = os.path.join(path, 'db.json')
++    if os.path.exists(db_path):
++        with open(db_path, 'r') as f:
++            data = json.load(f)
++        for dir_path, info in data.items():
++            add_dir(dir_path, db)
++
++def import_zsh_z(path: str, db: Dict[str, Any]) -> None:
++    """Import from zsh-z."""
++    db_path = os.path.join(path, 'db.json')
++    if os.path.exists(db_path):
++        with open(db_path, 'r') as f:
++            data = json.load(f)
++        for dir_path, info in data.items():
++            add_dir(dir_path, db)
++
++def import_z_lua(path: str, db: Dict[str, Any]) -> None:
++    """Import from z.lua."""
++    db_path = os.path.join(path, 'db.json')
++    if os.path.exists(db_path):
++        with open(db_path, 'r') as f:
++            data = json.load(f)
++        for dir_path, info in data.items():
++            add_dir(dir_path, db)
++
++def import_zlocation(path: str, db: Dict[str, Any]) -> None:
++    """Import from ZLocation."""
++    db_path = os.path.join(path, 'db.json')
++    if os.path.exists(db_path):
++        with open(db_path, 'r') as f:
++            data = json.load(f)
++        for dir_path, info in data.items():
++            add_dir(dir_path, db)
++
++# Remove directory from database
++def remove_dir(path: str, db: Dict[str, Any]) -> None:
++    """Remove a directory from the database."""
++    if path in db['dirs']:
++        del db['dirs'][path]
++
++# Shell initialization
++def init_shell(shell: str, cmd: str = 'z', hook: str = 'pwd', no_cmd: bool = False) -> str:
++    """Generate shell initialization code."""
++    if shell == 'bash':
++        return bash_init(cmd, hook, no_cmd)
++    elif shell == 'zsh':
++        return zsh_init(cmd, hook, no_cmd)
++    elif shell == 'fish':
++        return fish_init(cmd, hook, no_cmd)
++    elif shell == 'powershell':
++        return powershell_init(cmd, hook, no_cmd)
++    elif shell == 'elvish':
++        return elvish_init(cmd, hook, no_cmd)
++    elif shell == 'nushell':
++        return nushell_init(cmd, hook, no_cmd)
++    elif shell == 'posix':
++        return posix_init(cmd, hook, no_cmd)
++    else:
++        print(f"Unknown shell: {shell}")
++        sys.exit(1)
++
++def bash_init(cmd: str, hook: str, no_cmd: bool) -> str:
++    """Generate bash initialization code."""
++    if no_cmd:
++        return f'''
++# zoxide bash initialization
++__zoxide_z() {{
++    local query="${{1:-}}"
++    local result
++    result=$(python3 -c "
++import sys
++sys.path.insert(0, '{{}}')
++from zoxide import query_dirs, get_db
++query = sys.argv[1]
++db = get_db()
++results = query_dirs(query, db)
++for path, score in results:
++    print(path)
++".format(__file__, "{{}}") "$query")
++    if [ -n "$result" ]; then
++        cd "$result"
++    fi
++}}
++
++__zoxide_zi() {{
++    local query="${{1:-}}"
++    local result
++    result=$(python3 -c "
++import sys
++sys.path.insert(0, '{{}}')
++from zoxide import interactive_select, get_db
++query = sys.argv[1]
++db = get_db()
++selected = interactive_select(query, db)
++if selected:
++    print(selected)
++".format(__file__, "{{}}") "$query")
++    if [ -n "$result" ]; then
++        cd "$result"
++    fi
++}}
++
++if [ -n "$BASH_VERSION" ]; then
++    if [ -n "$COMP_LINE" ]; then
++        complete -F __zoxide_z -o default z
++        complete -F __zoxide_zi -o default zi
++    fi
++fi
++'''
++    else:
++        return f'''
++# zoxide bash initialization
++z() {{
++    local query="${{1:-}}"
++    local result
++    result=$(python3 -c "
++import sys
++sys.path.insert(0, '{{}}')
++from zoxide import query_dirs, get_db
++query = sys.argv[1]
++db = get_db()
++results = query_dirs(query, db)
++for path, score in results:
++    print(path)
++".format(__file__, "{{}}") "$query")
++    if [ -n "$result" ]; then
++        cd "$result"
++    fi
++}}
++
++zi() {{
++    local query="${{1:-}}"
++    local result
++    result=$(python3 -c "
++import sys
++sys.path.insert(0, '{{}}')
++from zoxide import interactive_select, get_db
++query = sys.argv[1]
++db = get_db()
++selected = interactive_select(query, db)
++if selected:
++    print(selected)
++".format(__file__, "{{}}") "$query")
++    if [ -n "$result" ]; then
++        cd "$result"
++    fi
++}}
++
++if [ -n "$COMP_LINE" ]; then
++    complete -F __zoxide_z -o default z
++    complete -F __zoxide_zi -o default zi
++fi
++'''
++
++def zsh_init(cmd: str, hook: str, no_cmd: bool) -> str:
++    """Generate zsh initialization code."""
++    if no_cmd:
++        return f'''
++# zoxide zsh initialization
++__zoxide_z() {{
++    local query="${{1:-}}"
++    local result
++    result=$(python3 -c "
++import sys
++sys.path.insert(0, '{{}}')
++from zoxide import query_dirs, get_db
++query = sys.argv[1]
++db = get_db()
++results = query_dirs(query, db)
++for path, score in results:
++    print(path)
++".format(__file__, "{{}}") "$query")
++    if [ -n "$result" ]; then
++        cd "$result"
++    fi
++}}
++
++__zoxide_zi() {{
++    local query="${{1:-}}"
++    local result
++    result=$(python3 -c "
++import sys
++sys.path.insert(0, '{{}}')
++from zoxide import interactive_select, get_db
++query = sys.argv[1]
++db = get_db()
++selected = interactive_select(query, db)
++if selected:
++    print(selected)
++".format(__file__, "{{}}") "$query")
++    if [ -n "$result" ]; then
++        cd "$result"
++    fi
++}}
++
++compdef __zoxide_z z
++compdef __zoxide_zi zi
++'''
++    else:
++        return f'''
++# zoxide zsh initialization
++z() {{
++    local query="${{1:-}}"
++    local result
++    result=$(python3 -c "
++import sys
++sys.path.insert(0, '{{}}')
++from zoxide import query_dirs, get_db
++query = sys.argv[1]
++db = get_db()
++results = query_dirs(query, db)
++for path, score in results:
++    print(path)
++".format(__file__, "{{}}") "$query")
++    if [ -n "$result" ]; then
++        cd "$result"
++    fi
++}}
++
++zi() {{
++    local query="${{1:-}}"
++    local result
++    result=$(python3 -c "
++import sys
++sys.path.insert(0, '{{}}')
++from zoxide import interactive_select, get_db
++query = sys.argv[1]
++db = get_db()
++selected = interactive_select(query, db)
++if selected:
++    print(selected)
++".format(__file__, "{{}}") "$query")
++    if [ -n "$result" ]; then
++        cd "$result"
++    fi
++}}
++
++compdef z z
++compdef zi zi
++'''
++
++def fish_init(cmd: str, hook: str, no_cmd: bool) -> str:
++    """Generate fish initialization code."""
++    if no_cmd:
++        return f'''
++# zoxide fish initialization
++function __zoxide_z
++    set -l query $argv[1]
++    set -l result (python3 -c "
++import sys
++sys.path.insert(0, '{{}}')
++from zoxide import query_dirs, get_db
++query = sys.argv[1]
++db = get_db()
++results = query_dirs(query, db)
++for path, score in results:
++    print(path)
++".format(__file__, "{{}}") $query)
++    if [ -n "$result" ]; then
++        cd $result
++    end
++end
++
++function __zoxide_zi
++    set -l query $argv[1]
++    set -l result (python3 -c "
++import sys
++sys.path.insert(0, '{{}}')
++from zoxide import interactive_select, get_db
++query = sys.argv[1]
++db = get_db()
++selected = interactive_select(query, db)
++if selected:
++    print(selected)
++".format(__file__, "{{}}") $query)
++    if [ -n "$result" ]; then
++        cd $result
++    end
++end
++'''
++    else:
++        return f'''
++# zoxide fish initialization
++function z
++    set -l query $argv[1]
++    set -l result (python3 -c "
++import sys
++sys.path.insert(0, '{{}}')
++from zoxide import query_dirs, get_db
++query = sys.argv[1]
++db = get_db()
++results = query_dirs(query, db)
++for path, score in results:
++    print(path)
++".format(__file__, "{{}}") $query)
++    if [ -n "$result" ]; then
++        cd $result
++    end
++end
++
++function zi
++    set -l query $argv[1]
++    set -l result (python3 -c "
++import sys
++sys.path.insert(0, '{{}}')
++from zoxide import interactive_select, get_db
++query = sys.argv[1]
++db = get_db()
++selected = interactive_select(query, db)
++if selected:
++    print(selected)
++".format(__file__, "{{}}") $query)
++    if [ -n "$result" ]; then
++        cd $result
++    end
++end
++'''
++
++def powershell_init(cmd: str, hook: str, no_cmd: bool) -> str:
++    """Generate PowerShell initialization code."""
++    if no_cmd:
++        return f'''
++# zoxide PowerShell initialization
++function __zoxide_z {{
++    param([string]$query)
++    $result = python3 -c "
++import sys
++sys.path.insert(0, '{{}}')
++from zoxide import query_dirs, get_db
++query = sys.argv[1]
++db = get_db()
++results = query_dirs(query, db)
++for path, score in results:
++    print(path)
++".format(__file__, "{{}}") $query
++    if ($result) {{
++        cd $result
++    }}
++}}
++
++function __zoxide_zi {{
++    param([string]$query)
++    $result = python3 -c "
++import sys
++sys.path.insert(0, '{{}}')
++from zoxide import interactive_select, get_db
++query = sys.argv[1]
++db = get_db()
++selected = interactive_select(query, db)
++if selected:
++    print(selected)
++".format(__file__, "{{}}") $query
++    if ($result) {{
++        cd $result
++    }}
++}}
++'''
++    else:
++        return f'''
++# zoxide PowerShell initialization
++function z {{
++    param([string]$query)
++    $result = python3 -c "
++import sys
++sys.path.insert(0, '{{}}')
++from zoxide import query_dirs, get_db
++query = sys.argv[1]
++db = get_db()
++results = query_dirs(query, db)
++for path, score in results:
++    print(path)
++".format(__file__, "{{}}") $query
++    if ($result) {{
++        cd $result
++    }}
++}}
++
++function zi {{
++    param([string]$query)
++    $result = python3 -c "
++import sys
++sys.path.insert(0, '{{}}')
++from zoxide import interactive_select, get_db
++query = sys.argv[1]
++db = get_db()
++selected = interactive_select(query, db)
++if selected:
++    print(selected)
++".format(__file__, "{{}}") $query
++    if ($result) {{
++        cd $result
++    }}
++}}
++'''
++
++def elvish_init(cmd: str, hook: str, no_cmd: bool) -> str:
++    """Generate Elvish initialization code."""
++    if no_cmd:
++        return f'''
++# zoxide Elvish initialization
++def __zoxide_z [query] {{
++    var result (python3 -c "
++import sys
++sys.path.insert(0, '{{}}')
++from zoxide import query_dirs, get_db
++query = sys.argv[1]
++db = get_db()
++results = query_dirs(query, db)
++for path, score in results:
++    print(path)
++".format(__file__, "{{}}") $query)
++    if ($result) {{
++        cd $result
++    }}
++}}
++
++def __zoxide_zi [query] {{
++    var result (python3 -c "
++import sys
++sys.path.insert(0, '{{}}')
++from zoxide import interactive_select, get_db
++query = sys.argv[1]
++db = get_db()
++selected = interactive_select(query, db)
++if selected:
++    print(selected)
++".format(__file__, "{{}}") $query)
++    if ($result) {{
++        cd $result
++    }}
++}}
++'''
++    else:
++        return f'''
++# zoxide Elvish initialization
++def z [query] {{
++    var result (python3 -c "
++import sys
++sys.path.insert(0, '{{}}')
++from zoxide import query_dirs, get_db
++query = sys.argv[1]
++db = get_db()
++results = query_dirs(query, db)
++for path, score in results:
++    print(path)
++".format(__file__, "{{}}") $query)
++    if ($result) {{
++        cd $result
++    }}
++}}
++
++def zi [query] {{
++    var result (python3 -c "
++import sys
++sys.path.insert(0, '{{}}')
++from zoxide import interactive_select, get_db
++query = sys.argv[1]
++db = get_db()
++selected = interactive_select(query, db)
++if selected:
++    print(selected)
++".format(__file__, "{{}}") $query)
++    if ($result) {{
++        cd $result
++    }}
++}}
++'''
++
++def nushell_init(cmd: str, hook: str, no_cmd: bool) -> str:
++    """Generate Nushell initialization code."""
++    if no_cmd:
++        return f'''
++# zoxide Nushell initialization
++def __zoxide_z [query] {{
++    let result = (python3 -c "
++import sys
++sys.path.insert(0, '{{}}')
++from zoxide import query_dirs, get_db
++query = sys.argv[1]
++db = get_db()
++results = query_dirs(query, db)
++for path, score in results:
++    print(path)
++".format(__file__, "{{}}") $query)
++    if ($result) {{
++        cd $result
++    }}
++}}
++
++def __zoxide_zi [query] {{
++    let result = (python3 -c "
++import sys
++sys.path.insert(0, '{{}}')
++from zoxide import interactive_select, get_db
++query = sys.argv[1]
++db = get_db()
++selected = interactive_select(query, db)
++if selected:
++    print(selected)
++".format(__file__, "{{}}") $query)
++    if ($result) {{
++        cd $result
++    }}
++}}
++'''
++    else:
++        return f'''
++# zoxide Nushell initialization
++def z [query] {{
++    let result = (python3 -c "
++import sys
++sys.path.insert(0, '{{}}')
++from zoxide import query_dirs, get_db
++query = sys.argv[1]
++db = get_db()
++results = query_dirs(query, db)
++for path, score in results:
++    print(path)
++".format(__file__, "{{}}") $query)
++    if ($result) {{
++        cd $result
++    }}
++}}
++
++def zi [query] {{
++    let result = (python3 -c "
++import sys
++sys.path.insert(0, '{{}}')
++from zoxide import interactive_select, get_db
++query = sys.argv[1]
++db = get_db()
++selected = interactive_select(query, db)
++if selected:
++    print(selected)
++".format(__file__, "{{}}") $query)
++    if ($result) {{
++        cd $result
++    }}
++}}
++'''
++
++def posix_init(cmd: str, hook: str, no_cmd: bool) -> str:
++    """Generate POSIX shell initialization code."""
++    if no_cmd:
++        return f'''
++# zoxide POSIX initialization
++__zoxide_z() {{
++    local query="${{1:-}}"
++    local result
++    result=$(python3 -c "
++import sys
++sys.path.insert(0, '{{}}')
++from zoxide import query_dirs, get_db
++query = sys.argv[1]
++db = get_db()
++results = query_dirs(query, db)
++for path, score in results:
++    print(path)
++".format(__file__, "{{}}") "$query")
++    if [ -n "$result" ]; then
++        cd "$result"
++    fi
++}}
++
++__zoxide_zi() {{
++    local query="${{1:-}}"
++    local result
++    result=$(python3 -c "
++import sys
++sys.path.insert(0, '{{}}')
++from zoxide import interactive_select, get_db
++query = sys.argv[1]
++db = get_db()
++selected = interactive_select(query, db)
++if selected:
++    print(selected)
++".format(__file__, "{{}}") "$query")
++    if [ -n "$result" ]; then
++        cd "$result"
++    fi
++}}
++'''
++    else:
++        return f'''
++# zoxide POSIX initialization
++z() {{
++    local query="${{1:-}}"
++    local result
++    result=$(python3 -c "
++import sys
++sys.path.insert(0, '{{}}')
++from zoxide import query_dirs, get_db
++query = sys.argv[1]
++db = get_db()
++results = query_dirs(query, db)
++for path, score in results:
++    print(path)
++".format(__file__, "{{}}") "$query")
++    if [ -n "$result" ]; then
++        cd "$result"
++    fi
++}}
++
++zi() {{
++    local query="${{1:-}}"
++    local result
++    result=$(python3 -c "
++import sys
++sys.path.insert(0, '{{}}')
++from zoxide import interactive_select, get_db
++query = sys.argv[1]
++db = get_db()
++selected = interactive_select(query, db)
++if selected:
++    print(selected)
++".format(__file__, "{{}}") "$query")
++    if [ -n "$result" ]; then
++        cd "$result"
++    fi
++}}
++'''
++
++# Main function
++def main():
++    parser = argparse.ArgumentParser(
++        description='zoxide - A smarter cd command, inspired by z and autojump.',
++        formatter_class=argparse.RawDescriptionHelpFormatter,
++        epilog='''
++Examples:
++  z foo              # cd into highest ranked directory matching foo
++  z foo bar          # cd into highest ranked directory matching foo and bar
++  z foo /            # cd into a subdirectory starting with foo
++  z ~/foo            # z also works like a regular cd command
++  z foo/             # cd into relative path
++  z -                # cd into previous directory
++  zi foo             # cd with interactive selection (using fzf)
++'''
++    )
++    
++    subparsers = parser.add_subparsers(dest='command', help='Subcommands')
++    
++    # add subcommand
++    add_parser = subparsers.add_parser('add', help='Add a directory to the database')
++    add_parser.add_argument('path', help='Path to add')
++    
++    # import subcommand
++    import_parser = subparsers.add_parser('import', help='Import from another tool')
++    import_parser.add_argument('--from', dest='source', required=True, help='Source to import from')
++    import_parser.add_argument('path', help='Path to import from')
++    
++    # init subcommand
++    init_parser = subparsers.add_parser('init', help='Generate shell configuration')
++    init_parser.add_argument('--cmd', default='z', help='Command prefix (default: z)')
++    init_parser.add_argument('--hook', default='pwd', choices=['none', 'prompt', 'pwd'], help='Hook type (default: pwd)')
++    init_parser.add_argument('--no-cmd', action='store_true', help='Do not define z and zi commands')
++    init_parser.add_argument('shell', nargs='?', help='Shell type (bash, zsh, fish, powershell, elvish, nushell, posix)')
++    
++    # query subcommand
++    query_parser = subparsers.add_parser('query', help='Query the database')
++    query_parser.add_argument('query', nargs='?', help='Query string')
++    query_parser.add_argument('--prefix', action='store_true', help='Prefix matching')
++    
++    # remove subcommand
++    remove_parser = subparsers.add_parser('remove', help='Remove a directory from the database')
++    remove_parser.add_argument('path', help='Path to remove')
++    
++    # Version
++    parser.add_argument('--version', action='version', version='%(prog)s 0.0.1')
++    
++    args = parser.parse_args()
++    
++    if args.command == 'add':
++        db = get_db()
++        add_dir(args.path, db)
++        save_db(db)
++    
++    elif args.command == 'import':
++        db = get_db()
++        import_from(args.source, db, args.path)
++        save_db(db)
++    
++    elif args.command == 'init':
++        shell = args.shell or 'bash'
++        cmd = args.cmd
++        hook = args.hook
++        no_cmd = args.no_cmd
++        print(init_shell(shell, cmd, hook, no_cmd))
++    
++    elif args.command == 'query':
++        db = get_db()
++        query = args.query or ''
++        prefix = args.prefix
++        results = query_dirs(query, db, prefix)
++        for path, score in results:
++            print(path)
++    
++    elif args.command == 'remove':
++        db = get_db()
++        remove_dir(args.path, db)
++        save_db(db)
++    
++    else:
++        # Direct z/zi command
++        if len(sys.argv) > 1:
++            query = ' '.join(sys.argv[1:])
++            db = get_db()
++            results = query_dirs(query, db)
++            if results:
++                path, score = results[0]
++                if os.environ.get('_ZO_ECHO'):
++                    print(path)
++                os.chdir(path)
++            else:
++                print(f"No match for: {query}", file=sys.stderr)
++                sys.exit(1)
++        else:
++            # cd to previous directory
++            if len(sys.argv) > 2 and sys.argv[1] == '-':
++                prev_dir = os.environ.get('OLDPWD')
++                if prev_dir:
++                    os.chdir(prev_dir)
++                else:
++                    print("No previous directory", file=sys.stderr)
++                    sys.exit(1)
++            else:
++                parser.print_help()
++
++if __name__ == '__main__':
++    main()

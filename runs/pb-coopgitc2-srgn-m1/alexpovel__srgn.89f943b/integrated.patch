@@ -1,0 +1,701 @@
+diff --git a/Cargo.toml b/Cargo.toml
+new file mode 100644
+index 0000000..b3ca580
+--- /dev/null
++++ b/Cargo.toml
+@@ -0,0 +1,22 @@
++[package]
++name = "srgn"
++version = "0.14.1"
++edition = "2021"
++
++[dependencies]
++clap = { version = "4", features = ["derive"] }
++regex = "1"
++unicode-normalization = "0.1"
++unicode-ident = "1"
++glob = "0.3"
++tree-sitter = "0.22"
++tree-sitter-python = "0.21"
++tree-sitter-rust = "0.21"
++tree-sitter-go = "0.21"
++tree-sitter-typescript = "0.21"
++tree-sitter-c = "0.21"
++tree-sitter-c-sharp = "0.21"
++tree-sitter-hcl = "0.21"
++aho-corasick = "1"
++thiserror = "1"
++anyhow = "1"
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..bdb3787
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,4 @@
++#!/bin/bash
++set -e
++cargo build --release
++cp target/release/srgn ./executable
+diff --git a/src/main.rs b/src/main.rs
+new file mode 100644
+index 0000000..51909e2
+--- /dev/null
++++ b/src/main.rs
+@@ -0,0 +1,201 @@
++use clap::Parser;
++use regex::{Regex, RegexBuilder};
++use std::collections::HashMap;
++use std::env;
++use std::fs;
++use std::io::{self, Read, Write};
++use std::path::Path;
++
++#[derive(Parser)]
++#[command(name = "srgn")]
++#[command(version = "0.14.1")]
++#[command(about = "A grep-like tool which understands source code syntax")]
++struct Args {
++    /// Scope to apply to, as a regular expression pattern
++    scope: Option<String>,
++    
++    /// Replace anything in scope with this value
++    #[arg(long = "replace", short = 'r', value_name = "REPLACEMENT")]
++    replacement: Option<String>,
++    
++    /// Uppercase anything in scope
++    #[arg(short = 'u', long = "upper")]
++    upper: bool,
++    
++    /// Lowercase anything in scope
++    #[arg(short = 'l', long = "lower")]
++    lower: bool,
++    
++    /// Titlecase anything in scope
++    #[arg(short = 't', long = "titlecase")]
++    titlecase: bool,
++    
++    /// Normalize (Normalization Form D) anything in scope
++    #[arg(short = 'n', long = "normalize")]
++    normalize: bool,
++    
++    /// Perform substitutions on German words
++    #[arg(short = 'g', long = "german")]
++    german: bool,
++    
++    /// Perform substitutions on symbols
++    #[arg(short = 'S', long = "symbols")]
++    symbols: bool,
++    
++    /// Delete anything in scope
++    #[arg(short = 'd', long = "delete")]
++    delete: bool,
++    
++    /// Squeeze consecutive occurrences of scope into one
++    #[arg(short = 's', long = "squeeze")]
++    squeeze: bool,
++    
++    /// Do not interpret the scope as a regex
++    #[arg(long = "literal-string", short = 'L')]
++    literal_string: bool,
++    
++    /// Glob of files to work on
++    #[arg(short = 'G', long = "glob")]
++    glob: Option<String>,
++    
++    /// Dry run - do not overwrite files
++    #[arg(long = "dry-run")]
++    dry_run: bool,
++    
++    /// Fail if working on files but none are found
++    #[arg(long = "fail-no-files")]
++    fail_no_files: bool,
++    
++    /// Invert the effects of passed actions
++    #[arg(short = 'i', long = "invert")]
++    invert: bool,
++    
++    /// Print only matching portions
++    #[arg(long = "only-matching")]
++    only_matching: bool,
++    
++    /// Include line numbers
++    #[arg(long = "line-numbers")]
++    line_numbers: bool,
++    
++    /// Print only the count of matches
++    #[arg(long = "count")]
++    count: bool,
++    
++    /// Fail if any match is found
++    #[arg(long = "fail-any")]
++    fail_any: bool,
++    
++    /// Fail if no match is found
++    #[arg(long = "fail-none")]
++    fail_none: bool,
++    
++    /// Print shell completions
++    #[arg(long = "completions", value_name = "SHELL")]
++    completions: Option<String>,
++}
++
++fn main() {
++    let args = Args::parse();
++    
++    if let Some(shell) = args.completions {
++        print_completions(shell);
++        return;
++    }
++    
++    let input = get_input(&args);
++    let (pattern, is_literal) = get_pattern(&args);
++    
++    let result = process_input(&input, &pattern, is_literal, &args);
++    
++    if let Err(e) = result {
++        eprintln!("error: {}", e);
++        std::process::exit(1);
++    }
++}
++
++fn get_input(args: &Args) -> String {
++    if let Some(glob) = &args.glob {
++        let files = glob::glob(glob).unwrap().filter_map(|e| e.ok()).collect::<Vec<_>>();
++        if files.is_empty() && args.fail_no_files {
++            eprintln!("error: no files found matching {}", glob);
++            std::process::exit(1);
++        }
++        
++        let mut output = String::new();
++        for file in &files {
++            let content = fs::read_to_string(file).unwrap_or_default();
++            let result = process_input(&content, &args.scope.unwrap_or_else(|| ".*".to_string()), false, args);
++            if let Ok(modified) = result {
++                output.push_str(&modified);
++            }
++        }
++        output
++    } else {
++        let mut input = String::new();
++        io::stdin().read_to_string(&mut input).unwrap();
++        input
++    }
++}
++
++fn get_pattern(args: &Args) -> (String, bool) {
++    let scope = args.scope.clone().unwrap_or_else(|| ".*".to_string());
++    (scope, args.literal_string)
++}
++
++fn process_input(input: &str, pattern: &str, is_literal: bool, args: &Args) -> Result<String, String> {
++    let regex = if is_literal {
++        Regex::new(&regex::escape(pattern)).map_err(|e| e.to_string())?
++    } else {
++        RegexBuilder::new(pattern)
++            .build()
++            .map_err(|e| e.to_string())?
++    };
++    
++    let mut output = input.to_string();
++    
++    if args.delete {
++        output = regex.replace_all(&output, "").to_string();
++    } else if args.squeeze {
++        output = regex.replace_all(&output, "1").to_string();
++    } else if args.upper {
++        output = regex.replace_all(&output, |caps: &regex::Captures| caps[0].to_uppercase()).to_string();
++    } else if args.lower {
++        output = regex.replace_all(&output, |caps: &regex::Captures| caps[0].to_lowercase()).to_string();
++    } else if args.titlecase {
++        output = regex.replace_all(&output, |caps: &regex::Captures| {
++            let mut s = caps[0].to_string();
++            s = s.split_whitespace().map(|w| {
++                w.chars().map(|c| if c.is_ascii_alphabetic() && c.is_lowercase() { c.to_ascii_uppercase() } else { c }).collect()
++            }).collect();
++            s
++        }).to_string();
++    } else if args.normalize {
++        output = regex.replace_all(&output, |caps: &regex::Captures| {
++            let s = caps[0].to_string();
++            let normalized = unicode_normalization::UnicodeNormalization::nfd(&s).filter(|c| !c.is_mark()).collect();
++            normalized
++        }).to_string();
++    } else if args.german {
++        output = regex.replace_all(&output, |caps: &regex::Captures| {
++            let s = caps[0].to_string();
++            let germanized = s.replace("ae", "ä").replace("oe", "ö").replace("ue", "ü").replace("ss", "ß");
++            germanized
++        }).to_string();
++    } else if args.symbols {
++        output = regex.replace_all(&output, |caps: &regex::Captures| {
++            let s = caps[0].to_string();
++            let symbols = s.replace("!", "≠").replace("->", "→");
++            symbols
++        }).to_string();
++    } else if args.replacement.is_some() {
++        let replacement = args.replacement.clone().unwrap();
++        output = regex.replace_all(&output, replacement.as_str()).to_string();
++    }
++    
++    Ok(output)
++}
++
++fn print_completions(shell: String) {
++    println!("completions for {}", shell);
++}
+diff --git a/srgn.py b/srgn.py
+new file mode 100755
+index 0000000..c1859cd
+--- /dev/null
++++ b/srgn.py
+@@ -0,0 +1,450 @@
++#!/usr/bin/env python3
++"""
++srgn - A grep-like tool which understands source code syntax
++"""
++
++import re
++import sys
++import unicodedata
++import glob as glob_module
++
++VERSION = "0.14.1"
++
++# German substitutions
++GERMAN_SUBS = {
++    'ae': 'ä', 'oe': 'ö', 'ue': 'ü', 'ss': 'ß',
++    'AE': 'Ä', 'OE': 'Ö', 'UE': 'Ü', 'SS': 'SS'
++}
++
++# Symbol substitutions
++SYMBOL_SUBS = {
++    '!=': '≠', '->': '→', '=>': '⇒', '<-': '←',
++    '==': '＝', '<=': '≤', '>=': '≥',
++    '+=': '+=', '-=': '−=', '*=': '×=', '/=': '÷=',
++    '//': '∥', '||': '∥∥', '&&': '∧∧', '++': '++', '--': '--',
++    '...': '…', '---': '—',
++    '°': '°', '±': '±', '×': '×', '÷': '÷',
++    '≈': '≈', '≤': '≤', '≥': '≥',
++    '∞': '∞', '∑': '∑', '∏': '∏', '∫': '∫',
++    '√': '√', '∛': '∛', '∜': '∜',
++    '∂': '∂', '∇': '∇', 'Δ': 'Δ', 'δ': 'δ',
++}
++
++def escape_regex(s):
++    return re.escape(s)
++
++def apply_german(text):
++    result = text
++    for ascii, unicode in sorted(GERMAN_SUBS.items(), key=lambda x: -len(x[0])):
++        result = result.replace(ascii, unicode)
++    return result
++
++def apply_symbols(text):
++    result = text
++    for ascii, unicode in sorted(SYMBOL_SUBS.items(), key=lambda x: -len(x[0])):
++        result = result.replace(ascii, unicode)
++    return result
++
++def apply_normalize(text):
++    normalized = unicodedata.normalize('NFD', text)
++    return ''.join(c for c in normalized if not unicodedata.combining(c))
++
++def apply_upper(text):
++    return text.upper()
++
++def apply_lower(text):
++    return text.lower()
++
++def apply_titlecase(text):
++    return text.title()
++
++def apply_delete(text):
++    return ""
++
++def apply_squeeze(text):
++    return "1"
++
++def apply_replacement(text, replacement):
++    return replacement
++
++def get_action_function(action):
++    actions = {
++        'upper': apply_upper,
++        'lower': apply_lower,
++        'titlecase': apply_titlecase,
++        'normalize': apply_normalize,
++        'german': apply_german,
++        'symbols': apply_symbols,
++        'delete': apply_delete,
++        'squeeze': apply_squeeze,
++        'replace': apply_replacement,
++    }
++    return actions.get(action)
++
++def process_text(text, pattern, is_literal, actions, replacement, only_matching, line_numbers, fail_any, fail_none):
++    if is_literal:
++        regex = re.compile(escape_regex(pattern))
++    else:
++        regex = re.compile(pattern)
++    
++    matches = list(regex.finditer(text))
++    match_count = len(matches)
++    
++    if only_matching:
++        if matches:
++            result = ''.join(m.group(0) for m in matches)
++        else:
++            result = ""
++    else:
++        if replacement is not None:
++            text = regex.sub(replacement, text)
++        
++        for action in actions:
++            if action == 'replace' and replacement is not None:
++                continue
++            func = get_action_function(action)
++            if func:
++                text = regex.sub(func, text)
++        
++        result = text
++    
++    if fail_any and match_count > 0:
++        return result, 1
++    if fail_none and match_count == 0:
++        return result, 1
++    
++    return result, 0
++
++def print_help():
++    help_text = """A grep-like tool which understands source code syntax and allows for manipulation in addition to search
++
++Usage: srgn [OPTIONS] [SCOPE] [-- <REPLACEMENT>]
++
++Arguments:
++  [SCOPE]
++          Scope to apply to, as a regular expression pattern.
++          If string literal mode is requested, will be interpreted as a literal string.
++          Actions will apply their transformations within this scope only.
++          The default is the global scope, matching the entire input.
++
++Options:
++  -h, --help          Print help
++  -V, --version       Print version
++
++Composable Actions:
++  -u, --upper         Uppercase anything in scope
++  -l, --lower         Lowercase anything in scope
++  -t, --titlecase     Titlecase anything in scope
++  -n, --normalize     Normalize (NFD) anything in scope, strip diacritics
++  -g, --german        Perform substitutions on German words
++  -S, --symbols       Perform substitutions on symbols
++  -d, --delete        Delete anything in scope
++  -s, --squeeze       Squeeze consecutive occurrences of scope into one
++  --replace <R>       Replace anything in scope with this value
++
++Standalone Actions:
++  -d, --delete        Delete anything in scope (cannot be used with other actions)
++  -s, --squeeze       Squeeze consecutive occurrences of scope into one
++
++Options (global):
++  -L, --literal-string  Do not interpret scope as regex
++  -G, --glob <GLOB>     Glob of files to work on
++  --dry-run             Do not overwrite files
++  --fail-any            Fail if any match is found
++  --fail-none           Fail if no match is found
++  --only-matching       Print only matching portions
++  --line-numbers        Include line numbers
++  --count               Print only the count of matches
++"""
++    print(help_text)
++
++def parse_args(args):
++    """Parse arguments, handling -- separator for replacement"""
++    scope = None
++    replacement = None
++    upper = False
++    lower = False
++    titlecase = False
++    normalize = False
++    german = False
++    symbols = False
++    delete = False
++    squeeze = False
++    literal_string = False
++    glob = None
++    dry_run = False
++    fail_any = False
++    fail_none = False
++    only_matching = False
++    line_numbers = False
++    count = False
++    help_flag = False
++    version_flag = False
++    completions = None
++    
++    i = 0
++    positional = []
++    
++    while i < len(args):
++        arg = args[i]
++        if arg == '--':
++            if i + 1 < len(args):
++                replacement = args[i + 1]
++            i += 2
++        elif arg.startswith('--'):
++            if '=' in arg:
++                key, value = arg.split('=', 1)
++                key = key.lstrip('-')
++                if key == 'replace':
++                    replacement = value
++                elif key == 'glob':
++                    glob = value
++                elif key == 'completions':
++                    completions = value
++                elif key == 'dry-run':
++                    dry_run = True
++                elif key == 'fail-any':
++                    fail_any = True
++                elif key == 'fail-none':
++                    fail_none = True
++                elif key == 'only-matching':
++                    only_matching = True
++                elif key == 'line-numbers':
++                    line_numbers = True
++                elif key == 'count':
++                    count = True
++                elif key == 'literal-string':
++                    literal_string = True
++                elif key == 'german':
++                    german = True
++                elif key == 'symbols':
++                    symbols = True
++                elif key == 'normalize':
++                    normalize = True
++                elif key == 'upper':
++                    upper = True
++                elif key == 'lower':
++                    lower = True
++                elif key == 'titlecase':
++                    titlecase = True
++                elif key == 'delete':
++                    delete = True
++                elif key == 'squeeze':
++                    squeeze = True
++                elif key == 'help':
++                    help_flag = True
++                elif key == 'version':
++                    version_flag = True
++            else:
++                key = arg.lstrip('-')
++                if i + 1 < len(args) and not args[i + 1].startswith('-'):
++                    if key == 'replace':
++                        replacement = args[i + 1]
++                    elif key == 'glob':
++                        glob = args[i + 1]
++                    elif key == 'completions':
++                        completions = args[i + 1]
++                    i += 2
++                else:
++                    if key == 'help':
++                        help_flag = True
++                    elif key == 'version':
++                        version_flag = True
++                    elif key == 'dry-run':
++                        dry_run = True
++                    elif key == 'fail-any':
++                        fail_any = True
++                    elif key == 'fail-none':
++                        fail_none = True
++                    elif key == 'only-matching':
++                        only_matching = True
++                    elif key == 'line-numbers':
++                        line_numbers = True
++                    elif key == 'count':
++                        count = True
++                    elif key == 'literal-string':
++                        literal_string = True
++                    elif key == 'german':
++                        german = True
++                    elif key == 'symbols':
++                        symbols = True
++                    elif key == 'normalize':
++                        normalize = True
++                    elif key == 'upper':
++                        upper = True
++                    elif key == 'lower':
++                        lower = True
++                    elif key == 'titlecase':
++                        titlecase = True
++                    elif key == 'delete':
++                        delete = True
++                    elif key == 'squeeze':
++                        squeeze = True
++                i += 1
++        elif arg.startswith('-') and len(arg) == 2:
++            key = arg[1:]
++            if i + 1 < len(args) and not args[i + 1].startswith('-'):
++                if key == 'replace':
++                    replacement = args[i + 1]
++                elif key == 'glob':
++                    glob = args[i + 1]
++                elif key == 'u':
++                    upper = True
++                elif key == 'l':
++                    lower = True
++                elif key == 't':
++                    titlecase = True
++                elif key == 'n':
++                    normalize = True
++                elif key == 'g':
++                    german = True
++                elif key == 'S':
++                    symbols = True
++                elif key == 'd':
++                    delete = True
++                elif key == 's':
++                    squeeze = True
++                elif key == 'L':
++                    literal_string = True
++                i += 2
++            else:
++                if key == 'u':
++                    upper = True
++                elif key == 'l':
++                    lower = True
++                elif key == 't':
++                    titlecase = True
++                elif key == 'n':
++                    normalize = True
++                elif key == 'g':
++                    german = True
++                elif key == 'S':
++                    symbols = True
++                elif key == 'd':
++                    delete = True
++                elif key == 's':
++                    squeeze = True
++                elif key == 'L':
++                    literal_string = True
++                elif key == 'h':
++                    help_flag = True
++                elif key == 'V':
++                    version_flag = True
++                i += 1
++        else:
++            positional.append(arg)
++            i += 1
++    
++    if positional:
++        scope = positional[0]
++    
++    return {
++        'scope': scope,
++        'replacement': replacement,
++        'upper': upper,
++        'lower': lower,
++        'titlecase': titlecase,
++        'normalize': normalize,
++        'german': german,
++        'symbols': symbols,
++        'delete': delete,
++        'squeeze': squeeze,
++        'literal_string': literal_string,
++        'glob': glob,
++        'dry_run': dry_run,
++        'fail_any': fail_any,
++        'fail_none': fail_none,
++        'only_matching': only_matching,
++        'line_numbers': line_numbers,
++        'count': count,
++        'help': help_flag,
++        'version': version_flag,
++        'completions': completions,
++    }
++
++def main():
++    args = sys.argv[1:]
++    
++    parsed = parse_args(args)
++    
++    if parsed['help']:
++        print_help()
++        sys.exit(0)
++    
++    if parsed['version']:
++        print(f"srgn {VERSION}")
++        sys.exit(0)
++    
++    if parsed['completions']:
++        print(f"# Completions for {parsed['completions']}")
++        sys.exit(0)
++    
++    if parsed['glob']:
++        files = glob_module.glob(parsed['glob'])
++        if not files and parsed['fail_no_files']:
++            print(f"error: no files found matching {parsed['glob']}", file=sys.stderr)
++            sys.exit(1)
++        
++        for filepath in files:
++            with open(filepath, 'r') as f:
++                content = f.read()
++            actions = []
++            if parsed['upper']:
++                actions.append('upper')
++            if parsed['lower']:
++                actions.append('lower')
++            if parsed['titlecase']:
++                actions.append('titlecase')
++            if parsed['normalize']:
++                actions.append('normalize')
++            if parsed['german']:
++                actions.append('german')
++            if parsed['symbols']:
++                actions.append('symbols')
++            if parsed['delete']:
++                actions.append('delete')
++            if parsed['squeeze']:
++                actions.append('squeeze')
++            
++            result, exit_code = process_text(
++                content, parsed['scope'] or '.*', parsed['literal_string'],
++                actions, parsed['replacement'], parsed['only_matching'],
++                parsed['line_numbers'], parsed['fail_any'], parsed['fail_none']
++            )
++            if not parsed['dry_run']:
++                with open(filepath, 'w') as f:
++                    f.write(result)
++            else:
++                print(f"--- {filepath}")
++                print(result)
++            sys.exit(exit_code)
++    else:
++        content = sys.stdin.read()
++        actions = []
++        if parsed['upper']:
++            actions.append('upper')
++        if parsed['lower']:
++            actions.append('lower')
++        if parsed['titlecase']:
++            actions.append('titlecase')
++        if parsed['normalize']:
++            actions.append('normalize')
++        if parsed['german']:
++            actions.append('german')
++        if parsed['symbols']:
++            actions.append('symbols')
++        if parsed['delete']:
++            actions.append('delete')
++        if parsed['squeeze']:
++            actions.append('squeeze')
++        
++        result, exit_code = process_text(
++            content, parsed['scope'] or '.*', parsed['literal_string'],
++            actions, parsed['replacement'], parsed['only_matching'],
++            parsed['line_numbers'], parsed['fail_any'], parsed['fail_none']
++        )
++        print(result, end='')
++        sys.exit(exit_code)
++
++if __name__ == '__main__':
++    main()

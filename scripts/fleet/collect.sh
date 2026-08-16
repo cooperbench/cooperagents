@@ -11,7 +11,7 @@ for ip in $(cat scripts/fleet/nodes.txt); do
       rsync -az -e "$SSH" "ubuntu@$ip:CooperAgents/runs/$name" "ubuntu@$ip:CooperAgents/runs/$name.launch.log" "ubuntu@$ip:CooperAgents/runs/$name.DONE" runs/ 2>/dev/null
       echo "collected $name from $ip: $(cat runs/$name.DONE)"
     fi
-    f=$(ls "runs/$name"/abishekvashok__cmatrix.5c082c6/*.eval.json 2>/dev/null | head -1)
+    f=$(ls "runs/$name"/*/*.eval.json 2>/dev/null | head -1)
     if [ -n "$f" ]; then
       python3 - "$name" "$f" <<'PYEOF'
 import json, sys

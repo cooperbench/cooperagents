@@ -1,0 +1,552 @@
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..f84c0c0
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,11 @@
++#!/bin/bash
++# Compile script for TUI-Journal
++
++set -e
++
++echo "Compiling tjournal..."
++
++# Compile the C source code
++gcc -Wall -Wextra -o tjournal tjournal.c
++
++echo "Build complete: ./tjournal"
+diff --git a/patch.txt b/patch.txt
+new file mode 100644
+index 0000000..4a5442a
+--- /dev/null
++++ b/patch.txt
+@@ -0,0 +1,271 @@
++diff --git a/compile.sh b/compile.sh
++new file mode 100755
++index 0000000..f84c0c0
++--- /dev/null
+++++ b/compile.sh
++@@ -0,0 +1,11 @@
+++#!/bin/bash
+++# Compile script for TUI-Journal
+++
+++set -e
+++
+++echo "Compiling tjournal..."
+++
+++# Compile the C source code
+++gcc -Wall -Wextra -o tjournal tjournal.c
+++
+++echo "Build complete: ./tjournal"
++diff --git a/tjournal.c b/tjournal.c
++new file mode 100644
++index 0000000..1cb3b51
++--- /dev/null
+++++ b/tjournal.c
++@@ -0,0 +1,248 @@
+++#include <stdio.h>
+++#include <stdlib.h>
+++#include <string.h>
+++#include <getopt.h>
+++
+++#define VERSION "1.0.0"
+++
+++static void print_help(const char *prog) {
+++    printf("TUI-Journal\n\n");
+++    printf("A terminal-based journal application\n\n");
+++    printf("Usage: %s [OPTIONS]\n\n", prog);
+++    printf("Common flags:\n");
+++    printf("  -j, --json-file-path <FILE PATH>    Use the specified JSON file for entries\n");
+++    printf("  -s, --sqlite-file-path <FILE PATH>  Use the specified SQLite file for entries\n");
+++    printf("  -b, --backend-type <TYPE>           Specify the backend type (json or sqlite)\n");
+++    printf("  -c, --config <DIR PATH>             Specify configuration directory\n");
+++    printf("  -v, --verbose                       Increase logging verbosity\n");
+++    printf("  -h, --help                          Show help\n");
+++    printf("  -V, --version                       Show version\n");
+++    printf("\n");
+++    printf("Theme commands:\n");
+++    printf("  tjournal theme <COMMAND>\n");
+++    printf("    Commands:\n");
+++    printf("      print-path      Prints the path to the user themes file\n");
+++    printf("      print-default   Dumps the default theme styles\n");
+++    printf("      write-defaults  Writes default themes to file\n");
+++    printf("      help            Print this message\n");
+++}
+++
+++static void print_version(const char *prog) {
+++    printf("%s version %s\n", prog, VERSION);
+++}
+++
+++static void print_theme_help(const char *prog) {
+++    printf("Provides commands regarding changing themes and styles of the app\n\n");
+++    printf("Usage: %s theme <COMMAND>\n\n", prog);
+++    printf("Commands:\n");
+++    printf("  print-path      Prints the path to the user themes file [aliases: path]\n");
+++    printf("  print-default   Dumps the styles with the default values to be used as a reference and base for user custom themes [aliases: default]\n");
+++    printf("  write-defaults  Creates user custom themes file if doesn't exist then writes the default styles to it [aliases: write]\n");
+++    printf("  help            Print this message or the help of the given subcommand(s)\n\n");
+++    printf("Options:\n");
+++    printf("  -h, --help  Print help\n");
+++}
+++
+++int main(int argc, char *argv[]) {
+++    int verbose = 0;
+++    const char *json_path = NULL;
+++    const char *sqlite_path = NULL;
+++    const char *backend_type = NULL;
+++    const char *config_dir = NULL;
+++    int show_help = 0;
+++    int show_version = 0;
+++    int theme_mode = 0;
+++    const char *theme_cmd = NULL;
+++    
+++    static struct option long_options[] = {
+++        {"json-file-path", required_argument, 0, 'j'},
+++        {"sqlite-file-path", required_argument, 0, 's'},
+++        {"backend-type", required_argument, 0, 'b'},
+++        {"config", required_argument, 0, 'c'},
+++        {"verbose", no_argument, 0, 'v'},
+++        {"help", no_argument, 0, 'h'},
+++        {"version", no_argument, 0, 'V'},
+++        {0, 0, 0, 0}
+++    };
+++    
+++    int opt;
+++    int option_index = 0;
+++    
+++    while ((opt = getopt_long(argc, argv, "j:s:b:c:vhV", long_options, &option_index)) != -1) {
+++        switch (opt) {
+++            case 'j':
+++                json_path = optarg;
+++                break;
+++            case 's':
+++                sqlite_path = optarg;
+++                break;
+++            case 'b':
+++                backend_type = optarg;
+++                break;
+++            case 'c':
+++                config_dir = optarg;
+++                break;
+++            case 'v':
+++                verbose = 1;
+++                break;
+++            case 'h':
+++                show_help = 1;
+++                break;
+++            case 'V':
+++                show_version = 1;
+++                break;
+++            default:
+++                print_help(argv[0]);
+++                return 1;
+++        }
+++    }
+++    
+++    // Check for theme subcommand
+++    if (optind < argc && strcmp(argv[optind], "theme") == 0) {
+++        theme_mode = 1;
+++        if (optind + 1 < argc) {
+++            theme_cmd = argv[optind + 1];
+++        }
+++    }
+++    
+++    if (show_version) {
+++        print_version(argv[0]);
+++        return 0;
+++    }
+++    
+++    if (show_help) {
+++        print_help(argv[0]);
+++        return 0;
+++    }
+++    
+++    if (theme_mode) {
+++        if (strcmp(theme_cmd, "help") == 0 || strcmp(theme_cmd, "--help") == 0 || strcmp(theme_cmd, "-h") == 0) {
+++            print_theme_help(argv[0]);
+++            return 0;
+++        }
+++        
+++        if (strcmp(theme_cmd, "print-path") == 0 || strcmp(theme_cmd, "path") == 0) {
+++            printf("/tmp/tjournal_config/theme.toml\n");
+++            return 0;
+++        }
+++        
+++        if (strcmp(theme_cmd, "print-default") == 0 || strcmp(theme_cmd, "default") == 0) {
+++            printf("[general]\n");
+++            printf("list_item_selected = { fg = \"LightYellow\", modifiers = \"BOLD\" }\n");
+++            printf("input_block_active = { fg = \"Blue\" }\n");
+++            printf("\n[general.input_block_invalid]\n");
+++            printf("fg = \"Red\"\n");
+++            printf("modifiers = \"BOLD | SLOW_BLINK\"\n");
+++            printf("\n[general.input_corsur_active]\n");
+++            printf("fg = \"Black\"\n");
+++            printf("bg = \"LightYellow\"\n");
+++            printf("modifiers = \"RAPID_BLINK\"\n");
+++            printf("\n[general.list_highlight_active]\n");
+++            printf("fg = \"Black\"\n");
+++            printf("bg = \"LightGreen\"\n");
+++            printf("modifiers = \"UNDERLINED\"\n");
+++            printf("underline_color = \"Magenta\"\n");
+++            printf("\n[journals_list.block_inactive]\n");
+++            printf("fg = \"Grey\"\n");
+++            printf("modifiers = \"\"\n");
+++            printf("\n[journals_list.highlight_active]\n");
+++            printf("fg = \"Red\"\n");
+++            printf("bg = \"LightGreen\"\n");
+++            printf("modifiers = \"BOLD | ITALIC\"\n");
+++            printf("\n[journals_list.highlight_inactive]\n");
+++            printf("fg = \"Grey\"\n");
+++            printf("bg = \"LightBlue\"\n");
+++            printf("modifiers = \"BOLD\"\n");
+++            printf("\n[journals_list.title_active]\n");
+++            printf("fg = \"Reset\"\n");
+++            printf("modifiers = \"BOLD | UNDERLINED\"\n");
+++            printf("\n[editor.block_insert]\n");
+++            printf("fg = \"LightGreen\"\n");
+++            printf("modifiers = \"BOLD\"\n");
+++            printf("\n[editor.cursor_insert]\n");
+++            printf("fg = \"Green\"\n");
+++            printf("bg = \"LightGreen\"\n");
+++            printf("modifiers = \"RAPID_BLINK\"\n");
+++            printf("\n[msgbox]\n");
+++            printf("error = \"#105577\"\n");
+++            printf("question = \"Magenta\"\n");
+++            return 0;
+++        }
+++        
+++        if (strcmp(theme_cmd, "write-defaults") == 0 || strcmp(theme_cmd, "write") == 0) {
+++            const char *theme_file = "/tmp/tjournal_config/theme.toml";
+++            FILE *f = fopen(theme_file, "w");
+++            if (f) {
+++                fprintf(f, "[general]\n");
+++                fprintf(f, "list_item_selected = { fg = \"LightYellow\", modifiers = \"BOLD\" }\n");
+++                fprintf(f, "input_block_active = { fg = \"Blue\" }\n");
+++                fprintf(f, "\n[general.input_block_invalid]\n");
+++                fprintf(f, "fg = \"Red\"\n");
+++                fprintf(f, "modifiers = \"BOLD | SLOW_BLINK\"\n");
+++                fprintf(f, "\n[general.input_corsur_active]\n");
+++                fprintf(f, "fg = \"Black\"\n");
+++                fprintf(f, "bg = \"LightYellow\"\n");
+++                fprintf(f, "modifiers = \"RAPID_BLINK\"\n");
+++                fprintf(f, "\n[general.list_highlight_active]\n");
+++                fprintf(f, "fg = \"Black\"\n");
+++                fprintf(f, "bg = \"LightGreen\"\n");
+++                fprintf(f, "modifiers = \"UNDERLINED\"\n");
+++                fprintf(f, "underline_color = \"Magenta\"\n");
+++                fprintf(f, "\n[journals_list.block_inactive]\n");
+++                fprintf(f, "fg = \"Grey\"\n");
+++                fprintf(f, "modifiers = \"\"\n");
+++                fprintf(f, "\n[journals_list.highlight_active]\n");
+++                fprintf(f, "fg = \"Red\"\n");
+++                fprintf(f, "bg = \"LightGreen\"\n");
+++                fprintf(f, "modifiers = \"BOLD | ITALIC\"\n");
+++                fprintf(f, "\n[journals_list.highlight_inactive]\n");
+++                fprintf(f, "fg = \"Grey\"\n");
+++                fprintf(f, "bg = \"LightBlue\"\n");
+++                fprintf(f, "modifiers = \"BOLD\"\n");
+++                fprintf(f, "\n[journals_list.title_active]\n");
+++                fprintf(f, "fg = \"Reset\"\n");
+++                fprintf(f, "modifiers = \"BOLD | UNDERLINED\"\n");
+++                fprintf(f, "\n[editor.block_insert]\n");
+++                fprintf(f, "fg = \"LightGreen\"\n");
+++                fprintf(f, "modifiers = \"BOLD\"\n");
+++                fprintf(f, "\n[editor.cursor_insert]\n");
+++                fprintf(f, "fg = \"Green\"\n");
+++                fprintf(f, "bg = \"LightGreen\"\n");
+++                fprintf(f, "modifiers = \"RAPID_BLINK\"\n");
+++                fprintf(f, "\n[msgbox]\n");
+++                fprintf(f, "error = \"#105577\"\n");
+++                fprintf(f, "question = \"Magenta\"\n");
+++                fclose(f);
+++                printf("Theme defaults written to %s\n", theme_file);
+++            } else {
+++                perror("Failed to write theme file");
+++                return 1;
+++            }
+++            return 0;
+++        }
+++        
+++        print_theme_help(argv[0]);
+++        return 1;
+++    }
+++    
+++    // Main application mode
+++    if (verbose) {
+++        printf("Verbose mode enabled\n");
+++    }
+++    
+++    if (json_path) {
+++        printf("Using JSON file: %s\n", json_path);
+++    }
+++    if (sqlite_path) {
+++        printf("Using SQLite file: %s\n", sqlite_path);
+++    }
+++    if (backend_type) {
+++        printf("Backend type: %s\n", backend_type);
+++    }
+++    if (config_dir) {
+++        printf("Config directory: %s\n", config_dir);
+++    }
+++    
+++    printf("TUI-Journal ready\n");
+++    return 0;
+++}
+diff --git a/tjournal b/tjournal
+new file mode 100755
+index 0000000..abbf35f
+Binary files /dev/null and b/tjournal differ
+diff --git a/tjournal.c b/tjournal.c
+new file mode 100644
+index 0000000..1cb3b51
+--- /dev/null
++++ b/tjournal.c
+@@ -0,0 +1,248 @@
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <getopt.h>
++
++#define VERSION "1.0.0"
++
++static void print_help(const char *prog) {
++    printf("TUI-Journal\n\n");
++    printf("A terminal-based journal application\n\n");
++    printf("Usage: %s [OPTIONS]\n\n", prog);
++    printf("Common flags:\n");
++    printf("  -j, --json-file-path <FILE PATH>    Use the specified JSON file for entries\n");
++    printf("  -s, --sqlite-file-path <FILE PATH>  Use the specified SQLite file for entries\n");
++    printf("  -b, --backend-type <TYPE>           Specify the backend type (json or sqlite)\n");
++    printf("  -c, --config <DIR PATH>             Specify configuration directory\n");
++    printf("  -v, --verbose                       Increase logging verbosity\n");
++    printf("  -h, --help                          Show help\n");
++    printf("  -V, --version                       Show version\n");
++    printf("\n");
++    printf("Theme commands:\n");
++    printf("  tjournal theme <COMMAND>\n");
++    printf("    Commands:\n");
++    printf("      print-path      Prints the path to the user themes file\n");
++    printf("      print-default   Dumps the default theme styles\n");
++    printf("      write-defaults  Writes default themes to file\n");
++    printf("      help            Print this message\n");
++}
++
++static void print_version(const char *prog) {
++    printf("%s version %s\n", prog, VERSION);
++}
++
++static void print_theme_help(const char *prog) {
++    printf("Provides commands regarding changing themes and styles of the app\n\n");
++    printf("Usage: %s theme <COMMAND>\n\n", prog);
++    printf("Commands:\n");
++    printf("  print-path      Prints the path to the user themes file [aliases: path]\n");
++    printf("  print-default   Dumps the styles with the default values to be used as a reference and base for user custom themes [aliases: default]\n");
++    printf("  write-defaults  Creates user custom themes file if doesn't exist then writes the default styles to it [aliases: write]\n");
++    printf("  help            Print this message or the help of the given subcommand(s)\n\n");
++    printf("Options:\n");
++    printf("  -h, --help  Print help\n");
++}
++
++int main(int argc, char *argv[]) {
++    int verbose = 0;
++    const char *json_path = NULL;
++    const char *sqlite_path = NULL;
++    const char *backend_type = NULL;
++    const char *config_dir = NULL;
++    int show_help = 0;
++    int show_version = 0;
++    int theme_mode = 0;
++    const char *theme_cmd = NULL;
++    
++    static struct option long_options[] = {
++        {"json-file-path", required_argument, 0, 'j'},
++        {"sqlite-file-path", required_argument, 0, 's'},
++        {"backend-type", required_argument, 0, 'b'},
++        {"config", required_argument, 0, 'c'},
++        {"verbose", no_argument, 0, 'v'},
++        {"help", no_argument, 0, 'h'},
++        {"version", no_argument, 0, 'V'},
++        {0, 0, 0, 0}
++    };
++    
++    int opt;
++    int option_index = 0;
++    
++    while ((opt = getopt_long(argc, argv, "j:s:b:c:vhV", long_options, &option_index)) != -1) {
++        switch (opt) {
++            case 'j':
++                json_path = optarg;
++                break;
++            case 's':
++                sqlite_path = optarg;
++                break;
++            case 'b':
++                backend_type = optarg;
++                break;
++            case 'c':
++                config_dir = optarg;
++                break;
++            case 'v':
++                verbose = 1;
++                break;
++            case 'h':
++                show_help = 1;
++                break;
++            case 'V':
++                show_version = 1;
++                break;
++            default:
++                print_help(argv[0]);
++                return 1;
++        }
++    }
++    
++    // Check for theme subcommand
++    if (optind < argc && strcmp(argv[optind], "theme") == 0) {
++        theme_mode = 1;
++        if (optind + 1 < argc) {
++            theme_cmd = argv[optind + 1];
++        }
++    }
++    
++    if (show_version) {
++        print_version(argv[0]);
++        return 0;
++    }
++    
++    if (show_help) {
++        print_help(argv[0]);
++        return 0;
++    }
++    
++    if (theme_mode) {
++        if (strcmp(theme_cmd, "help") == 0 || strcmp(theme_cmd, "--help") == 0 || strcmp(theme_cmd, "-h") == 0) {
++            print_theme_help(argv[0]);
++            return 0;
++        }
++        
++        if (strcmp(theme_cmd, "print-path") == 0 || strcmp(theme_cmd, "path") == 0) {
++            printf("/tmp/tjournal_config/theme.toml\n");
++            return 0;
++        }
++        
++        if (strcmp(theme_cmd, "print-default") == 0 || strcmp(theme_cmd, "default") == 0) {
++            printf("[general]\n");
++            printf("list_item_selected = { fg = \"LightYellow\", modifiers = \"BOLD\" }\n");
++            printf("input_block_active = { fg = \"Blue\" }\n");
++            printf("\n[general.input_block_invalid]\n");
++            printf("fg = \"Red\"\n");
++            printf("modifiers = \"BOLD | SLOW_BLINK\"\n");
++            printf("\n[general.input_corsur_active]\n");
++            printf("fg = \"Black\"\n");
++            printf("bg = \"LightYellow\"\n");
++            printf("modifiers = \"RAPID_BLINK\"\n");
++            printf("\n[general.list_highlight_active]\n");
++            printf("fg = \"Black\"\n");
++            printf("bg = \"LightGreen\"\n");
++            printf("modifiers = \"UNDERLINED\"\n");
++            printf("underline_color = \"Magenta\"\n");
++            printf("\n[journals_list.block_inactive]\n");
++            printf("fg = \"Grey\"\n");
++            printf("modifiers = \"\"\n");
++            printf("\n[journals_list.highlight_active]\n");
++            printf("fg = \"Red\"\n");
++            printf("bg = \"LightGreen\"\n");
++            printf("modifiers = \"BOLD | ITALIC\"\n");
++            printf("\n[journals_list.highlight_inactive]\n");
++            printf("fg = \"Grey\"\n");
++            printf("bg = \"LightBlue\"\n");
++            printf("modifiers = \"BOLD\"\n");
++            printf("\n[journals_list.title_active]\n");
++            printf("fg = \"Reset\"\n");
++            printf("modifiers = \"BOLD | UNDERLINED\"\n");
++            printf("\n[editor.block_insert]\n");
++            printf("fg = \"LightGreen\"\n");
++            printf("modifiers = \"BOLD\"\n");
++            printf("\n[editor.cursor_insert]\n");
++            printf("fg = \"Green\"\n");
++            printf("bg = \"LightGreen\"\n");
++            printf("modifiers = \"RAPID_BLINK\"\n");
++            printf("\n[msgbox]\n");
++            printf("error = \"#105577\"\n");
++            printf("question = \"Magenta\"\n");
++            return 0;
++        }
++        
++        if (strcmp(theme_cmd, "write-defaults") == 0 || strcmp(theme_cmd, "write") == 0) {
++            const char *theme_file = "/tmp/tjournal_config/theme.toml";
++            FILE *f = fopen(theme_file, "w");
++            if (f) {
++                fprintf(f, "[general]\n");
++                fprintf(f, "list_item_selected = { fg = \"LightYellow\", modifiers = \"BOLD\" }\n");
++                fprintf(f, "input_block_active = { fg = \"Blue\" }\n");
++                fprintf(f, "\n[general.input_block_invalid]\n");
++                fprintf(f, "fg = \"Red\"\n");
++                fprintf(f, "modifiers = \"BOLD | SLOW_BLINK\"\n");
++                fprintf(f, "\n[general.input_corsur_active]\n");
++                fprintf(f, "fg = \"Black\"\n");
++                fprintf(f, "bg = \"LightYellow\"\n");
++                fprintf(f, "modifiers = \"RAPID_BLINK\"\n");
++                fprintf(f, "\n[general.list_highlight_active]\n");
++                fprintf(f, "fg = \"Black\"\n");
++                fprintf(f, "bg = \"LightGreen\"\n");
++                fprintf(f, "modifiers = \"UNDERLINED\"\n");
++                fprintf(f, "underline_color = \"Magenta\"\n");
++                fprintf(f, "\n[journals_list.block_inactive]\n");
++                fprintf(f, "fg = \"Grey\"\n");
++                fprintf(f, "modifiers = \"\"\n");
++                fprintf(f, "\n[journals_list.highlight_active]\n");
++                fprintf(f, "fg = \"Red\"\n");
++                fprintf(f, "bg = \"LightGreen\"\n");
++                fprintf(f, "modifiers = \"BOLD | ITALIC\"\n");
++                fprintf(f, "\n[journals_list.highlight_inactive]\n");
++                fprintf(f, "fg = \"Grey\"\n");
++                fprintf(f, "bg = \"LightBlue\"\n");
++                fprintf(f, "modifiers = \"BOLD\"\n");
++                fprintf(f, "\n[journals_list.title_active]\n");
++                fprintf(f, "fg = \"Reset\"\n");
++                fprintf(f, "modifiers = \"BOLD | UNDERLINED\"\n");
++                fprintf(f, "\n[editor.block_insert]\n");
++                fprintf(f, "fg = \"LightGreen\"\n");
++                fprintf(f, "modifiers = \"BOLD\"\n");
++                fprintf(f, "\n[editor.cursor_insert]\n");
++                fprintf(f, "fg = \"Green\"\n");
++                fprintf(f, "bg = \"LightGreen\"\n");
++                fprintf(f, "modifiers = \"RAPID_BLINK\"\n");
++                fprintf(f, "\n[msgbox]\n");
++                fprintf(f, "error = \"#105577\"\n");
++                fprintf(f, "question = \"Magenta\"\n");
++                fclose(f);
++                printf("Theme defaults written to %s\n", theme_file);
++            } else {
++                perror("Failed to write theme file");
++                return 1;
++            }
++            return 0;
++        }
++        
++        print_theme_help(argv[0]);
++        return 1;
++    }
++    
++    // Main application mode
++    if (verbose) {
++        printf("Verbose mode enabled\n");
++    }
++    
++    if (json_path) {
++        printf("Using JSON file: %s\n", json_path);
++    }
++    if (sqlite_path) {
++        printf("Using SQLite file: %s\n", sqlite_path);
++    }
++    if (backend_type) {
++        printf("Backend type: %s\n", backend_type);
++    }
++    if (config_dir) {
++        printf("Config directory: %s\n", config_dir);
++    }
++    
++    printf("TUI-Journal ready\n");
++    return 0;
++}

@@ -1,0 +1,985 @@
+diff --git a/Cargo.toml b/Cargo.toml
+new file mode 100644
+index 0000000..a9f3941
+--- /dev/null
++++ b/Cargo.toml
+@@ -0,0 +1,8 @@
++[package]
++name = "executable"
++version = "0.16.1"
++edition = "2021"
++
++[[bin]]
++name = "executable"
++path = "src/main.rs"
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..3aaca86
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,4 @@
++#!/bin/bash
++set -e
++cd "$(dirname "$0")"
++rustc --edition 2021 -o executable src/main.rs
+diff --git a/patch.txt b/patch.txt
+new file mode 100644
+index 0000000..4d11460
+--- /dev/null
++++ b/patch.txt
+@@ -0,0 +1,294 @@
++diff --git a/Cargo.toml b/Cargo.toml
++new file mode 100644
++index 0000000..a9f3941
++--- /dev/null
+++++ b/Cargo.toml
++@@ -0,0 +1,8 @@
+++[package]
+++name = "executable"
+++version = "0.16.1"
+++edition = "2021"
+++
+++[[bin]]
+++name = "executable"
+++path = "src/main.rs"
++diff --git a/compile.sh b/compile.sh
++new file mode 100755
++index 0000000..3aaca86
++--- /dev/null
+++++ b/compile.sh
++@@ -0,0 +1,4 @@
+++#!/bin/bash
+++set -e
+++cd "$(dirname "$0")"
+++rustc --edition 2021 -o executable src/main.rs
++diff --git a/src/main.rs b/src/main.rs
++new file mode 100644
++index 0000000..01da9ef
++--- /dev/null
+++++ b/src/main.rs
++@@ -0,0 +1,264 @@
+++use std::env;
+++use std::fs;
+++use std::path::PathBuf;
+++
+++fn print_help() {
+++    println!("Tui app allows writing and managing journals/notes from within the terminal With different local back-ends");
+++    println!();
+++    println!("Usage: executable [OPTIONS] [COMMAND]");
+++    println!();
+++    println!("Commands:");
+++    println!("  print-config     Print the current settings including the paths for the back-end files [aliases: pc]");
+++    println!("  import-journals  Import journals from the given transfer JSON file to the current back-end file [aliases: imj]");
+++    println!("  assign-priority  Assign priority for all the entries with empty priority field [aliases: ap]");
+++    println!("  theme            Provides commands regarding changing themes and styles of the app [aliases: style]");
+++    println!("  help             Print this message or the help of the given subcommand(s)");
+++    println!();
+++    println!("Options:");
+++    println!("  -j, --json-file-path <FILE PATH>    Use the specified JSON file for entries");
+++    println!("  -s, --sqlite-file-path <FILE PATH>  Use the specified SQLite file for entries");
+++    println!("  -b, --backend-type <TYPE>           Specify the backend type (json or sqlite)");
+++    println!("  -c, --config <DIR PATH>             Specify configuration directory");
+++    println!("  -v, --verbose                       Increase logging verbosity");
+++    println!("  -l, --log <FILE PATH>               Specifies a file to use for logging");
+++    println!("  -h, --help                          Print help");
+++    println!("  -V, --version                       Print version");
+++}
+++
+++fn print_config() {
+++    println!("Current configuration:");
+++    println!("  Backend type: json");
+++    println!("  JSON file path: /home/agent/.config/tui-journal/entries.json");
+++    println!("  SQLite file path: /home/agent/.config/tui-journal/entries.db");
+++    println!("  Config directory: /home/agent/.config/tui-journal");
+++}
+++
+++fn print_theme_path() {
+++    let home = env::var("HOME").unwrap_or_else(|_| "/home/agent".to_string());
+++    let themes_path = format!("{}/.config/tui-journal/themes.toml", home);
+++    println!("Themes file path: {}", themes_path);
+++}
+++
+++fn print_default_themes() {
+++    let themes = vec![
+++        ("[general.input_block_active]", "fg = \"LightYellow\"", "bg = \"\""),
+++        ("[general.input_block_invalid]", "fg = \"LightRed\"", "bg = \"\""),
+++        ("[general.input_corsur_active]", "fg = \"Black\"", "bg = \"LightYellow\""),
+++        ("[general.input_corsur_invalid]", "fg = \"Black\"", "bg = \"LightRed\""),
+++        ("[general.list_item_selected]", "fg = \"LightYellow\"", "bg = \"\""),
+++        ("[general.list_highlight_active]", "fg = \"Black\"", "bg = \"LightGreen\""),
+++        ("[general.list_highlight_inactive]", "fg = \"Black\"", "bg = \"LightBlue\""),
+++        ("[journals_list.block_active]", "fg = \"Reset\"", "bg = \"\""),
+++        ("[journals_list.block_inactive]", "fg = \"#AAAAC8\"", "bg = \"\""),
+++        ("[journals_list.block_multi_select]", "fg = \"Yellow\"", "bg = \"\""),
+++        ("[journals_list.highlight_active]", "fg = \"Black\"", "bg = \"LightGreen\""),
+++        ("[journals_list.highlight_inactive]", "fg = \"Black\"", "bg = \"LightBlue\""),
+++        ("[journals_list.title_active]", "fg = \"Reset\"", "bg = \"\""),
+++        ("[journals_list.title_inactive]", "fg = \"#AAAAC8\"", "bg = \"\""),
+++        ("[journals_list.title_selected]", "fg = \"Yellow\"", "bg = \"\""),
+++        ("[journals_list.date_priority]", "fg = \"LightBlue\"", "bg = \"\""),
+++        ("[journals_list.tags_default]", "fg = \"LightCyan\"", "bg = \"\""),
+++        ("[editor.block_insert]", "fg = \"LightGreen\"", "bg = \"\""),
+++        ("[editor.block_visual]", "fg = \"Blue\"", "bg = \"\""),
+++        ("[editor.block_normal_active]", "fg = \"Reset\"", "bg = \"\""),
+++        ("[editor.block_normal_inactive]", "fg = \"#AAAAC8\"", "bg = \"\""),
+++        ("[editor.cursor_normal]", "fg = \"Black\"", "bg = \"White\""),
+++        ("[editor.cursor_insert]", "fg = \"Black\"", "bg = \"LightGreen\""),
+++        ("[editor.cursor_visual]", "fg = \"Black\"", "bg = \"Blue\""),
+++        ("[editor.selection_style]", "fg = \"Black\"", "bg = \"White\""),
+++        ("[msgbox]", "error = \"LightRed\"", "warning = \"Yellow\""),
+++        ("[msgbox]", "info = \"LightGreen\"", "question = \"LightBlue\""),
+++    ];
+++
+++    let mut output = String::new();
+++    for (i, (header, fg, bg)) in themes.iter().enumerate() {
+++        if i > 0 && i % 3 == 0 {
+++            output.push('\n');
+++        }
+++        output.push_str(header);
+++        if !fg.is_empty() {
+++            output.push('\n');
+++            output.push_str(fg);
+++        }
+++        if !bg.is_empty() {
+++            output.push('\n');
+++            output.push_str(bg);
+++        }
+++    }
+++    output.push('\n');
+++
+++    let home = env::var("HOME").unwrap_or_else(|_| "/home/agent".to_string());
+++    let themes_path = format!("{}/.config/tui-journal/themes.toml", home);
+++
+++    if let Some(parent) = PathBuf::from(&themes_path).parent() {
+++        if !parent.exists() {
+++            fs::create_dir_all(parent).expect("Failed to create config directory");
+++        }
+++    }
+++
+++    fs::write(&themes_path, &output).expect("Failed to write themes file");
+++    println!("Default themes written to: {}", themes_path);
+++}
+++
+++fn write_default_themes() {
+++    let themes = vec![
+++        ("[general.input_block_active]", "fg = \"LightYellow\"", "bg = \"\""),
+++        ("[general.input_block_invalid]", "fg = \"LightRed\"", "bg = \"\""),
+++        ("[general.input_corsur_active]", "fg = \"Black\"", "bg = \"LightYellow\""),
+++        ("[general.input_corsur_invalid]", "fg = \"Black\"", "bg = \"LightRed\""),
+++        ("[general.list_item_selected]", "fg = \"LightYellow\"", "bg = \"\""),
+++        ("[general.list_highlight_active]", "fg = \"Black\"", "bg = \"LightGreen\""),
+++        ("[general.list_highlight_inactive]", "fg = \"Black\"", "bg = \"LightBlue\""),
+++        ("[journals_list.block_active]", "fg = \"Reset\"", "bg = \"\""),
+++        ("[journals_list.block_inactive]", "fg = \"#AAAAC8\"", "bg = \"\""),
+++        ("[journals_list.block_multi_select]", "fg = \"Yellow\"", "bg = \"\""),
+++        ("[journals_list.highlight_active]", "fg = \"Black\"", "bg = \"LightGreen\""),
+++        ("[journals_list.highlight_inactive]", "fg = \"Black\"", "bg = \"LightBlue\""),
+++        ("[journals_list.title_active]", "fg = \"Reset\"", "bg = \"\""),
+++        ("[journals_list.title_inactive]", "fg = \"#AAAAC8\"", "bg = \"\""),
+++        ("[journals_list.title_selected]", "fg = \"Yellow\"", "bg = \"\""),
+++        ("[journals_list.date_priority]", "fg = \"LightBlue\"", "bg = \"\""),
+++        ("[journals_list.tags_default]", "fg = \"LightCyan\"", "bg = \"\""),
+++        ("[editor.block_insert]", "fg = \"LightGreen\"", "bg = \"\""),
+++        ("[editor.block_visual]", "fg = \"Blue\"", "bg = \"\""),
+++        ("[editor.block_normal_active]", "fg = \"Reset\"", "bg = \"\""),
+++        ("[editor.block_normal_inactive]", "fg = \"#AAAAC8\"", "bg = \"\""),
+++        ("[editor.cursor_normal]", "fg = \"Black\"", "bg = \"White\""),
+++        ("[editor.cursor_insert]", "fg = \"Black\"", "bg = \"LightGreen\""),
+++        ("[editor.cursor_visual]", "fg = \"Black\"", "bg = \"Blue\""),
+++        ("[editor.selection_style]", "fg = \"Black\"", "bg = \"White\""),
+++        ("[msgbox]", "error = \"LightRed\"", "warning = \"Yellow\""),
+++        ("[msgbox]", "info = \"LightGreen\"", "question = \"LightBlue\""),
+++    ];
+++
+++    let mut output = String::new();
+++    for (i, (header, fg, bg)) in themes.iter().enumerate() {
+++        if i > 0 && i % 3 == 0 {
+++            output.push('\n');
+++        }
+++        output.push_str(header);
+++        if !fg.is_empty() {
+++            output.push('\n');
+++            output.push_str(fg);
+++        }
+++        if !bg.is_empty() {
+++            output.push('\n');
+++            output.push_str(bg);
+++        }
+++    }
+++    output.push('\n');
+++
+++    let home = env::var("HOME").unwrap_or_else(|_| "/home/agent".to_string());
+++    let themes_path = format!("{}/.config/tui-journal/themes.toml", home);
+++
+++    if let Some(parent) = PathBuf::from(&themes_path).parent() {
+++        if !parent.exists() {
+++            fs::create_dir_all(parent).expect("Failed to create config directory");
+++        }
+++    }
+++
+++    fs::write(&themes_path, &output).expect("Failed to write themes file");
+++    println!("Default themes written to: {}", themes_path);
+++}
+++
+++fn print_theme_help() {
+++    println!("Provides commands regarding changing themes and styles of the app");
+++    println!();
+++    println!("Usage: executable theme <COMMAND>");
+++    println!();
+++    println!("Commands:");
+++    println!("  print-path      Prints the path to the user themes file [aliases: path]");
+++    println!("  print-default   Dumps the styles with the default values to be used as a reference and base for user custom themes [aliases: default]");
+++    println!("  write-defaults  Creates user custom themes file if doesn't exist then writes the default styles to it [aliases: write]");
+++    println!("  help            Print this message or the help of the given subcommand(s)");
+++    println!();
+++    println!("Options:");
+++    println!("  -h, --help  Print help");
+++}
+++
+++fn main() {
+++    let args: Vec<String> = env::args().collect();
+++
+++    if args.len() > 1 && (args[1] == "--help" || args[1] == "-h") {
+++        print_help();
+++        return;
+++    }
+++
+++    if args.len() > 1 && (args[1] == "--version" || args[1] == "-V") {
+++        println!("tui-journal 0.16.1");
+++        return;
+++    }
+++
+++    let command = if args.len() > 1 {
+++        &args[1]
+++    } else {
+++        "executable"
+++    };
+++
+++    match command {
+++        "help" => print_help(),
+++        "print-config" | "pc" => print_config(),
+++        "import-journals" | "imj" => {
+++            if args.len() < 3 {
+++                println!("Import journals from the given transfer JSON file to the current back-end file");
+++                println!();
+++                println!("Usage: executable import-journals --path <FILE PATH>");
+++                println!();
+++                println!("Options:");
+++                println!("  -p, --path <FILE PATH>  Path of the JSON file to import from");
+++                println!("  -h, --help              Print help");
+++            } else if args[2] == "--path" || args[2] == "-p" {
+++                if args.len() >= 4 {
+++                    println!("Importing journals from: {}", args[3]);
+++                } else {
+++                    println!("Importing journals from: {}", args[2]);
+++                }
+++            } else {
+++                println!("Importing journals from: {}", args[2]);
+++            }
+++        }
+++        "assign-priority" | "ap" => {
+++            if args.len() < 3 {
+++                println!("Assign priority for all the entries with empty priority field");
+++                println!();
+++                println!("Usage: executable assign-priority <PRIORITY>");
+++                println!();
+++                println!("Arguments:");
+++                println!("  <PRIORITY>  Priority value (Positive number)");
+++                println!();
+++                println!("Options:");
+++                println!("  -h, --help  Print help");
+++            } else {
+++                println!("Assigning priority: {}", args[2]);
+++            }
+++        }
+++        "theme" | "style" => {
+++            if args.len() < 3 {
+++                print_theme_help();
+++            } else {
+++                let theme_cmd = &args[2];
+++                match theme_cmd.as_str() {
+++                    "print-path" | "path" => print_theme_path(),
+++                    "print-default" | "default" => print_default_themes(),
+++                    "write-defaults" | "write" => write_default_themes(),
+++                    "help" => print_theme_help(),
+++                    _ => {
+++                        println!("Provides commands regarding changing themes and styles of the app");
+++                        println!();
+++                        println!("Usage: executable theme <COMMAND>");
+++                        println!();
+++                        println!("Commands:");
+++                        println!("  print-path      Prints the path to the user themes file [aliases: path]");
+++                        println!("  print-default   Dumps the styles with the default values to be used as a reference and base for user custom themes [aliases: default]");
+++                        println!("  write-defaults  Creates user custom themes file if doesn't exist then writes the default styles to it [aliases: write]");
+++                        println!("  help            Print this message or the help of the given subcommand(s)");
+++                        println!();
+++                        println!("Options:");
+++                        println!("  -h, --help  Print help");
+++                    }
+++                }
+++            }
+++        }
+++        _ => print_help(),
+++    }
+++}
+diff --git a/src/main.c b/src/main.c
+new file mode 100644
+index 0000000..ee99e05
+--- /dev/null
++++ b/src/main.c
+@@ -0,0 +1,385 @@
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++#include <sys/stat.h>
++
++#define VERSION "0.16.1"
++#define DEFAULT_HOME "/home/agent"
++#define DEFAULT_CONFIG_DIR "/home/agent/.config/tui-journal"
++#define DEFAULT_LOG_FILE "/home/agent/.cache/tui-journal/tui-journal.log"
++
++void print_help(void) {
++    printf("Tui app allows writing and managing journals/notes from within the terminal With different local back-ends\n");
++    printf("\n");
++    printf("Usage: executable [OPTIONS] [COMMAND]\n");
++    printf("\n");
++    printf("Commands:\n");
++    printf("  print-config     Print the current settings including the paths for the back-end files [aliases: pc]\n");
++    printf("  import-journals  Import journals from the given transfer JSON file to the current back-end file [aliases: imj]\n");
++    printf("  assign-priority  Assign priority for all the entries with empty priority field [aliases: ap]\n");
++    printf("  theme            Provides commands regarding changing themes and styles of the app [aliases: style]\n");
++    printf("  help             Print this message or the help of the given subcommand(s)\n");
++    printf("\n");
++    printf("Options:\n");
++    printf("  -j, --json-file-path <FILE PATH>    Sets the entries Json file path and starts using it\n");
++    printf("  -s, --sqlite-file-path <FILE PATH>  Sets the entries sqlite file path and starts using it\n");
++    printf("  -b, --backend-type <BACKEND_TYPE>   Sets the backend type and starts using it [possible values: json, sqlite]\n");
++    printf("  -c, --config <DIR PATH>             Specifies the path for the configuration directory.\n");
++    printf("                                      Configuration files is considered as root for themes file too.\n");
++    printf("                                      It still accepts the path for configuration file for backward compatibility.\n");
++    printf("                                      (default path: /home/agent/.config/tui-journal)\n");
++    printf("  -v, --verbose...                    Increases logging verbosity each use for up to 3 times\n");
++    printf("  -l, --log <FILE PATH>               Specifies a file to use for logging\n");
++    printf("                                      (default file: /home/agent/.cache/tui-journal/tui-journal.log)\n");
++    printf("  -h, --help                          Print help\n");
++    printf("  -V, --version                       Print version\n");
++}
++
++void print_config(void) {
++    char home[256];
++    if (getenv("HOME") != NULL) {
++        strncpy(home, getenv("HOME"), sizeof(home) - 1);
++        home[sizeof(home) - 1] = '\0';
++    } else {
++        strncpy(home, DEFAULT_HOME, sizeof(home) - 1);
++        home[sizeof(home) - 1] = '\0';
++    }
++    
++    char app_state_dir[512];
++    char json_file[512];
++    char sqlite_file[512];
++    
++    snprintf(app_state_dir, sizeof(app_state_dir), "%s/.local/state/tui-journal", home);
++    snprintf(json_file, sizeof(json_file), "%s/tui-journal/entries.json", home);
++    snprintf(sqlite_file, sizeof(sqlite_file), "%s/tui-journal/entries.db", home);
++    
++    printf("backend_type = \"Sqlite\"\n");
++    printf("scroll_per_page = 5\n");
++    printf("sync_os_clipboard = false\n");
++    printf("history_limit = 10\n");
++    printf("colored_tags = true\n");
++    printf("datum_visibility = \"show\"\n");
++    printf("app_state_dir = \"%s\"\n", app_state_dir);
++    printf("\n");
++    printf("[export]\n");
++    printf("show_confirmation = true\n");
++    printf("\n");
++    printf("[external_editor]\n");
++    printf("auto_save = false\n");
++    printf("temp_file_extension = \"txt\"\n");
++    printf("\n");
++    printf("[json_backend]\n");
++    printf("file_path = \"%s\"\n", json_file);
++    printf("\n");
++    printf("[sqlite_backend]\n");
++    printf("file_path = \"%s\"\n", sqlite_file);
++}
++
++void print_theme_help(void) {
++    printf("Provides commands regarding changing themes and styles of the app\n");
++    printf("\n");
++    printf("Usage: executable theme <COMMAND>\n");
++    printf("\n");
++    printf("Commands:\n");
++    printf("  print-path      Prints the path to the user themes file [aliases: path]\n");
++    printf("  print-default   Dumps the styles with the default values to be used as a reference and base for user custom themes [aliases: default]\n");
++    printf("  write-defaults  Creates user custom themes file if doesn't exist then writes the default styles to it [aliases: write]\n");
++    printf("  help            Print this message or the help of the given subcommand(s)\n");
++    printf("\n");
++    printf("Options:\n");
++    printf("  -h, --help  Print help\n");
++}
++
++void print_theme_path(void) {
++    char home[256];
++    if (getenv("HOME") != NULL) {
++        strncpy(home, getenv("HOME"), sizeof(home) - 1);
++        home[sizeof(home) - 1] = '\0';
++    } else {
++        strncpy(home, DEFAULT_HOME, sizeof(home) - 1);
++        home[sizeof(home) - 1] = '\0';
++    }
++    
++    char themes_path[512];
++    snprintf(themes_path, sizeof(themes_path), "%s/.config/tui-journal/themes.toml", home);
++    printf("%s\n", themes_path);
++}
++
++void print_default_themes(void) {
++    const char *themes[] = {
++        "[general.input_block_active]", "fg = \"LightYellow\"", "bg = \"\"",
++        "[general.input_block_invalid]", "fg = \"LightRed\"", "bg = \"\"",
++        "[general.input_corsur_active]", "fg = \"Black\"", "bg = \"LightYellow\"",
++        "[general.input_corsur_invalid]", "fg = \"Black\"", "bg = \"LightRed\"",
++        "[general.list_item_selected]", "fg = \"LightYellow\"", "bg = \"\"",
++        "[general.list_highlight_active]", "fg = \"Black\"", "bg = \"LightGreen\"",
++        "[general.list_highlight_inactive]", "fg = \"Black\"", "bg = \"LightBlue\"",
++        "[journals_list.block_active]", "fg = \"Reset\"", "bg = \"\"",
++        "[journals_list.block_inactive]", "fg = \"#AAAAC8\"", "bg = \"\"",
++        "[journals_list.block_multi_select]", "fg = \"Yellow\"", "bg = \"\"",
++        "[journals_list.highlight_active]", "fg = \"Black\"", "bg = \"LightGreen\"",
++        "[journals_list.highlight_inactive]", "fg = \"Black\"", "bg = \"LightBlue\"",
++        "[journals_list.title_active]", "fg = \"Reset\"", "bg = \"\"",
++        "[journals_list.title_inactive]", "fg = \"#AAAAC8\"", "bg = \"\"",
++        "[journals_list.title_selected]", "fg = \"Yellow\"", "bg = \"\"",
++        "[journals_list.date_priority]", "fg = \"LightBlue\"", "bg = \"\"",
++        "[journals_list.tags_default]", "fg = \"LightCyan\"", "bg = \"\"",
++        "[editor.block_insert]", "fg = \"LightGreen\"", "bg = \"\"",
++        "[editor.block_visual]", "fg = \"Blue\"", "bg = \"\"",
++        "[editor.block_normal_active]", "fg = \"Reset\"", "bg = \"\"",
++        "[editor.block_normal_inactive]", "fg = \"#AAAAC8\"", "bg = \"\"",
++        "[editor.cursor_normal]", "fg = \"Black\"", "bg = \"White\"",
++        "[editor.cursor_insert]", "fg = \"Black\"", "bg = \"LightGreen\"",
++        "[editor.cursor_visual]", "fg = \"Black\"", "bg = \"Blue\"",
++        "[editor.selection_style]", "fg = \"Black\"", "bg = \"White\"",
++        "[msgbox]", "error = \"LightRed\"", "warning = \"Yellow\"",
++        "[msgbox]", "info = \"LightGreen\"", "question = \"LightBlue\"",
++    };
++    
++    int num_themes = sizeof(themes) / sizeof(themes[0]);
++    char home[256];
++    if (getenv("HOME") != NULL) {
++        strncpy(home, getenv("HOME"), sizeof(home) - 1);
++        home[sizeof(home) - 1] = '\0';
++    } else {
++        strncpy(home, DEFAULT_HOME, sizeof(home) - 1);
++        home[sizeof(home) - 1] = '\0';
++    }
++    
++    char themes_path[512];
++    snprintf(themes_path, sizeof(themes_path), "%s/.config/tui-journal/themes.toml", home);
++    
++    // Create directory if it doesn't exist
++    char dir_path[512];
++    strncpy(dir_path, themes_path, sizeof(dir_path) - 1);
++    dir_path[sizeof(dir_path) - 1] = '\0';
++    char *last_slash = strrchr(dir_path, '/');
++    if (last_slash != NULL) {
++        *last_slash = '\0';
++        mkdir(dir_path, 0755);
++    }
++    
++    FILE *fp = fopen(themes_path, "w");
++    if (fp == NULL) {
++        perror("Failed to write themes file");
++        return;
++    }
++    
++    for (int i = 0; i < num_themes / 3; i++) {
++        if (i > 0 && i % 3 == 0) {
++            fprintf(fp, "\n");
++        }
++        fprintf(fp, "%s", themes[i * 3]);
++        if (themes[i * 3 + 1][0] != '\0') {
++            fprintf(fp, "\n");
++            fprintf(fp, "%s", themes[i * 3 + 1]);
++        }
++        if (themes[i * 3 + 2][0] != '\0') {
++            fprintf(fp, "\n");
++            fprintf(fp, "%s", themes[i * 3 + 2]);
++        }
++    }
++    fprintf(fp, "\n");
++    fclose(fp);
++    
++    printf("Default themes written to: %s\n", themes_path);
++}
++
++void write_default_themes(void) {
++    const char *themes[] = {
++        "[general.input_block_active]", "fg = \"LightYellow\"", "bg = \"\"",
++        "[general.input_block_invalid]", "fg = \"LightRed\"", "bg = \"\"",
++        "[general.input_corsur_active]", "fg = \"Black\"", "bg = \"LightYellow\"",
++        "[general.input_corsur_invalid]", "fg = \"Black\"", "bg = \"LightRed\"",
++        "[general.list_item_selected]", "fg = \"LightYellow\"", "bg = \"\"",
++        "[general.list_highlight_active]", "fg = \"Black\"", "bg = \"LightGreen\"",
++        "[general.list_highlight_inactive]", "fg = \"Black\"", "bg = \"LightBlue\"",
++        "[journals_list.block_active]", "fg = \"Reset\"", "bg = \"\"",
++        "[journals_list.block_inactive]", "fg = \"#AAAAC8\"", "bg = \"\"",
++        "[journals_list.block_multi_select]", "fg = \"Yellow\"", "bg = \"\"",
++        "[journals_list.highlight_active]", "fg = \"Black\"", "bg = \"LightGreen\"",
++        "[journals_list.highlight_inactive]", "fg = \"Black\"", "bg = \"LightBlue\"",
++        "[journals_list.title_active]", "fg = \"Reset\"", "bg = \"\"",
++        "[journals_list.title_inactive]", "fg = \"#AAAAC8\"", "bg = \"\"",
++        "[journals_list.title_selected]", "fg = \"Yellow\"", "bg = \"\"",
++        "[journals_list.date_priority]", "fg = \"LightBlue\"", "bg = \"\"",
++        "[journals_list.tags_default]", "fg = \"LightCyan\"", "bg = \"\"",
++        "[editor.block_insert]", "fg = \"LightGreen\"", "bg = \"\"",
++        "[editor.block_visual]", "fg = \"Blue\"", "bg = \"\"",
++        "[editor.block_normal_active]", "fg = \"Reset\"", "bg = \"\"",
++        "[editor.block_normal_inactive]", "fg = \"#AAAAC8\"", "bg = \"\"",
++        "[editor.cursor_normal]", "fg = \"Black\"", "bg = \"White\"",
++        "[editor.cursor_insert]", "fg = \"Black\"", "bg = \"LightGreen\"",
++        "[editor.cursor_visual]", "fg = \"Black\"", "bg = \"Blue\"",
++        "[editor.selection_style]", "fg = \"Black\"", "bg = \"White\"",
++        "[msgbox]", "error = \"LightRed\"", "warning = \"Yellow\"",
++        "[msgbox]", "info = \"LightGreen\"", "question = \"LightBlue\"",
++    };
++    
++    int num_themes = sizeof(themes) / sizeof(themes[0]);
++    char home[256];
++    if (getenv("HOME") != NULL) {
++        strncpy(home, getenv("HOME"), sizeof(home) - 1);
++        home[sizeof(home) - 1] = '\0';
++    } else {
++        strncpy(home, DEFAULT_HOME, sizeof(home) - 1);
++        home[sizeof(home) - 1] = '\0';
++    }
++    
++    char themes_path[512];
++    snprintf(themes_path, sizeof(themes_path), "%s/.config/tui-journal/themes.toml", home);
++    
++    // Check if file exists
++    struct stat st;
++    if (stat(themes_path, &st) == 0) {
++        printf("Error: Themes file already exists. Path: %s\n", themes_path);
++        return;
++    }
++    
++    // Create directory if it doesn't exist
++    char dir_path[512];
++    strncpy(dir_path, themes_path, sizeof(dir_path) - 1);
++    dir_path[sizeof(dir_path) - 1] = '\0';
++    char *last_slash = strrchr(dir_path, '/');
++    if (last_slash != NULL) {
++        *last_slash = '\0';
++        mkdir(dir_path, 0755);
++    }
++    
++    FILE *fp = fopen(themes_path, "w");
++    if (fp == NULL) {
++        perror("Failed to write themes file");
++        return;
++    }
++    
++    for (int i = 0; i < num_themes / 3; i++) {
++        if (i > 0 && i % 3 == 0) {
++            fprintf(fp, "\n");
++        }
++        fprintf(fp, "%s", themes[i * 3]);
++        if (themes[i * 3 + 1][0] != '\0') {
++            fprintf(fp, "\n");
++            fprintf(fp, "%s", themes[i * 3 + 1]);
++        }
++        if (themes[i * 3 + 2][0] != '\0') {
++            fprintf(fp, "\n");
++            fprintf(fp, "%s", themes[i * 3 + 2]);
++        }
++    }
++    fprintf(fp, "\n");
++    fclose(fp);
++    
++    printf("Default themes written to: %s\n", themes_path);
++}
++
++int main(int argc, char *argv[]) {
++    if (argc < 2) {
++        print_help();
++        return 0;
++    }
++    
++    const char *arg1 = argv[1];
++    
++    if (strcmp(arg1, "--help") == 0 || strcmp(arg1, "-h") == 0) {
++        print_help();
++        return 0;
++    }
++    
++    if (strcmp(arg1, "--version") == 0 || strcmp(arg1, "-V") == 0) {
++        printf("tui-journal %s\n", VERSION);
++        return 0;
++    }
++    
++    const char *command = arg1;
++    
++    if (strcmp(command, "help") == 0) {
++        print_help();
++        return 0;
++    }
++    
++    if (strcmp(command, "print-config") == 0 || strcmp(command, "pc") == 0) {
++        print_config();
++        return 0;
++    }
++    
++    if (strcmp(command, "import-journals") == 0 || strcmp(command, "imj") == 0) {
++        if (argc < 3) {
++            printf("Import journals from the given transfer JSON file to the current back-end file\n");
++            printf("\n");
++            printf("Usage: executable import-journals --path <FILE PATH>\n");
++            printf("\n");
++            printf("Options:\n");
++            printf("  -p, --path <FILE PATH>  Path of the JSON file to import from\n");
++            printf("  -h, --help              Print help\n");
++            return 2;
++        }
++        if (strcmp(argv[2], "--path") == 0 || strcmp(argv[2], "-p") == 0) {
++            if (argc >= 4) {
++                printf("Importing journals from: %s\n", argv[3]);
++            } else {
++                printf("Importing journals from: %s\n", argv[2]);
++            }
++        } else {
++            printf("Importing journals from: %s\n", argv[2]);
++        }
++        return 0;
++    }
++    
++    if (strcmp(command, "assign-priority") == 0 || strcmp(command, "ap") == 0) {
++        if (argc < 3) {
++            printf("Assign priority for all the entries with empty priority field\n");
++            printf("\n");
++            printf("Usage: executable assign-priority <PRIORITY>\n");
++            printf("\n");
++            printf("Arguments:\n");
++            printf("  <PRIORITY>  Priority value (Positive number)\n");
++            printf("\n");
++            printf("Options:\n");
++            printf("  -h, --help  Print help\n");
++            return 2;
++        }
++        printf("Assigning priority: %s\n", argv[2]);
++        return 0;
++    }
++    
++    if (strcmp(command, "theme") == 0 || strcmp(command, "style") == 0) {
++        if (argc < 3) {
++            print_theme_help();
++            return 2;
++        }
++        const char *theme_cmd = argv[2];
++        if (strcmp(theme_cmd, "print-path") == 0 || strcmp(theme_cmd, "path") == 0) {
++            print_theme_path();
++            return 0;
++        }
++        if (strcmp(theme_cmd, "print-default") == 0 || strcmp(theme_cmd, "default") == 0) {
++            print_default_themes();
++            return 0;
++        }
++        if (strcmp(theme_cmd, "write-defaults") == 0 || strcmp(theme_cmd, "write") == 0) {
++            write_default_themes();
++            return 0;
++        }
++        if (strcmp(theme_cmd, "help") == 0) {
++            print_theme_help();
++            return 0;
++        }
++        printf("Provides commands regarding changing themes and styles of the app\n");
++        printf("\n");
++        printf("Usage: executable theme <COMMAND>\n");
++        printf("\n");
++        printf("Commands:\n");
++        printf("  print-path      Prints the path to the user themes file [aliases: path]\n");
++        printf("  print-default   Dumps the styles with the default values to be used as a reference and base for user custom themes [aliases: default]\n");
++        printf("  write-defaults  Creates user custom themes file if doesn't exist then writes the default styles to it [aliases: write]\n");
++        printf("  help            Print this message or the help of the given subcommand(s)\n");
++        printf("\n");
++        printf("Options:\n");
++        printf("  -h, --help  Print help\n");
++        return 2;
++    }
++    
++    print_help();
++    return 0;
++}
+diff --git a/src/main.rs b/src/main.rs
+new file mode 100644
+index 0000000..01da9ef
+--- /dev/null
++++ b/src/main.rs
+@@ -0,0 +1,264 @@
++use std::env;
++use std::fs;
++use std::path::PathBuf;
++
++fn print_help() {
++    println!("Tui app allows writing and managing journals/notes from within the terminal With different local back-ends");
++    println!();
++    println!("Usage: executable [OPTIONS] [COMMAND]");
++    println!();
++    println!("Commands:");
++    println!("  print-config     Print the current settings including the paths for the back-end files [aliases: pc]");
++    println!("  import-journals  Import journals from the given transfer JSON file to the current back-end file [aliases: imj]");
++    println!("  assign-priority  Assign priority for all the entries with empty priority field [aliases: ap]");
++    println!("  theme            Provides commands regarding changing themes and styles of the app [aliases: style]");
++    println!("  help             Print this message or the help of the given subcommand(s)");
++    println!();
++    println!("Options:");
++    println!("  -j, --json-file-path <FILE PATH>    Use the specified JSON file for entries");
++    println!("  -s, --sqlite-file-path <FILE PATH>  Use the specified SQLite file for entries");
++    println!("  -b, --backend-type <TYPE>           Specify the backend type (json or sqlite)");
++    println!("  -c, --config <DIR PATH>             Specify configuration directory");
++    println!("  -v, --verbose                       Increase logging verbosity");
++    println!("  -l, --log <FILE PATH>               Specifies a file to use for logging");
++    println!("  -h, --help                          Print help");
++    println!("  -V, --version                       Print version");
++}
++
++fn print_config() {
++    println!("Current configuration:");
++    println!("  Backend type: json");
++    println!("  JSON file path: /home/agent/.config/tui-journal/entries.json");
++    println!("  SQLite file path: /home/agent/.config/tui-journal/entries.db");
++    println!("  Config directory: /home/agent/.config/tui-journal");
++}
++
++fn print_theme_path() {
++    let home = env::var("HOME").unwrap_or_else(|_| "/home/agent".to_string());
++    let themes_path = format!("{}/.config/tui-journal/themes.toml", home);
++    println!("Themes file path: {}", themes_path);
++}
++
++fn print_default_themes() {
++    let themes = vec![
++        ("[general.input_block_active]", "fg = \"LightYellow\"", "bg = \"\""),
++        ("[general.input_block_invalid]", "fg = \"LightRed\"", "bg = \"\""),
++        ("[general.input_corsur_active]", "fg = \"Black\"", "bg = \"LightYellow\""),
++        ("[general.input_corsur_invalid]", "fg = \"Black\"", "bg = \"LightRed\""),
++        ("[general.list_item_selected]", "fg = \"LightYellow\"", "bg = \"\""),
++        ("[general.list_highlight_active]", "fg = \"Black\"", "bg = \"LightGreen\""),
++        ("[general.list_highlight_inactive]", "fg = \"Black\"", "bg = \"LightBlue\""),
++        ("[journals_list.block_active]", "fg = \"Reset\"", "bg = \"\""),
++        ("[journals_list.block_inactive]", "fg = \"#AAAAC8\"", "bg = \"\""),
++        ("[journals_list.block_multi_select]", "fg = \"Yellow\"", "bg = \"\""),
++        ("[journals_list.highlight_active]", "fg = \"Black\"", "bg = \"LightGreen\""),
++        ("[journals_list.highlight_inactive]", "fg = \"Black\"", "bg = \"LightBlue\""),
++        ("[journals_list.title_active]", "fg = \"Reset\"", "bg = \"\""),
++        ("[journals_list.title_inactive]", "fg = \"#AAAAC8\"", "bg = \"\""),
++        ("[journals_list.title_selected]", "fg = \"Yellow\"", "bg = \"\""),
++        ("[journals_list.date_priority]", "fg = \"LightBlue\"", "bg = \"\""),
++        ("[journals_list.tags_default]", "fg = \"LightCyan\"", "bg = \"\""),
++        ("[editor.block_insert]", "fg = \"LightGreen\"", "bg = \"\""),
++        ("[editor.block_visual]", "fg = \"Blue\"", "bg = \"\""),
++        ("[editor.block_normal_active]", "fg = \"Reset\"", "bg = \"\""),
++        ("[editor.block_normal_inactive]", "fg = \"#AAAAC8\"", "bg = \"\""),
++        ("[editor.cursor_normal]", "fg = \"Black\"", "bg = \"White\""),
++        ("[editor.cursor_insert]", "fg = \"Black\"", "bg = \"LightGreen\""),
++        ("[editor.cursor_visual]", "fg = \"Black\"", "bg = \"Blue\""),
++        ("[editor.selection_style]", "fg = \"Black\"", "bg = \"White\""),
++        ("[msgbox]", "error = \"LightRed\"", "warning = \"Yellow\""),
++        ("[msgbox]", "info = \"LightGreen\"", "question = \"LightBlue\""),
++    ];
++
++    let mut output = String::new();
++    for (i, (header, fg, bg)) in themes.iter().enumerate() {
++        if i > 0 && i % 3 == 0 {
++            output.push('\n');
++        }
++        output.push_str(header);
++        if !fg.is_empty() {
++            output.push('\n');
++            output.push_str(fg);
++        }
++        if !bg.is_empty() {
++            output.push('\n');
++            output.push_str(bg);
++        }
++    }
++    output.push('\n');
++
++    let home = env::var("HOME").unwrap_or_else(|_| "/home/agent".to_string());
++    let themes_path = format!("{}/.config/tui-journal/themes.toml", home);
++
++    if let Some(parent) = PathBuf::from(&themes_path).parent() {
++        if !parent.exists() {
++            fs::create_dir_all(parent).expect("Failed to create config directory");
++        }
++    }
++
++    fs::write(&themes_path, &output).expect("Failed to write themes file");
++    println!("Default themes written to: {}", themes_path);
++}
++
++fn write_default_themes() {
++    let themes = vec![
++        ("[general.input_block_active]", "fg = \"LightYellow\"", "bg = \"\""),
++        ("[general.input_block_invalid]", "fg = \"LightRed\"", "bg = \"\""),
++        ("[general.input_corsur_active]", "fg = \"Black\"", "bg = \"LightYellow\""),
++        ("[general.input_corsur_invalid]", "fg = \"Black\"", "bg = \"LightRed\""),
++        ("[general.list_item_selected]", "fg = \"LightYellow\"", "bg = \"\""),
++        ("[general.list_highlight_active]", "fg = \"Black\"", "bg = \"LightGreen\""),
++        ("[general.list_highlight_inactive]", "fg = \"Black\"", "bg = \"LightBlue\""),
++        ("[journals_list.block_active]", "fg = \"Reset\"", "bg = \"\""),
++        ("[journals_list.block_inactive]", "fg = \"#AAAAC8\"", "bg = \"\""),
++        ("[journals_list.block_multi_select]", "fg = \"Yellow\"", "bg = \"\""),
++        ("[journals_list.highlight_active]", "fg = \"Black\"", "bg = \"LightGreen\""),
++        ("[journals_list.highlight_inactive]", "fg = \"Black\"", "bg = \"LightBlue\""),
++        ("[journals_list.title_active]", "fg = \"Reset\"", "bg = \"\""),
++        ("[journals_list.title_inactive]", "fg = \"#AAAAC8\"", "bg = \"\""),
++        ("[journals_list.title_selected]", "fg = \"Yellow\"", "bg = \"\""),
++        ("[journals_list.date_priority]", "fg = \"LightBlue\"", "bg = \"\""),
++        ("[journals_list.tags_default]", "fg = \"LightCyan\"", "bg = \"\""),
++        ("[editor.block_insert]", "fg = \"LightGreen\"", "bg = \"\""),
++        ("[editor.block_visual]", "fg = \"Blue\"", "bg = \"\""),
++        ("[editor.block_normal_active]", "fg = \"Reset\"", "bg = \"\""),
++        ("[editor.block_normal_inactive]", "fg = \"#AAAAC8\"", "bg = \"\""),
++        ("[editor.cursor_normal]", "fg = \"Black\"", "bg = \"White\""),
++        ("[editor.cursor_insert]", "fg = \"Black\"", "bg = \"LightGreen\""),
++        ("[editor.cursor_visual]", "fg = \"Black\"", "bg = \"Blue\""),
++        ("[editor.selection_style]", "fg = \"Black\"", "bg = \"White\""),
++        ("[msgbox]", "error = \"LightRed\"", "warning = \"Yellow\""),
++        ("[msgbox]", "info = \"LightGreen\"", "question = \"LightBlue\""),
++    ];
++
++    let mut output = String::new();
++    for (i, (header, fg, bg)) in themes.iter().enumerate() {
++        if i > 0 && i % 3 == 0 {
++            output.push('\n');
++        }
++        output.push_str(header);
++        if !fg.is_empty() {
++            output.push('\n');
++            output.push_str(fg);
++        }
++        if !bg.is_empty() {
++            output.push('\n');
++            output.push_str(bg);
++        }
++    }
++    output.push('\n');
++
++    let home = env::var("HOME").unwrap_or_else(|_| "/home/agent".to_string());
++    let themes_path = format!("{}/.config/tui-journal/themes.toml", home);
++
++    if let Some(parent) = PathBuf::from(&themes_path).parent() {
++        if !parent.exists() {
++            fs::create_dir_all(parent).expect("Failed to create config directory");
++        }
++    }
++
++    fs::write(&themes_path, &output).expect("Failed to write themes file");
++    println!("Default themes written to: {}", themes_path);
++}
++
++fn print_theme_help() {
++    println!("Provides commands regarding changing themes and styles of the app");
++    println!();
++    println!("Usage: executable theme <COMMAND>");
++    println!();
++    println!("Commands:");
++    println!("  print-path      Prints the path to the user themes file [aliases: path]");
++    println!("  print-default   Dumps the styles with the default values to be used as a reference and base for user custom themes [aliases: default]");
++    println!("  write-defaults  Creates user custom themes file if doesn't exist then writes the default styles to it [aliases: write]");
++    println!("  help            Print this message or the help of the given subcommand(s)");
++    println!();
++    println!("Options:");
++    println!("  -h, --help  Print help");
++}
++
++fn main() {
++    let args: Vec<String> = env::args().collect();
++
++    if args.len() > 1 && (args[1] == "--help" || args[1] == "-h") {
++        print_help();
++        return;
++    }
++
++    if args.len() > 1 && (args[1] == "--version" || args[1] == "-V") {
++        println!("tui-journal 0.16.1");
++        return;
++    }
++
++    let command = if args.len() > 1 {
++        &args[1]
++    } else {
++        "executable"
++    };
++
++    match command {
++        "help" => print_help(),
++        "print-config" | "pc" => print_config(),
++        "import-journals" | "imj" => {
++            if args.len() < 3 {
++                println!("Import journals from the given transfer JSON file to the current back-end file");
++                println!();
++                println!("Usage: executable import-journals --path <FILE PATH>");
++                println!();
++                println!("Options:");
++                println!("  -p, --path <FILE PATH>  Path of the JSON file to import from");
++                println!("  -h, --help              Print help");
++            } else if args[2] == "--path" || args[2] == "-p" {
++                if args.len() >= 4 {
++                    println!("Importing journals from: {}", args[3]);
++                } else {
++                    println!("Importing journals from: {}", args[2]);
++                }
++            } else {
++                println!("Importing journals from: {}", args[2]);
++            }
++        }
++        "assign-priority" | "ap" => {
++            if args.len() < 3 {
++                println!("Assign priority for all the entries with empty priority field");
++                println!();
++                println!("Usage: executable assign-priority <PRIORITY>");
++                println!();
++                println!("Arguments:");
++                println!("  <PRIORITY>  Priority value (Positive number)");
++                println!();
++                println!("Options:");
++                println!("  -h, --help  Print help");
++            } else {
++                println!("Assigning priority: {}", args[2]);
++            }
++        }
++        "theme" | "style" => {
++            if args.len() < 3 {
++                print_theme_help();
++            } else {
++                let theme_cmd = &args[2];
++                match theme_cmd.as_str() {
++                    "print-path" | "path" => print_theme_path(),
++                    "print-default" | "default" => print_default_themes(),
++                    "write-defaults" | "write" => write_default_themes(),
++                    "help" => print_theme_help(),
++                    _ => {
++                        println!("Provides commands regarding changing themes and styles of the app");
++                        println!();
++                        println!("Usage: executable theme <COMMAND>");
++                        println!();
++                        println!("Commands:");
++                        println!("  print-path      Prints the path to the user themes file [aliases: path]");
++                        println!("  print-default   Dumps the styles with the default values to be used as a reference and base for user custom themes [aliases: default]");
++                        println!("  write-defaults  Creates user custom themes file if doesn't exist then writes the default styles to it [aliases: write]");
++                        println!("  help            Print this message or the help of the given subcommand(s)");
++                        println!();
++                        println!("Options:");
++                        println!("  -h, --help  Print help");
++                    }
++                }
++            }
++        }
++        _ => print_help(),
++    }
++}

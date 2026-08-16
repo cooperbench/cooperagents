@@ -50,11 +50,29 @@ class MiniSweEnvAdapter:
 
     config: Any = None
 
-    def __init__(self, env: Environment, *, timeout: int = 240, guard_git: bool = False, deadline: float | None = None) -> None:
+    def __init__(
+        self,
+        env: Environment,
+        *,
+        timeout: int = 240,
+        guard_git: bool = False,
+        deadline: float | None = None,
+        completion_gate=None,
+        gate_max_rejections: int = 3,
+    ) -> None:
         self._env = env
         self._timeout = timeout
         self._guard_git = guard_git
         self._deadline = deadline
+        # Iteration 6 (gate-at-source): callable(env) -> None (pass) or error
+        # text. Run when the agent tries to finish; on failure the finish is
+        # rejected and the error injected as the observation, so the agent
+        # fixes the problem with its full context and remaining budget
+        # (post-hoc repair agents start cold and failed 150-step budgets on
+        # errors the original agent could fix in-context).
+        self._completion_gate = completion_gate
+        self._gate_rejections = 0
+        self._gate_max_rejections = gate_max_rejections
 
     def execute(self, action: dict, cwd: str = "", *, timeout: int | None = None) -> dict[str, Any]:
         if self._deadline is not None:
@@ -82,6 +100,18 @@ class MiniSweEnvAdapter:
     def _check_finished(self, output: dict) -> None:
         lines = output.get("output", "").lstrip().splitlines(keepends=True)
         if lines and lines[0].strip() == "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT" and output["returncode"] == 0:
+            if self._completion_gate is not None and self._gate_rejections < self._gate_max_rejections:
+                err = self._completion_gate(self._env)
+                if err:
+                    self._gate_rejections += 1
+                    left = self._gate_max_rejections - self._gate_rejections
+                    output["output"] = (
+                        "SUBMISSION REJECTED by the completion gate "
+                        f"({left} rejection(s) left before forced accept):\n{err}\n"
+                        "Fix the problem, verify, then submit again."
+                    )
+                    output["returncode"] = 1
+                    return
             submission = "".join(lines[1:])
             raise Submitted({"role": "exit", "content": submission, "extra": {"exit_status": "Submitted", "submission": submission}})
 
@@ -286,6 +316,7 @@ def run_mini_swe_agent(
     time_limit_s: int | None = None,
     monitor=None,
     git_share: bool = False,
+    completion_gate=None,
 ) -> AgentResult:
     """Run one mini-swe DefaultAgent on the shared ``env``; return an AgentResult.
 
@@ -320,6 +351,7 @@ def run_mini_swe_agent(
             timeout=command_timeout,
             guard_git=guard_git,
             deadline=(_time.time() + time_limit_s) if time_limit_s else None,
+            completion_gate=completion_gate,
         ),
         agent_id=agent_id,
         system_template=system_template,

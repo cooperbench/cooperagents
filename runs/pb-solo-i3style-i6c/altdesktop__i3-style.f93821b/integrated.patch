@@ -1,0 +1,282 @@
+diff --git a/__pycache__/i3_style.cpython-310.pyc b/__pycache__/i3_style.cpython-310.pyc
+new file mode 100644
+index 0000000..0be6f5a
+Binary files /dev/null and b/__pycache__/i3_style.cpython-310.pyc differ
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..1162112
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,5 @@
++#!/bin/bash
++set -e
++python3 -m compileall -q /workspace
++cp i3_style.py ./executable
++chmod +x ./executable
+diff --git a/i3_style.py b/i3_style.py
+new file mode 100644
+index 0000000..3d3dd37
+--- /dev/null
++++ b/i3_style.py
+@@ -0,0 +1,261 @@
++#!/usr/bin/env python3
++"""i3-style: Apply themes to i3 config files."""
++
++import argparse
++import os
++import re
++import subprocess
++import sys
++
++VERSION = "1.0"
++
++def parse_args():
++    parser = argparse.ArgumentParser(description="Apply themes to i3 config files")
++    parser.add_argument("theme", nargs="?", help="Theme name or path to theme file")
++    parser.add_argument("-o", "--output", help="Output config file path")
++    parser.add_argument("--to-theme", help="Convert config to theme file")
++    parser.add_argument("--reload", action="store_true", help="Reload i3 after applying theme")
++    parser.add_argument("--version", action="store_true", help="Show version")
++    return parser.parse_args()
++
++def get_bar_color(theme, color_name):
++    if "bar_colors" in theme and color_name in theme["bar_colors"]:
++        return theme["bar_colors"][color_name]
++    return None
++
++def get_window_colors(theme, client_type):
++    """Get all colors for a window type from theme."""
++    if client_type not in theme:
++        return None
++    colors = theme[client_type]
++    bg = colors.get("background")
++    border = colors.get("focused_border")
++    text = colors.get("focused_text")
++    if bg and border and text:
++        return f"{bg} {border} {text}"
++    return None
++
++def apply_theme_to_config(config_content, theme, config_path):
++    lines = config_content.split("\n")
++    result_lines = []
++    in_bar = False
++    in_bar_colors = False
++    
++    for line in lines:
++        stripped = line.strip()
++        
++        if stripped == "bar {":
++            in_bar = True
++            result_lines.append(line)
++        elif stripped == "}":
++            in_bar = False
++            result_lines.append(line)
++        elif in_bar and stripped.startswith("colors {"):
++            in_bar_colors = True
++            result_lines.append(line)
++        elif in_bar_colors and stripped == "}":
++            in_bar_colors = False
++            result_lines.append(line)
++        elif in_bar and in_bar_colors:
++            # Skip old color lines and replace with new ones
++            if stripped.startswith("separator"):
++                color = get_bar_color(theme, "separator")
++                if color:
++                    result_lines.append(f"    separator {color}")
++                    continue
++            elif stripped.startswith("background"):
++                color = get_bar_color(theme, "background")
++                if color:
++                    result_lines.append(f"    background {color}")
++                    continue
++            elif stripped.startswith("statusline"):
++                color = get_bar_color(theme, "statusline")
++                if color:
++                    result_lines.append(f"    statusline {color}")
++                    continue
++            elif stripped.startswith("focused_workspace"):
++                colors = get_window_colors(theme, "focused_workspace")
++                if colors:
++                    result_lines.append(f"    focused_workspace {colors}")
++                    continue
++            elif stripped.startswith("active_workspace"):
++                colors = get_window_colors(theme, "active_workspace")
++                if colors:
++                    result_lines.append(f"    active_workspace {colors}")
++                    continue
++            elif stripped.startswith("inactive_workspace"):
++                colors = get_window_colors(theme, "inactive_workspace")
++                if colors:
++                    result_lines.append(f"    inactive_workspace {colors}")
++                    continue
++            elif stripped.startswith("urgent_workspace"):
++                colors = get_window_colors(theme, "urgent_workspace")
++                if colors:
++                    result_lines.append(f"    urgent_workspace {colors}")
++                    continue
++            # If we get here, we don't have a replacement, so skip this line
++            continue
++        result_lines.append(line)
++    
++    return "\n".join(result_lines)
++
++def validate_config(config_path):
++    try:
++        result = subprocess.run(
++            ["i3", "-C", "-c", config_path],
++            capture_output=True,
++            text=True,
++            timeout=10
++        )
++        return result.returncode == 0
++    except FileNotFoundError:
++        return False
++    except subprocess.TimeoutExpired:
++        return False
++
++def parse_theme_file(theme_content):
++    """Parse a theme file in the format: key = { subkey: value, ... }"""
++    theme = {
++        "bar_colors": {},
++        "focused_workspace": {},
++        "active_workspace": {},
++        "inactive_workspace": {},
++        "urgent_workspace": {}
++    }
++    
++    # Pattern to match key = { ... }
++    pattern = r'(\w+)\s*=\s*\{([^}]*)\}'
++    
++    for match in re.finditer(pattern, theme_content, re.DOTALL):
++        key = match.group(1).strip()
++        value_block = match.group(2).strip()
++        
++        if key in theme:
++            # Parse subkey: value pairs
++            for item in value_block.split(','):
++                item = item.strip()
++                if ':' in item:
++                    subkey, subvalue = item.split(':', 1)
++                    theme[key][subkey.strip()] = subvalue.strip()
++    
++    return theme
++
++def main():
++    args = parse_args()
++    
++    if args.version:
++        print(f"i3-style {VERSION}")
++        return 0
++    
++    if hasattr(args, 'help') and args.help:
++        print("i3-style 1.0")
++        print("Usage: i3-style [options] <theme> -o <output>")
++        print("Options:")
++        print("  -o, --output <file>  Output config file path")
++        print("  --to-theme <file>    Convert config to theme file")
++        print("  --reload             Reload i3 after applying theme")
++        print("  --version            Show version")
++        print("  --help               Show this help message")
++        return 0
++    
++    if not args.theme:
++        print("Error: Theme is required", file=sys.stderr)
++        return 1
++    
++    if args.to_theme:
++        config_path = args.theme
++        theme_path = args.to_theme
++        
++        if not os.path.exists(config_path):
++            print(f"Config file not found: {config_path}", file=sys.stderr)
++            return 1
++        
++        with open(config_path, 'r') as f:
++            config_content = f.read()
++        
++        theme = {
++            "bar_colors": {},
++            "focused_workspace": {},
++            "active_workspace": {},
++            "inactive_workspace": {},
++            "urgent_workspace": {}
++        }
++        
++        color_pattern = r"#([0-9A-Fa-f]{6}|[0-9A-Fa-f]{3})"
++        
++        bar_colors_section = re.search(r"bar\s*\{[^}]*colors\s*\{([^}]+)\}", config_content)
++        
++        if bar_colors_section:
++            bar_colors = bar_colors_section.group(1)
++            for color_match in re.finditer(color_pattern, bar_colors):
++                color = color_match.group(0)
++                theme["bar_colors"][color_match.group(0)] = color
++        
++        with open(theme_path, 'w') as f:
++            f.write("# i3-style theme\n")
++            f.write(f"bar_colors = {{\n")
++            for key, value in theme["bar_colors"].items():
++                f.write(f"  {key}: {value}\n")
++            f.write("}\n")
++            f.write(f"focused_workspace = {{\n")
++            f.write(f"  background: {theme['focused_workspace'].get('background', '#000000')}\n")
++            f.write(f"  focused_border: {theme['focused_workspace'].get('focused_border', '#000000')}\n")
++            f.write(f"  focused_text: {theme['focused_workspace'].get('focused_text', '#000000')}\n")
++            f.write(f"  focused_workspace_border: {theme['focused_workspace'].get('focused_workspace_border', '#000000')}\n")
++            f.write("}\n")
++            f.write(f"active_workspace = {{\n")
++            f.write(f"  background: {theme['active_workspace'].get('background', '#000000')}\n")
++            f.write(f"  focused_border: {theme['active_workspace'].get('focused_border', '#000000')}\n")
++            f.write(f"  focused_text: {theme['active_workspace'].get('focused_text', '#000000')}\n")
++            f.write(f"  focused_workspace_border: {theme['active_workspace'].get('focused_workspace_border', '#000000')}\n")
++            f.write("}\n")
++            f.write(f"inactive_workspace = {{\n")
++            f.write(f"  background: {theme['inactive_workspace'].get('background', '#000000')}\n")
++            f.write(f"  focused_border: {theme['inactive_workspace'].get('focused_border', '#000000')}\n")
++            f.write(f"  focused_text: {theme['inactive_workspace'].get('focused_text', '#000000')}\n")
++            f.write(f"  focused_workspace_border: {theme['inactive_workspace'].get('focused_workspace_border', '#000000')}\n")
++            f.write("}\n")
++            f.write(f"urgent_workspace = {{\n")
++            f.write(f"  background: {theme['urgent_workspace'].get('background', '#000000')}\n")
++            f.write(f"  focused_border: {theme['urgent_workspace'].get('focused_border', '#000000')}\n")
++            f.write(f"  focused_text: {theme['urgent_workspace'].get('focused_text', '#000000')}\n")
++            f.write(f"  focused_workspace_border: {theme['urgent_workspace'].get('focused_workspace_border', '#000000')}\n")
++            f.write("}\n")
++        
++        print(f"Theme created: {theme_path}")
++        return 0
++    
++    theme_path = args.theme
++    
++    if not os.path.exists(theme_path):
++        print(f"Theme file not found: {theme_path}", file=sys.stderr)
++        return 1
++    
++    if not os.path.exists(args.output):
++        print(f"Config file not found: {args.output}", file=sys.stderr)
++        return 1
++    
++    with open(args.output, 'r') as f:
++        config_content = f.read()
++    
++    with open(theme_path, 'r') as f:
++        theme_content = f.read()
++    
++    theme = parse_theme_file(theme_content)
++    
++    new_config = apply_theme_to_config(config_content, theme, args.output)
++    
++    with open(args.output, 'w') as f:
++        f.write(new_config)
++    
++    if args.reload:
++        try:
++            subprocess.run(["i3", "reload"], check=True)
++        except subprocess.CalledProcessError:
++            print("Failed to reload i3", file=sys.stderr)
++            return 1
++    
++    return 0
++
++if __name__ == "__main__":
++    sys.exit(main())

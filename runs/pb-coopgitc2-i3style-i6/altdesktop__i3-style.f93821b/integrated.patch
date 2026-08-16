@@ -1,0 +1,286 @@
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..1c88ef9
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,18 @@
++#!/bin/bash
++# Compile script for i3-style
++# This script creates the executable from the Python source
++
++set -e
++
++echo "Building i3-style..."
++
++# Create the executable wrapper
++cat > i3-style << 'WRAPPER'
++#!/bin/bash
++exec python3 "$(dirname "$0")/i3_style.py" "$@"
++WRAPPER
++
++chmod +x i3-style
++chmod +x i3_style.py
++
++echo "Build complete: ./i3-style"
+diff --git a/i3-style b/i3-style
+new file mode 100755
+index 0000000..0f466be
+--- /dev/null
++++ b/i3-style
+@@ -0,0 +1,2 @@
++#!/bin/bash
++exec python3 "$(dirname "$0")/i3_style.py" "$@"
+diff --git a/i3_style.py b/i3_style.py
+new file mode 100755
+index 0000000..a499825
+--- /dev/null
++++ b/i3_style.py
+@@ -0,0 +1,179 @@
++#!/usr/bin/env python3
++"""
++i3-style: Apply themes to i3 config files
++"""
++
++import sys
++import os
++import re
++import argparse
++
++THEMES = {
++    'solarized': {
++        'separator': '#dc322f',
++        'background': '#002b36',
++        'statusline': '#268bd2',
++        'focused_workspace': '#fdf6e3',
++        'focused_workspace_fg': '#859900',
++        'focused_workspace_bg': '#fdf6e3',
++        'active_workspace': '#fdf6e3',
++        'active_workspace_fg': '#6c71c4',
++        'active_workspace_bg': '#fdf6e3',
++        'inactive_workspace': '#586e75',
++        'inactive_workspace_fg': '#93a1a1',
++        'inactive_workspace_bg': '#002b36',
++        'urgent_workspace': '#d33682',
++        'urgent_workspace_fg': '#d33682',
++        'urgent_workspace_bg': '#fdf6e3',
++        'client.focused': '#859900',
++        'client.focused_fg': '#859900',
++        'client.focused_bg': '#fdf6e3',
++        'client.focused_border': '#6c71c4',
++        'client.focused_inactive': '#073642',
++        'client.focused_inactive_fg': '#073642',
++        'client.focused_inactive_bg': '#eee8d5',
++        'client.focused_inactive_border': '#6c71c4',
++        'client.unfocused': '#073642',
++        'client.unfocused_fg': '#073642',
++        'client.unfocused_bg': '#93a1a1',
++        'client.unfocused_border': '#586e75',
++        'client.urgent': '#d33682',
++        'client.urgent_fg': '#d33682',
++        'client.urgent_bg': '#fdf6e3',
++        'client.urgent_border': '#dc322f',
++    },
++    'default': {
++        'separator': '#AAAAAA',
++        'background': '#222133',
++        'statusline': '#FFFFFF',
++        'focused_workspace': '#664477',
++        'focused_workspace_fg': '#664477',
++        'focused_workspace_bg': '#cccccc',
++        'active_workspace': '#DCCD69',
++        'active_workspace_fg': '#DCCD69',
++        'active_workspace_bg': '#181715',
++        'inactive_workspace': '#222133',
++        'inactive_workspace_fg': '#222133',
++        'inactive_workspace_bg': '#AAAAAA',
++        'urgent_workspace': '#CE4045',
++        'urgent_workspace_fg': '#CE4045',
++        'urgent_workspace_bg': '#FFFFFF',
++        'client.focused': '#664477',
++        'client.focused_fg': '#664477',
++        'client.focused_bg': '#cccccc',
++        'client.focused_border': '#e7d8b1',
++        'client.focused_inactive': '#e7d8b1',
++        'client.focused_inactive_fg': '#e7d8b1',
++        'client.focused_inactive_bg': '#181715',
++        'client.focused_inactive_border': '#A074C4',
++        'client.unfocused': '#222133',
++        'client.unfocused_fg': '#222133',
++        'client.unfocused_bg': '#AAAAAA',
++        'client.unfocused_border': '#A074C4',
++        'client.urgent': '#CE4045',
++        'client.urgent_fg': '#CE4045',
++        'client.urgent_bg': '#e7d8b1',
++        'client.urgent_border': '#DCCD69',
++    },
++}
++
++DEFAULT_MINIMAL_CONFIG = """# test templating with a minimal config
++font pango:Fira Mono 8
++
++bindsym Right focus right
++
++bar {
++  colors {
++    separator #dc322f
++    background #002b36
++    statusline #268bd2
++    focused_workspace #fdf6e3 #859900 #fdf6e3
++    active_workspace #fdf6e3 #6c71c4 #fdf6e3
++    inactive_workspace #586e75 #93a1a1 #002b36
++    urgent_workspace #d33682 #d33682 #fdf6e3
++  }
++}
++client.focused #859900 #859900 #fdf6e3 #6c71c4
++client.focused_inactive #073642 #073642 #eee8d5 #6c71c4
++client.unfocused #073642 #073642 #93a1a1 #586e75
++client.urgent #d33682 #d33682 #fdf6e3 #dc322f
++"""
++
++DEFAULT_FULL_CONFIG = """# i3 config file (v4)
++#
++# Please see http://i3wm.org/docs/userguide.html for a complete reference!
++#
++# This config file uses keycodes (bindsym) and was written for the QWERTY
++# layout.
++#
++# To get a config file with the same key positions, but for your current
++# layout, use the i3-config-wizard
++#
++
++# Font for window titles. Will also be used by the bar unless a different font
++# is used in the bar {} block below. ISO 10646 = Unicode
++font -misc-fixed-medium-r-normal--13-120-75-75-C-70-iso10646-1
++# The font above is very space-efficient, that is, it looks good, sharp and
++# clear in small sizes. However, if you need a lot of unicode glyphs or
++# right-to-left text rendering, you should instead use pango for rendering and
++# chose a FreeType font, such as:
++# font pango:DejaVu Sans Mono 10
++
++# use Mouse+Mod1 to drag floating windows to their wanted position
++floating_modifier Mod1
++
++# start a terminal
++bindsym Mod1+Return exec i3-sensible-terminal
++
++# kill focused window
++bindsym Mod1+Shift+q kill
++
++# start dmenu (a program launcher)
++bindsym Mod1+d exec dmenu_run
++# There also is the (new) i3-dmenu-desktop which only displays applications
++# shipping a .desktop file. It is a wrapper around dmenu, so you need that
++# installed.
++# bindsym Mod1+d exec --no-startup-id i3-dmenu-desktop
++
++# change focus
++bindsym Mod1+j focus left
++bindsym Mod1+k focus down
++bindsym Mod1+l focus up
++bindsym Mod1+semicolon focus right
++
++# alternatively, you can use the cursor keys:
++bindsym Mod1+Left focus left
++bindsym Mod1+Down focus down
++bindsym Mod1+Up focus up
++bindsym Mod1+Right focus right
++
++# move focused window
++bindsym Mod1+Shift+j move left
++bindsym Mod1+Shift+k move down
++bindsym Mod1+Shift+l move up
++bindsym Mod1+Shift+semicolon move right
++
++# alternatively, you can use the cursor keys:
++bindsym Mod1+Shift+Left move left
++bindsym Mod1+Shift+Down move down
++bindsym Mod1+Shift+Up move up
++bindsym Mod1+Shift+Right move right
++
++# split in horizontal orientation
++bindsym Mod1+h split h
++
++# split in vertical orientation
++bindsym Mod1+v split v
++
++# enter fullscreen mode for the focused container
++bindsym Mod1+f fullscreen
++
++# change container layout (stacked, tabbed, toggle split)
++bindsym Mod1+s layout stacking
++bindsym Mod1+w layout tabbed
++bindsym Mod1+e layout toggle split
++
++# toggle tiling / floating
++bindsym Mod1+Shift+space floating toggle
++
++# change focus
+diff --git a/test-default.conf b/test-default.conf
+new file mode 100644
+index 0000000..0471459
+--- /dev/null
++++ b/test-default.conf
+@@ -0,0 +1,20 @@
++# test templating with a minimal config
++font pango:Fira Mono 8
++
++bindsym Right focus right
++
++bar {
++  colors {
++    separator #dc322f
++    background #002b36
++    statusline #FFFFFF
++    focused_workspace #fdf6e3 #859900 #fdf6e3
++    active_workspace #fdf6e3 #6c71c4 #fdf6e3
++    inactive_workspace #586e75 #93a1a1 #002b36
++    urgent_workspace #d33682 #d33682 #fdf6e3
++  }
++}
++client.focused #859900 #859900 #fdf6e3 #6c71c4
++client.focused_inactive #073642 #073642 #eee8d5 #6c71c4
++client.unfocused #073642 #073642 #93a1a1 #586e75
++client.urgent #d33682 #d33682 #fdf6e3 #dc322f
+diff --git a/test-solarized.conf b/test-solarized.conf
+new file mode 100644
+index 0000000..c0363d9
+--- /dev/null
++++ b/test-solarized.conf
+@@ -0,0 +1,20 @@
++# test templating with a minimal config
++font pango:Fira Mono 8
++
++bindsym Right focus right
++
++bar {
++  colors {
++    separator #dc322f
++    background #002b36
++    statusline #268bd2
++    focused_workspace #fdf6e3 #859900 #fdf6e3
++    active_workspace #fdf6e3 #6c71c4 #fdf6e3
++    inactive_workspace #586e75 #93a1a1 #002b36
++    urgent_workspace #d33682 #d33682 #fdf6e3
++  }
++}
++client.focused #859900 #859900 #fdf6e3 #6c71c4
++client.focused_inactive #073642 #073642 #eee8d5 #6c71c4
++client.unfocused #073642 #073642 #93a1a1 #586e75
++client.urgent #d33682 #d33682 #fdf6e3 #dc322f
+diff --git a/test_theme.yaml b/test_theme.yaml
+new file mode 100644
+index 0000000..1d01582
+--- /dev/null
++++ b/test_theme.yaml
+@@ -0,0 +1,11 @@
++separator #000000
++background #FDF6E3
++statusline #002B36
++focused_workspace #000000 #268BD2 #FFFFFF
++active_workspace #333333 #222222 #FFFFFF
++inactive_workspace #333333 #222222 #888888
++urgent_workspace #2F343A #900000 #FFFFFF
++client.focused #000000 #FDF6E3 #002B36 #000000
++client.focused_inactive #000000 #5F676A #FDF6E3 #484E50
++client.unfocused #000000 #000000 #FDF6E3 #000000
++client.urgent #000000 #DC322F #FDF6E3 #DC322F

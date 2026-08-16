@@ -838,6 +838,91 @@ BINDING CONSTRAINT NOW: the unbuildable-merge/repair-fails class (6/18
 zeros, only remaining zero class) — candidates: raise repair step budget,
 repair-from-best-agent-tree instead of merged tree, or discard-merge
 fallback (submit best single agent tree when merge is irreparable).
+
+MBENCH10 (2026-08-15): 10-task ProgramBench benchmark (first 10
+alphabetical instances with images), solo + coordinator, k=1/cell, i5
+config. Corrected means after rerunning 7 endpoint-outage-poisoned cells
+(the Modal app was deleted mid-batch a second time; redeployed):
+- solo 23.2, coordinator 17.2 (per-task: cmatrix 82.6/68.0, walk
+  48.5/39.2, tuijournal 45.1/33.8, i3style 26.7/0, fx 21.3/19.7,
+  shellharden 8.0/11.8, chroma/srgn/zipfinder/zoxide 0/0 at baseline).
+- Structure: on multi-task ground the coordinator LOSES its
+  single-instance advantage — solo >= coordinator on 8/10 tasks. The
+  cmatrix k>=3 finding (team cuts variance) does not transfer at k=1
+  across tasks where the capability floor, not variance, binds.
+
+ITERATION 6 (2026-08-15) — completion gate + env brief, measured on the
+5 wave-1 tasks (diagnosis: all four baseline zero modes were detectable
+in the agent's own container; post-hoc repair starts cold and failed).
+Mechanisms: (A) finish rejected until compile.sh builds a FRESH
+./executable in the agent's container (<=3 rejections, error injected as
+observation); (B) probed toolchain list + operational no-network
+constraint prepended to the task. Clean-cell before/after (solo):
+zipfinder 0->44.2 (gate fired 2x then clean submit at step 599 — direct
+causal evidence), srgn 0->35.4, zoxide 0->15.3, chroma 0->0 (agent never
+attempts to finish; gate cannot fire — iteration-7 candidate: budget-aware
+submit nudge), i3style rerun pending. Coordinator: srgn 0->11.6, others
+0->0 (team-zoxide persistently 0 where solo flips — merge overhead eats
+the budget solo spent on its std-lib pivot). Solo 5-task mean 5.3 -> ~19.
+Infra incidents fixed en route: emergency-truncation clipped tool-call
+arguments mid-escape producing invalid JSON (both zoxide-i6 agents dead
+at step ~116; now truncates inside parsed JSON values); single
+truncation retry could itself overflow (i3style-i6c died at step 324;
+now escalates 3 attempts keeping 2->1->0 recent turns); minimal-E0
+smoke found cost_tracking crash on unmapped self-hosted model.
+MINIMAL E0 (runs/evolve/versions/coopgit-min): 302-line run.py + unchanged
+vendored agent (184KB): 2 agents, shared git remote + 45s auto-push sync,
+3-way merge with apply-chain fallback. Smoke-validated live (agents probe
+the reference binary correctly at 25 steps). Fat snapshot deleted —
+evolution now genuinely starts from coop+git.
+
+WHY TEAM < SOLO ON MBENCH10 (diagnosis, 2026-08-15/16): (1) a team run
+ends at the SLOWER agent — only 5/20 team agents ever submitted (14 rode
+the cap) vs solo finishing early in 4/10 runs; early finish needs BOTH
+agents to converge (~p^2). (2) repair fired 9/10 team runs vs 4/10 solo:
+the post-hoc 3-way merge of two overlapping trees is the damage source,
+and NO AGENT EVER SEES THE MERGED TREE — the first reader is a cold
+repair agent. (3) trajectories show the git substrate delivers awareness
+without agreement: one agent references shared/<teammate> a handful of
+times (0-22 refs, 1-6 file-takes), the other typically ignores it; no
+division of labor forms. User correction recorded: division via git IS
+the intent; duplicate implementation is a failure mode, not the design.
+
+ITERATION 7 (launched 2026-08-16): PRE-SUBMISSION MERGE — the finishing
+agent must merge every teammate branch from the shared remote into its
+own tree (conflict markers surfaced to the AGENT, which resolves them
+in-context), then pass the fresh-build gate on the MERGED tree
+(pb_merge_completion_gate, --presub-merge; agent id written to
+/tmp/.agent_id per container; solo/repair envs reduce to the plain gate).
+Targets diagnosis items (1)+(2): merge moves from post-hoc mechanical to
+in-context agent work. Measuring: coopgitc2 on the 6 tasks where team
+trails solo (cmatrix, tuijournal, walk, fx, i3style, zoxide), full i6+i7
+stack. teamfull analogue (merge-window reservation) deferred.
+
+ITERATION 7 RESULTS — KEPT; TEAM OVERTAKES SOLO (2026-08-16).
+First pass exposed a design incompleteness: gate diagnostics showed ZERO
+rejections and zero conflict rounds (agents' merges pass cleanly — the
+45s auto-push sync keeps trees convergent), yet tuijournal/fx regressed
+to 0 because the harness still 3-way RE-merged two already-merged trees,
+re-creating the damage the gate prevented. Completion of the same idea:
+TeamSpec.select_integration — when pre-submission merge is on,
+integration SELECTS the best member tree by pb_score instead of
+re-merging (one NameError iteration en route: metrics dict not in scope
+at the integration branch; all four i7b runs crashed; fixed to stdout
+logging).
+Final i7 column vs baseline vs solo (6 tasks):
+  cmatrix 73.2 (was 68.0; solo 82.6), tuijournal 48.7 (33.8; 45.1),
+  walk 46.6 (39.2; 48.5), fx 46.4 (19.7; 21.3), i3style 49.5 (0; 26.7),
+  zoxide 13.7 (0; 15.3).
+  MEANS: coordinator 26.8 -> 46.4 (+19.6); solo same-6 = 39.9.
+  THE TEAM ARM NOW BEATS SOLO (46.4 vs 39.9), winning outright on
+  fx (+25.1), i3style (+22.8), tuijournal (+3.6).
+Attribution: merge damage was the WHOLE team penalty. With merging done
+by an in-context agent and integration by selection over verified trees,
+the second agent's work adds value instead of destroying it. Selection
+fired 4/4 (chose tree 0 each time; zoxide's [165B vs 77KB] tie-broke to
+the empty tree at (-1,·) — repair tail then rebuilt to 13.7; selector
+tie-breaking on equal tiers is a known rough edge).
 Also launched: solo-i5r{1,2,3} — solo re-run under the SAME current harness
 services (repair tail, new fitness, truncation fix); solo-a's 0 predates
 those fixes (empty patch after a 1000-step loop). Caveat: solo batch runs

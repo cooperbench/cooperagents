@@ -270,7 +270,29 @@ class DefaultAgent:
                 fn = tc.get("function") or {}
                 a = fn.get("arguments")
                 if isinstance(a, str) and len(a) > 20000:
-                    fn["arguments"] = a[:8000] + "...[clipped]..." + a[-4000:]
+                    # arguments is parsed as JSON server-side: a raw character
+                    # clip can split an escape sequence and every later request
+                    # then 400s ("Invalid \escape" at the clip boundary —
+                    # killed both coopgitc2-zoxide-i6 agents at step ~116).
+                    # Truncate INSIDE the parsed values and re-dump so the
+                    # string stays valid JSON.
+                    import json as _json
+
+                    def _shrink(v):
+                        if isinstance(v, str) and len(v) > 12000:
+                            return v[:8000] + "...[clipped]..." + v[-4000:]
+                        if isinstance(v, dict):
+                            return {k: _shrink(x) for k, x in v.items()}
+                        if isinstance(v, list):
+                            return [_shrink(x) for x in v]
+                        return v
+
+                    try:
+                        fn["arguments"] = _json.dumps(_shrink(_json.loads(a)))
+                    except Exception:
+                        # unparseable arguments: dump the head as a JSON string
+                        # (always valid) rather than concatenating raw halves.
+                        fn["arguments"] = _json.dumps({"clipped": a[:8000]})
             return m
 
         stub = {
@@ -351,8 +373,27 @@ class DefaultAgent:
             # itself overflow — and retry once.
             if "ContextWindow" not in type(e).__name__ and "context length" not in str(e).lower():
                 raise
-            self._emergency_truncate()
-            message = self.model.query(self.messages)
+            # One truncation can be insufficient when the kept recent turns are
+            # themselves huge (observed: solo-i3style-i6c died at step 324 on
+            # the retry's own overflow). Escalate: retry up to 3 times, keeping
+            # fewer recent turns each time (2 -> 1 -> 0).
+            keep = self.config.compaction_keep_recent_turns
+            last_err: Exception = e
+            for attempt in range(3):
+                self.config.compaction_keep_recent_turns = max(0, keep - attempt)
+                self._emergency_truncate()
+                try:
+                    message = self.model.query(self.messages)
+                    break
+                except Exception as e2:  # noqa: BLE001
+                    last_err = e2
+                    if "ContextWindow" not in type(e2).__name__ and "context length" not in str(e2).lower():
+                        self.config.compaction_keep_recent_turns = keep
+                        raise
+            else:
+                self.config.compaction_keep_recent_turns = keep
+                raise last_err
+            self.config.compaction_keep_recent_turns = keep
         self.cost += message.get("extra", {}).get("cost", 0.0)
         self._last_prompt_tokens = self._get_prompt_tokens(message)
         self.add_messages(message)

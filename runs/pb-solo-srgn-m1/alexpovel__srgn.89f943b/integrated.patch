@@ -1,0 +1,169 @@
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..12746d4
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,5 @@
++#!/bin/bash
++set -e
++
++# Build the srgn tool
++go build -o srgn main.go
+diff --git a/main.go b/main.go
+new file mode 100644
+index 0000000..77ace9b
+--- /dev/null
++++ b/main.go
+@@ -0,0 +1,148 @@
++package main
++
++import (
++	"bufio"
++	"flag"
++	"fmt"
++	"os"
++	"regexp"
++	"strings"
++)
++
++func main() {
++	scope := flag.String("scope", "", "The scope pattern (regex or literal)")
++	replacementStr := flag.String("replace", "", "Replacement string")
++	upper := flag.Bool("upper", false, "Uppercase matches")
++	lower := flag.Bool("lower", false, "Lowercase matches")
++	titlecase := flag.Bool("titlecase", false, "Titlecase matches")
++	normalize := flag.Bool("normalize", false, "Normalize Unicode")
++	symbols := flag.Bool("symbols", false, "Replace ASCII symbols with Unicode")
++	german := flag.Bool("german", false, "Replace German spellings")
++	deleteFlag := flag.Bool("delete", false, "Delete matches")
++	squeeze := flag.Bool("squeeze", false, "Squeeze repeated matches")
++	literal := flag.Bool("literal", false, "Literal scope (not regex)")
++	onlyMatching := flag.Bool("only-matching", false, "Only matching portions")
++	count := flag.Bool("count", false, "Count matches")
++	version := flag.Bool("version", false, "Print version")
++	query := flag.String("query", "", "Custom query")
++
++	flag.Parse()
++
++	if *version {
++		fmt.Println("srgn version 0.1.0")
++		return
++	}
++
++	if *query != "" {
++		fmt.Println("Custom query support coming soon")
++		return
++	}
++
++	if *scope == "" {
++		fmt.Println("Usage: srgn [OPTIONS] [SCOPE] [-- REPLACEMENT]")
++		os.Exit(1)
++	}
++
++	var pattern *regexp.Regexp
++	if *literal {
++		escaped := regexp.QuoteMeta(*scope)
++		pattern = regexp.MustCompile(escaped)
++	} else {
++		pattern = regexp.MustCompile(*scope)
++	}
++
++	var replacement string
++	if *upper || *lower || *titlecase || *normalize || *symbols || *german {
++		replacement = *scope
++	} else if *replacementStr != "" {
++		replacement = *replacementStr
++	} else {
++		replacement = *scope
++	}
++
++	var input string
++	if len(os.Args) > 1 {
++		input = os.Args[1]
++	} else {
++		input = readFromStdin()
++	}
++
++	var result string
++	if *deleteFlag {
++		result = pattern.ReplaceAllString(input, "")
++	} else if *squeeze {
++		result = pattern.ReplaceAllString(input, replacement)
++	} else {
++		result = pattern.ReplaceAllString(input, replacement)
++	}
++
++	if *upper {
++		result = strings.ToUpper(result)
++	} else if *lower {
++		result = strings.ToLower(result)
++	} else if *titlecase {
++		result = strings.Title(result)
++	} else if *normalize {
++		result = normalizeUnicode(result)
++	} else if *symbols {
++		result = replaceSymbols(result)
++	} else if *german {
++		result = replaceGerman(result)
++	}
++
++	if *count {
++		count := pattern.FindAllStringIndex(input, -1)
++		fmt.Println(len(count))
++		return
++	}
++
++	if *onlyMatching {
++		for _, match := range pattern.FindAllStringIndex(input, -1) {
++			fmt.Println(input[match[0]:match[1]])
++		}
++		return
++	}
++
++	fmt.Print(result)
++}
++
++func readFromStdin() string {
++	var result strings.Builder
++	scanner := bufio.NewScanner(os.Stdin)
++	for scanner.Scan() {
++		result.WriteString(scanner.Text())
++		result.WriteString("\n")
++	}
++	return result.String()
++}
++
++func normalizeUnicode(s string) string {
++	result := ""
++	for _, r := range s {
++		if r < 0x0300 || r > 0x036F {
++			result += string(r)
++		}
++	}
++	return result
++}
++
++func replaceSymbols(s string) string {
++	result := strings.ReplaceAll(s, "&", "∧")
++	result = strings.ReplaceAll(result, "!", "≠")
++	result = strings.ReplaceAll(result, "=", "≡")
++	result = strings.ReplaceAll(result, "<", "⊂")
++	result = strings.ReplaceAll(result, ">", "⊃")
++	result = strings.ReplaceAll(result, "(", "⎔")
++	result = strings.ReplaceAll(result, ")", "⎕")
++	result = strings.ReplaceAll(result, "[", "⎕")
++	result = strings.ReplaceAll(result, "]", "⎕")
++	return result
++}
++
++func replaceGerman(s string) string {
++	result := strings.ReplaceAll(s, "ae", "ä")
++	result = strings.ReplaceAll(result, "oe", "ö")
++	result = strings.ReplaceAll(result, "ue", "ü")
++	result = strings.ReplaceAll(result, "ss", "ß")
++	return result
++}
+diff --git a/srgn b/srgn
+new file mode 100755
+index 0000000..185fb83
+Binary files /dev/null and b/srgn differ

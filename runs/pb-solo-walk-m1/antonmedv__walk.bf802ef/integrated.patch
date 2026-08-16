@@ -1,0 +1,187 @@
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..a4a1fc5
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,5 @@
++#!/bin/bash
++set -e
++
++# Build the walk executable
++go build -o ./executable main.go
+diff --git a/main.go b/main.go
+new file mode 100644
+index 0000000..5fbef1a
+--- /dev/null
++++ b/main.go
+@@ -0,0 +1,170 @@
++//go:build ignore
++
++package main
++
++import (
++	"fmt"
++	"os"
++	"strings"
++)
++
++const Version = "v1.13.0"
++
++type FileEntry struct {
++	Name     string
++	IsDir    bool
++	IsHidden bool
++	Icon     string
++}
++
++func main() {
++	// Parse flags
++	showIcons := false
++	showDirsOnly := false
++	hideHidden := false
++
++	args := os.Args[1:]
++	for i := 0; i < len(args); i++ {
++		switch args[i] {
++		case "--icons":
++			showIcons = true
++		case "--dir-only":
++			showDirsOnly = true
++		case "--hide-hidden":
++			hideHidden = true
++		case "--help", "-h":
++			printHelp()
++			os.Exit(0)
++		case "--version", "-v":
++			fmt.Println(Version)
++			os.Exit(0)
++		}
++	}
++
++	// Get path from args (first non-flag argument)
++	path := "."
++	for _, arg := range args {
++		if !strings.HasPrefix(arg, "--") {
++			path = arg
++			break
++		}
++	}
++
++	// Check if path exists
++	if _, err := os.Stat(path); os.IsNotExist(err) {
++		fmt.Fprintf(os.Stderr, "Error: path '%s' does not exist\n", path)
++		os.Exit(1)
++	}
++
++	// Check if it's a directory
++	info, err := os.Stat(path)
++	if err != nil {
++		fmt.Fprintf(os.Stderr, "Error: cannot access '%s': %v\n", path, err)
++		os.Exit(1)
++	}
++
++	if !info.IsDir() {
++		fmt.Fprintf(os.Stderr, "Error: '%s' is not a directory\n", path)
++		os.Exit(1)
++	}
++
++	// List directory
++	files := listDirectory(path, showIcons, showDirsOnly, hideHidden)
++
++	if len(files) == 0 {
++		fmt.Println("Directory is empty")
++		os.Exit(0)
++	}
++
++	// Print files
++	for _, f := range files {
++		fmt.Println(f.Name)
++	}
++}
++
++func printHelp() {
++	fmt.Println()
++	fmt.Printf("  walk %s\n\n", Version)
++	fmt.Println("  Usage: walk [path]\n")
++	fmt.Println("    arrows, hjkl  Move cursor")
++	fmt.Println("    enter         Enter directory")
++	fmt.Println("    backspace     Exit directory")
++	fmt.Println("    space         Toggle preview")
++	fmt.Println("    esc, q        Exit with cd")
++	fmt.Println("    ctrl+c        Exit without cd")
++	fmt.Println("    /             Fuzzy search")
++	fmt.Println("    d, delete     Delete file or dir")
++	fmt.Println("    y             Copy to clipboard")
++	fmt.Println("    .             Hide hidden files")
++	fmt.Println("    ?             Show help")
++	fmt.Println()
++	fmt.Println("  Flags:")
++	fmt.Println()
++	fmt.Println("    --icons        display icons")
++	fmt.Println("    --dir-only     show dirs only")
++	fmt.Println("    --hide-hidden  hide hidden files")
++	fmt.Println("    --preview      display preview")
++	fmt.Println("    --with-border  preview with border")
++	fmt.Println("    --fuzzy        fuzzy mode")
++	fmt.Println()
++}
++
++func listDirectory(path string, showIcons, showDirsOnly, hideHidden bool) []FileEntry {
++	files := []FileEntry{}
++
++	entries, err := os.ReadDir(path)
++	if err != nil {
++		return files
++	}
++
++	for _, entry := range entries {
++		name := entry.Name()
++		isHidden := strings.HasPrefix(name, ".")
++
++		if hideHidden && isHidden {
++			continue
++		}
++
++		if showDirsOnly && !entry.IsDir() {
++			continue
++		}
++
++		var icon string
++		if showIcons {
++			if entry.IsDir() {
++				icon = "di"
++			} else if entry.Type()&os.ModeSymlink != 0 {
++				icon = "ln"
++			} else if entry.Type()&os.ModeNamedPipe != 0 {
++				icon = "pi"
++			} else if entry.Type()&os.ModeSocket != 0 {
++				icon = "so"
++			} else if entry.Type()&os.ModeDevice != 0 {
++				if entry.Type()&os.ModeCharDevice != 0 {
++					icon = "cd"
++				} else {
++					icon = "bd"
++				}
++			} else if entry.Type()&os.ModeSetuid != 0 {
++				icon = "su"
++			} else if entry.Type()&os.ModeSetgid != 0 {
++				icon = "sg"
++			} else if entry.Type()&os.ModeSticky != 0 {
++				icon = "st"
++			} else if entry.Type()&os.ModePerm&os.ModeSetuid != 0 || entry.Type()&os.ModePerm&os.ModeSetgid != 0 || entry.Type()&os.ModePerm&os.ModeSticky != 0 {
++				icon = "ex"
++			} else {
++				icon = "fi"
++			}
++		}
++
++		files = append(files, FileEntry{
++			Name:     name,
++			IsDir:    entry.IsDir(),
++			IsHidden: isHidden,
++			Icon:     icon,
++		})
++	}
++
++	return files
++}

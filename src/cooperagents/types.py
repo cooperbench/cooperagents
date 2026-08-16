@@ -207,6 +207,20 @@ class TeamSpec:
     round 0): an agent politely polling for a teammate's patch that never
     arrives burns its full step budget at sleep-poll pace (~11h observed).
     A time cap bounds that tail; None = uncapped (CooperBench behavior)."""
+    select_integration: Any = None
+    """Iteration 7 companion: callable(list[patch]) -> index. When set, team
+    integration SELECTS one member patch (each member's tree already contains
+    the merged team work via the pre-submission merge gate) instead of 3-way
+    merging — re-merging two both-merged trees re-creates conflict damage."""
+    completion_gate: Any = None
+    """Iteration 6 (gate-at-source): callable(env) -> None (pass) or error text,
+    run in the agent's own container when it tries to finish. On failure the
+    finish is rejected (up to 3 times) and the error injected as the
+    observation. Motivation (mbench10 wave 1): all four zero-score failure
+    modes (offline-unbuildable deps, submitted syntax error, compile.sh
+    producing no ./executable, binary copied into tree) were detectable
+    in-container while the agent still had context and budget; post-hoc
+    repair agents start cold and failed on the same errors."""
     team_roles: bool = False
     """Complete-Team cell (CooperBench team-harness analogue): lead/member role
     asymmetry + shared scratchpad volume at /workspace/shared mounted in every

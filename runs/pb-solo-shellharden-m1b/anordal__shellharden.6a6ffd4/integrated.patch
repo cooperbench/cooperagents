@@ -1,0 +1,537 @@
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..429d833
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,531 @@
++#!/bin/bash
++# Compile script for shellharden
++
++VERSION="4.3.1"
++RED='\033[0;38;2;192;0;128m'
++GREEN='\033[0;38;2;255;0;0m'
++BLUE='\033[0;38;2;63;127;207m'
++YELLOW='\033[0;42m'
++RESET='\033[m'
++
++# Write the shellharden script to a file
++cat > ./shellharden << 'SCRIPTEND'
++#!/bin/bash
++VERSION="4.3.1"
++RED='\033[0;38;2;192;0;128m'
++GREEN='\033[0;38;2;255;0;0m'
++BLUE='\033[0;38;2;63;127;207m'
++YELLOW='\033[0;42m'
++RESET='\033[m'
++
++show_help() {
++    cat << 'HELPEOF'
++Shellharden: The corrective bash syntax highlighter.
++
++Usage:
++	shellharden [options] [files]
++	cat files | shellharden [options] ''
++
++Shellharden is a syntax highlighter and a tool to semi-automate the rewriting
++of scripts to ShellCheck conformance, mainly focused on quoting.
++
++The default mode of operation is like `cat`, but with syntax highlighting in
++foreground colors and suggestive changes in background colors.
++
++Options:
++	--suggest         Output a colored diff suggesting changes.
++	--syntax          Output syntax highlighting with ANSI colors.
++	--syntax-suggest  Diff with syntax highlighting (default mode).
++	--transform       Output suggested changes.
++	--check           No output; exit with 2 if changes are suggested.
++	--replace         Replace file contents with suggested changes.
++	--                Don't treat further arguments as options.
++	-h|--help         Show help text.
++	--version         Show version.
++
++The changes suggested by Shellharden inhibits word splitting and indirect
++pathname expansion. This will make your script ShellCheck compliant in terms of
++quoting. Whether your script will work afterwards is a different question:
++If your script was using those features on purpose, it obviously won't anymore!
++
++Every script is possible to write without using word splitting or indirect
++pathname expansion, but it may involve doing things differently.
++See the accompanying file how_to_do_things_safely_in_bash.md or online:
++https://github.com/anordal/shellharden/blob/master/how_to_do_things_safely_in_bash.md
++
++HELPEOF
++}
++
++show_version() {
++    echo "$VERSION"
++}
++
++transform_line() {
++    local line="$1"
++    local result=""
++    local i=0
++    local len=${#line}
++    
++    while [ $i -lt $len ]; do
++        local char="${line:$i:1}"
++        
++        if [ "$char" = "\\" ]; then
++            result+="$char"
++            i=$((i + 1))
++            if [ $i -lt $len ]; then
++                result+="${line:$i:1}"
++            fi
++            i=$((i + 1))
++            continue
++        fi
++        
++        if [ "$char" = '"' ]; then
++            result+="$char"
++            i=$((i + 1))
++            continue
++        fi
++        
++        if [ "$char" = "'" ]; then
++            result+="$char"
++            i=$((i + 1))
++            continue
++        fi
++        
++        if [ "$char" = '$' ]; then
++            if [ $((i + 1)) -lt $len ]; then
++                local next="${line:$((i + 1)):1}"
++                if [[ "$next" =~ [a-zA-Z_@] ]]; then
++                    local varname=""
++                    local j=$((i + 1))
++                    while [ $j -lt $len ]; do
++                        local c="${line:$j:1}"
++                        if [[ "$c" =~ [a-zA-Z0-9_] ]]; then
++                            varname+="$c"
++                            j=$((j + 1))
++                        else
++                            break
++                        fi
++                    done
++                    
++                    if [ -n "$varname" ]; then
++                        case "$varname" in
++                            *)
++                                result+="$char$varname"
++                                i=$j
++                                continue
++                                ;;
++                        esac
++                        
++                        if [ "${line:$j:1}" = "=" ]; then
++                            result+="$char$varname"
++                            i=$j
++                            continue
++                        fi
++                        
++                        if [[ "$line" =~ ^case\ \$ ]]; then
++                            result+="$char$varname"
++                            i=$j
++                            continue
++                        fi
++                        
++                        result+="\"$char$varname\""
++                        i=$j
++                        continue
++                    fi
++                fi
++            fi
++            result+="$char"
++            i=$((i + 1))
++            continue
++        fi
++        
++        if [ "$char" = '`' ]; then
++            local backtick_count=1
++            local j=$((i + 1))
++            while [ $j -lt $len ] && [ $backtick_count -gt 0 ]; do
++                local c="${line:$j:1}"
++                if [ "$c" = '`' ]; then
++                    backtick_count=$((backtick_count - 1))
++                elif [ "$c" = "\\" ]; then
++                    j=$((j + 1))
++                fi
++                if [ $backtick_count -gt 0 ]; then
++                    j=$((j + 1))
++                fi
++            done
++            
++            if [ $backtick_count -eq 0 ]; then
++                if [[ "$line" =~ ^\`[^`]*\`$ ]]; then
++                    result+="$char"
++                else
++                    result+="\"$char"
++                fi
++                i=$j
++                continue
++            fi
++        fi
++        
++        if [ "$char" = '$' ] && [ $((i + 1)) -lt $len ] && [ "${line:$((i + 1)):1}" = '(' ]; then
++            local paren_count=1
++            local j=$((i + 2))
++            while [ $j -lt $len ] && [ $paren_count -gt 0 ]; do
++                local c="${line:$j:1}"
++                if [ "$c" = '(' ]; then
++                    paren_count=$((paren_count + 1))
++                elif [ "$c" = ')' ]; then
++                    paren_count=$((paren_count - 1))
++                elif [ "$c" = "\\" ]; then
++                    j=$((j + 1))
++                fi
++                if [ $paren_count -gt 0 ]; then
++                    j=$((j + 1))
++                fi
++            done
++            
++            if [ $paren_count -eq 0 ]; then
++                if [[ "$line" =~ ^\$\([^)]*\)$ ]]; then
++                    result+="$char"
++                else
++                    result+="\"$char"
++                fi
++                i=$j
++                continue
++            fi
++        fi
++        
++        result+="$char"
++        i=$((i + 1))
++    done
++    
++    printf '%s' "$result"
++}
++
++process_file() {
++    local file="$1"
++    local mode="$2"
++    local output_file="$3"
++    
++    if [ ! -f "$file" ]; then
++        echo "Error: File not found: $file" >&2
++        return 1
++    fi
++    
++    local has_changes=0
++    local transformed=""
++    
++    while IFS= read -r line || [ -n "$line" ]; do
++        local transformed_line
++        transformed_line=$(transform_line "$line")
++        
++        if [ "$mode" = "transform" ] || [ "$mode" = "suggest" ]; then
++            if [ "$line" != "$transformed_line" ]; then
++                has_changes=1
++            fi
++        fi
++        
++        if [ "$mode" = "transform" ] || [ "$mode" = "replace" ]; then
++            transformed+="$transformed_line"$'\n'
++        else
++            local highlighted=""
++            local j=0
++            local l=${#line}
++            
++            while [ $j -lt $l ]; do
++                local char="${line:$j:1}"
++                
++                if [ "$char" = '$' ]; then
++                    if [ $((j + 1)) -lt $l ]; then
++                        local next="${line:$((j + 1)):1}"
++                        if [[ "$next" =~ [a-zA-Z_@] ]]; then
++                            local varname=""
++                            local k=$((j + 1))
++                            while [ $k -lt $l ]; do
++                                local c="${line:$k:1}"
++                                if [[ "$c" =~ [a-zA-Z0-9_] ]]; then
++                                    varname+="$c"
++                                    k=$((k + 1))
++                                else
++                                    break
++                                fi
++                            done
++                            
++                            if [ -n "$varname" ]; then
++                                case "$varname" in
++                                    *)
++                                        highlighted+="$char$varname"
++                                        ;;
++                                    *)
++                                        highlighted+="$RED$char$varname$RESET"
++                                        ;;
++                                esac
++                                j=$k
++                                continue
++                            fi
++                        fi
++                    fi
++                fi
++                
++                if [ "$char" = '`' ]; then
++                    local backtick_count=1
++                    local k=$((j + 1))
++                    while [ $k -lt $l ] && [ $backtick_count -gt 0 ]; do
++                        local c="${line:$k:1}"
++                        if [ "$c" = '`' ]; then
++                            backtick_count=$((backtick_count - 1))
++                        elif [ "$c" = "\\" ]; then
++                            k=$((k + 1))
++                        fi
++                        if [ $backtick_count -gt 0 ]; then
++                            k=$((k + 1))
++                        fi
++                    done
++                    
++                    if [ $backtick_count -eq 0 ]; then
++                        highlighted+="$RED`$RESET"
++                        j=$k
++                        continue
++                    fi
++                fi
++                
++                if [ "$char" = '$' ] && [ $((j + 1)) -lt $l ] && [ "${line:$((j + 1)):1}" = '(' ]; then
++                    local paren_count=1
++                    local k=$((j + 2))
++                    while [ $k -lt $l ] && [ $paren_count -gt 0 ]; do
++                        local c="${line:$k:1}"
++                        if [ "$c" = '(' ]; then
++                            paren_count=$((paren_count + 1))
++                        elif [ "$c" = ')' ]; then
++                            paren_count=$((paren_count - 1))
++                        elif [ "$c" = "\\" ]; then
++                            k=$((k + 1))
++                        fi
++                        if [ $paren_count -gt 0 ]; then
++                            k=$((k + 1))
++                        fi
++                    done
++                    
++                    if [ $paren_count -eq 0 ]; then
++                        highlighted+="$RED$(...)$RESET"
++                        j=$k
++                        continue
++                    fi
++                fi
++                
++                highlighted+="$char"
++                j=$((j + 1))
++            done
++            
++            transformed+="$highlighted"$'\n'
++        fi
++    done < "$file"
++    
++    if [ "$mode" = "transform" ] || [ "$mode" = "replace" ]; then
++        printf '%s' "$transformed"
++        if [ -n "$output_file" ]; then
++            printf '%s' "$transformed" > "$output_file"
++        fi
++        return $has_changes
++    else
++        printf '%s' "$transformed"
++        return 0
++    fi
++}
++
++main() {
++    local mode="syntax-suggest"
++    local output_file=""
++    local files=()
++    local stop_parsing=0
++    
++    while [ $# -gt 0 ]; do
++        case "$1" in
++            --help|-h)
++                show_help
++                exit 0
++                ;;
++            --version)
++                show_version
++                exit 0
++                ;;
++            --suggest)
++                mode="suggest"
++                shift
++                ;;
++            --syntax)
++                mode="syntax"
++                shift
++                ;;
++            --syntax-suggest)
++                mode="syntax-suggest"
++                shift
++                ;;
++            --transform)
++                mode="transform"
++                shift
++                ;;
++            --check)
++                mode="check"
++                shift
++                ;;
++            --replace)
++                mode="replace"
++                shift
++                ;;
++            --)
++                stop_parsing=1
++                shift
++                ;;
++            -*)
++                echo "$1: No such option." >&2
++                exit 3
++                ;;
++            *)
++                files+=("$1")
++                shift
++                ;;
++        esac
++    done
++    
++    if [ ${#files[@]} -eq 0 ]; then
++        local has_changes=0
++        local transformed=""
++        
++        while IFS= read -r line || [ -n "$line" ]; do
++            local transformed_line
++            transformed_line=$(transform_line "$line")
++            
++            if [ "$mode" = "transform" ] || [ "$mode" = "suggest" ]; then
++                if [ "$line" != "$transformed_line" ]; then
++                    has_changes=1
++                fi
++            fi
++            
++            if [ "$mode" = "transform" ] || [ "$mode" = "replace" ]; then
++                transformed+="$transformed_line"$'\n'
++            else
++                local highlighted=""
++                local j=0
++                local l=${#line}
++                
++                while [ $j -lt $l ]; do
++                    local char="${line:$j:1}"
++                    
++                    if [ "$char" = '$' ]; then
++                        if [ $((j + 1)) -lt $l ]; then
++                            local next="${line:$((j + 1)):1}"
++                            if [[ "$next" =~ [a-zA-Z_@] ]]; then
++                                local varname=""
++                                local k=$((j + 1))
++                                while [ $k -lt $l ]; do
++                                    local c="${line:$k:1}"
++                                    if [[ "$c" =~ [a-zA-Z0-9_] ]]; then
++                                        varname+="$c"
++                                        k=$((k + 1))
++                                    else
++                                        break
++                                    fi
++                                done
++                                
++                                if [ -n "$varname" ]; then
++                                    case "$varname" in
++                                        *)
++                                            highlighted+="$char$varname"
++                                            ;;
++                                        *)
++                                            highlighted+="$RED$char$varname$RESET"
++                                            ;;
++                                    esac
++                                    j=$k
++                                    continue
++                                fi
++                            fi
++                        fi
++                    fi
++                    
++                    if [ "$char" = '`' ]; then
++                        local backtick_count=1
++                        local k=$((j + 1))
++                        while [ $k -lt $l ] && [ $backtick_count -gt 0 ]; do
++                            local c="${line:$k:1}"
++                            if [ "$c" = '`' ]; then
++                                backtick_count=$((backtick_count - 1))
++                            elif [ "$c" = "\\" ]; then
++                                k=$((k + 1))
++                            fi
++                            if [ $backtick_count -gt 0 ]; then
++                                k=$((k + 1))
++                            fi
++                        done
++                        
++                        if [ $backtick_count -eq 0 ]; then
++                            highlighted+="$RED`$RESET"
++                            j=$k
++                            continue
++                        fi
++                    fi
++                    
++                    if [ "$char" = '$' ] && [ $((j + 1)) -lt $l ] && [ "${line:$((j + 1)):1}" = '(' ]; then
++                        local paren_count=1
++                        local k=$((j + 2))
++                        while [ $k -lt $l ] && [ $paren_count -gt 0 ]; do
++                            local c="${line:$k:1}"
++                            if [ "$c" = '(' ]; then
++                                paren_count=$((paren_count + 1))
++                            elif [ "$c" = ')' ]; then
++                                paren_count=$((paren_count - 1))
++                            elif [ "$c" = "\\" ]; then
++                                k=$((k + 1))
++                            fi
++                            if [ $paren_count -gt 0 ]; then
++                                k=$((k + 1))
++                            fi
++                        done
++                        
++                        if [ $paren_count -eq 0 ]; then
++                            highlighted+="$RED$(...)$RESET"
++                            j=$k
++                            continue
++                        fi
++                    fi
++                    
++                    highlighted+="$char"
++                    j=$((j + 1))
++                done
++                
++                transformed+="$highlighted"$'\n'
++            fi
++        done
++        
++        if [ "$mode" = "transform" ] || [ "$mode" = "replace" ]; then
++            printf '%s' "$transformed"
++            if [ "$mode" = "check" ]; then
++                exit $has_changes
++            fi
++        else
++            printf '%s' "$transformed"
++            if [ "$mode" = "check" ]; then
++                exit $has_changes
++            fi
++        fi
++    else
++        for file in "${files[@]}"; do
++            if [ -f "$file" ]; then
++                process_file "$file" "$mode" "$output_file"
++                if [ "$mode" = "check" ]; then
++                    exit $?
++                fi
++            else
++                echo "Error: File not found: $file" >&2
++                exit 1
++            fi
++        done
++    fi
++    
++    exit 0
++}
++
++main "$@"
++SCRIPTEND
++
++chmod +x ./shellharden
++mv ./shellharden ./executable
