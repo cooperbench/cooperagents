@@ -901,6 +901,36 @@ in-context agent work. Measuring: coopgitc2 on the 6 tasks where team
 trails solo (cmatrix, tuijournal, walk, fx, i3style, zoxide), full i6+i7
 stack. teamfull analogue (merge-window reservation) deferred.
 
+TEAM-SIZE SCALABILITY (2026-08-17, coopgitc2 + full i7 stack, k=1/cell):
+| task       | t2   | t3    | t4   |
+| cmatrix    | 73.2 | 79.2  | 70.1 |
+| tuijournal | 48.7 | 48.4  | 33.6 |
+| walk       | 46.6 | 42.4  | 50.1 |
+| i3style    | 49.5 | 21.3* | 36.7 |
+| fx         | 46.4 | 21.2* | 20.2 |
+| zoxide     | 13.7 | 19.4* | 11.6 |
+| MEAN       | 46.4 | 38.7  | 37.1 |
+(* = ran under partial endpoint saturation; other cells clean.)
+VERDICT: flat-to-negative scaling. 2 agents is the optimum; the 3rd/4th
+agent adds merge surface and coordination cost without new capability.
+Clean-cell reading agrees: t3 vs t2 is a wash (+6 cmatrix, -4 walk, flat
+tuijournal), t4 loses clearly (3 losses, 1 win, 2 ~flat) despite a healthy
+endpoint. Explanation consistent with the program's model: selection over
+N trees pays only if trees are independent draws, but the 45s git-share
+sync makes team trees CONVERGE (correlated candidates), so extra agents
+add little diversity while adding N-1 gate-time merges; token cost scales
+linearly, so t3/t4 are dominated on both axes.
+Execution incidents (all fixed in code): (1) initial 12-at-once dispatch
+saturated the single Modal container (max_inputs=32 never triggered
+scale-out); agents entered connection-retry loops the wall-clock cap
+could not bound (cap checked only at execute()); 9 runs killed at 8h.
+Fixes: wall_deadline now checked at query() entry (vendored agent),
+max_inputs 32->16 (scale-out verified live: 3 containers, 20-burst p50
+2.8s), staggered dispatch driver (max 3 concurrent). (2) collect.sh
+ssh/rsync consumed callers' stdin, truncating a driver's job list —
+stdin-proofed. (3) Two wave-1 cells starved in the scale-out transient
+(agents ~70s/step, capped at ~50 steps) — rerun clean.
+
 ITERATION 7 RESULTS — KEPT; TEAM OVERTAKES SOLO (2026-08-16).
 First pass exposed a design incompleteness: gate diagnostics showed ZERO
 rejections and zero conflict rounds (agents' merges pass cleanly — the
@@ -1150,3 +1180,20 @@ dominate Q3 and likely leave {solo, team-seq or Q4, Q2-parallel} as the front.
   substrate becomes interference → cancels parallelism. ⇒ S1 (region-partitioning / disjoint-file
   assignment) is now the top lever; coordination-enrichment seams are aimed the wrong way.
   New artifact: `scripts/select_coupled.py` (reproducible coupling-ranked set selector).
+
+TOOL-CALL FORMAT ERRORS ROOT-CAUSED (2026-08-17): 2,370 "No tool calls
+found" retry cycles across 94/113 runs were a SERVING-STACK bug, never a
+model weakness. Raw-response dump on replayed contexts showed the model's
+tool call intact but trapped in reasoning_content — the bf16 serve script
+ran --reasoning-parser qwen3 alongside the qwen3_coder tool parser, the
+exact combination the qualified config (CooperTrain
+configs/qwen3-5-9b.yaml) documents as corrupting tool parsing on vLLM
+0.19. Fix: reasoning parser removed, redeployed (old warm container had
+to be force-stopped — a redeploy does NOT replace live containers).
+Validation (scripts/test_tool_choice_required.py, replaying 8 real
+offending contexts): before fix 1/8 responses had tool calls; after fix
+8/8. tool_choice="required" was ALSO tested and scored 7/8 — no better
+than the fixed baseline and one regression — NOT adopted.
+Implication: every bf16-era run paid a step/token tax on this bug
+(heaviest: scalability batch, 893 incidents), one more reason the
+pending clean re-measurement supersedes those numbers.

@@ -5,10 +5,10 @@
 SSH="ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -i $HOME/.ssh/fleet_key"
 cd /home/ubuntu/CooperAgents
 for ip in $(cat scripts/fleet/nodes.txt); do
-  for marker in $($SSH ubuntu@$ip "ls CooperAgents/runs/*.DONE 2>/dev/null" 2>/dev/null); do
+  for marker in $($SSH ubuntu@$ip "ls CooperAgents/runs/*.DONE 2>/dev/null" </dev/null 2>/dev/null); do
     name=$(basename "$marker" .DONE)
     if [ ! -f "runs/$name.DONE" ]; then
-      rsync -az -e "$SSH" "ubuntu@$ip:CooperAgents/runs/$name" "ubuntu@$ip:CooperAgents/runs/$name.launch.log" "ubuntu@$ip:CooperAgents/runs/$name.DONE" runs/ 2>/dev/null
+      rsync -az -e "$SSH" "ubuntu@$ip:CooperAgents/runs/$name" "ubuntu@$ip:CooperAgents/runs/$name.launch.log" "ubuntu@$ip:CooperAgents/runs/$name.DONE" runs/ </dev/null 2>/dev/null
       echo "collected $name from $ip: $(cat runs/$name.DONE)"
     fi
     f=$(ls "runs/$name"/*/*.eval.json 2>/dev/null | head -1)

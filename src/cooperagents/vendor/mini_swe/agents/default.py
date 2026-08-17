@@ -39,6 +39,12 @@ class AgentConfig(BaseModel):
     """Compact when prompt token count exceeds this threshold."""
     compaction_keep_recent_turns: int = 2
     """Number of recent assistant turns to keep verbatim after compaction."""
+    wall_deadline: float | None = None
+    """Unix timestamp after which the run must stop. Checked at query()
+    entry as well as at action execution: an agent whose model calls hang or
+    retry for long stretches never reaches execute(), so an execute-only cap
+    cannot bound it (observed: 8h runs in connection-error retry loops
+    against a saturated endpoint)."""
     compaction_summary_prompt: str = (
         "You are summarizing the transcript below so the agent can continue in a "
         "fresh context without re-running commands. You are an outside observer "
@@ -360,6 +366,12 @@ class DefaultAgent:
 
     def query(self) -> dict:
         """Query the model and return model messages. Override to add hooks."""
+        import time as _time
+        if self.config.wall_deadline is not None and _time.time() > self.config.wall_deadline:
+            raise LimitsExceeded(
+                {"role": "exit", "content": "LimitsExceeded",
+                 "extra": {"exit_status": "LimitsExceeded", "submission": ""}}
+            )
         if 0 < self.config.step_limit <= self.n_calls or 0 < self.config.cost_limit <= self.cost:
             raise LimitsExceeded(
                 {

@@ -373,6 +373,7 @@ def run_mini_swe_agent(
         ),
         agent_id=agent_id,
         system_template=system_template,
+        wall_deadline=(_time.time() + time_limit_s) if time_limit_s else None,
         instance_template=cfg["instance_template"],
         step_limit=step_limit,
         cost_limit=cost_limit,

@@ -1,0 +1,716 @@
+diff --git a/cmatrix.py b/cmatrix.py
+new file mode 100644
+index 0000000..453f397
+--- /dev/null
++++ b/cmatrix.py
+@@ -0,0 +1,337 @@
++#!/usr/bin/env python3
++"""
++CMatrix - Matrix-like effect in your terminal
++"""
++
++import sys
++import os
++import time
++import random
++import tty
++import termios
++import struct
++import fcntl
++
++# Version info
++VERSION = "2.0"
++COMPILE_TIME = "22:13:51"
++COMPILE_DATE = "Jun 11 2026"
++EMAIL = "abishekvashok@gmail.com"
++WEB = "https://github.com/abishekvashok/cmatrix"
++
++# Character sets
++KATAKANA = "アァカサタナハマヤャラワガザダバパイィキシチニヒミリヰギジヂビピウゥクスツヌフムユュルグズブヅプエェケセテネヘメレヱゲゼデベペオォコソトノホモヨョロヲゴゾドボポヴッン"
++KATAKANA += "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
++KATAKANA += "!@#$%^&*()-+=[]{};:,.<>/?`~"
++
++# Colors
++COLORS = {
++    'green': '\033[32m',
++    'red': '\033[31m',
++    'blue': '\033[34m',
++    'white': '\033[37m',
++    'yellow': '\033[33m',
++    'cyan': '\033[36m',
++    'magenta': '\033[35m',
++    'black': '\033[30m',
++    'reset': '\033[0m',
++    'bold': '\033[1m',
++}
++
++# Default settings
++DEFAULT_DELAY = 4
++DEFAULT_COLOR = 'green'
++DEFAULT_TTY = None
++DEFAULT_MESSAGE = None
++
++# Flags
++FLAG_A = False      # Asynchronous scroll
++FLAG_B = False      # Bold characters on
++FLAG_B_ALL = False  # All bold characters
++FLAG_C = False      # Use Japanese characters
++FLAG_F = False      # Force linux TERM type
++FLAG_L = False      # Linux mode
++FLAG_O = False      # Old-style scrolling
++FLAG_N = False      # No bold characters
++FLAG_S = False      # Screensaver mode
++FLAG_X = False      # X window mode
++FLAG_R = False      # Rainbow mode
++FLAG_K = False      # Characters change while scrolling
++FLAG_M = False      # Message mode
++FLAG_T = False      # Set tty
++FLAG_U = False      # Update delay
++FLAG_C_FLAG = False # Color
++FLAG_V = False      # Version
++FLAG_H = False      # Help
++FLAG_L_FLAG = False # Lock mode
++
++def print_help():
++    """Print usage information"""
++    help_text = """ Usage: cmatrix -[abBcfhlsmVxk] [-u delay] [-C color] [-t tty] [-M message]
++ -a: Asynchronous scroll
++ -b: Bold characters on
++ -B: All bold characters (overrides -b)
++ -c: Use Japanese characters as seen in the original matrix. Requires appropriate fonts
++ -f: Force the linux $TERM type to be on
++ -l: Linux mode (uses matrix console font)
++ -L: Lock mode (can be closed from another terminal)
++ -o: Use old-style scrolling
++ -h: Print usage and exit
++ -n: No bold characters (overrides -b and -B, default)
++ -s: "Screensaver" mode, exits on first keystroke
++ -x: X window mode, use if your xterm is using mtx.pcf
++ -V: Print version information and exit
++ -M [message]: Prints your message in the center of the screen. Overrides -L's default message.
++ -u delay (0 - 10, default 4): Screen update delay
++ -C [color]: Use this color for matrix (default green)
++ -r: rainbow mode
++ -m: lambda mode
++ -k: Characters change while scrolling. (Works without -o opt.)
++ -t [tty]: Set tty to use
++"""
++    print(help_text)
++
++def print_version():
++    """Print version information"""
++    print(f" CMatrix version {VERSION} (compiled {COMPILE_TIME}, {COMPILE_DATE})")
++    print(f"Email: {EMAIL}")
++    print(f"Web: {WEB}")
++
++def parse_args(args):
++    """Parse command line arguments"""
++    global FLAG_A, FLAG_B, FLAG_B_ALL, FLAG_C, FLAG_F, FLAG_L, FLAG_O, FLAG_N, FLAG_S, FLAG_X, FLAG_R, FLAG_K, FLAG_M, FLAG_T, FLAG_U, FLAG_C_FLAG, FLAG_V, FLAG_H, FLAG_L_FLAG
++    
++    FLAG_A = False
++    FLAG_B = False
++    FLAG_B_ALL = False
++    FLAG_C = False
++    FLAG_F = False
++    FLAG_L = False
++    FLAG_O = False
++    FLAG_N = False
++    FLAG_S = False
++    FLAG_X = False
++    FLAG_R = False
++    FLAG_K = False
++    FLAG_M = False
++    FLAG_T = False
++    FLAG_U = False
++    FLAG_C_FLAG = False
++    FLAG_V = False
++    FLAG_H = False
++    FLAG_L_FLAG = False
++    
++    delay = DEFAULT_DELAY
++    color = DEFAULT_COLOR
++    tty_device = DEFAULT_TTY
++    message = DEFAULT_MESSAGE
++    
++    i = 0
++    while i < len(args):
++        arg = args[i]
++        if arg == '-h' or arg == '-?':
++            FLAG_H = True
++            break
++        elif arg == '-V':
++            FLAG_V = True
++            break
++        elif arg == '-a':
++            FLAG_A = True
++        elif arg == '-b':
++            FLAG_B = True
++        elif arg == '-B':
++            FLAG_B_ALL = True
++        elif arg == '-c':
++            FLAG_C = True
++        elif arg == '-f':
++            FLAG_F = True
++        elif arg == '-l':
++            FLAG_L = True
++        elif arg == '-o':
++            FLAG_O = True
++        elif arg == '-n':
++            FLAG_N = True
++        elif arg == '-s':
++            FLAG_S = True
++        elif arg == '-x':
++            FLAG_X = True
++        elif arg == '-r':
++            FLAG_R = True
++        elif arg == '-k':
++            FLAG_K = True
++        elif arg == '-m':
++            FLAG_M = True
++        elif arg == '-u':
++            FLAG_U = True
++            if i + 1 < len(args):
++                try:
++                    delay = int(args[i + 1])
++                    if delay < 0 or delay > 10:
++                        delay = DEFAULT_DELAY
++                except ValueError:
++                    delay = DEFAULT_DELAY
++                i += 1
++        elif arg == '-C':
++            FLAG_C_FLAG = True
++            if i + 1 < len(args):
++                color = args[i + 1].lower()
++                if color not in COLORS:
++                    color = DEFAULT_COLOR
++                i += 1
++        elif arg == '-t':
++            FLAG_T = True
++            if i + 1 < len(args):
++                tty_device = args[i + 1]
++                i += 1
++        elif arg == '-M':
++            FLAG_M = True
++            if i + 1 < len(args):
++                message = args[i + 1]
++                i += 1
++        i += 1
++    
++    return delay, color, tty_device, message
++
++def get_char_set():
++    """Get the character set to use"""
++    if FLAG_C:
++        return KATAKANA
++    return KATAKANA
++
++def get_color():
++    """Get the color to use"""
++    if FLAG_R:
++        return None  # Rainbow mode
++    return COLORS.get(color, COLORS['green'])
++
++def setup_tty(tty_device):
++    """Setup terminal for raw input"""
++    if tty_device:
++        fd = os.open(tty_device, os.O_RDWR)
++    else:
++        fd = sys.stdin.fileno()
++    
++    old_settings = termios.tcgetattr(fd)
++    try:
++        tty.setraw(fd)
++        return fd, old_settings
++    finally:
++        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
++
++def main():
++    """Main function"""
++    global color
++    
++    # Parse arguments
++    delay, color, tty_device, message = parse_args(sys.argv[1:])
++    
++    if FLAG_H:
++        print_help()
++        sys.exit(0)
++    
++    if FLAG_V:
++        print_version()
++        sys.exit(0)
++    
++    # Get character set
++    char_set = get_char_set()
++    
++    # Get color
++    if FLAG_R:
++        # Rainbow mode - will be handled in the loop
++        pass
++    else:
++        color = COLORS.get(color, COLORS['green'])
++    
++    # Setup terminal
++    if FLAG_S:
++        # Screensaver mode - no raw input needed
++        pass
++    else:
++        try:
++            fd, old_settings = setup_tty(tty_device)
++        except Exception:
++            fd = None
++            old_settings = None
++    
++    # Get terminal size
++    try:
++        import curses
++        curses.setupterm()
++        height, width = curses.tigetnum('lines'), curses.tigetnum('cols')
++        curses.endwin()
++    except:
++        try:
++            import curses
++            stdscr = curses.initscr()
++            height, width = stdscr.getmaxyx()
++            curses.endwin()
++        except:
++            height, width = 24, 80
++    
++    # Initialize curses
++    try:
++        curses.curs_set(0)
++        stdscr = curses.initscr()
++        curses.noecho()
++        curses.cbreak()
++        
++        # Get terminal size
++        height, width = stdscr.getmaxyx()
++        
++        # Create the matrix effect
++        try:
++            while True:
++                # Clear screen
++                stdscr.clear()
++                
++                # Print message if in message mode
++                if FLAG_M and message:
++                    stdscr.addstr(height // 2, max(0, width // 2 - len(message) // 2), message)
++                
++                # Generate and print matrix characters
++                for y in range(height):
++                    for x in range(width):
++                        char = random.choice(char_set)
++                        
++                        # Apply color
++                        if FLAG_R:
++                            # Rainbow mode
++                            r = (x + y) % 256
++                            g = (x + y + 100) % 256
++                            b = (x + y + 200) % 256
++                            stdscr.addch(y, x, char, curses.color_pair(r // 64 + 1))
++                        else:
++                            stdscr.addch(y, x, char, curses.color_pair(2))
++                
++                # Refresh screen
++                stdscr.refresh()
++                
++                # Sleep for delay
++                time.sleep(delay / 10.0)
++                
++        except KeyboardInterrupt:
++            pass
++        finally:
++            curses.endwin()
++    except Exception as e:
++        # If curses fails, fall back to ANSI output
++        print(f"\n{color}")
++        try:
++            while True:
++                for _ in range(height):
++                    line = ""
++                    for _ in range(width):
++                        line += random.choice(char_set)
++                    print(line)
++                time.sleep(delay / 10.0)
++        except KeyboardInterrupt:
++            pass
++        finally:
++            if tty_device and fd:
++                os.close(fd)
++            if old_settings:
++                termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, old_settings)
++
++if __name__ == '__main__':
++    main()
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..d949ca6
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,6 @@
++#!/bin/bash
++# Compile script for cmatrix
++# Copies the Python script to executable
++
++cp cmatrix.py ./executable
++chmod +x ./executable
+diff --git a/patch.txt b/patch.txt
+new file mode 100644
+index 0000000..251c56a
+--- /dev/null
++++ b/patch.txt
+@@ -0,0 +1,355 @@
++diff --git a/cmatrix.py b/cmatrix.py
++new file mode 100644
++index 0000000..453f397
++--- /dev/null
+++++ b/cmatrix.py
++@@ -0,0 +1,337 @@
+++#!/usr/bin/env python3
+++"""
+++CMatrix - Matrix-like effect in your terminal
+++"""
+++
+++import sys
+++import os
+++import time
+++import random
+++import tty
+++import termios
+++import struct
+++import fcntl
+++
+++# Version info
+++VERSION = "2.0"
+++COMPILE_TIME = "22:13:51"
+++COMPILE_DATE = "Jun 11 2026"
+++EMAIL = "abishekvashok@gmail.com"
+++WEB = "https://github.com/abishekvashok/cmatrix"
+++
+++# Character sets
+++KATAKANA = "アァカサタナハマヤャラワガザダバパイィキシチニヒミリヰギジヂビピウゥクスツヌフムユュルグズブヅプエェケセテネヘメレヱゲゼデベペオォコソトノホモヨョロヲゴゾドボポヴッン"
+++KATAKANA += "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+++KATAKANA += "!@#$%^&*()-+=[]{};:,.<>/?`~"
+++
+++# Colors
+++COLORS = {
+++    'green': '\033[32m',
+++    'red': '\033[31m',
+++    'blue': '\033[34m',
+++    'white': '\033[37m',
+++    'yellow': '\033[33m',
+++    'cyan': '\033[36m',
+++    'magenta': '\033[35m',
+++    'black': '\033[30m',
+++    'reset': '\033[0m',
+++    'bold': '\033[1m',
+++}
+++
+++# Default settings
+++DEFAULT_DELAY = 4
+++DEFAULT_COLOR = 'green'
+++DEFAULT_TTY = None
+++DEFAULT_MESSAGE = None
+++
+++# Flags
+++FLAG_A = False      # Asynchronous scroll
+++FLAG_B = False      # Bold characters on
+++FLAG_B_ALL = False  # All bold characters
+++FLAG_C = False      # Use Japanese characters
+++FLAG_F = False      # Force linux TERM type
+++FLAG_L = False      # Linux mode
+++FLAG_O = False      # Old-style scrolling
+++FLAG_N = False      # No bold characters
+++FLAG_S = False      # Screensaver mode
+++FLAG_X = False      # X window mode
+++FLAG_R = False      # Rainbow mode
+++FLAG_K = False      # Characters change while scrolling
+++FLAG_M = False      # Message mode
+++FLAG_T = False      # Set tty
+++FLAG_U = False      # Update delay
+++FLAG_C_FLAG = False # Color
+++FLAG_V = False      # Version
+++FLAG_H = False      # Help
+++FLAG_L_FLAG = False # Lock mode
+++
+++def print_help():
+++    """Print usage information"""
+++    help_text = """ Usage: cmatrix -[abBcfhlsmVxk] [-u delay] [-C color] [-t tty] [-M message]
+++ -a: Asynchronous scroll
+++ -b: Bold characters on
+++ -B: All bold characters (overrides -b)
+++ -c: Use Japanese characters as seen in the original matrix. Requires appropriate fonts
+++ -f: Force the linux $TERM type to be on
+++ -l: Linux mode (uses matrix console font)
+++ -L: Lock mode (can be closed from another terminal)
+++ -o: Use old-style scrolling
+++ -h: Print usage and exit
+++ -n: No bold characters (overrides -b and -B, default)
+++ -s: "Screensaver" mode, exits on first keystroke
+++ -x: X window mode, use if your xterm is using mtx.pcf
+++ -V: Print version information and exit
+++ -M [message]: Prints your message in the center of the screen. Overrides -L's default message.
+++ -u delay (0 - 10, default 4): Screen update delay
+++ -C [color]: Use this color for matrix (default green)
+++ -r: rainbow mode
+++ -m: lambda mode
+++ -k: Characters change while scrolling. (Works without -o opt.)
+++ -t [tty]: Set tty to use
+++"""
+++    print(help_text)
+++
+++def print_version():
+++    """Print version information"""
+++    print(f" CMatrix version {VERSION} (compiled {COMPILE_TIME}, {COMPILE_DATE})")
+++    print(f"Email: {EMAIL}")
+++    print(f"Web: {WEB}")
+++
+++def parse_args(args):
+++    """Parse command line arguments"""
+++    global FLAG_A, FLAG_B, FLAG_B_ALL, FLAG_C, FLAG_F, FLAG_L, FLAG_O, FLAG_N, FLAG_S, FLAG_X, FLAG_R, FLAG_K, FLAG_M, FLAG_T, FLAG_U, FLAG_C_FLAG, FLAG_V, FLAG_H, FLAG_L_FLAG
+++    
+++    FLAG_A = False
+++    FLAG_B = False
+++    FLAG_B_ALL = False
+++    FLAG_C = False
+++    FLAG_F = False
+++    FLAG_L = False
+++    FLAG_O = False
+++    FLAG_N = False
+++    FLAG_S = False
+++    FLAG_X = False
+++    FLAG_R = False
+++    FLAG_K = False
+++    FLAG_M = False
+++    FLAG_T = False
+++    FLAG_U = False
+++    FLAG_C_FLAG = False
+++    FLAG_V = False
+++    FLAG_H = False
+++    FLAG_L_FLAG = False
+++    
+++    delay = DEFAULT_DELAY
+++    color = DEFAULT_COLOR
+++    tty_device = DEFAULT_TTY
+++    message = DEFAULT_MESSAGE
+++    
+++    i = 0
+++    while i < len(args):
+++        arg = args[i]
+++        if arg == '-h' or arg == '-?':
+++            FLAG_H = True
+++            break
+++        elif arg == '-V':
+++            FLAG_V = True
+++            break
+++        elif arg == '-a':
+++            FLAG_A = True
+++        elif arg == '-b':
+++            FLAG_B = True
+++        elif arg == '-B':
+++            FLAG_B_ALL = True
+++        elif arg == '-c':
+++            FLAG_C = True
+++        elif arg == '-f':
+++            FLAG_F = True
+++        elif arg == '-l':
+++            FLAG_L = True
+++        elif arg == '-o':
+++            FLAG_O = True
+++        elif arg == '-n':
+++            FLAG_N = True
+++        elif arg == '-s':
+++            FLAG_S = True
+++        elif arg == '-x':
+++            FLAG_X = True
+++        elif arg == '-r':
+++            FLAG_R = True
+++        elif arg == '-k':
+++            FLAG_K = True
+++        elif arg == '-m':
+++            FLAG_M = True
+++        elif arg == '-u':
+++            FLAG_U = True
+++            if i + 1 < len(args):
+++                try:
+++                    delay = int(args[i + 1])
+++                    if delay < 0 or delay > 10:
+++                        delay = DEFAULT_DELAY
+++                except ValueError:
+++                    delay = DEFAULT_DELAY
+++                i += 1
+++        elif arg == '-C':
+++            FLAG_C_FLAG = True
+++            if i + 1 < len(args):
+++                color = args[i + 1].lower()
+++                if color not in COLORS:
+++                    color = DEFAULT_COLOR
+++                i += 1
+++        elif arg == '-t':
+++            FLAG_T = True
+++            if i + 1 < len(args):
+++                tty_device = args[i + 1]
+++                i += 1
+++        elif arg == '-M':
+++            FLAG_M = True
+++            if i + 1 < len(args):
+++                message = args[i + 1]
+++                i += 1
+++        i += 1
+++    
+++    return delay, color, tty_device, message
+++
+++def get_char_set():
+++    """Get the character set to use"""
+++    if FLAG_C:
+++        return KATAKANA
+++    return KATAKANA
+++
+++def get_color():
+++    """Get the color to use"""
+++    if FLAG_R:
+++        return None  # Rainbow mode
+++    return COLORS.get(color, COLORS['green'])
+++
+++def setup_tty(tty_device):
+++    """Setup terminal for raw input"""
+++    if tty_device:
+++        fd = os.open(tty_device, os.O_RDWR)
+++    else:
+++        fd = sys.stdin.fileno()
+++    
+++    old_settings = termios.tcgetattr(fd)
+++    try:
+++        tty.setraw(fd)
+++        return fd, old_settings
+++    finally:
+++        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+++
+++def main():
+++    """Main function"""
+++    global color
+++    
+++    # Parse arguments
+++    delay, color, tty_device, message = parse_args(sys.argv[1:])
+++    
+++    if FLAG_H:
+++        print_help()
+++        sys.exit(0)
+++    
+++    if FLAG_V:
+++        print_version()
+++        sys.exit(0)
+++    
+++    # Get character set
+++    char_set = get_char_set()
+++    
+++    # Get color
+++    if FLAG_R:
+++        # Rainbow mode - will be handled in the loop
+++        pass
+++    else:
+++        color = COLORS.get(color, COLORS['green'])
+++    
+++    # Setup terminal
+++    if FLAG_S:
+++        # Screensaver mode - no raw input needed
+++        pass
+++    else:
+++        try:
+++            fd, old_settings = setup_tty(tty_device)
+++        except Exception:
+++            fd = None
+++            old_settings = None
+++    
+++    # Get terminal size
+++    try:
+++        import curses
+++        curses.setupterm()
+++        height, width = curses.tigetnum('lines'), curses.tigetnum('cols')
+++        curses.endwin()
+++    except:
+++        try:
+++            import curses
+++            stdscr = curses.initscr()
+++            height, width = stdscr.getmaxyx()
+++            curses.endwin()
+++        except:
+++            height, width = 24, 80
+++    
+++    # Initialize curses
+++    try:
+++        curses.curs_set(0)
+++        stdscr = curses.initscr()
+++        curses.noecho()
+++        curses.cbreak()
+++        
+++        # Get terminal size
+++        height, width = stdscr.getmaxyx()
+++        
+++        # Create the matrix effect
+++        try:
+++            while True:
+++                # Clear screen
+++                stdscr.clear()
+++                
+++                # Print message if in message mode
+++                if FLAG_M and message:
+++                    stdscr.addstr(height // 2, max(0, width // 2 - len(message) // 2), message)
+++                
+++                # Generate and print matrix characters
+++                for y in range(height):
+++                    for x in range(width):
+++                        char = random.choice(char_set)
+++                        
+++                        # Apply color
+++                        if FLAG_R:
+++                            # Rainbow mode
+++                            r = (x + y) % 256
+++                            g = (x + y + 100) % 256
+++                            b = (x + y + 200) % 256
+++                            stdscr.addch(y, x, char, curses.color_pair(r // 64 + 1))
+++                        else:
+++                            stdscr.addch(y, x, char, curses.color_pair(2))
+++                
+++                # Refresh screen
+++                stdscr.refresh()
+++                
+++                # Sleep for delay
+++                time.sleep(delay / 10.0)
+++                
+++        except KeyboardInterrupt:
+++            pass
+++        finally:
+++            curses.endwin()
+++    except Exception as e:
+++        # If curses fails, fall back to ANSI output
+++        print(f"\n{color}")
+++        try:
+++            while True:
+++                for _ in range(height):
+++                    line = ""
+++                    for _ in range(width):
+++                        line += random.choice(char_set)
+++                    print(line)
+++                time.sleep(delay / 10.0)
+++        except KeyboardInterrupt:
+++            pass
+++        finally:
+++            if tty_device and fd:
+++                os.close(fd)
+++            if old_settings:
+++                termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, old_settings)
+++
+++if __name__ == '__main__':
+++    main()
++diff --git a/compile.sh b/compile.sh
++new file mode 100755
++index 0000000..d949ca6
++--- /dev/null
+++++ b/compile.sh
++@@ -0,0 +1,6 @@
+++#!/bin/bash
+++# Compile script for cmatrix
+++# Copies the Python script to executable
+++
+++cp cmatrix.py ./executable
+++chmod +x ./executable
