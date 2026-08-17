@@ -861,7 +861,9 @@ constraint prepended to the task. Clean-cell before/after (solo):
 zipfinder 0->44.2 (gate fired 2x then clean submit at step 599 — direct
 causal evidence), srgn 0->35.4, zoxide 0->15.3, chroma 0->0 (agent never
 attempts to finish; gate cannot fire — iteration-7 candidate: budget-aware
-submit nudge), i3style rerun pending. Coordinator: srgn 0->11.6, others
+submit nudge), i3style 26.7->8.7 (clean i6d rerun after the escalating-
+truncation fix — agent survived 1000 steps; the one honest i6 regression;
+final solo i6 5-task mean 20.7 vs baseline 5.3). Coordinator: srgn 0->11.6, others
 0->0 (team-zoxide persistently 0 where solo flips — merge overhead eats
 the budget solo spent on its std-lib pivot). Solo 5-task mean 5.3 -> ~19.
 Infra incidents fixed en route: emergency-truncation clipped tool-call

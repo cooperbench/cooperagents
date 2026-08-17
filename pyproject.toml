@@ -36,7 +36,7 @@ packages = ["src/cooperagents"]
 [tool.ruff]
 line-length = 140
 src = ["src", "tests"]
-extend-exclude = ["src/cooperagents/vendor"]
+extend-exclude = ["src/cooperagents/vendor", "runs", "logs*"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]

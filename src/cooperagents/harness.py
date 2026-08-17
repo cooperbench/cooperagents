@@ -29,6 +29,7 @@ from __future__ import annotations
 import threading
 import time
 from collections.abc import Callable
+from typing import Any
 
 from cooperagents.agent import Agent
 from cooperagents.bus.base import TeamBus
@@ -659,7 +660,11 @@ class UnifiedHarness:
         """
 
         def pick_llm(agent_id: str, role: str) -> LLMClient:
-            return llm_factory(agent_id, role) if llm_factory is not None else llm  # type: ignore[return-value]
+            if llm_factory is not None:
+                return llm_factory(agent_id, role)
+            if llm is None:
+                raise ValueError("either llm or llm_factory must be provided")
+            return llm
 
         def run_on_shared(
             env: Environment,
@@ -909,7 +914,8 @@ class UnifiedHarness:
                         poller.watch_board(bus)
                     if poller is not None and coordinator is not None:
                         poller.watch_coordinator(coordinator)
-                    r = run_on_shared(env, a.agent_id, a.role, task, a.feature_id, poller=poller, monitor=coordinator, time_limit_s=spec.agent_time_limit)
+                    r = run_on_shared(env, a.agent_id, a.role, task, a.feature_id,
+                                      poller=poller, monitor=coordinator, time_limit_s=spec.agent_time_limit)
 
                     return a.agent_id, r, strip_test_sections(env.git_diff())
                 return None  # unreachable
@@ -1070,7 +1076,9 @@ class UnifiedHarness:
                         step_limit=spec.repair_step_limit,
                         time_limit_s=spec.repair_time_limit,
                     )
-                    env.execute("find . -path ./.git -prune -o \\( -name '*.rej' -o -name '*.orig' \\) -print0 2>/dev/null | xargs -0 -r rm -f")
+                    env.execute(
+                        "find . -path ./.git -prune -o \\( -name '*.rej' -o -name '*.orig' \\) -print0 2>/dev/null | xargs -0 -r rm -f"
+                    )
                 integrated_patch = strip_test_sections(env.git_diff())
             finally:
                 env.cleanup()
@@ -1148,6 +1156,8 @@ class UnifiedHarness:
                 guard_git=spec.guard_git,
                 temperature=spec.temperature,
             )
+        if llm is None:
+            raise ValueError("builtin worker requires an LLM client")
         agent = Agent(
             agent_id=agent_id,
             role=role,
@@ -1551,7 +1561,11 @@ class UnifiedHarness:
         spawning = spec.allow_spawn and cap > n_seed
 
         def pick_llm(agent_id: str, role: str) -> LLMClient:
-            return llm_factory(agent_id, role) if llm_factory is not None else llm  # type: ignore[return-value]
+            if llm_factory is not None:
+                return llm_factory(agent_id, role)
+            if llm is None:
+                raise ValueError("either llm or llm_factory must be provided")
+            return llm
 
         seeds: dict[str, AgentResult] = {}
         helpers: dict[str, AgentResult] = {}

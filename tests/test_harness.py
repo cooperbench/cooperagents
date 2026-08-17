@@ -703,7 +703,8 @@ def test_repair_integrator_runs_only_when_merge_broken():
             "agent1": [Action(tool="write_file", args={"path": "mod.py", "content": "X = 1\n"}), Action(tool="finish")],
             # agent2 writes a broken file that the mechanical merge will keep
             "agent2": [Action(tool="write_file", args={"path": "bad.py", "content": "def f(:\n"}), Action(tool="finish")],
-            "integrator": [Action(tool="write_file", args={"path": "bad.py", "content": "def f():\n    return 1\n"}), Action(tool="finish")],
+            "integrator": [Action(tool="write_file", args={"path": "bad.py", "content": "def f():\n    return 1\n"}),
+                           Action(tool="finish")],
         }
     )
     res = UnifiedHarness(bus=InMemoryBus("rq5")).run(spec, env_factory=lambda _id: LocalEnv.fresh(), llm=llm)
@@ -758,7 +759,8 @@ def test_no_seed_merge_conflict_falls_back_and_repairs():
         {
             "agent1": [Action(tool="write_file", args={"path": "shared.py", "content": "MODE = 'alpha'\n"}), Action(tool="finish")],
             "agent2": [Action(tool="write_file", args={"path": "shared.py", "content": "def f(:\n"}), Action(tool="finish")],
-            "integrator": [Action(tool="write_file", args={"path": "shared.py", "content": "MODE = 'alpha'\ndef f():\n    return MODE\n"}), Action(tool="finish")],
+            "integrator": [Action(tool="write_file", args={"path": "shared.py", "content": "MODE = 'alpha'\ndef f():\n    return MODE\n"}),
+                           Action(tool="finish")],
         }
     )
     res = UnifiedHarness(bus=InMemoryBus("rq51")).run(spec, env_factory=lambda _id: LocalEnv.fresh(), llm=llm)

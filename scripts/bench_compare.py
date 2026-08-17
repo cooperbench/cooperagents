@@ -147,7 +147,7 @@ def _mechanical_selector(img: str):
                 if env is None:
                     return (-1, -1000, -1000, -1)
                 xpass = 0
-                for i, (name, body) in enumerate(sorted(checks.items())):
+                for i, (_name, body) in enumerate(sorted(checks.items())):
                     env.write_file(f".cb_pool/chk_{i}.py", body)
                     r = env.execute(f"timeout 60 python3 .cb_pool/chk_{i}.py >/dev/null 2>&1; echo $?")
                     xpass += 1 if r.stdout.strip().endswith("0") else 0
@@ -331,26 +331,38 @@ def main() -> None:
     ap.add_argument("--decompose", action="store_true", help="G1-3: planner cuts an independence-max subtask DAG, run parallel")
     ap.add_argument("--preserve-invariants", action="store_true", help="C1: agents publish regression checks; later agents keep them green")
     ap.add_argument("--git-share", action="store_true", help="TK-git: live shared git remote between parallel agents (coop+git cell)")
-    ap.add_argument("--team-roles", action="store_true", help="Complete-Team cell: lead/member roles + shared scratchpad volume; lead merges member patches and its tree is the submission")
-    ap.add_argument("--coordinator", action="store_true", help="C2: live monitor — mechanical loop/stall/collision triggers, LLM-composed nudges via poller")
+    ap.add_argument("--team-roles", action="store_true",
+                    help="Complete-Team cell: lead/member roles + shared scratchpad volume;"
+                         " lead merges member patches and its tree is the submission")
+    ap.add_argument("--coordinator", action="store_true",
+                    help="C2: live monitor — mechanical loop/stall/collision triggers, LLM-composed nudges via poller")
     ap.add_argument("--focused-repair", action="store_true", help="R2: harness gathers merge-damage evidence into the repair brief")
     ap.add_argument("--repair-time", type=int, default=0, help="TK9f: wall-clock cap (s) for the repair agent; 0 = uncapped")
     ap.add_argument("--apply-merge", action="store_true", help="TK8: pure apply-chain merge (Q5 base) instead of 3-way-first")
-    ap.add_argument("--claim-mode", action="store_true", help="TK6: shared objective + unclaimed board tasks; agents self-partition via task_claim")
+    ap.add_argument("--claim-mode", action="store_true",
+                    help="TK6: shared objective + unclaimed board tasks; agents self-partition via task_claim")
     ap.add_argument("--allow-spawn", action="store_true", help="TK7: spawn_helper tool (helper cap = max-agents minus seed agents)")
     ap.add_argument("--agents", type=int, default=2, help="claim-mode seed agent count")
     ap.add_argument("--task-board", action="store_true", help="TK4: shared task-board tools with fair billing + status protocol")
     ap.add_argument("--wait-protocol", action="store_true", help="TK5: blocking send_message wait:true, fairly billed")
-    ap.add_argument("--tool-protocol", action="store_true", help="TK3: fairly-advertised send_message (system-prompt billing + first-action protocol); usage stays the model's choice")
+    ap.add_argument("--tool-protocol", action="store_true",
+                    help="TK3: fairly-advertised send_message (system-prompt billing + first-action protocol);"
+                         " usage stays the model's choice")
     ap.add_argument("--behavioral-gate", action="store_true", help="Q10: repair-trigger = syntax + published checks + fail-fast repo tests")
-    ap.add_argument("--contract-first", action="store_true", help="TK1/Q6: planner writes the shared interface contract; injected into all briefs")
+    ap.add_argument("--contract-first", action="store_true",
+                    help="TK1/Q6: planner writes the shared interface contract; injected into all briefs")
     ap.add_argument("--live-awareness", action="store_true", help="TK2/Q9: push '[team] X is editing ...' notes into each agent's context")
     ap.add_argument("--repair-steps", type=int, default=25, help="step cap for the Q5 merge-repair agent")
-    ap.add_argument("--repair-integrator", action="store_true", help="Q5: health-gate the no-seed merge; run one repair agent only when broken")
-    ap.add_argument("--coop-tools", action="store_true", help="Q4: concurrent agents + bus send_message tool (CooperBench team-harness shape); use with --no-seed")
-    ap.add_argument("--diversity-temp", type=float, default=None, help="Q3: sample best-of-N attempts >1 at this temperature (attempt 1 stays pinned)")
-    ap.add_argument("--select", choices=["judge", "mechanical"], default="judge", help="best-of-N selector: LLM judge (T6) or mechanical health+repo-tests (Q2)")
-    ap.add_argument("--do-no-harm", action="store_true", help="Q1: discard an agent's delta if it broke a previously-healthy tree (compile/AST gate)")
+    ap.add_argument("--repair-integrator", action="store_true",
+                    help="Q5: health-gate the no-seed merge; run one repair agent only when broken")
+    ap.add_argument("--coop-tools", action="store_true",
+                    help="Q4: concurrent agents + bus send_message tool (CooperBench team-harness shape); use with --no-seed")
+    ap.add_argument("--diversity-temp", type=float, default=None,
+                    help="Q3: sample best-of-N attempts >1 at this temperature (attempt 1 stays pinned)")
+    ap.add_argument("--select", choices=["judge", "mechanical"], default="judge",
+                    help="best-of-N selector: LLM judge (T6) or mechanical health+repo-tests (Q2)")
+    ap.add_argument("--do-no-harm", action="store_true",
+                    help="Q1: discard an agent's delta if it broke a previously-healthy tree (compile/AST gate)")
     ap.add_argument("--adaptive", action="store_true", help="runtime topology: parallel, fall back to sequential on merge conflict")
     ap.add_argument("--team-only", action="store_true", help="skip the solo arm (reuse an existing solo baseline)")
     ap.add_argument("--log-dir", default="logs")
@@ -455,8 +467,8 @@ def main() -> None:
         solo_feats += sp[1] if sp else 0
         team_feats += tp[1] if tp else 0
         tag = f"{item.repo}/{item.task_id} {sorted(item.features)}"
-        ss = f"PASS" if sp and sp[0] else (f"{sp[1]}/2 " if sp else "none")
-        ts = f"PASS" if tp and tp[0] else (f"{tp[1]}/2 " if tp else "none")
+        ss = "PASS" if sp and sp[0] else (f"{sp[1]}/2 " if sp else "none")
+        ts = "PASS" if tp and tp[0] else (f"{tp[1]}/2 " if tp else "none")
         print(f"  {tag:<45} solo={ss:<4} ({s['duration']:.0f}s)  team={ts:<4} ({t['duration']:.0f}s)")
     n = len(rows)
     print(f"\n  pass-rate:  solo {solo_pass}/{n}   team {team_pass}/{n}")

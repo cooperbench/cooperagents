@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import traceback
+import typing
 from pathlib import Path
 
 from jinja2 import StrictUndefined, Template
@@ -116,6 +117,12 @@ class AgentConfig(BaseModel):
 
 
 class DefaultAgent:
+    # Optional team-mode hooks, assigned by the cooperagents adapter after
+    # construction; absent in solo runs (read via ``getattr`` with a fallback),
+    # so these are annotations only — no class-level value is set.
+    team_poller: "typing.Any"
+    tool_handlers: "dict[str, typing.Callable[[dict], str]]"
+
     def __init__(
         self,
         model: Model,

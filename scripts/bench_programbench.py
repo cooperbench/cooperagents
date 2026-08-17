@@ -1,32 +1,38 @@
-"""ProgramBench single-instance comparison: solo vs coop+git vs complete-Team.
+"""ProgramBench runner: solo vs coordinator-team, adapter-driven.
 
-One indivisible task per instance (reconstruct a program from its binary +
-docs), so this directly tests whether a 2-agent team beats 1 agent on the
-SAME task — no benchmark-provided work split (removes CooperBench's
-separability confound). Agent held constant: vendored mini-swe.
+All ProgramBench-specific behavior (task prompt, cleanroom environment,
+fitness probes, completion gates, repair evidence, submission format) lives
+in ``cooperagents.adapters.programbench.ProgramBenchAdapter``; this script
+is the generic orchestration: build a team, run it, repair, package.
+Retired arms and pre-adapter history: git log before commit 0e73bdf.
 
 Arms
-  solo     1 agent
-  coopgit  2 agents, same task, live git-share substrate, mechanical 3-way
-           merge, NO repair (the ablation report's Coop+git protocol)
-  teamfull 2 agents, team_roles: lead/member prompts + task board +
-           scratchpad volume; the LEAD's merged tree is the submission
+  solo       1 mini-swe agent + the mechanical tail.
+  coopgit    N agents (default 2), same task, shared git remote.
+  coopgitc2  coopgit + the coordinator (loop/stall/collision nudges).
 
-Output layout (per arm/rep): runs/pb-<arm>-<rep>/<instance>/submission.tar.gz
-— directly consumable by `programbench eval`.
+Mechanism flags (each measured; record in docs/SEAM_BACKLOG.md)
+  --repair            gate the integrated tree; on failure run up to 2
+                      repair agents; submit the mechanically best candidate.
+  --completion-gate   reject an agent's finish until the adapter's gate
+                      passes in the agent's own container.
+  --env-brief         prepend the adapter's environment brief to the task.
+  --presub-merge      team gate = merge teammate branches first, gate the
+                      MERGED tree; integration then SELECTS the best member
+                      tree by adapter score() instead of re-merging.
 
-Usage:
-  ENV_FILE=.env.qwen .venv/bin/python scripts/bench_programbench.py \
-      --instance abishekvashok__cmatrix.5c082c6 --arm teamfull --rep a \
-      [--step-limit 100]
+Usage (full current stack):
+  set -a; source .env.qwen; set +a
+  .venv/bin/python scripts/bench_programbench.py \
+      --instance abishekvashok__cmatrix.5c082c6 --arm coopgitc2 --rep r1 \
+      --step-limit 1000 --repair --agent-time-limit 3600 \
+      --completion-gate --env-brief --presub-merge [--team-size 3]
 """
 
 from __future__ import annotations
 
 import argparse
 import os
-import re
-import subprocess
 import sys
 import time
 import uuid
@@ -34,170 +40,39 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
+from cooperagents import verification
+from cooperagents.adapters import get_adapter
 from cooperagents.bus.memory import InMemoryBus
 from cooperagents.env.docker import DockerEnv
 from cooperagents.harness import UnifiedHarness
 from cooperagents.types import Assignment, TeamSpec
 
-WORKSPACE = "/workspace"
-
-TASK = """## Task context
-
-We want to write the source code for a given executable. The executable is
-located at `./executable` in the workspace root. You also have access to the
-existing documentation (README.md, the man page, and anything else bundled in
-the workspace).
-
-## Your task
-
-Implement the source code to generate an executable of exactly identical
-behavior as the original.
-
-Rules:
-- You MUST create a `./compile.sh` script; running `bash compile.sh` with no
-  network access must build your source and produce `./executable` in the
-  workspace root. Grading rebuilds from source with your compile.sh — a
-  submission without a working compile.sh scores zero.
-- Do NOT wrap, shim, or delegate to the provided `./executable`.
-- Do NOT decompile the provided `./executable` or use strace/ltrace on it.
-- You MAY run the executable with any inputs, flags, and arguments to observe
-  its behavior, and read all documentation files.
-- Behavior to match includes: --help and --version output, flag handling and
-  error messages, exit codes, and the program's visible behavior.
-
-Work in the workspace root. Verify your build (`bash compile.sh`) and compare
-your program's behavior against the original before finishing."""
+ADAPTER = get_adapter("programbench")
 
 
-NEGOTIATE_LEAD = """
-
-TEAM DIVISION PROTOCOL — this ONE task is shared by a 2-agent team; you must
-NOT implement everything yourself. Before any coding:
-1. FIRST ACTION: send_message to agent2 with a concrete division proposal
-   (add "wait": true so the reply comes back in the same call). Example
-   division: one agent owns the core program logic and screen rendering; the
-   other owns option parsing, help/version/error output, man-page behaviors,
-   and compile.sh.
-2. Exchange messages until you have EXPLICIT agreement — at least one
-   proposal and one confirmation.
-3. The plan you write to /workspace/shared/PLAN.md and the board tasks you
-   create MUST be the agreed division. Implement ONLY the components you own;
-   your teammate's components arrive via their patch at merge time."""
-
-NEGOTIATE_MEMBER = """
-
-TEAM DIVISION PROTOCOL — this ONE task is shared by a 2-agent team; you must
-NOT implement everything yourself. Before any coding:
-1. FIRST ACTION: send_message to agent1 stating which components you propose
-   to own (add "wait": true so the reply comes back in the same call).
-2. Exchange messages until you have EXPLICIT agreement — at least one
-   proposal and one confirmation.
-3. Claim the board task matching the agreed division and implement ONLY the
-   components you own. Define clean interfaces (shared header / function
-   signatures) in /workspace/shared/ so the merged program compiles."""
+def _score(instance: str, patch: str) -> tuple:
+    """Harness verification.score bound to this adapter's declared facts."""
+    def env_factory():
+        e = DockerEnv(ADAPTER.image(instance), **ADAPTER.env_kwargs())
+        ADAPTER.setup_env(e, "score")
+        return e
+    return verification.score(ADAPTER.image(instance), patch, env_factory=env_factory,
+                              build_artifact=ADAPTER.build_artifact,
+                              reference_binary=ADAPTER.reference_binary)
 
 
-def image_for(instance: str) -> str:
-    return f"programbench/{instance.replace('__', '_1776_')}:task_cleanroom_v6"
-
-
-BUILD_GATE = "rm -f ./executable; [ -f ./compile.sh ] && bash ./compile.sh >/tmp/build.log 2>&1; test -x ./executable"
-
-# Iteration 5: behavioral probes beyond flag handling, all reference-comparative
-# (the same probe is run on the reference binary; only the comparison matters,
-# so the mechanism is program-general, not cmatrix-specific).
-#   RATE_PROBE  — bytes the binary writes to a pty in 2s. coopgitc2-r3's binary
-#     built, matched 2 flag probes, then wrote 11.3MB in 2s (reference: 88KB) —
-#     a busy-loop redraw that starved the evaluator's terminal emulation until
-#     every branch hit its 1h cap (results_read_failed). A candidate emitting
-#     >10x the reference rate is ranked below any well-paced build.
-#   QUIT_PROBE  — feed 'q' in a pty, compare exit codes. The reference exits 0
-#     promptly; a binary that ignores input gets killed at the timeout (124).
-#     Survivable for grading (coopgitc2-r2: 85.8 despite failing this) so it
-#     ranks candidates but does not gate repair.
-RATE_PROBE = ("TERM=xterm timeout 2 script -qec './executable' /dev/null "
-              "</dev/null 2>/dev/null | wc -c")
-QUIT_PROBE = ("printf q | TERM=xterm timeout 8 script -qec './executable' /dev/null "
-              ">/dev/null 2>&1; echo RC=$?")
-FIREHOSE_FLOOR = 200_000  # bytes/2s; below this no candidate is called a firehose
-
-
-def _rate(env) -> int:
-    out = env.execute(RATE_PROBE, timeout=30).stdout.strip().splitlines()
-    try:
-        return int(out[-1])
-    except (ValueError, IndexError):
-        return 0
-
-
-def _quit_rc(env) -> int:
-    out = env.execute(QUIT_PROBE, timeout=30).stdout
-    m = re.search(r"RC=(\d+)", out)
-    return int(m.group(1)) if m else -1
-
-
-def _is_firehose(cand_rate: int, ref_rate: int) -> bool:
-    return cand_rate > max(10 * ref_rate, FIREHOSE_FLOOR)
-
-REPAIR_TASK = """You are the integration repairer for a team that just merged its work into
-THIS tree. The task was: write source code + a `./compile.sh` build script so
-that `bash compile.sh` produces `./executable` (a program matching the
-documented behavior of the original; see README.md / the man page).
-
-The build is currently BROKEN (or compile.sh is missing). Evidence:
-
-```
-{evidence}
-```
-
-Fix the build WITHOUT discarding any teammate's work:
-- resolve any merge conflict markers (<<<<<<< ======= >>>>>>>) by RECONCILING
-  both sides (keep both contributions where possible);
-- reconcile duplicate or missing definitions across files;
-- create or fix `./compile.sh` if it is missing or wrong;
-- then run `bash compile.sh` and confirm it produces a working `./executable`
-  (try `./executable --help` and `./executable --version`).
-Do not start over; repair what exists."""
-
-BEHAVIOR_REPAIR_TASK = """You are the integration repairer for a team that just merged its work into
-THIS tree. The task was: write source code + a `./compile.sh` build script so
-that `bash compile.sh` produces `./executable` (a program matching the
-documented behavior of the original; see README.md / the man page).
-
-The build SUCCEEDS, but the produced binary misbehaves at runtime. Evidence:
-
-```
-{evidence}
-```
-
-The usual cause is a main loop that redraws without its frame delay (a
-missing/removed sleep, usleep, napms, or timer between frames), so the program
-floods the terminal with output instead of animating at a paced rate. Find the
-main loop, restore correct frame pacing (the documentation describes the
-update speed options), rebuild with `bash compile.sh`, and verify:
-`timeout 2 ./executable | wc -c` run in a terminal should produce output on
-the order of tens of kilobytes, not megabytes.
-Do not start over; repair what exists."""
-
-
-def build_gate_and_repair(image: str, patch: str, *, model: str, step_limit: int = 150,
+def build_gate_and_repair(instance: str, patch: str, *, model: str, step_limit: int = 150,
                           time_limit_s: int = 2400, command_timeout: int = 300) -> tuple[str, dict]:
-    """Iteration-1 mechanism (team-goal loop): mechanical build gate + repair.
+    """Generic repair tail: adapter gate -> repair agents -> mechanical pick.
 
-    Apply the integrated patch to a fresh cleanroom tree; if `compile.sh`
-    builds `./executable`, pass through unchanged. Otherwise run ONE repair
-    agent in that tree with the build error as evidence (Coop+Repair's
-    mechanism with the BUILD as the gate). Returns (patch, meta)."""
+    The repair agent's self-report is never trusted: every candidate
+    (pre-repair included) is ranked by adapter score() and the max wins.
+    """
     from cooperagents.workers.mini_swe_worker import run_mini_swe_agent
 
-    env = DockerEnv(image, repo_path=WORKSPACE, network="none", user="agent", keepalive="24h")
+    env = DockerEnv(ADAPTER.image(instance), **ADAPTER.env_kwargs())
     try:
-        subprocess.run(["docker", "exec", "-u", "root", env.name, "bash", "-c",
-                        "chown -R agent:agent /workspace 2>/dev/null; true"], capture_output=True)
-        env.execute("printf 'executable\nshared/\n' >> .git/info/exclude")
-        # Reference behavior must be captured BEFORE the first build: the
-        # pristine tree's ./executable is the (execute-only) reference binary.
-        ref_rate = _rate(env)
+        ADAPTER.setup_env(env, "integration")
         if patch.strip():
             env.write_file("/tmp/final.patch", patch)
             env.execute(
@@ -205,39 +80,17 @@ def build_gate_and_repair(image: str, patch: str, *, model: str, step_limit: int
                 " || git apply --3way /tmp/final.patch 2>/dev/null"
                 " || git apply --reject /tmp/final.patch 2>/dev/null || true"
             )
-
-        def gate_state() -> tuple[str, str] | None:
-            """None if the tree passes; else (failure_kind, evidence)."""
-            g = env.execute(BUILD_GATE, timeout=600)
-            if g.exit_code != 0:
-                ev = env.execute("tail -c 3000 /tmp/build.log 2>/dev/null; ls compile.sh 2>&1").stdout[-3000:]
-                return "build", ev
-            # Iteration 5: builds-but-floods is a gate failure too (coopgitc2-r3
-            # shipped an 11.3MB/2s busy-loop that DNF'd the evaluator).
-            cand_rate = _rate(env)
-            if _is_firehose(cand_rate, ref_rate):
-                return "firehose", (
-                    f"`timeout 2 ./executable` in a terminal wrote {cand_rate} bytes; "
-                    f"the reference binary writes ~{ref_rate} bytes in the same window. "
-                    f"The binary floods output instead of animating at a paced rate."
-                )
-            return None
-
-        failure = gate_state()
-        if failure is None:
+        repair_prompt = verification.repair(
+            env, build_artifact=ADAPTER.build_artifact,
+            reference_binary=ADAPTER.reference_binary)
+        if repair_prompt is None:
             return patch, {"repair": "not_needed"}
-        # Iteration 3: repair is stochastic at 9B (k=3 finding: 1 success in 4
-        # firings, and a failed repair was submitted 3 times → three zeros).
-        # Retry a failed repair once with fresh evidence, and NEVER trust the
-        # repair agent's self-report — submit the mechanically best candidate.
         meta = {"repair": "ran", "attempts": []}
         candidates = [patch]
         for attempt in range(2):
-            kind, evidence = failure
-            task_tpl = BEHAVIOR_REPAIR_TASK if kind == "firehose" else REPAIR_TASK
             res = run_mini_swe_agent(
                 env,
-                task=task_tpl.format(evidence=evidence),
+                task=repair_prompt,
                 agent_id=f"repair{attempt + 1}",
                 role="integrator",
                 model_name=model,
@@ -248,12 +101,14 @@ def build_gate_and_repair(image: str, patch: str, *, model: str, step_limit: int
             )
             env.execute(r"find . -path ./.git -prune -o \( -name '*.rej' -o -name '*.orig' \) -print0 | xargs -0 -r rm -f")
             candidates.append(env.git_diff())
-            failure = gate_state()
+            repair_prompt = verification.repair(
+            env, build_artifact=ADAPTER.build_artifact,
+            reference_binary=ADAPTER.reference_binary)
             meta["attempts"].append({"steps": res.steps, "status": res.status,
-                                     "gate_after": 0 if failure is None else failure[0]})
-            if failure is None:
+                                     "gate_after": 0 if repair_prompt is None else "fail"})
+            if repair_prompt is None:
                 break
-        scores = [pb_score(image, c) for c in candidates]
+        scores = [_score(instance, c) for c in candidates]
         best = max(range(len(candidates)), key=lambda i: scores[i])
         meta["candidate_scores"] = scores
         meta["chosen"] = best
@@ -262,217 +117,24 @@ def build_gate_and_repair(image: str, patch: str, *, model: str, step_limit: int
         env.cleanup()
 
 
-def make_submission(image: str, patch: str, out_dir: Path) -> None:
-    """Apply the integrated patch to a fresh cleanroom tree and tar it."""
-    out_dir.mkdir(parents=True, exist_ok=True)
-    env = DockerEnv(image, repo_path=WORKSPACE, network="none", keepalive="24h")
-    try:
-        env.write_file("/tmp/final.patch", patch)
-        r = env.execute(
-            "git apply --whitespace=nowarn /tmp/final.patch 2>/dev/null"
-            " || git apply --3way /tmp/final.patch 2>/dev/null"
-            " || git apply --reject /tmp/final.patch 2>/dev/null; "
-            "find . -path ./.git -prune -o \\( -name '*.rej' -o -name '*.orig' \\) -print0 | xargs -0 -r rm -f; "
-            "tar -czf /tmp/submission.tar.gz --exclude=./.git --exclude=./shared "
-            "--exclude=./executable --exclude=./compile_out ."
-        )
-        if r.exit_code != 0:
-            print(f"[warn] submission tar step exit={r.exit_code}: {r.stdout[-300:]}")
-        subprocess.run(
-            ["docker", "cp", f"{env.name}:/tmp/submission.tar.gz", str(out_dir / "submission.tar.gz")],
-            check=True,
-        )
-    finally:
-        env.cleanup()
+def run_team_once(arm: str, instance: str, *, step_limit: int, agent_time_limit: int | None,
+                  gate: bool = False, brief: str = "", presub_merge: bool = False,
+                  team_size: int = 2):
+    """One full run for `arm`; returns (integrated_patch, RunResult).
 
-
-PROBES = [
-    "./executable --help",
-    "./executable -h",
-    "./executable --version",
-    "./executable -V",
-    "./executable --definitely-not-a-flag",
-]
-
-
-def pb_score(image: str, patch: str) -> tuple[int, int, int, int]:
-    """Mechanical candidate score, compared lexicographically:
-    (build_ok_tier, not_firehose, quit_matches_ref, flag_probes_matched).
-
-    Signals are all self-available: does compile.sh build, does the binary's
-    pty output rate stay near the reference's (iteration 5 — a flooding
-    busy-loop kills the evaluator), does it exit on 'q' like the reference,
-    and do fast flag probes (--help/--version/invalid-flag output + exit
-    codes) match the reference binary, which agents may legitimately run."""
-    if not patch.strip():
-        return (-2, 0, 0, 0)
-    env = DockerEnv(image, repo_path=WORKSPACE, network="none", keepalive="24h")
-    try:
-        ref = [env.execute(f"timeout 20 {p} 2>&1; echo RC=$?", timeout=40).stdout for p in PROBES]
-        ref_rate, ref_quit = _rate(env), _quit_rc(env)
-        env.write_file("/tmp/c.patch", patch)
-        env.execute(
-            "git apply --whitespace=nowarn /tmp/c.patch 2>/dev/null"
-            " || git apply --3way /tmp/c.patch 2>/dev/null"
-            " || git apply --reject /tmp/c.patch 2>/dev/null || true"
-        )
-        b = env.execute("rm -f ./executable; [ -f ./compile.sh ] && bash ./compile.sh", timeout=600)
-        if b.exit_code != 0 or env.execute("test -x ./executable").exit_code != 0:
-            return (-1, 0, 0, 0)
-        cand = [env.execute(f"timeout 20 {p} 2>&1; echo RC=$?", timeout=40).stdout for p in PROBES]
-        return (
-            1,
-            0 if _is_firehose(_rate(env), ref_rate) else 1,
-            1 if _quit_rc(env) == ref_quit else 0,
-            sum(a.strip() == c.strip() for a, c in zip(ref, cand)),
-        )
-    finally:
-        env.cleanup()
-
-
-def pb_selector(image: str):
-    """Board Best-of-2's mechanical selector, adapted to ProgramBench."""
-    def select(cands) -> int:
-        scores = [pb_score(image, c.integrated.patch if c.integrated else "") for c in cands]
-        print(f"[selector] scores={scores}")
-        return max(range(len(scores)), key=lambda i: scores[i])
-
-    return select
-
-
-# Iteration 6, mechanism A (gate-at-source): run the build in the AGENT'S OWN
-# container when it tries to finish; reject the finish with the build error as
-# the observation. The freshness check (-nt marker) fails a compile.sh that
-# completes without (re)building ./executable, while leaving the reference
-# binary untouched on failure (mbench10 zipfinder mode: compileall, no output).
-GATE_CMD = (
-    "touch /tmp/.gate_marker; "
-    "bash ./compile.sh >/tmp/gate_build.log 2>&1; rc=$?; "
-    "if [ $rc -ne 0 ]; then echo BUILD_FAILED; tail -c 2500 /tmp/gate_build.log; "
-    "elif [ ! -x ./executable ] || [ ! ./executable -nt /tmp/.gate_marker ]; then "
-    "echo 'NO_FRESH_EXECUTABLE: compile.sh exited 0 but did not (re)build ./executable'; "
-    "else echo GATE_OK; fi"
-)
-
-
-def pb_completion_gate(env) -> str | None:
-    out = env.execute(GATE_CMD, timeout=650).stdout
-    if "GATE_OK" in out:
-        return None
-    return (
-        "The gate ran `bash compile.sh` in your workspace and it did not "
-        "produce a fresh ./executable:\n" + out[-2600:] +
-        "\nReminder: there is NO network access here or during grading — any "
-        "package download (crates.io, proxy.golang.org, pip) fails. Use only "
-        "the standard library, or sources vendored in-tree."
-    )
-
-
-# Iteration 7 (pre-submission merge): in coop arms the harness previously
-# 3-way merged the two diffs AFTER both agents finished — no agent ever saw
-# the combined tree, so nobody resolved conflicts and the first entity to
-# look at the merged result was a cold repair agent (repair fired 9/10 team
-# runs on mbench10). This gate makes the FINISHING AGENT perform the merge:
-# commit own work, merge every teammate branch from the shared remote,
-# resolve any conflict markers in-context, then pass the fresh-build gate on
-# the MERGED tree. Without a shared remote (solo, repair envs) it reduces to
-# GATE_CMD.
-MERGE_GATE_CMD = (
-    "MERGED=0; "
-    "if git remote get-url shared >/dev/null 2>&1; then "
-    "git fetch shared 2>/dev/null; "
-    "AID=$(cat /tmp/.agent_id 2>/dev/null); "
-    "git add -A 2>/dev/null; "
-    "if grep -rl '^<<<<<<< ' --exclude-dir=.git . >/dev/null 2>&1; then "
-    "echo 'UNRESOLVED_CONFLICT_MARKERS in:'; grep -rl '^<<<<<<< ' --exclude-dir=.git . | head -10; "
-    "else "
-    "git -c user.name=agent -c user.email=a@t commit -q -m wip 2>/dev/null; "
-    "[ -f .git/MERGE_HEAD ] && git -c user.name=agent -c user.email=a@t commit -q --no-edit 2>/dev/null; "
-    "ok=1; "
-    "for b in $(git for-each-ref --format='%(refname:short)' refs/remotes/shared/ | sed 's|shared/||'); do "
-    "[ \"$b\" = \"$AID\" ] && continue; "
-    "if ! git -c user.name=agent -c user.email=a@t merge --no-edit shared/$b >/tmp/.mg 2>&1; then "
-    "echo \"TEAMMATE_MERGE_CONFLICT merging shared/$b — conflicted files:\"; "
-    "git diff --name-only --diff-filter=U | head -10; ok=0; break; fi; done; "
-    "[ $ok = 1 ] && MERGED=1; "
-    "fi; "
-    "else MERGED=1; fi; "
-    "[ \"$MERGED\" = 1 ] && { " + GATE_CMD + " ; }"
-)
-
-
-def pb_merge_completion_gate(env) -> str | None:
-    out = env.execute(MERGE_GATE_CMD, timeout=900).stdout
-    if "GATE_OK" in out:
-        return None
-    if "TEAMMATE_MERGE_CONFLICT" in out or "UNRESOLVED_CONFLICT_MARKERS" in out:
-        return (
-            "Before finishing you must MERGE your teammate's work into your "
-            "tree. The gate attempted it:\n" + out[-2000:] +
-            "\nOpen the conflicted files, reconcile BOTH sides (keep both "
-            "contributions where possible), remove the <<<<<<< ======= >>>>>>> "
-            "markers, `git add -A`, then verify `bash compile.sh` produces "
-            "./executable and submit again."
-        )
-    return (
-        "Your merged tree does not build a fresh ./executable. Gate output:\n"
-        + out[-2400:] +
-        "\nFix the MERGED tree (your work + teammate's), rebuild, submit again. "
-        "No network: standard library or vendored sources only."
-    )
-
-
-# Iteration 6, mechanism B (environment brief / constraint priming): probe the
-# image's toolchains mechanically and state the no-network constraint
-# operationally. mbench10 zoxide mode: the agent obeyed the written rule's
-# letter (its compile.sh was fine) but reached for crates.io clap anyway and
-# spent its run fighting the registry.
-def make_env_brief(img: str) -> str:
-    env = DockerEnv(img, repo_path=WORKSPACE, network="none", keepalive="1h")
-    try:
-        vers = env.execute(
-            "for t in gcc g++ make cargo rustc go python3; do "
-            "command -v $t >/dev/null 2>&1 && echo \"$t: $($t --version 2>/dev/null | head -1)\"; done",
-            timeout=60,
-        ).stdout.strip()
-    finally:
-        env.cleanup()
-    return (
-        "## Environment\n\nToolchains available in this workspace:\n"
-        f"{vers}\n\n"
-        "There is NO network access during your run and during grading: any "
-        "package download (crates.io, proxy.golang.org, pip install) will "
-        "fail. Write your implementation against the STANDARD LIBRARY of the "
-        "language you pick, or vendor dependency sources in-tree. Before "
-        "finishing, verify that `bash compile.sh` produces ./executable.\n\n"
-    )
-
-
-def build_assignments(arm: str, brief: str = "") -> list:
-    task = brief + TASK
-    if arm == "solo":
-        return [Assignment(agent_id="agent1", role="lead", feature_id=None, task=task)]
-    if arm in ("divide", "dividebo2"):
-        return [
-            Assignment(agent_id="agent1", role="lead", feature_id=None, task=task + NEGOTIATE_LEAD),
-            Assignment(agent_id="agent2", role="member", feature_id=None, task=task + NEGOTIATE_MEMBER),
-        ]
-    return [
-        Assignment(agent_id="agent1", role="lead", feature_id=None, task=task),
-        Assignment(agent_id="agent2", role="member", feature_id=None, task=task),
-    ]
-
-
-def run_team_once(arm: str, img: str, *, step_limit: int, agent_time_limit: int | None,
-                  gate: bool = False, brief: str = "", presub_merge: bool = False):
-    """One full team run for `arm`; returns (patch, RunResult). Own run_id →
-    own bus, own scratchpad/git-share volumes (safe to call concurrently)."""
+    Own run_id -> own bus and git-share volume, so concurrent calls are safe.
+    """
     run_id = uuid.uuid4().hex[:8]
-    assignments = build_assignments(arm, brief)
-    base = arm.replace("bo2", "")  # dividebo2 attempts run the divide config
+    n = 1 if arm == "solo" else team_size
+    assignments = [
+        Assignment(agent_id=f"agent{i+1}", role="lead" if i == 0 else "member",
+                   feature_id=None,
+                   task=brief + ADAPTER.task_for(instance, i, n))
+        for i in range(n)
+    ]
     spec = TeamSpec(
         run_id=run_id,
-        repo="programbench",
+        repo=ADAPTER.name,
         task_id=0,
         features=[],
         assignments=assignments,
@@ -480,42 +142,24 @@ def run_team_once(arm: str, img: str, *, step_limit: int, agent_time_limit: int 
         worker="mini_swe",
         model=os.environ.get("AZURE_OPENAI_DEPLOYMENT", "Qwen/Qwen3.5-9B"),
         seed_prior=False,
-        coop_tools=base in ("coopgit", "coopgitc2", "teamfull", "divide"),
-        tool_protocol=base == "divide",
-        wait_protocol=base == "divide",
+        coop_tools=arm != "solo",
         agent_time_limit=agent_time_limit,
-        git_share=base in ("coopgit", "coopgitc2"),
-        coordinator=base == "coopgitc2",
-        task_board=base in ("teamfull", "divide"),
-        team_roles=base in ("teamfull", "divide"),
+        git_share=arm != "solo",
+        coordinator=arm == "coopgitc2",
         temperature=0.0,
-        completion_gate=(pb_merge_completion_gate if presub_merge else pb_completion_gate) if (gate or presub_merge) else None,
+        completion_gate=(lambda env, _m=presub_merge: verification.validate(
+                            env, merged=_m, build_artifact=ADAPTER.build_artifact))
+                        if (gate or presub_merge) else None,
+        # With the merge gate on, every member tree already contains the
+        # merged team work — select the best one instead of re-merging.
         select_integration=(lambda patches: max(range(len(patches)),
-                            key=lambda i: pb_score(img, patches[i]))) if presub_merge else None,
+                            key=lambda i: _score(instance, patches[i]))) if presub_merge else None,
     )
-    vols = []
-    if spec.git_share:
-        vols.append(f"cbs{run_id}:/cbshared")
-    if spec.team_roles:
-        vols.append(f"cbt{run_id}:{WORKSPACE}/shared")
+    vols = [f"cbs{run_id}:/cbshared"] if spec.git_share else []
 
     def make_env(_id: str, _v=vols or None) -> DockerEnv:
-        env = DockerEnv(img, repo_path=WORKSPACE, volumes=_v, network="none", user="agent", keepalive="24h")
-        # Shared volumes are created root-owned; agents run as uid "agent" and
-        # must be able to write PLAN.md / patch exports / the git-share repo.
-        subprocess.run(
-            ["docker", "exec", "-u", "root", env.name, "bash", "-c",
-             "chown -R agent:agent /workspace/shared /cbshared 2>/dev/null; true"],
-            capture_output=True,
-        )
-        # The reference binary is execute-only, which makes `git add -A` FATAL
-        # ("unable to index file 'executable'") and empties every diff. Keep it
-        # (and the cross-container scratchpad) out of the index via the
-        # repo-local exclude file — invisible to the agent's .gitignore.
-        env.execute("printf 'executable\nshared/\n' >> .git/info/exclude")
-        # Iteration 7: the merge gate needs to know which shared branch is
-        # "self" so it merges only teammates' branches.
-        env.execute(f"echo {_id} > /tmp/.agent_id")
+        env = DockerEnv(ADAPTER.image(instance), volumes=_v, **ADAPTER.env_kwargs())
+        ADAPTER.setup_env(env, _id)
         return env
 
     harness = UnifiedHarness(bus=InMemoryBus(run_id), step_limit=step_limit, command_timeout=300)
@@ -526,63 +170,43 @@ def run_team_once(arm: str, img: str, *, step_limit: int, agent_time_limit: int 
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--instance", default="abishekvashok__cmatrix.5c082c6")
-    ap.add_argument("--arm", choices=["solo", "coopgit", "teamfull", "divide", "coopgitc2", "dividebo2"], required=True)
+    ap.add_argument("--arm", choices=["solo", "coopgit", "coopgitc2"], required=True)
     ap.add_argument("--rep", default="a")
-    ap.add_argument("--step-limit", type=int, default=100)
-    ap.add_argument("--repair", action="store_true", help="iteration 1: mechanical build gate + repair agent on the integrated tree")
-    ap.add_argument("--agent-time-limit", type=int, default=0, help="wall-clock cap (s) per team agent; 0 = uncapped")
+    ap.add_argument("--step-limit", type=int, default=1000)
+    ap.add_argument("--team-size", type=int, default=2,
+                    help="number of agents in coop arms (scalability axis)")
+    ap.add_argument("--agent-time-limit", type=int, default=0,
+                    help="wall-clock cap (s) per agent; 0 = uncapped")
+    ap.add_argument("--repair", action="store_true")
+    ap.add_argument("--completion-gate", action="store_true")
+    ap.add_argument("--env-brief", action="store_true")
+    ap.add_argument("--presub-merge", action="store_true")
     ap.add_argument("--runs-dir", default="runs")
-    ap.add_argument("--completion-gate", action="store_true",
-                    help="iteration 6A: reject an agent's finish until compile.sh builds a fresh ./executable in its own container")
-    ap.add_argument("--env-brief", action="store_true",
-                    help="iteration 6B: prepend a probed toolchain list + operational no-network constraint to the task")
-    ap.add_argument("--presub-merge", action="store_true",
-                    help="iteration 7: finishing agent must merge teammate branches and pass the build gate on the MERGED tree")
     args = ap.parse_args()
 
-    img = image_for(args.instance)
     run_name = f"pb-{args.arm}-{args.rep}"
     out_root = Path(args.runs_dir) / run_name / args.instance
     t0 = time.time()
-    bo2_meta = {}
-    brief = make_env_brief(img) if args.env_brief else ""
+    brief = ADAPTER.brief(args.instance) if args.env_brief else ""
 
-    if args.arm == "dividebo2":
-        # Iteration 2: Board Best-of-2 transplant — each attempt is a FULL
-        # negotiated-division team (isolated bus + volumes); the harness
-        # mechanically selects the better team output (pb_score).
-        from concurrent.futures import ThreadPoolExecutor
-
-        with ThreadPoolExecutor(max_workers=2) as ex:
-            futs = [ex.submit(run_team_once, args.arm, img,
-                              step_limit=args.step_limit,
-                              agent_time_limit=args.agent_time_limit or None,
-                              gate=args.completion_gate, brief=brief,
-                              presub_merge=args.presub_merge)
-                    for _ in range(2)]
-            attempts = [f.result() for f in futs]
-        scores = [pb_score(img, patch) for patch, _ in attempts]
-        chosen = max(range(2), key=lambda i: scores[i])
-        print(f"[{run_name}] bo2 scores={scores} chosen={chosen}")
-        patch, res = attempts[chosen]
-        bo2_meta = {"bo2_scores": scores, "bo2_chosen": chosen,
-                    "bo2_all_steps": [r.total_steps for _, r in attempts]}
-    else:
-        patch, res = run_team_once(args.arm, img,
-                                   step_limit=args.step_limit,
-                                   agent_time_limit=args.agent_time_limit or None,
-                                   gate=args.completion_gate, brief=brief,
-                                   presub_merge=args.presub_merge)
+    patch, res = run_team_once(args.arm, args.instance,
+                               step_limit=args.step_limit,
+                               agent_time_limit=args.agent_time_limit or None,
+                               gate=args.completion_gate, brief=brief,
+                               presub_merge=args.presub_merge,
+                               team_size=args.team_size)
 
     repair_meta = {}
     if args.repair:
-        patch, repair_meta = build_gate_and_repair(img, patch, model=os.environ.get("AZURE_OPENAI_DEPLOYMENT", "Qwen/Qwen3.5-9B"))
+        patch, repair_meta = build_gate_and_repair(
+            args.instance, patch, model=os.environ.get("AZURE_OPENAI_DEPLOYMENT", "Qwen/Qwen3.5-9B"))
         print(f"[{run_name}] repair: {repair_meta}")
     dur = time.time() - t0
     print(f"[{run_name}] duration={dur:.0f}s steps={res.total_steps} patch_bytes={len(patch)}")
     if not patch.strip():
         print(f"[{run_name}] EMPTY PATCH — writing empty submission for the record")
-    make_submission(img, patch, out_root)
+    ADAPTER.submit(args.instance, patch, out_root)
+
     import json as _json
     traj_dir = out_root / "trajectories"
     traj_dir.mkdir(parents=True, exist_ok=True)
@@ -592,12 +216,17 @@ def main() -> None:
             "error": r.error, "messages": r.messages,
         }, indent=1))
     (out_root / "integrated.patch").write_text(patch)
-    (out_root / "metrics.json").write_text(_json.dumps({**res.metrics, **repair_meta, **bo2_meta}, indent=1, default=str))
+    (out_root / "metrics.json").write_text(_json.dumps({**res.metrics, **repair_meta}, indent=1, default=str))
     (out_root / "run_meta.txt").write_text(
         f"arm={args.arm} rep={args.rep} duration_s={dur:.0f} steps={res.total_steps} "
         f"patch_bytes={len(patch)}\n"
     )
     print(f"[{run_name}] submission at {out_root}/submission.tar.gz")
+
+
+# Back-compat aliases for analysis snippets that import from this module.
+image_for = ADAPTER.image
+pb_score = _score
 
 
 if __name__ == "__main__":

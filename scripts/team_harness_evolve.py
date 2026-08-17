@@ -81,9 +81,9 @@ class TeamHarness:
     # -- create / load / save -------------------------------------------
     @classmethod
     def snapshot(cls, name: str, dest_root: Path, *, source_repo: Path = REPO,
-                 args: dict | None = None, parent: "TeamHarness | None" = None,
+                 args: dict | None = None, parent: TeamHarness | None = None,
                  idea_name: str | None = None,
-                 entry: str = "scripts/bench_programbench.py") -> "TeamHarness":
+                 entry: str = "scripts/bench_programbench.py") -> TeamHarness:
         """Freeze code into a new version folder (from the live repo for
         seeds, or from a parent version for derived harnesses)."""
         root = Path(dest_root) / name
@@ -111,7 +111,7 @@ class TeamHarness:
         return cls(root)
 
     @classmethod
-    def load(cls, source: str, *, versions_root: Path | None = None) -> "TeamHarness":
+    def load(cls, source: str, *, versions_root: Path | None = None) -> TeamHarness:
         """Load a version folder; or materialize a legacy flag-set source
         (submodule / JSON file) by snapshotting the CURRENT repo code."""
         p = Path(source)
@@ -121,7 +121,7 @@ class TeamHarness:
             d = json.loads(p.read_text())
             flags, name = d["flags"], d["name"]
         else:
-            d = getattr(importlib.import_module(source), "HARNESS")
+            d = importlib.import_module(source).HARNESS
             flags, name = d["flags"], d["name"]
         root = versions_root or (REPO / "runs" / "evolve" / "versions")
         dest = root / name
@@ -129,7 +129,7 @@ class TeamHarness:
             return cls(dest)  # already materialized
         return cls.snapshot(name, root, args=flags)
 
-    def derive(self, name: str, idea: "Idea") -> "TeamHarness":
+    def derive(self, name: str, idea: Idea) -> TeamHarness:
         """Child version = parent code copy + idea applied (args merge
         and/or arbitrary code edit), with a diff recorded for audit."""
         child = TeamHarness.snapshot(name, self.root.parent, parent=self,
@@ -275,7 +275,7 @@ def evolve(seed: TeamHarness, instance: str, *, k: int = 3, budget: int = 6,
     One idea in flight at a time; k reps fan out across workers. The async
     multi-idea variant with rebase-on-drift is described in the plan doc."""
     proposer = proposer or TaxonomyProposer()
-    nodes = [l.strip() for l in NODES_FILE.read_text().splitlines() if l.strip()] if use_fleet else []
+    nodes = [ln.strip() for ln in NODES_FILE.read_text().splitlines() if ln.strip()] if use_fleet else []
     out_dir.mkdir(parents=True, exist_ok=True)
     log = out_dir / "EVOLUTION_LOG.md"
     d_results: dict[str, dict] = {}

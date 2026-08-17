@@ -155,13 +155,13 @@ def _cmd_eval(args: argparse.Namespace) -> int:
         force=args.force,
         dry_run=args.dry_run,
     )
-    if args.dry_run:
-        print(" ".join(proc))  # type: ignore[arg-type]
+    if isinstance(proc, list):  # dry_run returns the argv without executing
+        print(" ".join(proc))
         return 0
-    print(proc.stdout)  # type: ignore[union-attr]
-    if proc.returncode != 0:  # type: ignore[union-attr]
-        print(proc.stderr, file=sys.stderr)  # type: ignore[union-attr]
-    return proc.returncode  # type: ignore[union-attr,return-value]
+    print(proc.stdout)
+    if proc.returncode != 0:
+        print(proc.stderr, file=sys.stderr)
+    return proc.returncode
 
 
 def _load_dotenv(path: str = ".env") -> None:

@@ -123,17 +123,33 @@ class MiniSweEnvAdapter:
 
 
 _TASK_TOOLS = [
-    {"type": "function", "function": {"name": "task_create", "description": "Post a shared task to the team board (visible to teammates)", "parameters": {"type": "object", "properties": {"title": {"type": "string", "description": "Short task title"}, "note": {"type": "string", "description": "Optional detail"}}, "required": ["title"]}}},
-    {"type": "function", "function": {"name": "task_update", "description": "Update a board task's status so teammates see your progress", "parameters": {"type": "object", "properties": {"task_id": {"type": "string"}, "status": {"type": "string", "description": "open | doing | done"}, "note": {"type": "string"}}, "required": ["task_id", "status"]}}},
-    {"type": "function", "function": {"name": "task_list", "description": "List the shared team board (yours and teammates' tasks with status)", "parameters": {"type": "object", "properties": {}}}},
-    {"type": "function", "function": {"name": "task_claim", "description": "Claim an unclaimed board task so you own it (first claimer wins)", "parameters": {"type": "object", "properties": {"task_id": {"type": "string"}}, "required": ["task_id"]}}},
+    {"type": "function", "function": {
+        "name": "task_create", "description": "Post a shared task to the team board (visible to teammates)",
+        "parameters": {"type": "object", "properties": {
+            "title": {"type": "string", "description": "Short task title"},
+            "note": {"type": "string", "description": "Optional detail"},
+        }, "required": ["title"]}}},
+    {"type": "function", "function": {
+        "name": "task_update", "description": "Update a board task's status so teammates see your progress",
+        "parameters": {"type": "object", "properties": {
+            "task_id": {"type": "string"},
+            "status": {"type": "string", "description": "open | doing | done"},
+            "note": {"type": "string"},
+        }, "required": ["task_id", "status"]}}},
+    {"type": "function", "function": {
+        "name": "task_list", "description": "List the shared team board (yours and teammates' tasks with status)",
+        "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {
+        "name": "task_claim", "description": "Claim an unclaimed board task so you own it (first claimer wins)",
+        "parameters": {"type": "object", "properties": {"task_id": {"type": "string"}}, "required": ["task_id"]}}},
 ]
 
 SPAWN_TOOL = {
     "type": "function",
     "function": {
         "name": "spawn_helper",
-        "description": "Recruit a helper agent in a fresh copy of the repo to work on a subtask in parallel; its diff is merged with yours at the end",
+        "description": "Recruit a helper agent in a fresh copy of the repo to work on a subtask in parallel;"
+        " its diff is merged with yours at the end",
         "parameters": {
             "type": "object",
             "properties": {"task": {"type": "string", "description": "Complete, self-contained subtask brief for the helper"}},
@@ -185,14 +201,16 @@ class TaskBoard:
 
     def _claim(self, action: dict) -> dict:
         ok = self._bus.claim_task(str(action.get("task_id", "")), by=self._id)
-        return {"output": "claimed — it is yours" if ok else "already taken — pick another (task_list)", "returncode": 0 if ok else 1, "exception_info": ""}
+        return {"output": "claimed — it is yours" if ok else "already taken — pick another (task_list)",
+                "returncode": 0 if ok else 1, "exception_info": ""}
 
     def _create(self, action: dict) -> dict:
         tid = self._bus.create_task(title=str(action.get("title", ""))[:200], created_by=self._id, owner=self._id)
         return {"output": f"task {tid} created on the board", "returncode": 0, "exception_info": ""}
 
     def _update(self, action: dict) -> dict:
-        self._bus.update_task(str(action.get("task_id", "")), by=self._id, status=str(action.get("status", "")) or None, note=str(action.get("note", "")) or None)
+        self._bus.update_task(str(action.get("task_id", "")), by=self._id,
+                              status=str(action.get("status", "")) or None, note=str(action.get("note", "")) or None)
         return {"output": "task updated", "returncode": 0, "exception_info": ""}
 
     def _list(self, action: dict) -> dict:
@@ -310,7 +328,7 @@ def run_mini_swe_agent(
     comm: BusComm | None = None,
     poller=None,
     tool_protocol: bool = False,
-    task_board: "TaskBoard | None" = None,
+    task_board: TaskBoard | None = None,
     wait_protocol: bool = False,
     spawn_handler=None,
     time_limit_s: int | None = None,
