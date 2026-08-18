@@ -1,0 +1,13 @@
+{
+  "name": "coopgitc2-fin-min",
+  "parent": "coopgitc2-fin",
+  "idea": "essence-extraction",
+  "lineage": ["gitshare", "coordinator", "repair+selection", "time-caps",
+              "i5-behavior-fitness", "i6-completion-gate", "i6-env-brief",
+              "i7-presub-merge+selection-integration"],
+  "args": {"arm": "coopgitc2", "step_limit": 1000, "agent_time_limit": 3600,
+           "repair": true, "completion_gate": true, "env_brief": true},
+  "entry": "scripts/bench_programbench.py",
+  "created": "2026-08-19T00:00:00Z",
+  "note": "Minimal essence of the coopgitc2-fin harness: identical behavior for the fin3 configuration with all unreachable code removed. Support classes (_GitShareSync, _TeammatePoller, _Coordinator) are verbatim copies; run_coopgitc2_team() transcribes the exact orchestration slice; verification/adapters/worker/vendored-agent copied unchanged; types and planner trimmed to used members. VERIFIED: --dry-run config identical to live repo for full fin args; live 3-agent smoke exercised git-share + coordinator + gate + selection end-to-end. Canonical invocation: scripts/bench_programbench.py --arm coopgitc2 --team-size 3 --step-limit 1000 --agent-time-limit 3600 --repair --completion-gate --env-brief --presub-merge"
+}
