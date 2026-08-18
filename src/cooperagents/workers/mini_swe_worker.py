@@ -412,6 +412,7 @@ def run_mini_swe_agent(
             feature_id=feature_id,
             messages=agent.messages,
             error=str(e),
+            segments=(agent._segments or None),
         )
     return AgentResult(
         agent_id=agent_id,
@@ -421,6 +422,7 @@ def run_mini_swe_agent(
         steps=agent.n_calls,
         feature_id=feature_id,
         messages=agent.messages,
+        segments=(agent._segments or None),
     )
 
 

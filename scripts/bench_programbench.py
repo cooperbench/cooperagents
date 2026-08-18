@@ -214,6 +214,7 @@ def main() -> None:
         (traj_dir / f"{aid}.json").write_text(_json.dumps({
             "agent_id": aid, "status": r.status, "steps": r.steps,
             "error": r.error, "messages": r.messages,
+            "segments": r.segments,
         }, indent=1))
     (out_root / "integrated.patch").write_text(patch)
     (out_root / "metrics.json").write_text(_json.dumps({**res.metrics, **repair_meta}, indent=1, default=str))

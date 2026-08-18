@@ -23,6 +23,27 @@ from cooperagents.vendor.mini_swe.models.utils.retry import retry
 logger = logging.getLogger("litellm_model")
 
 
+
+def _strip_think(text: str) -> str:
+    """Remove <think>...</think> chain-of-thought from a plain-text completion.
+
+    The serving stack runs WITHOUT a reasoning parser (the qwen3 reasoning
+    parser corrupts tool-call parsing on vLLM 0.19), so raw think blocks
+    arrive in content. Tool-call paths are unaffected; text consumers
+    (compaction summarizer, nudge/planner completions) must strip them —
+    observed leak: summaries beginning "The user is asking me to..." with a
+    dangling </think>, injected into agents' contexts.
+    """
+    import re as _re
+
+    out = _re.sub(r"<think>.*?</think>", "", text, flags=_re.S)
+    # unmatched opener/closer (truncated blocks)
+    if "</think>" in out:
+        out = out.split("</think>", 1)[1]
+    return out.strip()
+
+
+
 class LitellmModelConfig(BaseModel):
     model_name: str
     """Model name. Highly recommended to include the provider in the model name, e.g., `anthropic/claude-sonnet-4-5-20250929`."""
@@ -176,7 +197,7 @@ class LitellmModel:
         GLOBAL_MODEL_STATS.add(cost_output["cost"])
         return {
             "role": "assistant",
-            "content": response.choices[0].message.content or "",
+            "content": _strip_think(response.choices[0].message.content or ""),
             "extra": {
                 "summary": True,
                 **cost_output,

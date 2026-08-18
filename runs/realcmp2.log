@@ -30,3 +30,61 @@ dispatched coopgitc2-walk-cmp3r2 to 44.243.50.144
 dispatch issued: coopgitc2-walk-cmp3r2 [antonmedv__walk.bf802ef] -> 44.243.50.144
 dispatched solo-walk-cmpsr2 to 35.93.105.62
 dispatch issued: solo-walk-cmpsr2 [antonmedv__walk.bf802ef] -> 35.93.105.62
+=== REALCMP2 DONE ===
+pb-coopgitc2-chroma-cmp3: 0/531 = 0.0
+pb-coopgitc2-cmatrix-cmp3: 500/946 = 52.9
+pb-coopgitc2-cmatrix-cmp3r2: 631/769 = 82.1
+pb-coopgitc2-fx-cmp3r2: 260/3156 = 8.2
+pb-coopgitc2-i3style-cmp3r2: 246/750 = 32.8
+pb-coopgitc2-shellharden-cmp3r2: 361/1292 = 27.9
+pb-coopgitc2-srgn-cmp3: 702/2076 = 33.8
+pb-coopgitc2-tuijournal-cmp3r2: 978/1837 = 53.2
+pb-coopgitc2-walk-cmp3r2: 338/786 = 43.0
+pb-coopgitc2-zipfinder-cmp3: 225/792 = 28.4
+pb-coopgitc2-zipfinder-cmp3r2: 301/792 = 38.0
+pb-coopgitc2-zoxide-cmp3: no eval.json (run failed or eval failed; see runs/pb-coopgitc2-zoxide-cmp3/eval.log)
+pb-coopgitc2-zoxide-cmp3r2: 99/577 = 17.2
+pb-solo-chroma-cmps: 0/531 = 0.0
+pb-solo-cmatrix-cmps: 520/769 = 67.6
+pb-solo-fx-cmpsr2: 0/3157 = 0.0
+pb-solo-i3style-cmpsr2: 0/750 = 0.0
+pb-solo-shellharden-cmpsr2: 0/1292 = 0.0
+pb-solo-srgn-cmpsr2: 210/2076 = 10.1
+pb-solo-tuijournal-cmpsr2: 776/1837 = 42.2
+pb-solo-walk-cmpsr2: 422/786 = 53.7
+pb-solo-zipfinder-cmps: no eval.json (run failed or eval failed; see runs/pb-solo-zipfinder-cmps/eval.log)
+pb-solo-zipfinder-cmpsr2: 0/792 = 0.0
+pb-solo-zoxide-cmps: no eval.json (run failed or eval failed; see runs/pb-solo-zoxide-cmps/eval.log)
+pb-solo-zoxide-cmpsr2: 0/577 = 0.0
+PASS runs/pb-coopgitc2-chroma-cmp3 (3 agents; resource-clean)
+FAIL runs/pb-coopgitc2-cmatrix-cmp3:
+  - agent2: median latency 187.8s
+PASS runs/pb-coopgitc2-srgn-cmp3 (3 agents; resource-clean)
+FAIL runs/pb-coopgitc2-zipfinder-cmp3:
+  - agent1: median latency 59.1s
+  - agent3: median latency 57.1s
+PASS runs/pb-solo-chroma-cmps (1 agents; resource-clean)
+PASS runs/pb-solo-cmatrix-cmps (1 agents; resource-clean)
+PASS runs/pb-coopgitc2-cmatrix-cmp3r2 (3 agents; resource-clean)
+FAIL runs/pb-coopgitc2-fx-cmp3r2:
+  - agent1: terminal error litellm.ContextWindowExceededError: litellm.BadRequestError: ContextWindowExceed
+PASS runs/pb-coopgitc2-i3style-cmp3r2 (3 agents; resource-clean)
+PASS runs/pb-coopgitc2-shellharden-cmp3r2 (3 agents; resource-clean)
+FAIL runs/pb-coopgitc2-tuijournal-cmp3r2:
+  - agent1: median latency 249.6s
+PASS runs/pb-coopgitc2-walk-cmp3r2 (3 agents; resource-clean)
+FAIL runs/pb-coopgitc2-zipfinder-cmp3r2:
+  - agent2: median latency 19.2s
+FAIL runs/pb-coopgitc2-zoxide-cmp3r2:
+  - agent2: terminal error litellm.ContextWindowExceededError: litellm.BadRequestError: ContextWindowExceed
+  - agent2: median latency 10.1s
+  - agent3: terminal error litellm.ContextWindowExceededError: litellm.BadRequestError: ContextWindowExceed
+PASS runs/pb-solo-fx-cmpsr2 (1 agents; resource-clean)
+PASS runs/pb-solo-i3style-cmpsr2 (1 agents; resource-clean)
+PASS runs/pb-solo-shellharden-cmpsr2 (1 agents; resource-clean)
+PASS runs/pb-solo-srgn-cmpsr2 (1 agents; resource-clean)
+PASS runs/pb-solo-tuijournal-cmpsr2 (1 agents; resource-clean)
+FAIL runs/pb-solo-walk-cmpsr2:
+  - agent1: terminal error litellm.ContextWindowExceededError: litellm.BadRequestError: ContextWindowExceed
+PASS runs/pb-solo-zipfinder-cmpsr2 (1 agents; resource-clean)
+PASS runs/pb-solo-zoxide-cmpsr2 (1 agents; resource-clean)

@@ -28,6 +28,12 @@ class AgentResult:
     feature_id: int | None = None
     messages: list[dict[str, Any]] = field(default_factory=list)
     error: str | None = None
+    segments: list[dict[str, Any]] | None = None
+    """Full pre-compaction history: each entry {kind, messages} holds the raw
+    turns a compaction discarded from ``messages`` (solver segments) or the
+    summarizer's output. None when the run never compacted. Without this the
+    most productive agents lose most of their trajectory (observed: 611 of
+    694 steps invisible)."""
 
     @property
     def patch_lines(self) -> int:

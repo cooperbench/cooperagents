@@ -1,0 +1,659 @@
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..3edc99e
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,3 @@
++#!/bin/bash
++set -e
++go build -o ./executable main.go
+diff --git a/go.mod b/go.mod
+new file mode 100644
+index 0000000..70c4ec6
+--- /dev/null
++++ b/go.mod
+@@ -0,0 +1,3 @@
++module walk
++
++go 1.21.0
+diff --git a/main.go b/main.go
+new file mode 100644
+index 0000000..a44f4a7
+--- /dev/null
++++ b/main.go
+@@ -0,0 +1,551 @@
++package main
++
++/*
++#include <termios.h>
++#include <unistd.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++struct termios* getTermios(int fd) {
++    struct termios* t = malloc(sizeof(struct termios));
++    tcgetattr(fd, t);
++    return t;
++}
++
++void setTermios(int fd, struct termios* t) {
++    tcsetattr(fd, TCSANOW, t);
++}
++*/
++import "C"
++
++import (
++	"fmt"
++	"os"
++	"path/filepath"
++	"sort"
++	"strings"
++	"syscall"
++	"unsafe"
++)
++
++const Version = "v1.13.0"
++
++func main() {
++	args := os.Args[1:]
++	showHelp := false
++	showVersion := false
++	showIcons := false
++	showDirsOnly := false
++	hideHidden := false
++	showPreview := false
++	showBorder := false
++	fuzzyMode := false
++	path := ""
++
++	for _, arg := range args {
++		switch arg {
++		case "--help", "-h":
++			showHelp = true
++		case "--version", "-v":
++			showVersion = true
++		case "--icons":
++			showIcons = true
++		case "--dir-only":
++			showDirsOnly = true
++		case "--hide-hidden":
++			hideHidden = true
++		case "--preview":
++			showPreview = true
++		case "--with-border":
++			showBorder = true
++		case "--fuzzy":
++			fuzzyMode = true
++		default:
++			if !strings.HasPrefix(arg, "-") {
++				path = arg
++			}
++		}
++	}
++
++	if showVersion {
++		fmt.Println(Version)
++		os.Exit(0)
++	}
++
++	if showHelp {
++		printHelp()
++		os.Exit(1)
++	}
++
++	// Set up raw terminal mode
++	if err := setupTerminal(); err != nil {
++		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
++		os.Exit(1)
++	}
++	defer restoreTerminal()
++
++	// Initialize model
++	model := &Model{
++		currentDir:    path,
++		currentFile:   0,
++		previewMode:   showPreview,
++		previewDir:    path,
++		previewCursor: 0,
++		border:        showBorder,
++		fuzzyMode:     fuzzyMode,
++		hideHidden:    hideHidden,
++		showDirsOnly:  showDirsOnly,
++		showIcons:     showIcons,
++	}
++
++	// Main loop
++	for {
++		// Clear screen
++		fmt.Print("\033[2J\033[H")
++
++		// Draw primary view
++		model.drawPrimary()
++
++		// Draw separator
++		model.drawSeparator()
++
++		// Draw secondary view (preview)
++		if model.previewMode {
++			model.drawSecondary()
++		}
++
++		// Draw status bar
++		model.drawStatus()
++
++		// Read input
++		if model.readInput() {
++			break
++		}
++	}
++}
++
++type Model struct {
++	currentDir    string
++	currentFile   int
++	previewMode   bool
++	previewDir    string
++	previewCursor int
++	border        bool
++	fuzzyMode     bool
++	hideHidden    bool
++	showDirsOnly  bool
++	showIcons     bool
++}
++
++func setupTerminal() error {
++	fd := int(os.Stdin.Fd())
++	oldState := C.getTermios(C.int(fd))
++	if oldState == nil {
++		return os.NewSyscallError("tcgetattr", nil)
++	}
++	defer C.free(unsafe.Pointer(oldState))
++
++	newState := (*C.struct_termios)(C.malloc(C.sizeof_struct_termios))
++	C.memcpy(unsafe.Pointer(newState), unsafe.Pointer(oldState), C.sizeof_struct_termios)
++
++	// Modify the state using C functions
++	C.tcgetattr(C.int(fd), newState)
++	C.tcsetattr(C.int(fd), C.TCSANOW, newState)
++	C.free(unsafe.Pointer(newState))
++	return nil
++}
++
++func restoreTerminal() {
++	// Note: We can't restore the original state with this approach
++	// as we don't save it. This is a limitation of the cgo approach.
++}
++
++func (m *Model) getFiles() []string {
++	files, err := os.ReadDir(m.currentDir)
++	if err != nil {
++		return []string{}
++	}
++
++	var result []string
++	for _, f := range files {
++		if m.hideHidden && strings.HasPrefix(f.Name(), ".") {
++			continue
++		}
++		if m.showDirsOnly && !f.IsDir() {
++			continue
++		}
++		result = append(result, f.Name())
++	}
++
++	sort.Strings(result)
++	return result
++}
++
++func (m *Model) getPreviewFiles() []string {
++	files, err := os.ReadDir(m.previewDir)
++	if err != nil {
++		return []string{}
++	}
++
++	var result []string
++	for _, f := range files {
++		if m.hideHidden && strings.HasPrefix(f.Name(), ".") {
++			continue
++		}
++		if m.showDirsOnly && !f.IsDir() {
++			continue
++		}
++		result = append(result, f.Name())
++	}
++
++	sort.Strings(result)
++	return result
++}
++
++func (m *Model) drawPrimary() {
++	files := m.getFiles()
++	if len(files) == 0 {
++		fmt.Println("No files found")
++		return
++	}
++
++	for i, f := range files {
++		if i > 0 {
++			fmt.Println()
++		}
++
++		if m.showIcons {
++			fmt.Print(m.getIcon(f))
++		}
++
++		fmt.Printf("%s ", f)
++
++		if i == m.currentFile {
++			fmt.Print(" ")
++		}
++	}
++}
++
++func (m *Model) drawSeparator() {
++	fmt.Println("─")
++}
++
++func (m *Model) drawSecondary() {
++	files := m.getPreviewFiles()
++	if len(files) == 0 {
++		fmt.Println("No files found")
++		return
++	}
++
++	for i, f := range files {
++		if i > 0 {
++			fmt.Println()
++		}
++
++		if m.showIcons {
++			fmt.Print(m.getIcon(f))
++		}
++
++		fmt.Printf("%s ", f)
++
++		if i == m.previewCursor {
++			fmt.Print(" ")
++		}
++	}
++}
++
++func (m *Model) drawStatus() {
++	mode := "Normal"
++	if m.previewMode {
++		mode = "Preview"
++	}
++	if m.fuzzyMode {
++		mode = "Fuzzy"
++	}
++	fmt.Printf("\nMode: %s", mode)
++}
++
++func (m *Model) getIcon(name string) string {
++	if m.showIcons {
++		if strings.HasSuffix(name, ".md") || strings.HasSuffix(name, ".markdown") {
++			return "\ue609"
++		}
++		if strings.HasSuffix(name, ".json") {
++			return "\ue60b"
++		}
++		if strings.HasSuffix(name, ".js") {
++			return "\ue60c"
++		}
++		if strings.HasSuffix(name, ".py") {
++			return "\ue606"
++		}
++		if strings.HasSuffix(name, ".go") {
++			return "\ue627"
++		}
++		if strings.HasSuffix(name, ".rs") {
++			return "\ue7a8"
++		}
++		if strings.HasSuffix(name, ".html") {
++			return "\ue60e"
++		}
++		if strings.HasSuffix(name, ".css") {
++			return "\ue614"
++		}
++		if strings.HasSuffix(name, ".png") {
++			return "\ue60d"
++		}
++		if strings.HasSuffix(name, ".jpg") {
++			return "\ue60d"
++		}
++		if strings.HasSuffix(name, ".gif") {
++			return "\ue60d"
++		}
++		if strings.HasSuffix(name, ".zip") {
++			return "\uf296"
++		}
++		if strings.HasSuffix(name, ".docker") || strings.HasSuffix(name, "Dockerfile") {
++			return "\ue7b0"
++		}
++		if strings.HasSuffix(name, ".vim") {
++			return "\ue62b"
++		}
++		if strings.HasSuffix(name, ".dwm") {
++			return "\uf410"
++		}
++		if strings.HasSuffix(name, ".esd") {
++			return "\uf410"
++		}
++		if strings.HasSuffix(name, ".swm") {
++			return "\uf410"
++		}
++	}
++	return ""
++}
++
++func (m *Model) readInput() bool {
++	buf := make([]byte, 1)
++	n, err := syscall.Read(int(os.Stdin.Fd()), buf)
++	if n == 0 {
++		return true
++	}
++	if err != nil {
++		return true
++	}
++
++	key := buf[0]
++
++	switch key {
++	case '\x1b': // ESC
++		// Read ESC sequence
++		buf := make([]byte, 2)
++		n, _ := syscall.Read(int(os.Stdin.Fd()), buf)
++		if n == 2 {
++			switch {
++			case buf[0] == '[' && buf[1] == 'A': // Up
++				m.moveCursor(-1)
++			case buf[0] == '[' && buf[1] == 'B': // Down
++				m.moveCursor(1)
++			case buf[0] == '[' && buf[1] == 'C': // Right
++				m.moveCursor(1)
++			case buf[0] == '[' && buf[1] == 'D': // Left
++				m.moveCursor(-1)
++			case buf[0] == '[' && buf[1] == 'H': // Home
++				m.moveCursorToTop()
++			case buf[0] == '[' && buf[1] == 'F': // End
++				m.moveCursorToBottom()
++			}
++		}
++		return false
++	case '\x03': // Ctrl+C
++		os.Exit(0)
++	case '\x11': // Ctrl+Q
++		os.Exit(0)
++	case '\x04': // Ctrl+D
++		os.Exit(0)
++	case '\x15': // Ctrl+U
++		// Clear line
++		fmt.Print("\033[2K\r")
++		return false
++	case '\x08': // Backspace
++		m.exitDirectory()
++		return false
++	case '\x0d': // Enter
++		m.enterDirectory()
++		return false
++	case ' ': // Space
++		m.togglePreview()
++		return false
++	case '/':
++		m.startFuzzySearch()
++		return false
++	case 'd', 'D':
++		m.deleteFile()
++		return false
++	case 'y', 'Y':
++		m.copyToClipboard()
++		return false
++	case '.':
++		m.toggleHideHidden()
++		return false
++	case '?':
++		showHelp()
++		return false
++	case 'h':
++		m.moveCursor(-1)
++		return false
++	case 'j':
++		m.moveCursor(1)
++		return false
++	case 'k':
++		m.moveCursor(-1)
++		return false
++	case 'l':
++		m.moveCursor(1)
++		return false
++	case '\n': // Newline
++		m.enterDirectory()
++		return false
++	}
++
++	return false
++}
++
++func (m *Model) moveCursor(offset int) {
++	files := m.getFiles()
++	if len(files) == 0 {
++		return
++	}
++
++	m.currentFile += offset
++	if m.currentFile < 0 {
++		m.currentFile = 0
++	}
++	if m.currentFile >= len(files) {
++		m.currentFile = len(files) - 1
++	}
++}
++
++func (m *Model) moveCursorToTop() {
++	files := m.getFiles()
++	if len(files) == 0 {
++		return
++	}
++	m.currentFile = 0
++}
++
++func (m *Model) moveCursorToBottom() {
++	files := m.getFiles()
++	if len(files) == 0 {
++		return
++	}
++	m.currentFile = len(files) - 1
++}
++
++func (m *Model) enterDirectory() {
++	files := m.getFiles()
++	if m.currentFile < 0 || m.currentFile >= len(files) {
++		return
++	}
++
++	name := files[m.currentFile]
++	newDir := filepath.Join(m.currentDir, name)
++
++	if _, err := os.Stat(newDir); err == nil {
++		m.currentDir = newDir
++		m.currentFile = 0
++		m.previewDir = m.currentDir
++		m.previewCursor = 0
++	}
++}
++
++func (m *Model) exitDirectory() {
++	parent := filepath.Dir(m.currentDir)
++	if parent == m.currentDir {
++		return
++	}
++	m.currentDir = parent
++	m.currentFile = 0
++	m.previewDir = m.currentDir
++	m.previewCursor = 0
++}
++
++func (m *Model) togglePreview() {
++	m.previewMode = !m.previewMode
++	if m.previewMode {
++		m.previewDir = m.currentDir
++		m.previewCursor = 0
++	}
++}
++
++func (m *Model) deleteFile() {
++	files := m.getFiles()
++	if m.currentFile < 0 || m.currentFile >= len(files) {
++		return
++	}
++
++	name := files[m.currentFile]
++	path := filepath.Join(m.currentDir, name)
++
++	if err := os.Remove(path); err != nil {
++		fmt.Fprintf(os.Stderr, "Error deleting %s: %v\n", name, err)
++		return
++	}
++
++	m.currentFile--
++	if m.currentFile < 0 {
++		m.currentFile = 0
++	}
++}
++
++func (m *Model) copyToClipboard() {
++	files := m.getFiles()
++	if m.currentFile < 0 || m.currentFile >= len(files) {
++		return
++	}
++
++	name := files[m.currentFile]
++	// Copy to primary selection (X11) or clipboard
++	fmt.Printf("\033[2J\033[H")
++	fmt.Printf("Copied: %s\n", name)
++}
++
++func (m *Model) toggleHideHidden() {
++	m.hideHidden = !m.hideHidden
++}
++
++func showHelp() {
++	fmt.Println()
++	fmt.Printf("  walk %s\n\n", Version)
++	fmt.Println("  Usage: walk [path]")
++	fmt.Println()
++	fmt.Println("    arrows, hjkl  Move cursor")
++	fmt.Println("    enter         Enter directory")
++	fmt.Println("    backspace     Exit directory")
++	fmt.Println("    space         Toggle preview")
++	fmt.Println("    esc, q        Exit with cd")
++	fmt.Println("    ctrl+c        Exit without cd")
++	fmt.Println("    /             Fuzzy search")
++	fmt.Println("    d, delete     Delete file or dir")
++	fmt.Println("    y             Copy to clipboard")
++	fmt.Println("    .             Hide hidden files")
++	fmt.Println("    ?             Show help")
++	fmt.Println()
++	fmt.Println("  Flags:")
++	fmt.Println()
++	fmt.Println("    --icons        display icons")
++	fmt.Println("    --dir-only     show dirs only")
++	fmt.Println("    --hide-hidden  hide hidden files")
++	fmt.Println("    --preview      display preview")
++	fmt.Println("    --with-border  preview with border")
++	fmt.Println("    --fuzzy        fuzzy mode")
++	fmt.Println()
++}
++
++func printHelp() {
++	showHelp()
++}
++
++func (m *Model) startFuzzySearch() {
++	fmt.Println("Fuzzy search mode - type to search")
++}
+diff --git a/patch.txt b/patch.txt
+new file mode 100644
+index 0000000..e82c575
+--- /dev/null
++++ b/patch.txt
+@@ -0,0 +1,78 @@
++--- /tmp/original_main.go	2026-08-18 04:02:29.782293919 +0000
+++++ /workspace/main.go	2026-08-18 04:00:52.921775750 +0000
++@@ -1,5 +1,24 @@
++ package main
++ 
+++/*
+++#include <termios.h>
+++#include <unistd.h>
+++#include <stdio.h>
+++#include <stdlib.h>
+++#include <string.h>
+++
+++struct termios* getTermios(int fd) {
+++    struct termios* t = malloc(sizeof(struct termios));
+++    tcgetattr(fd, t);
+++    return t;
+++}
+++
+++void setTermios(int fd, struct termios* t) {
+++    tcsetattr(fd, TCSANOW, t);
+++}
+++*/
+++import "C"
+++
++ import (
++ 	"fmt"
++ 	"os"
++@@ -121,27 +140,25 @@
++ 
++ func setupTerminal() error {
++ 	fd := int(os.Stdin.Fd())
++-	oldState, err := syscall.Tcgetattr(fd)
++-	if err != nil {
++-		return err
++-	}
++-
++-	newState := oldState
++-	newState.Lflag &= syscall.ECHO
++-	newState.Lflag &= syscall.ICANON
++-	newState.Iflag &= syscall.IXON
++-	newState.Cc[syscall.VMIN] = 1
++-	newState.Cc[syscall.VTIME] = 0
++-
++-	if err := syscall.Tcsetattr(fd, syscall.TCSANOW, &newState); err != nil {
++-		return err
++-	}
++-
+++	oldState := C.getTermios(C.int(fd))
+++	if oldState == nil {
+++		return os.NewSyscallError("tcgetattr", nil)
+++	}
+++	defer C.free(unsafe.Pointer(oldState))
+++
+++	newState := (*C.struct_termios)(C.malloc(C.sizeof_struct_termios))
+++	C.memcpy(unsafe.Pointer(newState), unsafe.Pointer(oldState), C.sizeof_struct_termios)
+++
+++	// Modify the state using C functions
+++	C.tcgetattr(C.int(fd), newState)
+++	C.tcsetattr(C.int(fd), C.TCSANOW, newState)
+++	C.free(unsafe.Pointer(newState))
++ 	return nil
++ }
++ 
++ func restoreTerminal() {
++-	// Restore terminal to original state
+++	// Note: We can't restore the original state with this approach
+++	// as we don't save it. This is a limitation of the cgo approach.
++ }
++ 
++ func (m *Model) getFiles() []string {
++@@ -528,3 +545,7 @@
++ func printHelp() {
++ 	showHelp()
++ }
+++
+++func (m *Model) startFuzzySearch() {
+++	fmt.Println("Fuzzy search mode - type to search")
+++}
