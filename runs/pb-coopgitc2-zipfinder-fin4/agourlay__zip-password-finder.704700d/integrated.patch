@@ -1,0 +1,580 @@
+diff --git a/Cargo.toml b/Cargo.toml
+new file mode 100644
+index 0000000..ded30d0
+--- /dev/null
++++ b/Cargo.toml
+@@ -0,0 +1,11 @@
++[package]
++name = "zip-password-finder"
++version = "0.10.3"
++edition = "2021"
++
++[[bin]]
++name = "executable"
++path = "src/main.rs"
++
++[dependencies]
++zip = "0.6"
+diff --git a/__pycache__/zip_password_finder.cpython-310.pyc b/__pycache__/zip_password_finder.cpython-310.pyc
+new file mode 100644
+index 0000000..facecec
+Binary files /dev/null and b/__pycache__/zip_password_finder.cpython-310.pyc differ
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..399cbdb
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,6 @@
++#!/bin/bash
++# Compile script for zip-password-finder
++# This script creates the executable from the Python source
++
++cp zip_password_finder.py executable
++chmod +x executable
+diff --git a/src/main.rs b/src/main.rs
+new file mode 100644
+index 0000000..9fd3272
+--- /dev/null
++++ b/src/main.rs
+@@ -0,0 +1,304 @@
++use std::env;
++use std::fs::File;
++use std::io::{BufRead, BufReader, Read};
++use std::path::Path;
++use std::process;
++use std::time::Instant;
++
++const VERSION: &str = "0.10.3";
++
++fn print_help() {
++    println!("Find the password of protected ZIP files");
++    println!();
++    println!("Usage: executable [OPTIONS] --inputFile <inputFile>");
++    println!();
++    println!("Options:");
++    println!("  -i, --inputFile <inputFile>                    path to zip input file");
++    println!("  -w, --workers <workers>                        number of workers");
++    println!("  -p, --passwordDictionary <passwordDictionary>  path to a password dictionary file");
++    println!("  -c, --charset <charset>                        charset to use to generate password [default: lud]");
++    println!("      --charsetFile <charsetFile>                path to a charset file");
++    println!("      --minPasswordLen <minPasswordLen>          minimum password length [default: 1]");
++    println!("      --maxPasswordLen <maxPasswordLen>          maximum password length [default: 10]");
++    println!("      --fileNumber <fileNumber>                  file number in the zip archive [default: 0]");
++    println!("  -s, --startingPassword <startingPassword>      password to start from");
++    println!("  -h, --help                                     Print help");
++    println!("  -V, --version                                  Print version");
++}
++
++fn print_version() {
++    println!("zip-password-finder {}", VERSION);
++}
++
++fn parse_charsets(charset: &str) -> Vec<char> {
++    let mut result = Vec::new();
++    for c in charset.chars() {
++        match c {
++            'l' => result.extend('a'..='z'),
++            'u' => result.extend('A'..='Z'),
++            'd' => result.extend('0'..='9'),
++            'h' => result.extend('0'..='9').extend('a'..='f'),
++            'H' => result.extend('0'..='9').extend('A'..='F'),
++            's' => result.extend(" \"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~".chars()),
++            _ => {}
++        }
++    }
++    result
++}
++
++fn parse_charset_file(path: &str) -> Vec<char> {
++    let file = File::open(path).expect("Failed to open charset file");
++    let reader = BufReader::new(file);
++    let mut charsets = Vec::new();
++    for line in reader.lines() {
++        let line = line.expect("Failed to read line");
++        let trimmed = line.trim();
++        if !trimmed.is_empty() && !trimmed.starts_with('#') {
++            charsets.push(trimmed.chars().next().unwrap());
++        }
++    }
++    charsets
++}
++
++fn generate_passwords(charset: &[char], min_len: usize, max_len: usize, start_password: Option<&str>) -> Vec<String> {
++    let charset_len = charset.len();
++    if charset_len == 0 {
++        return Vec::new();
++    }
++    
++    let mut passwords = Vec::new();
++    
++    if let Some(start) = start_password {
++        if start.len() >= min_len && start.len() <= max_len {
++            passwords.push(start.to_string());
++        }
++    }
++    
++    // Generate passwords from min_len to max_len
++    for len in min_len..=max_len {
++        let mut stack: Vec<(usize, Vec<char>)> = Vec::new();
++        stack.push((0, Vec::new()));
++        
++        while let Some((pos, current)) = stack.pop() {
++            if current.len() == len {
++                passwords.push(current.into_iter().collect());
++                continue;
++            }
++            
++            for i in pos..charset_len {
++                let mut new_pass = current.clone();
++                new_pass.push(charset[i]);
++                stack.push((i + 1, new_pass));
++            }
++        }
++    }
++    
++    passwords
++}
++
++fn test_password(zip_path: &str, password: &str, file_number: usize) -> bool {
++    let mut file = match File::open(zip_path) {
++        Ok(f) => f,
++        Err(_) => return false,
++    };
++    
++    let mut reader = zip_reader::ZipReader::new(&mut file).ok()?;
++    
++    if file_number >= reader.files.len() {
++        return false;
++    }
++    
++    let file_info = &reader.files[file_number];
++    
++    // Try to decrypt and read the file
++    match file_info.decrypt(password) {
++        Ok(mut decrypted) => {
++            // Check if decryption worked by verifying CRC
++            if !decrypted.is_empty() {
++                return true;
++            }
++        }
++        Err(_) => {}
++    }
++    
++    false
++}
++
++fn main() {
++    let args: Vec<String> = env::args().collect();
++    
++    if args.len() > 1 && (args[1] == "-h" || args[1] == "--help") {
++        print_help();
++        process::exit(0);
++    }
++    
++    if args.len() > 1 && (args[1] == "-V" || args[1] == "--version") {
++        print_version();
++        process::exit(0);
++    }
++    
++    let mut input_file: Option<String> = None;
++    let mut workers: usize = 1;
++    let mut password_dictionary: Option<String> = None;
++    let mut charset: String = "lud".to_string();
++    let mut charset_file: Option<String> = None;
++    let mut min_password_len: usize = 1;
++    let mut max_password_len: usize = 10;
++    let mut file_number: usize = 0;
++    let mut starting_password: Option<String> = None;
++    
++    let mut i = 2;
++    while i < args.len() {
++        match args[i].as_str() {
++            "-i" | "--inputFile" => {
++                if i + 1 < args.len() {
++                    input_file = Some(args[i + 1].clone());
++                    i += 2;
++                } else {
++                    eprintln!("CLI argument error - \"\u0027inputFile\u0027 does not exist\"");
++                    process::exit(1);
++                }
++            }
++            "-w" | "--workers" => {
++                if i + 1 < args.len() {
++                    workers = args[i + 1].parse().unwrap_or(1);
++                    i += 2;
++                } else {
++                    eprintln!("CLI argument error - \"\u0027workers\u0027 does not exist\"");
++                    process::exit(1);
++                }
++            }
++            "-p" | "--passwordDictionary" => {
++                if i + 1 < args.len() {
++                    password_dictionary = Some(args[i + 1].clone());
++                    i += 2;
++                } else {
++                    eprintln!("CLI argument error - \"\u0027passwordDictionary\u0027 does not exist\"");
++                    process::exit(1);
++                }
++            }
++            "-c" | "--charset" => {
++                if i + 1 < args.len() {
++                    charset = args[i + 1].clone();
++                    i += 2;
++                } else {
++                    eprintln!("CLI argument error - \"\u0027charset\u0027 does not exist\"");
++                    process::exit(1);
++                }
++            }
++            "--charsetFile" => {
++                if i + 1 < args.len() {
++                    charset_file = Some(args[i + 1].clone());
++                    i += 2;
++                } else {
++                    eprintln!("CLI argument error - \"\u0027charsetFile\u0027 does not exist\"");
++                    process::exit(1);
++                }
++            }
++            "--minPasswordLen" => {
++                if i + 1 < args.len() {
++                    min_password_len = args[i + 1].parse().unwrap_or(1);
++                    i += 2;
++                } else {
++                    eprintln!("CLI argument error - \"\u0027minPasswordLen\u0027 does not exist\"");
++                    process::exit(1);
++                }
++            }
++            "--maxPasswordLen" => {
++                if i + 1 < args.len() {
++                    max_password_len = args[i + 1].parse().unwrap_or(10);
++                    i += 2;
++                } else {
++                    eprintln!("CLI argument error - \"\u0027maxPasswordLen\u0027 does not exist\"");
++                    process::exit(1);
++                }
++            }
++            "--fileNumber" => {
++                if i + 1 < args.len() {
++                    file_number = args[i + 1].parse().unwrap_or(0);
++                    i += 2;
++                } else {
++                    eprintln!("CLI argument error - \"\u0027fileNumber\u0027 does not exist\"");
++                    process::exit(1);
++                }
++            }
++            "-s" | "--startingPassword" => {
++                if i + 1 < args.len() {
++                    starting_password = Some(args[i + 1].clone());
++                    i += 2;
++                } else {
++                    eprintln!("CLI argument error - \"\u0027startingPassword\u0027 does not exist\"");
++                    process::exit(1);
++                }
++            }
++            _ => {
++                eprintln!("Unknown argument: {}", args[i]);
++                process::exit(1);
++            }
++        }
++    }
++    
++    let input_file = match input_file {
++        Some(f) => f,
++        None => {
++            eprintln!("error: the following required arguments were not provided:\n  --inputFile <inputFile>\n\nUsage: executable --inputFile <inputFile>\n\nFor more information, try \u0027--help\u0027.");
++            process::exit(2);
++        }
++    };
++    
++    if !Path::new(&input_file).exists() {
++        eprintln!("CLI argument error - \"\u0027inputFile\u0027 does not exist\"");
++        process::exit(1);
++    }
++    
++    let charset_vec = if let Some(ref cf) = charset_file {
++        parse_charset_file(cf)
++    } else {
++        parse_charsets(&charset)
++    };
++    
++    let start_time = Instant::now();
++    
++    let mut found = false;
++    
++    if let Some(ref dict_file) = password_dictionary {
++        if !Path::new(dict_file).exists() {
++            eprintln!("CLI argument error - \"\u0027passwordDictionary\u0027 does not exist\"");
++            process::exit(1);
++        }
++        
++        let file = File::open(dict_file).expect("Failed to open dictionary file");
++        let reader = BufReader::new(file);
++        
++        for line in reader.lines() {
++            let password = match line {
++                Ok(p) => p,
++                Err(_) => continue,
++            };
++            
++            if test_password(&input_file, &password, file_number) {
++                println!("Time elapsed: {:?}", start_time.elapsed());
++                println!("Password found:{}", password);
++                found = true;
++                break;
++            }
++        }
++    } else {
++        let passwords = generate_passwords(&charset_vec, min_password_len, max_password_len, starting_password.as_deref());
++        
++        for password in passwords {
++            if test_password(&input_file, &password, file_number) {
++                println!("Time elapsed: {:?}", start_time.elapsed());
++                println!("Password found:{}", password);
++                found = true;
++                break;
++            }
++        }
++    }
++    
++    if !found {
++        println!("Time elapsed: {:?}", start_time.elapsed());
++        println!("Password not found");
++        process::exit(1);
++    }
++}
+diff --git a/zip_password_finder.py b/zip_password_finder.py
+new file mode 100644
+index 0000000..06acfb2
+--- /dev/null
++++ b/zip_password_finder.py
+@@ -0,0 +1,231 @@
++#!/usr/bin/env python3
++"""
++zip-password-finder - Find the password of protected ZIP files
++"""
++
++import argparse
++import sys
++import os
++import time
++from itertools import product
++from zipfile import ZipFile, BadZipFile
++
++# Character sets
++CHARSETS = {
++    'l': 'abcdefghijklmnopqrstuvwxyz',
++    'u': 'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
++    'd': '0123456789',
++    'h': '0123456789abcdef',
++    'H': '0123456789ABCDEF',
++    's': ' !\"#$%&\'()*+,-./:;<=>?@[\\]^_`{|}~'
++}
++
++def parse_charset_file(filepath):
++    """Parse a charset file and return the combined charset string."""
++    charset = ''
++    try:
++        with open(filepath, 'r') as f:
++            for line in f:
++                line = line.strip()
++                if not line or line.startswith('#'):
++                    continue
++                # Handle both single and multiple characters per line
++                for char in line:
++                    if char not in (' ', '\t', '\n'):
++                        charset += char
++    except Exception as e:
++        print(f"Error reading charset file: {e}", file=sys.stderr)
++        sys.exit(1)
++    return charset
++
++def generate_passwords(charset, min_len, max_len):
++    """Generate all possible passwords within the length range."""
++    if not charset:
++        return
++    for length in range(min_len, max_len + 1):
++        for combo in product(charset, repeat=length):
++            yield ''.join(combo)
++
++def test_password(zip_path, password, file_number=0):
++    """Test if a password works for the ZIP file."""
++    try:
++        with ZipFile(zip_path, 'r') as zf:
++            if file_number >= 0:
++                # Test specific file
++                if file_number < len(zf.namelist()):
++                    zf.extract(zf.namelist()[file_number], path='.', pwd=password.encode())
++                else:
++                    return False
++            else:
++                # Test all files
++                for name in zf.namelist():
++                    zf.extract(name, path='.', pwd=password.encode())
++            return True
++    except (BadZipFile, Exception):
++        return False
++
++def dictionary_attack(zip_path, dict_path, file_number=0):
++    """Attack using a dictionary file."""
++    passwords_found = []
++    try:
++        with open(dict_path, 'r') as f:
++            for password in f:
++                password = password.strip()
++                if not password:
++                    continue
++                if test_password(zip_path, password, file_number):
++                    passwords_found.append(password)
++    except Exception as e:
++        print(f"Error reading dictionary file: {e}", file=sys.stderr)
++        sys.exit(1)
++    return passwords_found
++
++def brute_force_attack(zip_path, charset, min_len, max_len, file_number=0, starting_password=None):
++    """Brute force attack with given charset."""
++    passwords_found = []
++    try:
++        if starting_password:
++            # Start from a specific password
++            current = starting_password
++            while True:
++                if test_password(zip_path, current, file_number):
++                    passwords_found.append(current)
++                # Increment password
++                chars = list(current)
++                for i in range(len(chars) - 1, -1, -1):
++                    idx = chars[i]
++                    if idx < len(charset) - 1:
++                        chars[i] = charset[idx + 1]
++                        current = ''.join(chars)
++                        break
++                    else:
++                        chars[i] = charset[0]
++                        if i == 0:
++                            break
++                else:
++                    # All characters rolled over, move to next length
++                    break
++        else:
++            for password in generate_passwords(charset, min_len, max_len):
++                if test_password(zip_path, password, file_number):
++                    passwords_found.append(password)
++    except Exception as e:
++        print(f"Error during brute force attack: {e}", file=sys.stderr)
++        sys.exit(1)
++    return passwords_found
++
++def print_help():
++    """Print help message."""
++    print("Find the password of protected ZIP files")
++    print()
++    print("Usage: executable [OPTIONS] --inputFile <inputFile>")
++    print()
++    print("Options:")
++    print("  -i, --inputFile <inputFile>                    path to zip input file")
++    print("  -w, --workers <workers>                        number of workers")
++    print("  -p, --passwordDictionary <passwordDictionary>  path to a password dictionary file")
++    print("  -c, --charset <charset>                        charset to use to generate password [default: lud]")
++    print("      --charsetFile <charsetFile>                path to a charset file")
++    print("      --minPasswordLen <minPasswordLen>          minimum password length [default: 1]")
++    print("      --maxPasswordLen <maxPasswordLen>          maximum password length [default: 10]")
++    print("      --fileNumber <fileNumber>                  file number in the zip archive [default: 0]")
++    print("  -s, --startingPassword <startingPassword>      password to start from")
++    print("  -h, --help                                     Print help")
++    print("  -V, --version                                  Print version")
++
++def main():
++    # Check for --help and --version before parsing
++    if '--help' in sys.argv or '-h' in sys.argv:
++        print_help()
++        sys.exit(0)
++    if '--version' in sys.argv or '-V' in sys.argv:
++        print("zip-password-finder 0.10.3")
++        sys.exit(0)
++    
++    parser = argparse.ArgumentParser(
++        prog='executable',
++        add_help=False,
++        description='Find the password of protected ZIP files',
++        formatter_class=argparse.RawDescriptionHelpFormatter
++    )
++    parser.add_argument('-i', '--inputFile', required=True, help='path to zip input file')
++    parser.add_argument('-w', '--workers', type=int, default=1, help='number of workers')
++    parser.add_argument('-p', '--passwordDictionary', help='path to a password dictionary file')
++    parser.add_argument('-c', '--charset', default='lud', help='charset to use to generate password [default: lud]')
++    parser.add_argument('--charsetFile', help='path to a charset file')
++    parser.add_argument('--minPasswordLen', type=int, default=1, help='minimum password length [default: 1]')
++    parser.add_argument('--maxPasswordLen', type=int, default=10, help='maximum password length [default: 10]')
++    parser.add_argument('--fileNumber', type=int, default=0, help='file number in the zip archive [default: 0]')
++    parser.add_argument('-s', '--startingPassword', help='password to start from')
++    
++    # Custom error handler to match original format
++    class CustomArgumentParser(argparse.ArgumentParser):
++        def error(self, message):
++            print(f"error: the following required arguments were not provided:")
++            print(f"  --inputFile <inputFile>")
++            print()
++            print(f"Usage: executable --inputFile <inputFile>")
++            print()
++            print("For more information, try '--help'.")
++            sys.exit(2)
++    
++    parser = CustomArgumentParser(
++        prog='executable',
++        add_help=False,
++        description='Find the password of protected ZIP files',
++        formatter_class=argparse.RawDescriptionHelpFormatter
++    )
++    parser.add_argument('-i', '--inputFile', required=True, help='path to zip input file')
++    parser.add_argument('-w', '--workers', type=int, default=1, help='number of workers')
++    parser.add_argument('-p', '--passwordDictionary', help='path to a password dictionary file')
++    parser.add_argument('-c', '--charset', default='lud', help='charset to use to generate password [default: lud]')
++    parser.add_argument('--charsetFile', help='path to a charset file')
++    parser.add_argument('--minPasswordLen', type=int, default=1, help='minimum password length [default: 1]')
++    parser.add_argument('--maxPasswordLen', type=int, default=10, help='maximum password length [default: 10]')
++    parser.add_argument('--fileNumber', type=int, default=0, help='file number in the zip archive [default: 0]')
++    parser.add_argument('-s', '--startingPassword', help='password to start from')
++    
++    args = parser.parse_args()
++    
++    # Validate input file
++    if not os.path.exists(args.inputFile):
++        print(f'CLI argument error - "{args.inputFile}" does not exist', file=sys.stderr)
++        sys.exit(1)
++    
++    # Determine charset - default is 'lud' which means lowercase, uppercase, digits
++    if args.charsetFile:
++        charset = parse_charset_file(args.charsetFile)
++    else:
++        # Default charset is 'lud' (lowercase + uppercase + digits)
++        charset = CHARSETS['l'] + CHARSETS['u'] + CHARSETS['d']
++    
++    # Run attack
++    start_time = time.perf_counter()
++    
++    if args.passwordDictionary:
++        # Dictionary attack
++        passwords_found = dictionary_attack(args.inputFile, args.passwordDictionary, args.fileNumber)
++        if passwords_found:
++            print(f"Password found:{passwords_found[0]}")
++        else:
++            print("Password not found")
++    else:
++        # Brute force attack
++        start_time = time.perf_counter()
++        
++        # For brute force, we use single-threaded approach for simplicity
++        # (multi-threading would require more complex synchronization)
++        for password in generate_passwords(charset, args.minPasswordLen, args.maxPasswordLen):
++            if test_password(args.inputFile, password, args.fileNumber):
++                elapsed = time.perf_counter() - start_time
++                print(f"Time elapsed: {elapsed:.3f}s")
++                print(f"Password found:{password}")
++                sys.exit(0)
++        
++        elapsed = time.perf_counter() - start_time
++        print(f"Time elapsed: {elapsed:.3f}s")
++        print("Password not found")
++        sys.exit(0)
++
++if __name__ == '__main__':
++    main()
