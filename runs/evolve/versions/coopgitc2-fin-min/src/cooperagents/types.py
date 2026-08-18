@@ -54,3 +54,30 @@ class Assignment:
     task: str
     role: str = "member"
     feature_id: int | None = None
+
+
+@dataclass
+class RunResult:
+    """The aggregate outcome of a team run."""
+
+    run_id: str
+    repo: str
+    task_id: int
+    features: list[int]
+    seeds: dict[str, AgentResult] = field(default_factory=dict)
+    helpers: dict[str, AgentResult] = field(default_factory=dict)
+    integrated: AgentResult | None = None
+    """The single coherent diff from a shared-workspace run (both features in
+    one tree).  When set, the eval writer submits it as the team's solution."""
+    duration_seconds: float = 0.0
+    metrics: dict[str, Any] = field(default_factory=dict)
+    spawn_metrics: dict[str, Any] = field(default_factory=dict)
+    log_dir: str | None = None
+
+    @property
+    def total_cost(self) -> float:
+        return sum(r.cost for r in {**self.seeds, **self.helpers}.values())
+
+    @property
+    def total_steps(self) -> int:
+        return sum(r.steps for r in {**self.seeds, **self.helpers}.values())

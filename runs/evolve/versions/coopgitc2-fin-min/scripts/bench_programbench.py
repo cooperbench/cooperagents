@@ -47,7 +47,18 @@ from cooperagents.env.docker import DockerEnv
 from cooperagents.harness import run_coopgitc2_team
 from cooperagents.types import Assignment
 
-ADAPTER = get_adapter("programbench")
+import os as _os
+ADAPTER = get_adapter(_os.environ.get("COOPER_BENCHMARK", "programbench"))
+
+
+def _parse_instance(raw: str):
+    """ProgramBench: instance id string. CooperBench: repo:task_id:f1,f2."""
+    if ADAPTER.name == "cooperbench":
+        from cooperagents.eval.dataset import WorkItem
+        repo, task_id, feats = raw.split(":")
+        return WorkItem(repo=repo, task_id=int(task_id),
+                        features=[int(x) for x in feats.split(",")])
+    return raw
 
 
 def _score(instance: str, patch: str) -> tuple:
@@ -148,7 +159,7 @@ def run_team_once(arm: str, instance: str, *, step_limit: int, agent_time_limit:
 
     if dry_run:
         return {
-            "arm": arm, "team_size": n, "instance": instance,
+            "arm": arm, "team_size": n, "instance": str(instance),
             "image": ADAPTER.image(instance),
             "adapter": {"name": ADAPTER.name, "build_artifact": ADAPTER.build_artifact,
                         "reference_binary": ADAPTER.reference_binary},
@@ -199,6 +210,7 @@ def main() -> None:
 
     if args.basic_verify:
         ADAPTER.reference_binary = None  # verification degrades to build-only
+    args.instance = _parse_instance(args.instance)
     if args.dry_run:
         import json as _json
         cfg, _ = run_team_once(args.arm, args.instance,
@@ -212,7 +224,7 @@ def main() -> None:
         print(_json.dumps(cfg, sort_keys=True))
         return
     run_name = f"pb-{args.arm}-{args.rep}"
-    out_root = Path(args.runs_dir) / run_name / args.instance
+    out_root = Path(args.runs_dir) / run_name / str(args.instance).replace(" ", "")
     t0 = time.time()
     brief = ADAPTER.brief(args.instance) if args.env_brief else ""
 
