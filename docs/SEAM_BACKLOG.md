@@ -1239,3 +1239,39 @@ evidence the infrastructure now works, not a measurement of the harness.
 DEFINITIVE RERUN queued on the fully hardened stack (clean summaries,
 overflow-proof compaction, segments preserved, 180s timeouts,
 min_containers=2, validated dispatch).
+
+DEFINITIVE TEAM-VS-SOLO TABLE (2026-08-18, fin batch): 10 tasks x both
+arms, fully hardened stack (clean summaries, overflow-proof compaction,
+segments preserved, hard 240s completion cap, min_containers=2, staggered
+validated dispatch). ALL 20 CELLS RESOURCE-VALIDATED.
+| task        | solo | team-t3 |
+| cmatrix     | 72.0 | 90.0 |
+| tuijournal  |  0.0 | 48.9 |
+| walk        |  0.0 | 43.6 |
+| zoxide      | 14.0 | 30.2 |
+| zipfinder   |  0.0 | 21.6 |
+| fx          |  0.0 | 20.6 |
+| i3style     | 36.7 | 17.1 |
+| srgn        | 10.5 | 11.1 |
+| chroma      |  0.0 |  0.0 |
+| shellharden |  0.0 |  0.0 |
+MEANS: TEAM 28.3, SOLO 13.3 (2.1x). Team wins 7, solo 1 (i3style),
+ties 2 (hard zeros). VERDICT: with sound infrastructure and validated
+measurement, the 3-agent coordinator team with the full mechanism stack
+(env brief, completion+merge gates, selection, repair) decisively beats
+solo on ProgramBench — reversing the artifact-era "solo wins multi-task"
+and finally answering the original question cleanly.
+Cell provenance: replacements used ONLY where originals failed validation
+(team-zipfinder starved; solo zoxide/srgn/tuijournal hit the read-timeout
+hang, killed at 3h) — the i3style team rerun (41.1) was NOT substituted
+for its passing original (17.1): reruns replace invalid cells, never
+worse-scoring valid ones.
+ROOT CAUSE of the 3h solo hangs (py-spy live capture): litellm/httpx
+read timeout does not arm — calls blocked 2h+ in ssl.read awaiting
+response headers with timeout=180 correctly passed. Fixed with a hard
+future-timeout (240s) around every completion, unit-tested on a
+blackhole endpoint.
+Loop finding upheld on clean memory: cmatrix-fin3 agent1 looped 1000
+steps (96% dup) with CLEAN summaries — pollution was not the sole loop
+cause; the duplicate-command guard is the next mechanism, measured
+against this baseline.
