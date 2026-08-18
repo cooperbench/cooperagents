@@ -181,9 +181,14 @@ def main() -> None:
     ap.add_argument("--completion-gate", action="store_true")
     ap.add_argument("--env-brief", action="store_true")
     ap.add_argument("--presub-merge", action="store_true")
+    ap.add_argument("--basic-verify", action="store_true",
+                    help="E_CB purity: build-only verification — disable the ProgramBench-evolved "
+                         "reference-behavior probes in score/repair (CooperBench-era form)")
     ap.add_argument("--runs-dir", default="runs")
     args = ap.parse_args()
 
+    if args.basic_verify:
+        ADAPTER.reference_binary = None  # verification degrades to build-only
     run_name = f"pb-{args.arm}-{args.rep}"
     out_root = Path(args.runs_dir) / run_name / args.instance
     t0 = time.time()

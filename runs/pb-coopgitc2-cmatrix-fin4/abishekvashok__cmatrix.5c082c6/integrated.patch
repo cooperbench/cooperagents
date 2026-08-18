@@ -1,0 +1,453 @@
+diff --git a/__pycache__/cmatrix.cpython-310.pyc b/__pycache__/cmatrix.cpython-310.pyc
+new file mode 100644
+index 0000000..43dd052
+Binary files /dev/null and b/__pycache__/cmatrix.cpython-310.pyc differ
+diff --git a/cmatrix.py b/cmatrix.py
+new file mode 100644
+index 0000000..de913b0
+--- /dev/null
++++ b/cmatrix.py
+@@ -0,0 +1,364 @@
++#!/usr/bin/env python3
++"""
++CMatrix - Matrix-like terminal effect
++"""
++
++import sys
++import curses
++import random
++import time
++import argparse
++
++# Default settings
++DEFAULT_DELAY = 4
++DEFAULT_COLOR = "green"
++DEFAULT_TTY = None
++
++# Character sets
++KATAKANA = "アァカサタナハマヤャラワガザダバパイィキシチニヒミリヰギジヂビピウゥクスツヌフムユュルグズブヅプエェケセテネヘメレヱゲゼデベペオォコソトノホモヨョロヲゴゾドボポヴッン"
++ALPHANUM = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
++KATAKANA_ALPHANUM = KATAKANA + ALPHANUM
++
++# Key mappings for color change
++COLOR_KEYS = {
++    "!": "red",
++    "@": "green",
++    "#": "yellow",
++    "$": "blue",
++    "%": "magenta",
++    "^": "cyan",
++    "&": "white",
++    ")": "black",
++}
++
++class CMatrix:
++    def __init__(self, stdscr, args):
++        self.stdscr = stdscr
++        self.args = args
++        
++        # Initialize curses
++        curses.curs_set(0)
++        self.stdscr.nodelay(True)
++        
++        # Set up colors
++        curses.start_color()
++        curses.use_default_colors()
++        curses.init_pair(1, curses.COLOR_BLACK, curses.COLOR_GREEN)
++        curses.init_pair(2, curses.COLOR_BLACK, curses.COLOR_RED)
++        curses.init_pair(3, curses.COLOR_BLACK, curses.COLOR_BLUE)
++        curses.init_pair(4, curses.COLOR_BLACK, curses.COLOR_WHITE)
++        curses.init_pair(5, curses.COLOR_BLACK, curses.COLOR_YELLOW)
++        curses.init_pair(6, curses.COLOR_BLACK, curses.COLOR_CYAN)
++        curses.init_pair(7, curses.COLOR_BLACK, curses.COLOR_MAGENTA)
++        curses.init_pair(8, curses.COLOR_BLACK, curses.COLOR_BLACK)
++        
++        # Settings
++        self.delay = args.u if args.u is not None else DEFAULT_DELAY
++        self.color = args.C if args.C else DEFAULT_COLOR
++        self.message = args.M if args.M else None
++        self.tty = args.t if args.t else DEFAULT_TTY
++        
++        # Mode flags
++        self.async_scroll = args.a
++        self.bold = args.b
++        self.all_bold = args.B
++        self.force_term = args.f
++        self.linux_mode = args.l
++        self.old_scroll = args.o
++        self.no_bold = args.n
++        self.screensaver = args.s
++        self.x_mode = args.x
++        self.rainbow = args.r
++        self.lambda_mode = args.m
++        self.change_chars = args.k
++        
++        # Lock mode
++        self.locked = args.L
++        
++        # Character set
++        if args.c:
++            self.chars = KATAKANA_ALPHANUM
++        else:
++            self.chars = ALPHANUM
++        
++        # Lambda character
++        self.lambda_char = "λ"
++        
++        # Get terminal size
++        self.height, self.width = self.stdscr.getmaxyx()
++        
++        # Initialize columns
++        self.columns = []
++        for x in range(self.width):
++            self.columns.append({
++                'y': 0,
++                'char': random.choice(self.chars),
++                'color': self.color,
++                'bold': self.bold,
++            })
++        
++        # For lambda mode
++        self.lambda_positions = set()
++        
++        # For change mode
++        self.change_positions = set()
++        
++        # For message mode
++        self.message_y = self.height // 2
++        self.message_x = self.width // 2
++        
++        # For lock mode
++        self.lock_message = "Locked"
++        
++        # For rainbow mode
++        self.rainbow_hue = 0
++        
++        # For old scroll mode
++        self.old_scroll_y = 0
++        
++        # For async scroll
++        self.async_y = [0] * self.width
++        
++    def get_color(self):
++        if self.rainbow:
++            self.rainbow_hue = (self.rainbow_hue + 1) % 360
++            # Map hue to curses color
++            if self.rainbow_hue < 60:
++                return curses.color_pair(5)  # yellow
++            elif self.rainbow_hue < 120:
++                return curses.color_pair(6)  # cyan
++            elif self.rainbow_hue < 180:
++                return curses.color_pair(7)  # magenta
++            elif self.rainbow_hue < 240:
++                return curses.color_pair(3)  # blue
++            elif self.rainbow_hue < 300:
++                return curses.color_pair(2)  # red
++            else:
++                return curses.color_pair(1)  # green
++        else:
++            if self.color == "green":
++                return curses.color_pair(1)
++            elif self.color == "red":
++                return curses.color_pair(2)
++            elif self.color == "blue":
++                return curses.color_pair(3)
++            elif self.color == "white":
++                return curses.color_pair(4)
++            elif self.color == "yellow":
++                return curses.color_pair(5)
++            elif self.color == "cyan":
++                return curses.color_pair(6)
++            elif self.color == "magenta":
++                return curses.color_pair(7)
++            elif self.color == "black":
++                return curses.color_pair(8)
++            else:
++                return curses.color_pair(1)
++    
++    def get_bold(self):
++        if self.all_bold:
++            return True
++        if self.no_bold:
++            return False
++        if self.bold:
++            return True
++        return False
++    
++    def get_char(self, x):
++        if self.lambda_mode and x in self.lambda_positions:
++            return self.lambda_char
++        return random.choice(self.chars)
++    
++    def update_columns(self):
++        # Move columns down
++        if self.old_scroll:
++            self.old_scroll_y = (self.old_scroll_y + 1) % self.height
++            for x in range(self.width):
++                if self.columns[x]['y'] >= self.height - 1:
++                    self.columns[x]['y'] = 0
++                    self.columns[x]['char'] = random.choice(self.chars)
++        else:
++            for x in range(self.width):
++                self.columns[x]['y'] += 1
++                if self.columns[x]['y'] >= self.height:
++                    self.columns[x]['y'] = 0
++                    self.columns[x]['char'] = random.choice(self.chars)
++        
++        # For change mode
++        if self.change_chars:
++            for x in range(self.width):
++                if random.random() < 0.1:  # 10% chance to change
++                    self.columns[x]['char'] = random.choice(self.chars)
++    
++    def draw(self):
++        self.stdscr.clear()
++        
++        # Draw columns
++        for x, col in enumerate(self.columns):
++            y = col['y']
++            char = col['char']
++            color = self.get_color()
++            bold = self.get_bold()
++            
++            if self.lambda_mode and x in self.lambda_positions:
++                char = self.lambda_char
++            
++            if bold:
++                self.stdscr.addch(x, y, char, color | curses.A_BOLD)
++            else:
++                self.stdscr.addch(x, y, char, color)
++        
++        # Draw message if present
++        if self.message:
++            self.stdscr.addstr(self.message_y, self.message_x, self.message, curses.A_BOLD)
++        
++        # Draw lock message if present
++        if self.locked and not self.message:
++            self.stdscr.addstr(self.height - 1, 0, self.lock_message, curses.A_BOLD)
++        
++        self.stdscr.refresh()
++    
++    def handle_key(self, key):
++        if key == ord('q'):
++            return True  # Quit
++        
++        if key == ord('a'):
++            self.async_scroll = not self.async_scroll
++        
++        if key == ord('b'):
++            self.bold = not self.bold
++        
++        if key == ord('B'):
++            self.all_bold = True
++            self.bold = True
++        
++        if key == ord('n'):
++            self.no_bold = True
++            self.bold = False
++        
++        if key in COLOR_KEYS:
++            self.color = COLOR_KEYS[key]
++        
++        if key in '0123456789':
++            self.delay = int(key)
++        
++        if self.lambda_mode:
++            # Toggle lambda positions
++            for x in range(self.width):
++                if x not in self.lambda_positions:
++                    self.lambda_positions.add(x)
++                    break
++        
++        return False
++    
++    def run(self):
++        try:
++            while True:
++                # Update columns
++                self.update_columns()
++                
++                # Draw
++                self.draw()
++                
++                # Handle input
++                key = self.stdscr.getch()
++                if key != -1:
++                    if self.handle_key(key):
++                        break
++                
++                # Sleep based on delay
++                time.sleep(1.0 / (10 ** self.delay))
++                
++        except KeyboardInterrupt:
++            pass
++        finally:
++            curses.endwin()
++
++
++def print_usage():
++    print(" Usage: cmatrix -[abBcfhlsmVxk] [-u delay] [-C color] [-t tty] [-M message]")
++    print(" -a: Asynchronous scroll")
++    print(" -b: Bold characters on")
++    print(" -B: All bold characters (overrides -b)")
++    print(" -c: Use Japanese characters as seen in the original matrix. Requires appropriate fonts")
++    print(" -f: Force the linux $TERM type to be on")
++    print(" -l: Linux mode (uses matrix console font)")
++    print(" -L: Lock mode (can be closed from another terminal)")
++    print(" -o: Use old-style scrolling")
++    print(" -h: Print usage and exit")
++    print(" -n: No bold characters (overrides -b and -B, default)")
++    print(" -s: \"Screensaver\" mode, exits on first keystroke")
++    print(" -x: X window mode, use if your xterm is using mtx.pcf")
++    print(" -V: Print version information and exit")
++    print(" -M [message]: Prints your message in the center of the screen. Overrides -L's default message.")
++    print(" -u delay (0 - 10, default 4): Screen update delay")
++    print(" -C [color]: Use this color for matrix (default green)")
++    print(" -r: rainbow mode")
++    print(" -m: lambda mode")
++    print(" -k: Characters change while scrolling. (Works without -o opt.)")
++    print(" -t [tty]: Set tty to use")
++
++
++
++
++def print_version():
++    print(" CMatrix version 2.0 (compiled 22:13:51, Jun 11 2026)")
++    print("Email: abishekvashok@gmail.com")
++    print("Web: https://github.com/abishekvashok/cmatrix")
++
++
++def main():
++    parser = argparse.ArgumentParser(add_help=False)
++    parser.add_argument('-a', action='store_true', help='Asynchronous scroll')
++    parser.add_argument('-b', action='store_true', help='Bold characters on')
++    parser.add_argument('-B', action='store_true', help='All bold characters')
++    parser.add_argument('-c', action='store_true', help='Use Japanese characters')
++    parser.add_argument('-f', action='store_true', help='Force linux TERM')
++    parser.add_argument('-l', action='store_true', help='Linux mode')
++    parser.add_argument('-L', action='store_true', help='Lock mode')
++    parser.add_argument('-o', action='store_true', help='Old-style scrolling')
++    parser.add_argument('-h', action='store_true', help='Print usage')
++    parser.add_argument('-n', action='store_true', help='No bold characters')
++    parser.add_argument('-s', action='store_true', help='Screensaver mode')
++    parser.add_argument('-x', action='store_true', help='X window mode')
++    parser.add_argument('-V', action='store_true', help='Print version')
++    parser.add_argument('-u', type=int, help='Update delay')
++    parser.add_argument('-C', type=str, help='Color')
++    parser.add_argument('-t', type=str, help='TTY')
++    parser.add_argument('-M', type=str, help='Message')
++    parser.add_argument('-r', action='store_true', help='Rainbow mode')
++    parser.add_argument('-m', action='store_true', help='Lambda mode')
++    parser.add_argument('-k', action='store_true', help='Change characters')
++    
++    args = parser.parse_args()
++    
++    if args.h or args.V:
++        if args.V:
++            print_version()
++            return 0
++        print_usage()
++        return 0
++    
++    # Check for invalid arguments
++    if args.u is not None and (args.u < 0 or args.u > 10):
++        print("Error: -u delay must be between 0 and 10")
++        return 1
++    
++    # Initialize curses
++    try:
++        curses.setupterm()
++    except curses.error:
++        print("Error opening terminal: unknown.")
++        return 1
++    
++    # Create and run
++    stdscr = curses.initscr()
++    cmatrix = CMatrix(stdscr, args)
++    cmatrix.run()
++    
++    curses.endwin()
++    return 0
++
++
++if __name__ == '__main__':
++    sys.exit(main())
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..4860e09
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,6 @@
++#!/bin/bash
++python3 -m py_compile cmatrix.py
++rm -f ./executable
++cp cmatrix.py ./executable
++chmod +x ./executable
++echo "Build successful"
+diff --git a/patch.txt b/patch.txt
+new file mode 100644
+index 0000000..3067b9c
+--- /dev/null
++++ b/patch.txt
+@@ -0,0 +1,61 @@
++diff --git a/cmatrix.py b/cmatrix.py
++index dc561fe..de913b0 100644
++--- a/cmatrix.py
+++++ b/cmatrix.py
++@@ -299,28 +299,12 @@ def print_usage():
++     print(" -t [tty]: Set tty to use")
++ 
++ 
+++
+++
++ def print_version():
++-    print(" Usage: cmatrix -[abBcfhlsmVxk] [-u delay] [-C color] [-t tty] [-M message]")
++-    print(" -a: Asynchronous scroll")
++-    print(" -b: Bold characters on")
++-    print(" -B: All bold characters (overrides -b)")
++-    print(" -c: Use Japanese characters as seen in the original matrix. Requires appropriate fonts")
++-    print(" -f: Force the linux $TERM type to be on")
++-    print(" -l: Linux mode (uses matrix console font)")
++-    print(" -L: Lock mode (can be closed from another terminal)")
++-    print(" -o: Use old-style scrolling")
++-    print(" -h: Print usage and exit")
++-    print(" -n: No bold characters (overrides -b and -B, default)")
++-    print(" -s: \"Screensaver\" mode, exits on first keystroke")
++-    print(" -x: X window mode, use if your xterm is using mtx.pcf")
++-    print(" -V: Print version information and exit")
++-    print(" -M [message]: Prints your message in the center of the screen. Overrides -L's default message.")
++-    print(" -u delay (0 - 10, default 4): Screen update delay")
++-    print(" -C [color]: Use this color for matrix (default green)")
++-    print(" -r: rainbow mode")
++-    print(" -m: lambda mode")
++-    print(" -k: Characters change while scrolling. (Works without -o opt.)")
++-    print(" -t [tty]: Set tty to use")
+++    print(" CMatrix version 2.0 (compiled 22:13:51, Jun 11 2026)")
+++    print("Email: abishekvashok@gmail.com")
+++    print("Web: https://github.com/abishekvashok/cmatrix")
++ 
++ 
++ def main():
++@@ -349,6 +333,9 @@ def main():
++     args = parser.parse_args()
++     
++     if args.h or args.V:
+++        if args.V:
+++            print_version()
+++            return 0
++         print_usage()
++         return 0
++     
++diff --git a/compile.sh b/compile.sh
++index ab0c936..4860e09 100755
++--- a/compile.sh
+++++ b/compile.sh
++@@ -1,5 +1,6 @@
++ #!/bin/bash
++ python3 -m py_compile cmatrix.py
++-sudo cp cmatrix.py ./executable
++-sudo chmod +x ./executable
+++rm -f ./executable
+++cp cmatrix.py ./executable
+++chmod +x ./executable
++ echo "Build successful"
