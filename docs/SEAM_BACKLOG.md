@@ -1225,3 +1225,17 @@ call overflows when one giant observation blows past the window before the
 trigger; overflow now falls back to mechanical truncation (unit-tested).
 r3 reruns of the 4 excluded team cells + solo-walk in flight to complete
 the paired table.
+
+REALCMP DEMOTED TO PROVISIONAL (2026-08-18, user correction). The batch
+ran with think-leak polluting compaction summaries (reasoning-parser
+removal side effect, found post-hoc): every compacted agent's memory of
+its early work opened with the summarizer's chain-of-thought instead of
+the FILE-MAP digest. "Both arms equally affected" does NOT make the
+comparison fair — two corrupted measurements are two wrong things
+compared, and the defect plausibly interacts with the arms differently
+(compaction rates differ; polluted memory can CAUSE the loops observed,
+e.g. cmatrix-r2 agent3's 82-command probe loop). The realcmp table is
+evidence the infrastructure now works, not a measurement of the harness.
+DEFINITIVE RERUN queued on the fully hardened stack (clean summaries,
+overflow-proof compaction, segments preserved, 180s timeouts,
+min_containers=2, validated dispatch).
