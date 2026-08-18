@@ -21,7 +21,7 @@ fi
 $SSH ubuntu@$ip "cat > /tmp/pbjob_${arm}_${rep}.sh" <<EOF
 #!/bin/bash
 cd \$HOME/CooperAgents
-set -a; source .env.qwen; set +a
+set -a; source ${COOPER_ENV_FILE:-.env.qwen}; set +a
 export PATH="\$HOME/.local/bin:\$PATH"
 .venv/bin/python scripts/bench_programbench.py --instance $inst --arm $arm --rep $rep $extra \
   > runs/pb-$arm-$rep.launch.log 2>&1

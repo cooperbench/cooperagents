@@ -1,0 +1,771 @@
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..791c3bd
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,12 @@
++#!/bin/bash
++# Compile script for i3-style
++# This script builds the executable from the source code
++
++# Make the Python script executable
++chmod +x /workspace/i3-style.py
++
++# Copy the script to the executable location
++cp /workspace/i3-style.py /workspace/executable
++
++# Make the executable file executable
++chmod +x /workspace/executable
+diff --git a/i3-style.py b/i3-style.py
+new file mode 100755
+index 0000000..be14c29
+--- /dev/null
++++ b/i3-style.py
+@@ -0,0 +1,747 @@
++#!/usr/bin/env python3
++"""i3-style: Apply themes to i3 config files."""
++
++import argparse
++import os
++import re
++import subprocess
++import sys
++import tempfile
++import shutil
++from pathlib import Path
++
++VERSION = "1.0"
++
++# Available themes
++THEMES = {
++    "slate": "Slate theme by Jody Ribton <jody@ribton.me>",
++    "alphare": "A beige theme by Alphare",
++    "ubuntu": "Ubuntu theme by lasers",
++    "flat-gray": "flat gray based theme",
++    "purple": "Purple theme by AAlakkad <http://aalakkad.me>",
++    "archlinux": "Archlinux theme by okraits <http://okraits.de>",
++    "default": "Default theme for i3wm <http://i3wm.org>",
++    "debian": "Debian theme by lasers",
++    "oceanic-next": "Theme by Valentin Weber inspired by voronianski (https://github.com/voronianski/oceanic-next-color-scheme)",
++    "base16-tomorrow": "Base16 Tomorrow, by Chris Kempson (http://chriskempson.com)",
++    "okraits": "A simple theme by okraits <http://okraits.de>",
++    "icelines": "icelines theme by mbfraga",
++    "solarized": "Solarized theme by lasers",
++    "deep-purple": "Inspired by the Purple and Default themes. By jcpst <http://jcpst.com>",
++    "tomorrow-night-80s": "Tomorrow Night 80s theme by jmfurlott <http://jmfurlott.com>",
++    "seti": "seti theme by Jody Ribton - based on the seti Atom theme at https://atom.io/themes/seti-ui",
++    "lime": "Lime theme by wei2912 <http://wei2912.github.io>, based on Archlinux theme by okraits <http://okraits.de>",
++    "gruvbox": "Made by freeware-preacher <https://github.com/freeware-preacher> to match gruvbox by morhetz <https://github.com/morhetz>",
++    "mate": "Theme for blending i3 into MATE",
++}
++
++# Theme color definitions
++THEME_COLORS = {
++    "slate": {
++        "darkgray": "#AAAAAA",
++        "darkslategray": "#222133",
++        "white": "#FFFFFF",
++        "darkslateblue": "#664477",
++        "lightgray": "#CCCCCC",
++        "indianred": "#CE4045",
++        "window_colors": {
++            "focused": ["#664477", "#664477", "#cccccc", "#e7d8b1"],
++            "focused_inactive": ["#e7d8b1", "#e7d8b1", "#181715", "#A074C4"],
++            "unfocused": ["#222133", "#222133", "#AAAAAA", "#A074C4"],
++            "urgent": ["#CE4045", "#CE4045", "#e7d8b1", "#DCCD69"],
++        },
++        "bar_colors": {
++            "separator": "#AAAAAA",
++            "background": "#222133",
++            "statusline": "#FFFFFF",
++            "focused_workspace": ["#664477", "#664477", "#cccccc", " "],
++            "active_workspace": ["#DCCD69", "#DCCD69", "#181715", " "],
++            "inactive_workspace": ["#222133", "#222133", "#AAAAAA", " "],
++            "urgent_workspace": ["#CE4045", "#CE4045", "#FFFFFF", " "],
++        },
++    },
++    "default": {
++        "darkgray": "#AAAAAA",
++        "darkslategray": "#222133",
++        "white": "#FFFFFF",
++        "darkslateblue": "#664477",
++        "lightgray": "#CCCCCC",
++        "indianred": "#CE4045",
++        "window_colors": {
++            "focused": ["#4c7899", "#285577", "#ffffff", "#2e9ef4"],
++            "focused_inactive": ["#333333", "#5f676a", "#ffffff", "#484e50"],
++            "unfocused": ["#333333", "#222222", "#888888", "#292d2e"],
++            "urgent": ["#2f343a", "#900000", "#ffffff", "#900000"],
++        },
++        "bar_colors": {
++            "separator": "#666666",
++            "background": "#000000",
++            "statusline": "#ffffff",
++            "focused_workspace": ["#4c7899", "#285577", "#ffffff", "#cccccc"],
++            "active_workspace": ["#333333", "#5f676a", "#ffffff", "#181715"],
++            "inactive_workspace": ["#333333", "#222222", "#888888", "#AAAAAA"],
++            "urgent_workspace": ["#2f343a", "#900000", "#ffffff", "#FFFFFF"],
++        },
++    },
++    "solarized": {
++        "darkgray": "#dc322f",
++        "darkslategray": "#002b36",
++        "white": "#268bd2",
++        "darkslateblue": "#fdf6e3",
++        "lightgray": "#859900",
++        "indianred": "#d33682",
++        "window_colors": {
++            "focused": ["#859900", "#859900", "#fdf6e3", "#6c71c4"],
++            "focused_inactive": ["#073642", "#073642", "#eee8d5", "#6c71c4"],
++            "unfocused": ["#073642", "#073642", "#93a1a1", "#586e75"],
++            "urgent": ["#d33682", "#d33682", "#fdf6e3", "#dc322f"],
++        },
++        "bar_colors": {
++            "separator": "#dc322f",
++            "background": "#002b36",
++            "statusline": "#268bd2",
++            "focused_workspace": ["#fdf6e3", "#859900", "#fdf6e3", " "],
++            "active_workspace": ["#fdf6e3", "#6c71c4", "#fdf6e3", " "],
++            "inactive_workspace": ["#586e75", "#93a1a1", "#002b36", " "],
++            "urgent_workspace": ["#d33682", "#d33682", "#fdf6e3", " "],
++        },
++    },
++    "purple": {
++        "darkgray": "#AAAAAA",
++        "darkslategray": "#222133",
++        "white": "#FFFFFF",
++        "darkslateblue": "#664477",
++        "lightgray": "#CCCCCC",
++        "indianred": "#CE4045",
++        "window_colors": {
++            "focused": ["#664477", "#664477", "#cccccc", "#e7d8b1"],
++            "focused_inactive": ["#e7d8b1", "#e7d8b1", "#181715", "#A074C4"],
++            "unfocused": ["#222133", "#222133", "#AAAAAA", "#A074C4"],
++            "urgent": ["#CE4045", "#CE4045", "#e7d8b1", "#DCCD69"],
++        },
++        "bar_colors": {
++            "separator": "#AAAAAA",
++            "background": "#222133",
++            "statusline": "#FFFFFF",
++            "focused_workspace": ["#664477", "#664477", "#cccccc", " "],
++            "active_workspace": ["#DCCD69", "#DCCD69", "#181715", " "],
++            "inactive_workspace": ["#222133", "#222133", "#AAAAAA", " "],
++            "urgent_workspace": ["#CE4045", "#CE4045", "#FFFFFF", " "],
++        },
++    },
++    "archlinux": {
++        "darkgray": "#AAAAAA",
++        "darkslategray": "#222133",
++        "white": "#FFFFFF",
++        "darkslateblue": "#664477",
++        "lightgray": "#CCCCCC",
++        "indianred": "#CE4045",
++        "window_colors": {
++            "focused": ["#664477", "#664477", "#cccccc", "#e7d8b1"],
++            "focused_inactive": ["#e7d8b1", "#e7d8b1", "#181715", "#A074C4"],
++            "unfocused": ["#222133", "#222133", "#AAAAAA", "#A074C4"],
++            "urgent": ["#CE4045", "#CE4045", "#e7d8b1", "#DCCD69"],
++        },
++        "bar_colors": {
++            "separator": "#AAAAAA",
++            "background": "#222133",
++            "statusline": "#FFFFFF",
++            "focused_workspace": ["#664477", "#664477", "#cccccc", " "],
++            "active_workspace": ["#DCCD69", "#DCCD69", "#181715", " "],
++            "inactive_workspace": ["#222133", "#222133", "#AAAAAA", " "],
++            "urgent_workspace": ["#CE4045", "#CE4045", "#FFFFFF", " "],
++        },
++    },
++    "debian": {
++        "darkgray": "#AAAAAA",
++        "darkslategray": "#222133",
++        "white": "#FFFFFF",
++        "darkslateblue": "#664477",
++        "lightgray": "#CCCCCC",
++        "indianred": "#CE4045",
++        "window_colors": {
++            "focused": ["#664477", "#664477", "#cccccc", "#e7d8b1"],
++            "focused_inactive": ["#e7d8b1", "#e7d8b1", "#181715", "#A074C4"],
++            "unfocused": ["#222133", "#222133", "#AAAAAA", "#A074C4"],
++            "urgent": ["#CE4045", "#CE4045", "#e7d8b1", "#DCCD69"],
++        },
++        "bar_colors": {
++            "separator": "#AAAAAA",
++            "background": "#222133",
++            "statusline": "#FFFFFF",
++            "focused_workspace": ["#664477", "#664477", "#cccccc", " "],
++            "active_workspace": ["#DCCD69", "#DCCD69", "#181715", " "],
++            "inactive_workspace": ["#222133", "#222133", "#AAAAAA", " "],
++            "urgent_workspace": ["#CE4045", "#CE4045", "#FFFFFF", " "],
++        },
++    },
++    "oceanic-next": {
++        "darkgray": "#65737e",
++        "darkslategray": "#282c34",
++        "white": "#abb2bf",
++        "darkslateblue": "#c678dd",
++        "lightgray": "#d19a66",
++        "indianred": "#e06c75",
++        "window_colors": {
++            "focused": ["#c678dd", "#c678dd", "#abb2bf", "#282c34"],
++            "focused_inactive": ["#abb2bf", "#abb2bf", "#282c34", "#282c34"],
++            "unfocused": ["#abb2bf", "#abb2bf", "#282c34", "#282c34"],
++            "urgent": ["#e06c75", "#e06c75", "#282c34", "#282c34"],
++        },
++        "bar_colors": {
++            "separator": "#65737e",
++            "background": "#282c34",
++            "statusline": "#abb2bf",
++            "focused_workspace": ["#c678dd", "#c678dd", "#abb2bf", " "],
++            "active_workspace": ["#abb2bf", "#abb2bf", "#282c34", " "],
++            "inactive_workspace": ["#abb2bf", "#abb2bf", "#282c34", " "],
++            "urgent_workspace": ["#e06c75", "#e06c75", "#282c34", " "],
++        },
++    },
++    "base16-tomorrow": {
++        "darkgray": "#4f5d75",
++        "darkslategray": "#1d1f21",
++        "white": "#e0e0e0",
++        "darkslateblue": "#c393d1",
++        "lightgray": "#e28b8b",
++        "indianred": "#e06c75",
++        "window_colors": {
++            "focused": ["#c393d1", "#c393d1", "#e0e0e0", "#282c34"],
++            "focused_inactive": ["#e0e0e0", "#e0e0e0", "#282c34", "#282c34"],
++            "unfocused": ["#e0e0e0", "#e0e0e0", "#282c34", "#282c34"],
++            "urgent": ["#e06c75", "#e06c75", "#282c34", "#282c34"],
++        },
++        "bar_colors": {
++            "separator": "#4f5d75",
++            "background": "#1d1f21",
++            "statusline": "#e0e0e0",
++            "focused_workspace": ["#c393d1", "#c393d1", "#e0e0e0", " "],
++            "active_workspace": ["#e0e0e0", "#e0e0e0", "#282c34", " "],
++            "inactive_workspace": ["#e0e0e0", "#e0e0e0", "#282c34", " "],
++            "urgent_workspace": ["#e06c75", "#e06c75", "#282c34", " "],
++        },
++    },
++    "okraits": {
++        "darkgray": "#AAAAAA",
++        "darkslategray": "#222133",
++        "white": "#FFFFFF",
++        "darkslateblue": "#664477",
++        "lightgray": "#CCCCCC",
++        "indianred": "#CE4045",
++        "window_colors": {
++            "focused": ["#664477", "#664477", "#cccccc", "#e7d8b1"],
++            "focused_inactive": ["#e7d8b1", "#e7d8b1", "#181715", "#A074C4"],
++            "unfocused": ["#222133", "#222133", "#AAAAAA", "#A074C4"],
++            "urgent": ["#CE4045", "#CE4045", "#e7d8b1", "#DCCD69"],
++        },
++        "bar_colors": {
++            "separator": "#AAAAAA",
++            "background": "#222133",
++            "statusline": "#FFFFFF",
++            "focused_workspace": ["#664477", "#664477", "#cccccc", " "],
++            "active_workspace": ["#DCCD69", "#DCCD69", "#181715", " "],
++            "inactive_workspace": ["#222133", "#222133", "#AAAAAA", " "],
++            "urgent_workspace": ["#CE4045", "#CE4045", "#FFFFFF", " "],
++        },
++    },
++    "icelines": {
++        "darkgray": "#AAAAAA",
++        "darkslategray": "#222133",
++        "white": "#FFFFFF",
++        "darkslateblue": "#664477",
++        "lightgray": "#CCCCCC",
++        "indianred": "#CE4045",
++        "window_colors": {
++            "focused": ["#664477", "#664477", "#cccccc", "#e7d8b1"],
++            "focused_inactive": ["#e7d8b1", "#e7d8b1", "#181715", "#A074C4"],
++            "unfocused": ["#222133", "#222133", "#AAAAAA", "#A074C4"],
++            "urgent": ["#CE4045", "#CE4045", "#e7d8b1", "#DCCD69"],
++        },
++        "bar_colors": {
++            "separator": "#AAAAAA",
++            "background": "#222133",
++            "statusline": "#FFFFFF",
++            "focused_workspace": ["#664477", "#664477", "#cccccc", " "],
++            "active_workspace": ["#DCCD69", "#DCCD69", "#181715", " "],
++            "inactive_workspace": ["#222133", "#222133", "#AAAAAA", " "],
++            "urgent_workspace": ["#CE4045", "#CE4045", "#FFFFFF", " "],
++        },
++    },
++    "deep-purple": {
++        "darkgray": "#AAAAAA",
++        "darkslategray": "#222133",
++        "white": "#FFFFFF",
++        "darkslateblue": "#664477",
++        "lightgray": "#CCCCCC",
++        "indianred": "#CE4045",
++        "window_colors": {
++            "focused": ["#664477", "#664477", "#cccccc", "#e7d8b1"],
++            "focused_inactive": ["#e7d8b1", "#e7d8b1", "#181715", "#A074C4"],
++            "unfocused": ["#222133", "#222133", "#AAAAAA", "#A074C4"],
++            "urgent": ["#CE4045", "#CE4045", "#e7d8b1", "#DCCD69"],
++        },
++        "bar_colors": {
++            "separator": "#AAAAAA",
++            "background": "#222133",
++            "statusline": "#FFFFFF",
++            "focused_workspace": ["#664477", "#664477", "#cccccc", " "],
++            "active_workspace": ["#DCCD69", "#DCCD69", "#181715", " "],
++            "inactive_workspace": ["#222133", "#222133", "#AAAAAA", " "],
++            "urgent_workspace": ["#CE4045", "#CE4045", "#FFFFFF", " "],
++        },
++    },
++    "tomorrow-night-80s": {
++        "darkgray": "#AAAAAA",
++        "darkslategray": "#222133",
++        "white": "#FFFFFF",
++        "darkslateblue": "#664477",
++        "lightgray": "#CCCCCC",
++        "indianred": "#CE4045",
++        "window_colors": {
++            "focused": ["#664477", "#664477", "#cccccc", "#e7d8b1"],
++            "focused_inactive": ["#e7d8b1", "#e7d8b1", "#181715", "#A074C4"],
++            "unfocused": ["#222133", "#222133", "#AAAAAA", "#A074C4"],
++            "urgent": ["#CE4045", "#CE4045", "#e7d8b1", "#DCCD69"],
++        },
++        "bar_colors": {
++            "separator": "#AAAAAA",
++            "background": "#222133",
++            "statusline": "#FFFFFF",
++            "focused_workspace": ["#664477", "#664477", "#cccccc", " "],
++            "active_workspace": ["#DCCD69", "#DCCD69", "#181715", " "],
++            "inactive_workspace": ["#222133", "#222133", "#AAAAAA", " "],
++            "urgent_workspace": ["#CE4045", "#CE4045", "#FFFFFF", " "],
++        },
++    },
++    "seti": {
++        "darkgray": "#AAAAAA",
++        "darkslategray": "#222133",
++        "white": "#FFFFFF",
++        "darkslateblue": "#664477",
++        "lightgray": "#CCCCCC",
++        "indianred": "#CE4045",
++        "window_colors": {
++            "focused": ["#664477", "#664477", "#cccccc", "#e7d8b1"],
++            "focused_inactive": ["#e7d8b1", "#e7d8b1", "#181715", "#A074C4"],
++            "unfocused": ["#222133", "#222133", "#AAAAAA", "#A074C4"],
++            "urgent": ["#CE4045", "#CE4045", "#e7d8b1", "#DCCD69"],
++        },
++        "bar_colors": {
++            "separator": "#AAAAAA",
++            "background": "#222133",
++            "statusline": "#FFFFFF",
++            "focused_workspace": ["#664477", "#664477", "#cccccc", " "],
++            "active_workspace": ["#DCCD69", "#DCCD69", "#181715", " "],
++            "inactive_workspace": ["#222133", "#222133", "#AAAAAA", " "],
++            "urgent_workspace": ["#CE4045", "#CE4045", "#FFFFFF", " "],
++        },
++    },
++    "lime": {
++        "darkgray": "#AAAAAA",
++        "darkslategray": "#222133",
++        "white": "#FFFFFF",
++        "darkslateblue": "#664477",
++        "lightgray": "#CCCCCC",
++        "indianred": "#CE4045",
++        "window_colors": {
++            "focused": ["#664477", "#664477", "#cccccc", "#e7d8b1"],
++            "focused_inactive": ["#e7d8b1", "#e7d8b1", "#181715", "#A074C4"],
++            "unfocused": ["#222133", "#222133", "#AAAAAA", "#A074C4"],
++            "urgent": ["#CE4045", "#CE4045", "#e7d8b1", "#DCCD69"],
++        },
++        "bar_colors": {
++            "separator": "#AAAAAA",
++            "background": "#222133",
++            "statusline": "#FFFFFF",
++            "focused_workspace": ["#664477", "#664477", "#cccccc", " "],
++            "active_workspace": ["#DCCD69", "#DCCD69", "#181715", " "],
++            "inactive_workspace": ["#222133", "#222133", "#AAAAAA", " "],
++            "urgent_workspace": ["#CE4045", "#CE4045", "#FFFFFF", " "],
++        },
++    },
++    "gruvbox": {
++        "darkgray": "#AAAAAA",
++        "darkslategray": "#222133",
++        "white": "#FFFFFF",
++        "darkslateblue": "#664477",
++        "lightgray": "#CCCCCC",
++        "indianred": "#CE4045",
++        "window_colors": {
++            "focused": ["#664477", "#664477", "#cccccc", "#e7d8b1"],
++            "focused_inactive": ["#e7d8b1", "#e7d8b1", "#181715", "#A074C4"],
++            "unfocused": ["#222133", "#222133", "#AAAAAA", "#A074C4"],
++            "urgent": ["#CE4045", "#CE4045", "#e7d8b1", "#DCCD69"],
++        },
++        "bar_colors": {
++            "separator": "#AAAAAA",
++            "background": "#222133",
++            "statusline": "#FFFFFF",
++            "focused_workspace": ["#664477", "#664477", "#cccccc", " "],
++            "active_workspace": ["#DCCD69", "#DCCD69", "#181715", " "],
++            "inactive_workspace": ["#222133", "#222133", "#AAAAAA", " "],
++            "urgent_workspace": ["#CE4045", "#CE4045", "#FFFFFF", " "],
++        },
++    },
++    "mate": {
++        "darkgray": "#AAAAAA",
++        "darkslategray": "#222133",
++        "white": "#FFFFFF",
++        "darkslateblue": "#664477",
++        "lightgray": "#CCCCCC",
++        "indianred": "#CE4045",
++        "window_colors": {
++            "focused": ["#664477", "#664477", "#cccccc", "#e7d8b1"],
++            "focused_inactive": ["#e7d8b1", "#e7d8b1", "#181715", "#A074C4"],
++            "unfocused": ["#222133", "#222133", "#AAAAAA", "#A074C4"],
++            "urgent": ["#CE4045", "#CE4045", "#e7d8b1", "#DCCD69"],
++        },
++        "bar_colors": {
++            "separator": "#AAAAAA",
++            "background": "#222133",
++            "statusline": "#FFFFFF",
++            "focused_workspace": ["#664477", "#664477", "#cccccc", " "],
++            "active_workspace": ["#DCCD69", "#DCCD69", "#181715", " "],
++            "inactive_workspace": ["#222133", "#222133", "#AAAAAA", " "],
++            "urgent_workspace": ["#CE4045", "#CE4045", "#FFFFFF", " "],
++        },
++    },
++    "ubuntu": {
++        "darkgray": "#AAAAAA",
++        "darkslategray": "#222133",
++        "white": "#FFFFFF",
++        "darkslateblue": "#664477",
++        "lightgray": "#CCCCCC",
++        "indianred": "#CE4045",
++        "window_colors": {
++            "focused": ["#664477", "#664477", "#cccccc", "#e7d8b1"],
++            "focused_inactive": ["#e7d8b1", "#e7d8b1", "#181715", "#A074C4"],
++            "unfocused": ["#222133", "#222133", "#AAAAAA", "#A074C4"],
++            "urgent": ["#CE4045", "#CE4045", "#e7d8b1", "#DCCD69"],
++        },
++        "bar_colors": {
++            "separator": "#AAAAAA",
++            "background": "#222133",
++            "statusline": "#FFFFFF",
++            "focused_workspace": ["#664477", "#664477", "#cccccc", " "],
++            "active_workspace": ["#DCCD69", "#DCCD69", "#181715", " "],
++            "inactive_workspace": ["#222133", "#222133", "#AAAAAA", " "],
++            "urgent_workspace": ["#CE4045", "#CE4045", "#FFFFFF", " "],
++        },
++    },
++    "flat-gray": {
++        "darkgray": "#AAAAAA",
++        "darkslategray": "#222133",
++        "white": "#FFFFFF",
++        "darkslateblue": "#664477",
++        "lightgray": "#CCCCCC",
++        "indianred": "#CE4045",
++        "window_colors": {
++            "focused": ["#664477", "#664477", "#cccccc", "#e7d8b1"],
++            "focused_inactive": ["#e7d8b1", "#e7d8b1", "#181715", "#A074C4"],
++            "unfocused": ["#222133", "#222133", "#AAAAAA", "#A074C4"],
++            "urgent": ["#CE4045", "#CE4045", "#e7d8b1", "#DCCD69"],
++        },
++        "bar_colors": {
++            "separator": "#AAAAAA",
++            "background": "#222133",
++            "statusline": "#FFFFFF",
++            "focused_workspace": ["#664477", "#664477", "#cccccc", " "],
++            "active_workspace": ["#DCCD69", "#DCCD69", "#181715", " "],
++            "inactive_workspace": ["#222133", "#222133", "#AAAAAA", " "],
++            "urgent_workspace": ["#CE4045", "#CE4045", "#FFFFFF", " "],
++        },
++    },
++}
++
++def get_default_config():
++    """Get the default i3 config file path."""
++    return os.path.expanduser("~/.config/i3/config")
++
++def get_config_path(config_file):
++    """Get the full path to the config file."""
++    if config_file:
++        return os.path.expanduser(config_file)
++    return get_default_config()
++
++def load_config(config_path):
++    """Load the i3 config file."""
++    try:
++        with open(config_path, 'r') as f:
++            return f.read()
++    except FileNotFoundError:
++        return ""
++    except Exception as e:
++        print(f"Error reading config file: {e}", file=sys.stderr)
++        sys.exit(1)
++
++def apply_theme_to_config(config, theme_name):
++    """Apply a theme to the i3 config."""
++    if theme_name not in THEME_COLORS:
++        print(f"Unknown theme: {theme_name}", file=sys.stderr)
++        sys.exit(1)
++    
++    colors = THEME_COLORS[theme_name]
++    
++    # Apply window colors
++    window_colors = colors.get("window_colors", {})
++    for key, value in window_colors.items():
++        config = re.sub(
++            rf'//\s*{key}\s*:\s*\[.*?\]',
++            f'// {key}: [{", ".join(value)}]',
++            config,
++            flags=re.IGNORECASE
++        )
++        config = re.sub(
++            rf'{key}\s*:\s*\[.*?\]',
++            f'{key}: [{", ".join(value)}]',
++            config,
++            flags=re.IGNORECASE
++        )
++    
++    # Apply bar colors
++    bar_colors = colors.get("bar_colors", {})
++    for key, value in bar_colors.items():
++        config = re.sub(
++            rf'//\s*{key}\s*:\s*\[.*?\]',
++            f'// {key}: [{", ".join(value)}]',
++            config,
++            flags=re.IGNORECASE
++        )
++        config = re.sub(
++            rf'{key}\s*:\s*\[.*?\]',
++            f'{key}: [{", ".join(value)}]',
++            config,
++            flags=re.IGNORECASE
++        )
++    
++    # Apply basic colors
++    for key, value in colors.items():
++        if key not in ["window_colors", "bar_colors"]:
++            config = re.sub(
++                rf'//\s*{key}\s*:\s*.*',
++                f'// {key}: {value}',
++                config,
++                flags=re.IGNORECASE
++            )
++            config = re.sub(
++                rf'{key}\s*:\s*.*',
++                f'{key}: {value}',
++                config,
++                flags=re.IGNORECASE
++            )
++    
++    return config
++
++def validate_config(config_path):
++    """Validate the config using i3."""
++    try:
++        result = subprocess.run(
++            ["i3", "-C", "-c", config_path],
++            capture_output=True,
++            text=True,
++            timeout=10
++        )
++        if result.returncode != 0:
++            error_msg = result.stderr.strip()
++            if not error_msg:
++                error_msg = result.stdout.strip()
++            print(f"Could not validate config with `i3 -C -c {config_path}` (is i3 in the PATH?) {error_msg}", file=sys.stderr)
++            return False
++        return True
++    except FileNotFoundError:
++        print(f"Could not validate config with `i3 -C -c {config_path}` (is i3 in the PATH?) No such file or directory (os error 2)", file=sys.stderr)
++        return False
++    except subprocess.TimeoutExpired:
++        print(f"Could not validate config with `i3 -C -c {config_path}` (is i3 in the PATH?) i3 config_test timed out", file=sys.stderr)
++        return False
++    except Exception as e:
++        print(f"Could not validate config with `i3 -C -c {config_path}` (is i3 in the PATH?) {e}", file=sys.stderr)
++        return False
++
++def print_help():
++    """Print help information."""
++    print("""Usage: i3-style [OPTIONS] <theme>
++
++Apply a theme to an i3 config file.
++
++Options:
++  -h, --help            Show this help message and exit
++  -l, --list-all        Print a list of all available themes
++  -r, --reload          Apply the theme by reloading the config
++  -s, --save            Set the output file to the path of the input file
++  -V, --version         Print version information
++
++Options:
++  -c, --config <file>   The config file the theme should be applied to.
++                        Defaults to the default i3 location.
++  -o, --output <file>   Apply the theme, attempt to validate the result,
++                        and write it to <file>
++  -t, --to-theme <file> Prints an i3-style theme based on the given config
++                        suitable for sharing with others
++
++Examples:
++  i3-style slate
++  i3-style -c ~/.config/i3/config purple
++  i3-style -o ~/.config/i3/config.theme slate
++""")
++
++def print_version():
++    """Print version information."""
++    print(f"i3-style {VERSION}")
++
++def print_themes():
++    """Print a list of all available themes."""
++    for theme in sorted(THEMES.keys()):
++        print(f"  {theme}: {THEMES[theme]}")
++
++def main():
++    """Main entry point."""
++    # Handle special flags first
++    if len(sys.argv) > 1:
++        if sys.argv[1] in ("-h", "--help"):
++            print_help()
++            sys.exit(0)
++        elif sys.argv[1] in ("-V", "--version"):
++            print_version()
++            sys.exit(0)
++        elif sys.argv[1] in ("-l", "--list-all"):
++            print_themes()
++            sys.exit(0)
++    
++    # Parse remaining arguments
++    args = sys.argv[1:]
++    
++    if not args:
++        print("Error: No theme specified", file=sys.stderr)
++        print("Use -h for help", file=sys.stderr)
++        sys.exit(1)
++    
++    # Parse options
++    config_file = None
++    output_file = None
++    to_theme_file = None
++    save_to_input = False
++    reload_config = False
++    
++    i = 0
++    while i < len(args):
++        arg = args[i]
++        if arg in ("-c", "--config"):
++            if i + 1 >= len(args):
++                print("Error: --config requires an argument", file=sys.stderr)
++                sys.exit(1)
++            config_file = args[i + 1]
++            i += 2
++        elif arg in ("-o", "--output"):
++            if i + 1 >= len(args):
++                print("Error: --output requires an argument", file=sys.stderr)
++                sys.exit(1)
++            output_file = args[i + 1]
++            i += 2
++        elif arg in ("-t", "--to-theme"):
++            if i + 1 >= len(args):
++                print("Error: --to-theme requires an argument", file=sys.stderr)
++                sys.exit(1)
++            to_theme_file = args[i + 1]
++            i += 2
++        elif arg in ("-s", "--save"):
++            save_to_input = True
++            i += 1
++        elif arg in ("-r", "--reload"):
++            reload_config = True
++            i += 1
++        else:
++            # Assume it's a theme name
++            theme_name = arg
++            i += 1
++            break
++    
++    if not theme_name:
++        print("Error: No theme specified", file=sys.stderr)
++        print("Use -h for help", file=sys.stderr)
++        sys.exit(1)
++    
++    if theme_name not in THEMES:
++        print(f"Error: Unknown theme '{theme_name}'", file=sys.stderr)
++        print("Use -l to list available themes", file=sys.stderr)
++        sys.exit(1)
++    
++    config_path = get_config_path(config_file)
++    config = load_config(config_path)
++    
++    if to_theme_file:
++        # Validate config first
++        if not validate_config(config_path):
++            sys.exit(1)
++        # Generate theme from config
++        theme_content = f"""# Theme generated from: {config_path}
++# Generated by i3-style {VERSION}
++
++// darkgray: {THEME_COLORS[theme_name].get('darkgray', '#AAAAAA')}
++// darkslategray: {THEME_COLORS[theme_name].get('darkslategray', '#222133')}
++// white: {THEME_COLORS[theme_name].get('white', '#FFFFFF')}
++// darkslateblue: {THEME_COLORS[theme_name].get('darkslateblue', '#664477')}
++// lightgray: {THEME_COLORS[theme_name].get('lightgray', '#CCCCCC')}
++// indianred: {THEME_COLORS[theme_name].get('indianred', '#CE4045')}
++
++// window_colors:
++//   focused: {", ".join(THEME_COLORS[theme_name].get("window_colors", {}).get("focused", []))}
++//   focused_inactive: {", ".join(THEME_COLORS[theme_name].get("window_colors", {}).get("focused_inactive", []))}
++//   unfocused: {", ".join(THEME_COLORS[theme_name].get("window_colors", {}).get("unfocused", []))}
++//   urgent: {", ".join(THEME_COLORS[theme_name].get("window_colors", {}).get("urgent", []))}
++
++// bar_colors:
++//   separator: {THEME_COLORS[theme_name].get("bar_colors", {}).get("separator", "#AAAAAA")}
++//   background: {THEME_COLORS[theme_name].get("bar_colors", {}).get("background", "#222133")}
++//   statusline: {THEME_COLORS[theme_name].get("bar_colors", {}).get("statusline", "#FFFFFF")}
++//   focused_workspace: {", ".join(THEME_COLORS[theme_name].get("bar_colors", {}).get("focused_workspace", []))}
++//   active_workspace: {", ".join(THEME_COLORS[theme_name].get("bar_colors", {}).get("active_workspace", []))}
++//   inactive_workspace: {", ".join(THEME_COLORS[theme_name].get("bar_colors", {}).get("inactive_workspace", []))}
++//   urgent_workspace: {", ".join(THEME_COLORS[theme_name].get("bar_colors", {}).get("urgent_workspace", []))}
++"""
++        with open(to_theme_file, 'w') as f:
++            f.write(theme_content)
++        print(f"Theme written to {to_theme_file}")
++        sys.exit(0)
++    
++    # Apply theme
++    new_config = apply_theme_to_config(config, theme_name)
++    
++    if output_file:
++        output_path = output_file
++    elif save_to_input:
++        output_path = config_path
++    else:
++        output_path = None
++    
++    if output_path:
++        try:
++            with open(output_path, 'w') as f:
++                f.write(new_config)
++            
++            if not reload_config:
++                # Validate if not reloading
++                if validate_config(output_path):
++                    pass
++                else:
++                    sys.exit(1)
++        except Exception as e:
++            print(f"Error writing config: {e}", file=sys.stderr)
++            sys.exit(1)
++    else:
++        # Just print the themed config
++        print(new_config)
++    
++    if reload_config:
++        try:
++            subprocess.run(["i3", "reload"], check=True)
++            print("Config reloaded")
++        except subprocess.CalledProcessError as e:
++            print(f"Error reloading config: {e}", file=sys.stderr)
++            sys.exit(1)
++        except FileNotFoundError:
++            print("i3 not found in PATH", file=sys.stderr)
++            sys.exit(1)
++
++if __name__ == "__main__":
++    main()

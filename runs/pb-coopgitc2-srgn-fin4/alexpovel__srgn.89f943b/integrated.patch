@@ -1,0 +1,694 @@
+diff --git a/Cargo.toml b/Cargo.toml
+new file mode 100644
+index 0000000..34f4bdf
+--- /dev/null
++++ b/Cargo.toml
+@@ -0,0 +1,6 @@
++[package]
++name = "srgn"
++version = "0.14.1"
++edition = "2021"
++
++[dependencies]
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..de2ee15
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,3 @@
++#!/bin/bash
++set -e
++rustc --edition 2021 -o ./executable src/main.rs
+diff --git a/src/main.rs b/src/main.rs
+new file mode 100644
+index 0000000..e22ad14
+--- /dev/null
++++ b/src/main.rs
+@@ -0,0 +1,412 @@
++// Minimal regex implementation for srgn
++
++pub struct Regex {
++    pattern: String,
++}
++
++impl Regex {
++    pub fn new(pattern: &str) -> Result<Self, &'static str> {
++        Ok(Regex { pattern: pattern.to_string() })
++    }
++    
++    pub fn find_iter<'a>(&'a self, text: &'a str) -> RegexIter<'a> {
++        RegexIter {
++            regex: self,
++            text,
++            pos: 0,
++        }
++    }
++    
++    pub fn replace_all<F>(&self, text: &str, mut f: F) -> String
++    where
++        F: FnMut(&Captures) -> String,
++    {
++        let mut result = String::new();
++        let mut last_end = 0;
++        
++        for caps in self.find_iter(text) {
++            if caps.start() > last_end {
++                result.push_str(&text[last_end..caps.start()]);
++            }
++            result.push_str(&f(&caps));
++            last_end = caps.end();
++        }
++        
++        if last_end < text.len() {
++            result.push_str(&text[last_end..]);
++        }
++        
++        result
++    }
++}
++
++pub struct Captures {
++    text: String,
++    start: usize,
++    end: usize,
++}
++
++impl Captures {
++    pub fn new(text: &str, start: usize, end: usize) -> Self {
++        Captures {
++            text: text.to_string(),
++            start,
++            end,
++        }
++    }
++    
++    pub fn get(&self, _index: usize) -> &str {
++        &self.text[self.start..self.end]
++    }
++    
++    pub fn start(&self) -> usize {
++        self.start
++    }
++    
++    pub fn end(&self) -> usize {
++        self.end
++    }
++}
++
++pub struct RegexIter<'a> {
++    regex: &'a Regex,
++    text: &'a str,
++    pos: usize,
++}
++
++impl<'a> Iterator for RegexIter<'a> {
++    type Item = Captures;
++    
++    fn next(&mut self) -> Option<Self::Item> {
++        if self.pos >= self.text.len() {
++            return None;
++        }
++        
++        let start = self.pos;
++        let end = self.text.find(&self.regex.pattern).map(|i| start + i).unwrap_or(self.text.len());
++        
++        if end > start {
++            self.pos = end;
++            Some(Captures::new(self.text, start, end))
++        } else {
++            None
++        }
++    }
++}
++
++use std::env;
++use std::fs;
++use std::io::{self, Read, Write};
++
++fn main() {
++    let args: Vec<String> = env::args().collect();
++    
++    if args.len() > 1 && (args[1] == "--help" || args[1] == "-h") {
++        print_help();
++        return;
++    }
++    
++    if args.len() > 1 && (args[1] == "--version" || args[1] == "-V") {
++        println!("srgn 0.14.1");
++        return;
++    }
++    
++    let scope = if args.len() > 2 {
++        Some(args[2].clone())
++    } else {
++        None
++    };
++    
++    let replacement = if args.len() > 3 && args[3] == "--" {
++        Some(args[4].clone())
++    } else {
++        None
++    };
++    
++    let upper = args.iter().any(|a| *a == "-u" || *a == "--upper");
++    let lower = args.iter().any(|a| *a == "-l" || *a == "--lower");
++    let titlecase = args.iter().any(|a| *a == "-t" || *a == "--titlecase");
++    let normalize = args.iter().any(|a| *a == "-n" || *a == "--normalize");
++    let german = args.iter().any(|a| *a == "-g" || *a == "--german");
++    let symbols = args.iter().any(|a| *a == "-S" || *a == "--symbols");
++    let delete = args.iter().any(|a| *a == "-d" || *a == "--delete");
++    let squeeze = args.iter().any(|a| *a == "-s" || *a == "--squeeze");
++    let literal_string = args.iter().any(|a| *a == "-L" || *a == "--literal-string");
++    let invert = args.iter().any(|a| *a == "-i" || *a == "--invert");
++    let _glob = args.iter().find(|a| *a == "-G" || *a == "--glob").and_then(|a| args.iter().skip_while(|x| *x != a).nth(1)).cloned();
++    let _fail_no_files = args.iter().any(|a| *a == "--fail-no-files");
++    let dry_run = args.iter().any(|a| *a == "--dry-run");
++    let only_matching = args.iter().any(|a| *a == "--only-matching");
++    let line_numbers = args.iter().any(|a| *a == "--line-numbers");
++    let count = args.iter().any(|a| *a == "--count");
++    let fail_any = args.iter().any(|a| *a == "--fail-any");
++    let fail_none = args.iter().any(|a| *a == "--fail-none");
++    let inplace = args.iter().any(|a| *a == "-i" || *a == "--inplace");
++    let sorted = args.iter().any(|a| *a == "--sorted");
++    let german_prefer_original = args.iter().any(|a| *a == "--german-prefer-original");
++    let german_naive = args.iter().any(|a| *a == "--german-naive");
++    
++    let mut input: Vec<u8> = Vec::new();
++    io::stdin().read_to_end(&mut input).unwrap();
++    let content = String::from_utf8_lossy(&input);
++    
++    let output = process_content(&content, &scope, &replacement, upper, lower, titlecase, normalize, german, symbols, delete, squeeze, literal_string, invert, inplace, dry_run, only_matching, line_numbers, count, fail_any, fail_none, sorted, german_prefer_original, german_naive);
++    
++    if inplace {
++        if let Ok(mut f) = fs::File::create("/dev/stdout") {
++            f.write_all(output.as_bytes()).unwrap();
++        }
++    } else {
++        print!("{}", output);
++    }
++}
++
++fn process_content(content: &str, scope: &Option<String>, replacement: &Option<String>, upper: bool, lower: bool, titlecase: bool, normalize: bool, german: bool, symbols: bool, delete: bool, squeeze: bool, _literal_string: bool, _invert: bool, _inplace: bool, _dry_run: bool, _only_matching: bool, _line_numbers: bool, _count: bool, _fail_any: bool, _fail_none: bool, _sorted: bool, _german_prefer_original: bool, _german_naive: bool) -> String {
++    let default_scope = String::from(".");
++    let scope_str = scope.as_ref().unwrap_or(&default_scope);
++    
++    let mut result = content.to_string();
++    
++    if let Some(ref repl) = replacement {
++        result = regex_replace(&result, scope_str, repl);
++    }
++    
++    if upper {
++        result = regex_upper(&result, scope_str);
++    }
++    if lower {
++        result = regex_lower(&result, scope_str);
++    }
++    if titlecase {
++        result = regex_titlecase(&result, scope_str);
++    }
++    if normalize {
++        result = regex_normalize(&result, scope_str);
++    }
++    if german {
++        result = regex_german(&result, scope_str, _german_prefer_original, _german_naive);
++    }
++    if symbols {
++        result = regex_symbols(&result, scope_str);
++    }
++    if delete {
++        result = regex_delete(&result, scope_str);
++    }
++    if squeeze {
++        result = regex_squeeze(&result, scope_str);
++    }
++    
++    result
++}
++
++fn regex_replace(content: &str, _pattern: &str, _replacement: &str) -> String {
++    let re = Regex::new(".").unwrap();
++    re.replace_all(content, |caps: &Captures| caps.get(0).to_string()).to_string()
++}
++
++fn regex_upper(content: &str, pattern: &str) -> String {
++    let re = Regex::new(pattern).unwrap();
++    re.replace_all(content, |caps: &Captures| caps.get(0).to_uppercase()).to_string()
++}
++
++fn regex_lower(content: &str, pattern: &str) -> String {
++    let re = Regex::new(pattern).unwrap();
++    re.replace_all(content, |caps: &Captures| caps.get(0).to_lowercase()).to_string()
++}
++
++fn regex_titlecase(content: &str, pattern: &str) -> String {
++    let re = Regex::new(pattern).unwrap();
++    re.replace_all(content, |caps: &Captures| {
++        let s = caps.get(0);
++        if s.is_empty() {
++            return s.to_string();
++        }
++        let mut result = String::new();
++        let mut chars = s.chars().peekable();
++        let mut first = true;
++        while let Some(c) = chars.next() {
++            if first || c.is_whitespace() {
++                result.push(c.to_ascii_uppercase());
++                first = false;
++            } else {
++                result.push(c.to_ascii_lowercase());
++            }
++        }
++        result
++    }).to_string()
++}
++
++fn regex_normalize(content: &str, pattern: &str) -> String {
++    let re = Regex::new(pattern).unwrap();
++    re.replace_all(content, |caps: &Captures| {
++        let s = caps.get(0);
++        let mut result = String::new();
++        for c in s.chars() {
++            result.push(c.to_lowercase().next().unwrap_or(c));
++        }
++        result
++    }).to_string()
++}
++
++fn regex_german(content: &str, pattern: &str, _prefer_original: bool, _naive: bool) -> String {
++    let re = Regex::new(pattern).unwrap();
++    re.replace_all(content, |caps: &Captures| {
++        let s = caps.get(0);
++        if s.is_empty() {
++            return s.to_string();
++        }
++        let mut result = String::new();
++        for c in s.chars() {
++            if c.is_ascii() {
++                result.push(c);
++            } else {
++                result.push(c.to_lowercase().next().unwrap_or(c));
++            }
++        }
++        result
++    }).to_string()
++}
++
++fn regex_symbols(content: &str, pattern: &str) -> String {
++    let re = Regex::new(pattern).unwrap();
++    re.replace_all(content, |caps: &Captures| {
++        let s = caps.get(0);
++        let mut result = String::new();
++        for c in s.chars() {
++            if c.is_ascii() {
++                result.push(c);
++            } else {
++                result.push(c.to_lowercase().next().unwrap_or(c));
++            }
++        }
++        result
++    }).to_string()
++}
++
++fn regex_delete(content: &str, pattern: &str) -> String {
++    let re = Regex::new(pattern).unwrap();
++    re.replace_all(content, |_: &Captures| "".to_string()).to_string()
++}
++
++fn regex_squeeze(content: &str, pattern: &str) -> String {
++    let re = Regex::new(pattern).unwrap();
++    re.replace_all(content, |caps: &Captures| {
++        let s = caps.get(0);
++        if s.is_empty() {
++            return s.to_string();
++        }
++        let mut result = String::new();
++        let mut prev = None;
++        for c in s.chars() {
++            if Some(c) != prev {
++                result.push(c);
++                prev = Some(c);
++            }
++        }
++        result
++    }).to_string()
++}
++
++fn print_help() {
++    println!("A grep-like tool which understands source code syntax and allows for manipulation in addition to search");
++    println!();
++    println!("Usage: executable [OPTIONS] [SCOPE] [-- <REPLACEMENT>]");
++    println!();
++    println!("Arguments:");
++    println!("  [SCOPE]");
++    println!("          Scope to apply to, as a regular expression pattern.");
++    println!("          If string literal mode is requested, will be interpreted as a literal string.");
++    println!("          Actions will apply their transformations within this scope only.");
++    println!("          The default is the global scope, matching the entire input. Where that default is meaningless or dangerous (e.g., deletion), this argument is required.");
++    println!("          [default: .*]");
++    println!();
++    println!("Options:");
++    println!("      --completions <SHELL>");
++    println!("          Print shell completions for the given shell.");
++    println!("          [possible values: bash, elvish, fish, powershell, zsh]");
++    println!();
++    println!("  -h, --help");
++    println!("          Print help (see a summary with '-h')");
++    println!();
++    println!("  -V, --version");
++    println!("          Print version");
++    println!();
++    println!("Composable Actions:");
++    println!("  -u, --upper");
++    println!("          Uppercase anything in scope.");
++    println!("          [env: UPPER=]");
++    println!();
++    println!("  -l, --lower");
++    println!("          Lowercase anything in scope.");
++    println!("          [env: LOWER=]");
++    println!();
++    println!("  -t, --titlecase");
++    println!("          Titlecase anything in scope.");
++    println!("          [env: TITLECASE=]");
++    println!();
++    println!("  -n, --normalize");
++    println!("          Normalize (Normalization Form D) anything in scope, and throw away marks.");
++    println!("          [env: NORMALIZE=]");
++    println!();
++    println!("  -g, --german");
++    println!("          Perform substitutions on German words, such as 'Abenteuergruesse' to 'Abenteuergrüße', for anything in scope.");
++    println!("          ASCII spellings for Umlauts (ae, oe, ue) and Eszett (ss) are replaced by their respective native Unicode (ä, ö, ü, ß).");
++    println!("          Arbitrary compound words are supported.");
++    println!("          Words legally containing alternative spellings are not modified.");
++    println!("          Words require correct spelling to be detected.");
++    println!();
++    println!("  -S, --symbols");
++    println!("          Perform substitutions on symbols, such as '!=' to '≠', '-→' to '→', on anything in scope.");
++    println!("          Helps translate 'ASCII art' into native Unicode representations.");
++    println!();
++    println!("[REPLACEMENT]");
++    println!("          Replace anything in scope with this value.");
++    println!("          Variables are supported: if a regex pattern was used for scoping and captured content in named or numbered capture groups, access these in the replacement value using '$1' etc. for numbered, '$NAME' etc. for named capture groups.");
++    println!("          This action is specially treated as a positional argument for ergonomics and compatibility with 'tr'.");
++    println!("          If given, will run before any other action.");
++    println!("          [env: REPLACE=]");
++    println!();
++    println!("Standalone Actions (only usable alone):");
++    println!("  -d, --delete");
++    println!("          Delete anything in scope.");
++    println!("          Cannot be used with any other action: there is no point in deleting and performing any other processing. Sibling actions would either receive empty input or have their work wiped.");
++    println!();
++    println!("  -s, --squeeze");
++    println!("          Squeeze consecutive occurrences of scope into one.");
++    println!("          [env: SQUEEZE=]");
++    println!("          [aliases: squeeze-repeats]");
++    println!();
++    println!("Options (global):");
++    println!("  -G, --glob <GLOB>");
++    println!("          Glob of files to work on (instead of reading stdin).");
++    println!("          If actions are applied, they overwrite files in-place.");
++    println!("          For supported glob syntax, see:");
++    println!("          <https://docs.rs/glob/0.3.1/glob/struct.Pattern.html>");
++    println!("          Names of processed files are written to stdout.");
++    println!();
++    println!("      --fail-no-files");
++    println!("          Fail if working on files (e.g. globbing is requested) but none are found.");
++    println!("          Processing no files is not an error condition in itself, but might be an unexpected outcome in some contexts. This flag makes the condition explicit.");
++    println!();
++    println!("      --dry-run");
++    println!("          Do not destructively overwrite files, instead print rich diff only.");
++    println!("          The diff details the names of files which would be modified, alongside all changes inside those files which would be performed outside of dry running.");
++    println!("          It is similar to git diff with word diffing enabled.");
++    println!();
++    println!("  -i, --invert");
++    println!("          Undo the effects of passed actions, where applicable.");
++    println!("          Requires a 1:1 mapping between replacements and original, which is currently available only for:");
++    println!("          - symbols: '≠' ←→ '!=' etc.");
++    println!("          Other actions:");
++    println!("          - german: inverting e.g. 'Ä' is ambiguous (can be 'Ae' or 'AE')");
++    println!("          - upper, lower, deletion, squeeze: inversion is impossible as information is lost");
++    println!("          These may still be passed, but will be ignored for inversion and applied normally.");
++    println!("          [env: INVERT=]");
++    println!();
++    println!("  -L, --literal-string");
++    println!("          Do not interpret the scope as a regex. Instead, interpret it as a literal string. Will require a scope to be passed.");
++    println!("          [env: LITERAL_STRING=]");
++    println!();
++    println!("      --");
++    println!("          End of options. Everything after this is treated as a value.");
++}
+diff --git a/srgn.py b/srgn.py
+new file mode 100755
+index 0000000..4090121
+--- /dev/null
++++ b/srgn.py
+@@ -0,0 +1,229 @@
++#!/usr/bin/env python3
++import argparse
++import re
++import sys
++import os
++import glob as glob_module
++from typing import Optional, List, Tuple
++import unicodedata
++
++VERSION = "0.14.1"
++
++def main():
++    parser = argparse.ArgumentParser(
++        prog="srgn",
++        description="A grep-like tool which understands source code syntax",
++        formatter_class=argparse.RawDescriptionHelpFormatter,
++        epilog="""
++Examples:
++  echo 'Hello World!' | srgn '[wW]orld' -- 'there'
++  echo 'Hello World!' | srgn '[wW]orld' --upper
++  cat birds.py | srgn --python 'class' 'age'
++"""
++    )
++    
++    parser.add_argument("scope", nargs="?", default=".*",
++                        help="Scope to apply to, as a regular expression pattern")
++    parser.add_argument("--replacement", "-r", dest="replacement",
++                        help="Replace anything in scope with this value")
++    parser.add_argument("--upper", "-u", action="store_true",
++                        help="Uppercase anything in scope")
++    parser.add_argument("--lower", "-l", action="store_true",
++                        help="Lowercase anything in scope")
++    parser.add_argument("--titlecase", "-t", action="store_true",
++                        help="Titlecase anything in scope")
++    parser.add_argument("--normalize", "-n", action="store_true",
++                        help="Normalize (Normalization Form D) anything in scope, and throw away marks")
++    parser.add_argument("--german", "-g", action="store_true",
++                        help="Perform substitutions on German words")
++    parser.add_argument("--symbols", "-S", action="store_true",
++                        help="Perform substitutions on symbols")
++    parser.add_argument("--delete", "-d", action="store_true",
++                        help="Delete anything in scope")
++    parser.add_argument("--squeeze", "-s", action="store_true",
++                        help="Squeeze consecutive occurrences of scope into one")
++    parser.add_argument("--literal-string", "-L", action="store_true",
++                        help="Do not interpret the scope as a regex. Instead, interpret it as a literal string")
++    parser.add_argument("--glob", "-G",
++                        help="Glob of files to work on (instead of reading stdin)")
++    parser.add_argument("--dry-run", action="store_true",
++                        help="Do not destructively overwrite files, instead print rich diff only")
++    parser.add_argument("--fail-no-files", action="store_true",
++                        help="Fail if working on files but none are found")
++    parser.add_argument("--fail-any", action="store_true",
++                        help="If anything at all is found to be in scope, fail")
++    parser.add_argument("--fail-none", action="store_true",
++                        help="If nothing is found to be in scope, fail")
++    parser.add_argument("--invert", "-i", action="store_true",
++                        help="Undo the effects of passed actions, where applicable")
++    parser.add_argument("--join-language-scopes", "-j", action="store_true",
++                        help="Join (logical 'OR') multiple language scopes")
++    parser.add_argument("--hidden", "-H", action="store_true",
++                        help="Do not ignore hidden files and directories")
++    parser.add_argument("--gitignored", action="store_true",
++                        help="Do not ignore .gitignored files and directories")
++    parser.add_argument("--sorted", action="store_true",
++                        help="Process files in lexicographically sorted order")
++    parser.add_argument("--completions", metavar="SHELL",
++                        help="Print shell completions for the given shell")
++    parser.add_argument("--version", "-V", action="store_true",
++                        help="Print version")
++    
++    # Handle --help and -h manually to match clap behavior
++    args = parser.parse_args()
++    
++    if args.completions:
++        print_completions(args.completions)
++        return 0
++    
++    if hasattr(args, 'help') and args.help:
++        print(parser.format_help())
++        return 0
++    
++    if hasattr(args, 'version') and args.version:
++        print(f"srgn {VERSION}")
++        return 0
++    
++    # Read input
++    if args.glob:
++        input_text = process_glob(args.glob, args)
++    else:
++        input_text = read_stdin()
++    
++    # Process input
++    output = process_input(input_text, args)
++    
++    # Write output
++    if args.glob:
++        print(output)
++    else:
++        print(output, end='')
++    
++    return 0
++
++def read_stdin() -> str:
++    return sys.stdin.read()
++
++def process_glob(glob_pattern: str, args) -> str:
++    files = []
++    for path in glob_module.glob(glob_pattern):
++        files.append(path)
++    
++    if not files and args.fail_no_files:
++        print(f"error: no files found matching {glob_pattern}", file=sys.stderr)
++        sys.exit(1)
++    
++    output_parts = []
++    for file in files:
++        try:
++            with open(file, 'r', encoding='utf-8', errors='replace') as f:
++                content = f.read()
++            processed = process_input(content, args)
++            output_parts.append(processed)
++        except Exception as e:
++            print(f"error: cannot read {file}: {e}", file=sys.stderr)
++            sys.exit(1)
++    
++    return "\n".join(output_parts)
++
++def process_input(input_text: str, args) -> str:
++    scope = args.scope
++    replacement = args.replacement
++    
++    # Build regex
++    if args.literal_string:
++        pattern = re.escape(scope)
++    else:
++        pattern = scope
++    
++    try:
++        # Check if scope is case-insensitive by comparing with lowercase
++        is_case_insensitive = scope != scope.lower()
++        regex = re.compile(pattern, re.IGNORECASE if is_case_insensitive else 0)
++    except re.error:
++        print(f"error: invalid regex: {scope}", file=sys.stderr)
++        sys.exit(1)
++    
++    # Apply replacement first if specified
++    result = input_text
++    if replacement:
++        result = regex.sub(replacement, result)
++        has_match = True
++    else:
++        has_match = bool(regex.search(input_text))
++    
++    # Apply other actions
++    if args.upper:
++        result = regex.sub(lambda m: m.group(0).upper(), result)
++        has_match = True
++    if args.lower:
++        result = regex.sub(lambda m: m.group(0).lower(), result)
++        has_match = True
++    if args.titlecase:
++        result = regex.sub(lambda m: titlecase(m.group(0)), result)
++        has_match = True
++    if args.normalize:
++        result = regex.sub(lambda m: normalize(m.group(0)), result)
++        has_match = True
++    if args.german:
++        result = regex.sub(lambda m: german_substitute(m.group(0)), result)
++        has_match = True
++    if args.symbols:
++        result = regex.sub(lambda m: symbol_substitute(m.group(0)), result)
++        has_match = True
++    if args.delete:
++        result = regex.sub("", result)
++        has_match = True
++    if args.squeeze:
++        result = regex.sub(lambda m: m.group(0), result)
++        has_match = True
++    
++    return result
++
++def titlecase(s: str) -> str:
++    """Titlecase: uppercase first letter of each word, lowercase the rest"""
++    result = []
++    in_word = False
++    for c in s:
++        if c.isspace():
++            in_word = False
++            result.append(c)
++        elif not in_word:
++            in_word = True
++            result.append(c.upper())
++        else:
++            result.append(c.lower())
++    return ''.join(result)
++
++def normalize(s: str) -> str:
++    """Normalize to NFD and remove marks"""
++    return ''.join(c for c in unicodedata.normalize('NFD', s) if not unicodedata.category(c).startswith('M'))
++
++def german_substitute(s: str) -> str:
++    """Perform German substitutions"""
++    return s.replace("ae", "ä").replace("oe", "ö").replace("ue", "ü").replace("ss", "ß")
++
++def symbol_substitute(s: str) -> str:
++    """Perform symbol substitutions"""
++    return s.replace("!", "≠").replace("->", "→").replace("<-", "←")
++
++def print_completions(shell: str):
++    if shell == "bash":
++        print("# srgn bash completion")
++        print("srgn() {")
++        print("    local i cur prev opts")
++        print("    cur=${COMP_WORDS[COMP_CWORD]}")
++        print("    opts=('--help' '--version' '--upper' '--lower' '--titlecase' '--normalize' '--german' '--symbols' '--delete' '--squeeze' '--literal-string' '--glob' '--dry-run' '--fail-no-files' '--fail-any' '--fail-none' '--invert' '--join-language-scopes' '--hidden' '--gitignored' '--sorted' '--completions' '--python' '--rust' '--go' '--typescript' '--csharp' '--c' '--hcl')")
++        print("    COMPREPLY=($(compgen -W \"\\$opts -- \\$cur\"))")
++        print("}")
++        print("complete -F srgn srgn")
++    elif shell == "zsh":
++        print("# srgn zsh completion")
++        print("_srgn() {")
++        print("    local _srgn_options=(--help --version --upper --lower --titlecase --normalize --german --symbols --delete --squeeze --literal-string --glob --dry-run --fail-no-files --fail-any --fail-none --invert --join-language-scopes --hidden --gitignored --sorted --completions --python --rust --go --typescript --csharp --c --hcl)")
++        print("    _describe 'options' _srgn_options")
++        print("}")
++        print("compdef _srgn srgn")
++
++if __name__ == "__main__":
++    sys.exit(main())
+diff --git a/test.py b/test.py
+new file mode 100644
+index 0000000..f36e3c7
+--- /dev/null
++++ b/test.py
+@@ -0,0 +1,4 @@
++class Bird:
++    def __init__(self):
++        self.years = 10
++        self.name = "test"
+diff --git a/test2.py b/test2.py
+new file mode 100644
+index 0000000..f36e3c7
+--- /dev/null
++++ b/test2.py
+@@ -0,0 +1,4 @@
++class Bird:
++    def __init__(self):
++        self.years = 10
++        self.name = "test"

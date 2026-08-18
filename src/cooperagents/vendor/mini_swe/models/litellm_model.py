@@ -87,7 +87,10 @@ class LitellmModel:
         if self.config.litellm_model_registry and Path(self.config.litellm_model_registry).is_file():
             litellm.utils.register_model(json.loads(Path(self.config.litellm_model_registry).read_text()))
 
-    _HARD_TIMEOUT_S = 240  # ceiling on any single completion call
+    # Ceiling on any single completion call. Env-overridable per model
+    # profile: long-thinking models with large max_tokens need more than the
+    # default (e.g. 32k tokens at ~72 tok/s ≈ 455s).
+    _HARD_TIMEOUT_S = int(os.getenv("COOPER_HARD_TIMEOUT_S", "240"))
 
     def _query(self, messages: list[dict[str, str]], **kwargs):
         # The litellm/httpx `timeout` kwarg does not reliably arm the READ

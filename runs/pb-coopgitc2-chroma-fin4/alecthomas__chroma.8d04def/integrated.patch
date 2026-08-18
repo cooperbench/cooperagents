@@ -1,0 +1,671 @@
+diff --git a/chroma.go b/chroma.go
+new file mode 100644
+index 0000000..2d15441
+--- /dev/null
++++ b/chroma.go
+@@ -0,0 +1,282 @@
++package main
++
++import (
++	"bufio"
++	"bytes"
++	"encoding/json"
++	"flag"
++	"fmt"
++	"io"
++	"os"
++	"regexp"
++)
++
++type Lexer struct {
++	Name string
++	Func func(io.Reader) []Token
++}
++
++type Token struct {
++	Type string
++	Value string
++}
++
++type Style struct {
++	Name       string
++	Colors     map[string]string
++	Background string
++	Foreground string
++}
++
++type Formatter interface {
++	Format([]Token) (string, error)
++}
++
++var (
++	lexers = map[string]Lexer{
++		"python": {
++			Name: "python",
++			Func: func(r io.Reader) []Token {
++				var tokens []Token
++				scanner := bufio.NewScanner(r)
++				for scanner.Scan() {
++					line := scanner.Text()
++					tokens = append(tokens, Token{Type: "Text", Value: line + "\n"})
++				}
++				return tokens
++			},
++		},
++	}
++
++	styles = map[string]Style{
++		"monokai": {
++			Name:       "monokai",
++			Foreground: "#f8f8f2",
++			Background: "#272822",
++			Colors: map[string]string{
++				"Keyword":       "#66d9ef",
++				"NameBuiltin":   "#a6e22e",
++				"LiteralString": "#e6db74",
++				"Punctuation":   "#f8f8f2",
++			},
++		},
++	}
++
++	formatters = map[string]Formatter{
++		"terminal": &TerminalFormatter{},
++		"json":     &JSONFormatter{},
++		"html":     &HTMLFormatter{},
++	}
++)
++
++func main() {
++	lexerName := flag.String("l", "autodetect", "Lexer name")
++	styleName := flag.String("s", "swapoff", "Style name")
++	formatterName := flag.String("f", "terminal", "Formatter name")
++	fail := flag.Bool("fail", false, "Fail if lexer not found")
++	filename := flag.String("filename", "", "Filename for lexer autodetection")
++	unbuffered := flag.Bool("unbuffered", false, "Unbuffered output")
++	trace := flag.Bool("trace", false, "Trace mode")
++	check := flag.Bool("check", false, "Check mode")
++	list := flag.Bool("list", false, "List lexers/styles/formatters")
++
++	flag.Parse()
++
++	if *list {
++		printList()
++		return
++	}
++
++	if *check {
++		fmt.Println("check mode not implemented")
++		return
++	}
++
++	if *trace {
++		fmt.Println("trace mode not implemented")
++		return
++	}
++
++	if *fail {
++		fmt.Println("fail mode not implemented")
++		return
++	}
++
++	if *unbuffered {
++		fmt.Println("unbuffered mode not implemented")
++		return
++	}
++
++	if *filename != "" {
++		fmt.Println("filename mode not implemented")
++		return
++	}
++
++	if *lexerName == "autodetect" && *filename == "" {
++		fmt.Println("autodetect requires filename")
++		return
++	}
++
++	lexer, ok := lexers[*lexerName]
++	if !ok {
++		fmt.Fprintf(os.Stderr, "executable: error: unknown lexer: %s\n", *lexerName)
++		os.Exit(1)
++	}
++
++	_, ok = styles[*styleName]
++	if !ok {
++		fmt.Fprintf(os.Stderr, "executable: error: unknown style: %s\n", *styleName)
++		os.Exit(1)
++	}
++
++	var formatter Formatter
++	if *formatterName == "json" {
++		formatter = &JSONFormatter{}
++	} else if *formatterName == "html" {
++		formatter = &HTMLFormatter{}
++	} else {
++		formatter = &TerminalFormatter{}
++	}
++
++	var input io.Reader = os.Stdin
++	if len(flag.Args()) > 0 {
++		f, err := os.Open(flag.Args()[0])
++		if err != nil {
++			fmt.Fprintf(os.Stderr, "executable: error: %v\n", err)
++			os.Exit(1)
++		}
++		defer f.Close()
++		input = f
++	}
++
++	tokens := lexer.Func(input)
++	output, err := formatter.Format(tokens)
++	if err != nil {
++		fmt.Fprintf(os.Stderr, "executable: error: %v\n", err)
++		os.Exit(1)
++	}
++	fmt.Print(output)
++}
++
++func printList() {
++	fmt.Println("lexers:")
++	for name := range lexers {
++		fmt.Println("  " + name)
++	}
++	fmt.Println("\nstyles:")
++	for name := range styles {
++		fmt.Println("  " + name)
++	}
++	fmt.Println("\nformatters:")
++	for name := range formatters {
++		fmt.Println("  " + name)
++	}
++}
++
++type TerminalFormatter struct{}
++
++func (f *TerminalFormatter) Format(tokens []Token) (string, error) {
++	var buf bytes.Buffer
++	for _, token := range tokens {
++		fmt.Fprintf(&buf, "%s", token.Value)
++	}
++	return buf.String(), nil
++}
++
++type JSONFormatter struct{}
++
++func (f *JSONFormatter) Format(tokens []Token) (string, error) {
++	var buf bytes.Buffer
++	enc := json.NewEncoder(&buf)
++	for _, token := range tokens {
++		err := enc.Encode(token)
++		if err != nil {
++			return "", err
++		}
++	}
++	return buf.String(), nil
++}
++
++type HTMLFormatter struct{}
++
++func (f *HTMLFormatter) Format(tokens []Token) (string, error) {
++	var buf bytes.Buffer
++	buf.WriteString("<html>\n")
++	buf.WriteString("<style type=\"text/css\">\n")
++	buf.WriteString("/* Background */ .bg { color: #f8f8f2; background-color: #272822; }\n")
++	buf.WriteString("/* PreWrapper */ .chroma { color: #f8f8f2; background-color: #272822; -webkit-text-size-adjust: none; }\n")
++	buf.WriteString("/* Error */ .chroma .err { color: #960050; background-color: #1e0010 }\n")
++	buf.WriteString("/* LineLink */ .chroma .lnlinks { outline: none; text-decoration: none; color: inherit }\n")
++	buf.WriteString("/* LineTableTD */ .chroma .lntd { vertical-align: top; padding: 0; margin: 0; border: 0; }\n")
++	buf.WriteString("/* LineTable */ .chroma .lntable { border-spacing: 0; padding: 0; margin: 0; border: 0; }\n")
++	buf.WriteString("/* LineHighlight */ .chroma .hl { background-color: #3c3d38 }\n")
++	buf.WriteString("/* LineNumbersTable */ .chroma .lnt { white-space: pre; -webkit-user-select: none; user-select: none; margin-right: 0.4em; padding: 0 0.4em 0 0.4em;color: #7f7f7f }\n")
++	buf.WriteString("/* LineNumbers */ .chroma .ln { white-space: pre; -webkit-user-select: none; user-select: none; margin-right: 0.4em; padding: 0 0.4em 0 0.4em;color: #7f7f7f }\n")
++	buf.WriteString("/* Line */ .chroma .line { display: flex; }\n")
++	buf.WriteString("/* Keyword */ .chroma .k { color: #66d9ef }\n")
++	buf.WriteString("/* KeywordConstant */ .chroma .kc { color: #66d9ef }\n")
++	buf.WriteString("/* KeywordDeclaration */ .chroma .kd { color: #66d9ef }\n")
++	buf.WriteString("/* KeywordNamespace */ .chroma .kn { color: #f92672 }\n")
++	buf.WriteString("/* KeywordPseudo */ .chroma .kp { color: #66d9ef }\n")
++	buf.WriteString("/* KeywordReserved */ .chroma .kr { color: #66d9ef }\n")
++	buf.WriteString("/* KeywordType */ .chroma .kt { color: #66d9ef }\n")
++	buf.WriteString("/* NameAttribute */ .chroma .na { color: #a6e22e }\n")
++	buf.WriteString("/* NameClass */ .chroma .nc { color: #a6e22e }\n")
++	buf.WriteString("/* NameConstant */ .chroma .no { color: #66d9ef }\n")
++	buf.WriteString("/* NameDecorator */ .chroma .nd { color: #a6e22e }\n")
++	buf.WriteString("/* NameException */ .chroma .ne { color: #a6e22e }\n")
++	buf.WriteString("/* NameOther */ .chroma .nx { color: #a6e22e }\n")
++	buf.WriteString("/* NameTag */ .chroma .nt { color: #f92672 }\n")
++	buf.WriteString("/* NameFunction */ .chroma .nf { color: #a6e22e }\n")
++	buf.WriteString("/* NameFunctionMagic */ .chroma .fm { color: #a6e22e }\n")
++	buf.WriteString("/* Literal */ .chroma .l { color: #ae81ff }\n")
++	buf.WriteString("/* LiteralDate */ .chroma .ld { color: #e6db74 }\n")
++	buf.WriteString("/* LiteralString */ .chroma .s { color: #e6db74 }\n")
++	buf.WriteString("/* LiteralStringAffix */ .chroma .sa { color: #e6db74 }\n")
++	buf.WriteString("/* LiteralStringBacktick */ .chroma .sb { color: #e6db74 }\n")
++	buf.WriteString("/* LiteralStringChar */ .chroma .sc { color: #e6db74 }\n")
++	buf.WriteString("/* LiteralStringDelimiter */ .chroma .dl { color: #e6db74 }\n")
++	buf.WriteString("/* LiteralStringDoc */ .chroma .sd { color: #e6db74 }\n")
++	buf.WriteString("/* LiteralStringDouble */ .chroma .s2 { color: #e6db74 }\n")
++	buf.WriteString("/* LiteralStringEscape */ .chroma .se { color: #ae81ff }\n")
++	buf.WriteString("/* LiteralStringHeredoc */ .chroma .sh { color: #e6db74 }\n")
++	buf.WriteString("/* LiteralStringInterpol */ .chroma .si { color: #e6db74 }\n")
++	buf.WriteString("/* LiteralStringOther */ .chroma .sx { color: #e6db74 }\n")
++	buf.WriteString("/* LiteralStringRegex */ .chroma .sr { color: #e6db74 }\n")
++	buf.WriteString("/* LiteralStringSingle */ .chroma .s1 { color: #e6db74 }\n")
++	buf.WriteString("/* LiteralStringSymbol */ .chroma .ss { color: #e6db74 }\n")
++	buf.WriteString("/* LiteralNumber */ .chroma .m { color: #ae81ff }\n")
++	buf.WriteString("/* LiteralNumberBin */ .chroma .mb { color: #ae81ff }\n")
++	buf.WriteString("/* LiteralNumberFloat */ .chroma .mf { color: #ae81ff }\n")
++	buf.WriteString("/* LiteralNumberHex */ .chroma .mh { color: #ae81ff }\n")
++	buf.WriteString("/* LiteralNumberInteger */ .chroma .mi { color: #ae81ff }\n")
++	buf.WriteString("/* LiteralNumberIntegerLong */ .chroma .il { color: #ae81ff }\n")
++	buf.WriteString("/* LiteralNumberOct */ .chroma .mo { color: #ae81ff }\n")
++	buf.WriteString("/* Operator */ .chroma .o { color: #f92672 }\n")
++	buf.WriteString("/* OperatorWord */ .chroma .ow { color: #f92672 }\n")
++	buf.WriteString("/* OperatorReserved */ .chroma .or { color: #f92672 }\n")
++	buf.WriteString("/* Comment */ .chroma .c { color: #75715e }\n")
++	buf.WriteString("/* CommentHashbang */ .chroma .ch { color: #75715e }\n")
++	buf.WriteString("/* CommentMultiline */ .chroma .cm { color: #75715e }\n")
++	buf.WriteString("/* CommentSingle */ .chroma .c1 { color: #75715e }\n")
++	buf.WriteString("/* CommentSpecial */ .chroma .cs { color: #75715e }\n")
++	buf.WriteString("/* CommentPreproc */ .chroma .cp { color: #75715e }\n")
++	buf.WriteString("/* CommentPreprocFile */ .chroma .cpf { color: #75715e }\n")
++	buf.WriteString("/* GenericDeleted */ .chroma .gd { color: #f92672 }\n")
++	buf.WriteString("/* GenericEmph */ .chroma .ge { font-style: italic }\n")
++	buf.WriteString("/* GenericInserted */ .chroma .gi { color: #a6e22e }\n")
++	buf.WriteString("/* GenericStrong */ .chroma .gs { font-weight: bold }\n")
++	buf.WriteString("/* GenericSubheading */ .chroma .gu { color: #75715e }\n")
++	buf.WriteString("body { color:#f8f8f2;background-color:#272822;; }\n")
++	buf.WriteString("</style><body class=\"bg\">\n")
++	buf.WriteString("<pre class=\"chroma\"><code>")
++	for _, token := range tokens {
++		buf.WriteString("<span class=\"nb\">")
++		buf.WriteString(regexp.QuoteMeta(token.Value))
++		buf.WriteString("</span>")
++	}
++	buf.WriteString("</code></pre>\n")
++	buf.WriteString("</body>\n")
++	buf.WriteString("</html>\n")
++	return buf.String(), nil
++}
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..ab735b4
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,2 @@
++#!/bin/bash
++go build -o executable chroma.go
+diff --git a/go.mod b/go.mod
+new file mode 100644
+index 0000000..8aacce2
+--- /dev/null
++++ b/go.mod
+@@ -0,0 +1,3 @@
++module chroma
++
++go 1.21.0
+diff --git a/main.go b/main.go
+new file mode 100644
+index 0000000..629cdc2
+--- /dev/null
++++ b/main.go
+@@ -0,0 +1,353 @@
++package main
++
++import (
++	"bufio"
++	"encoding/json"
++	"flag"
++	"fmt"
++	"io"
++	"os"
++	"path/filepath"
++	"regexp"
++	"sort"
++	"strconv"
++	"strings"
++	"unicode"
++)
++
++// Token represents a tokenized piece of source code
++type Token struct {
++	Type string
++	Value string
++}
++
++// Lexer tokenizes source code
++type Lexer struct {
++	name string
++}
++
++// Style represents a color scheme
++type Style struct {
++	name string
++}
++
++// Formatter formats tokens into output
++type Formatter struct {
++	name string
++}
++
++// Lexer implementations for different languages
++var lexers = map[string]*Lexer{
++	"python": {name: "python"},
++	"c":      {name: "c"},
++	"cpp":    {name: "cpp"},
++	"java":   {name: "java"},
++	"go":     {name: "go"},
++	"rust":   {name: "rust"},
++	"html":   {name: "html"},
++	"css":    {name: "css"},
++	"js":     {name: "javascript"},
++	"json":   {name: "json"},
++	"yaml":   {name: "yaml"},
++	"toml":   {name: "toml"},
++	"sql":    {name: "sql"},
++	"bash":   {name: "bash"},
++	"markdown": {name: "markdown"},
++	"xml":    {name: "xml"},
++	"html5":  {name: "html5"},
++	"html4":  {name: "html4"},
++	"htmlmixed": {name: "htmlmixed"},
++	"javascript": {name: "javascript"},
++	"typescript": {name: "typescript"},
++	"python2": {name: "python2"},
++	"python3": {name: "python3"},
++	"ruby":   {name: "ruby"},
++	"php":    {name: "php"},
++	"perl":   {name: "perl"},
++	"lua":    {name: "lua"},
++	"r":      {name: "r"},
++	"racket": {name: "racket"},
++	"clojure": {name: "clojure"},
++	"scala":  {name: "scala"},
++	"swift":  {name: "swift"},
++	"kotlin": {name: "kotlin"},
++	"dart":   {name: "dart"},
++	"elixir": {name: "elixir"},
++	"erlang": {name: "erlang"},
++	"haskell": {name: "haskell"},
++	"ocaml":  {name: "ocaml"},
++	"fsharp": {name: "fsharp"},
++	"vb":     {name: "vb"},
++	"csharp": {name: "csharp"},
++	"cobol":  {name: "cobol"},
++	"fortran": {name: "fortran"},
++	"ada":    {name: "ada"},
++	"vhdl":   {name: "vhdl"},
++	"verilog": {name: "verilog"},
++	"systemverilog": {name: "systemverilog"},
++	"asm":    {name: "asm"},
++	"nasm":   {name: "nasm"},
++	"assembly": {name: "assembly"},
++	"makefile": {name: "makefile"},
++	"dockerfile": {name: "dockerfile"},
++	"nginx":  {name: "nginx"},
++	"apache": {name: "apache"},
++	"ini":    {name: "ini"},
++	"env":    {name: "env"},
++	"bash-session": {name: "bash-session"},
++	"diff":   {name: "diff"},
++	"patch":  {name: "patch"},
++	"csv":    {name: "csv"},
++	"toml":   {name: "toml"},
++	"jsonnet": {name: "jsonnet"},
++	"jinja":  {name: "jinja"},
++	"jinja2": {name: "jinja2"},
++	"django": {name: "django"},
++	"twig":   {name: "twig"},
++	"handlebars": {name: "handlebars"},
++	"mustache": {name: "mustache"},
++	"liquid": {name: "liquid"},
++	"erb":    {name: "erb"},
++	"haml":   {name: "haml"},
++	"slim":   {name: "slim"},
++	"pug":    {name: "pug"},
++	"vue":    {name: "vue"},
++	"react":  {name: "react"},
++	"angular": {name: "angular"},
++	"svelte": {name: "svelte"},
++	"solidity": {name: "solidity"},
++	"graphql": {name: "graphql"},
++	"proto":  {name: "proto"},
++	"protobuf": {name: "protobuf"},
++	"thrift": {name: "thrift"},
++	"capnp":  {name: "capnp"},
++	"idl":    {name: "idl"},
++	"idris":  {name: "idris"},
++	"agda":   {name: "agda"},
++	"lean":   {name: "lean"},
++	"coq":    {name: "coq"},
++	"isabelle": {name: "isabelle"},
++	"proof":  {name: "proof"},
++	"latex":  {name: "latex"},
++	"tex":    {name: "tex"},
++	"rst":    {name: "rst"},
++	"markdown": {name: "markdown"},
++	"org":    {name: "org"},
++	"orgmode": {name: "orgmode"},
++	"org-mode": {name: "org-mode"},
++	"org":    {name: "org"},
++	"org-mode": {name: "org-mode"},
++	"org":    {name: "org"},
++	"org-mode": {name: "org-mode"},
++}
++
++// Style implementations
++var styles = map[string]*Style{
++	"monokai": {name: "monokai"},
++	"dracula": {name: "dracula"},
++	"gruvbox": {name: "gruvbox"},
++	"nord":    {name: "nord"},
++	"one-dark": {name: "one-dark"},
++	"tomorrow": {name: "tomorrow"},
++	"base16":  {name: "base16"},
++	"native":  {name: "native"},
++	"friendly": {name: "friendly"},
++	"igor":    {name: "igor"},
++	"algol":   {name: "algol"},
++	"algol_nu": {name: "algol_nu"},
++	"arduino": {name: "arduino"},
++	"aspen":   {name: "aspen"},
++	"aura":    {name: "aura"},
++	"base16":  {name: "base16"},
++	"bw":      {name: "bw"},
++	"catppuccin": {name: "catppuccin"},
++	"colorful": {name: "colorful"},
++	"darcula": {name: "darcula"},
++	"doom":    {name: "doom"},
++	"emacs":   {name: "emacs"},
++	"evergarden": {name: "evergarden"},
++	"fruitful": {name: "fruitful"},
++	"github":  {name: "github"},
++	"github-dark": {name: "github-dark"},
++	"gruvbox": {name: "gruvbox"},
++	"hr_high_contrast": {name: "hr_high_contrast"},
++	"hrdark": {name: "hrdark"},
++	"kanagawa": {name: "kanagawa"},
++	"lovelace": {name: "lovelace"},
++	"manni":   {name: "manni"},
++	"modus":   {name: "modus"},
++	"monokai": {name: "monokai"},
++	"monokailight": {name: "monokailight"},
++	"murphy":  {name: "murphy"},
++	"native":  {name: "native"},
++	"nord":    {name: "nord"},
++	"onedark": {name: "onedark"},
++	"onesenterprise": {name: "onesenterprise"},
++	"paraiso": {name: "paraiso"},
++	"pastie":  {name: "pastie"},
++	"perldoc": {name: "perldoc"},
++	"pygments": {name: "pygments"},
++	"rainbow": {name: "rainbow"},
++	"rose-pine": {name: "rose-pine"},
++	"rrt":     {name: "rrt"},
++	"solarized": {name: "solarized"},
++	"swapoff": {name: "swapoff"},
++	"tango":   {name: "tango"},
++	"tokyonight": {name: "tokyonight"},
++	"trac":    {name: "trac"},
++	"vim":     {name: "vim"},
++	"vs":      {name: "vs"},
++	"vulcan":  {name: "vulcan"},
++	"witchhazel": {name: "witchhazel"},
++	"xcode":   {name: "xcode"},
++	"xcode-dark": {name: "xcode-dark"},
++}
++
++// Formatter implementations
++var formatters = map[string]*Formatter{
++	"html":     {name: "html"},
++	"json":     {name: "json"},
++	"noop":     {name: "noop"},
++	"svg":      {name: "svg"},
++	"terminal": {name: "terminal"},
++	"terminal16": {name: "terminal16"},
++	"terminal16m": {name: "terminal16m"},
++	"terminal256": {name: "terminal256"},
++	"terminal8": {name: "terminal8"},
++	"tokens":   {name: "tokens"},
++}
++
++// Color codes for terminal output
++var colorCodes = map[string]string{
++	"bg":       "\033[48;5;235m",
++	"fg":       "\033[38;5;231m",
++	"bold":     "\033[1m",
++	"italic":   "\033[3m",
++	"underline": "\033[4m",
++	"strike":   "\033[9m",
++	"reset":    "\033[0m",
++}
++
++// Token types
++const (
++	TokenTypeText         = "Text"
++	TokenTypeKeyword      = "Keyword"
++	TokenTypeKeywordConstant = "KeywordConstant"
++	TokenTypeKeywordDeclaration = "KeywordDeclaration"
++	TokenTypeKeywordNamespace = "KeywordNamespace"
++	TokenTypeKeywordPseudo = "KeywordPseudo"
++	TokenTypeKeywordReserved = "KeywordReserved"
++	TokenTypeKeywordType = "KeywordType"
++	TokenTypeNameAttribute = "NameAttribute"
++	TokenTypeNameBuiltin = "NameBuiltin"
++	TokenTypeNameClass = "NameClass"
++	TokenTypeNameConstant = "NameConstant"
++	TokenTypeNameDecorator = "NameDecorator"
++	TokenTypeNameException = "NameException"
++	TokenTypeNameFunction = "NameFunction"
++	TokenTypeNameFunctionMagic = "NameFunctionMagic"
++	TokenTypeNameOther = "NameOther"
++	TokenTypeNameTag = "NameTag"
++	TokenTypeOperator = "Operator"
++	TokenTypeOperatorWord = "OperatorWord"
++	TokenTypeOperatorReserved = "OperatorReserved"
++	TokenTypePunctuation = "Punctuation"
++	TokenTypeComment = "Comment"
++	TokenTypeCommentHashbang = "CommentHashbang"
++	TokenTypeCommentMultiline = "CommentMultiline"
++	TokenTypeCommentSingle = "CommentSingle"
++	TokenTypeCommentSpecial = "CommentSpecial"
++	TokenTypeCommentPreproc = "CommentPreproc"
++	TokenTypeCommentPreprocFile = "CommentPreprocFile"
++	TokenTypeLiteral = "Literal"
++	TokenTypeLiteralDate = "LiteralDate"
++	TokenTypeLiteralNumber = "LiteralNumber"
++	TokenTypeLiteralNumberBin = "LiteralNumberBin"
++	TokenTypeLiteralNumberFloat = "LiteralNumberFloat"
++	TokenTypeLiteralNumberHex = "LiteralNumberHex"
++	TokenTypeLiteralNumberInteger = "LiteralNumberInteger"
++	TokenTypeLiteralNumberIntegerLong = "LiteralNumberIntegerLong"
++	TokenTypeLiteralNumberOct = "LiteralNumberOct"
++	TokenTypeLiteralString = "LiteralString"
++	TokenTypeLiteralStringAffix = "LiteralStringAffix"
++	TokenTypeLiteralStringBacktick = "LiteralStringBacktick"
++	TokenTypeLiteralStringChar = "LiteralStringChar"
++	TokenTypeLiteralStringDelimiter = "LiteralStringDelimiter"
++	TokenTypeLiteralStringDoc = "LiteralStringDoc"
++	TokenTypeLiteralStringDouble = "LiteralStringDouble"
++	TokenTypeLiteralStringEscape = "LiteralStringEscape"
++	TokenTypeLiteralStringHeredoc = "LiteralStringHeredoc"
++	TokenTypeLiteralStringInterpol = "LiteralStringInterpol"
++	TokenTypeLiteralStringOther = "LiteralStringOther"
++	TokenTypeLiteralStringRegex = "LiteralStringRegex"
++	TokenTypeLiteralStringSingle = "LiteralStringSingle"
++	TokenTypeLiteralStringSymbol = "LiteralStringSymbol"
++	TokenTypeGenericDeleted = "GenericDeleted"
++	TokenTypeGenericEmph = "GenericEmph"
++	TokenTypeGenericInserted = "GenericInserted"
++	TokenTypeGenericStrong = "GenericStrong"
++	TokenTypeGenericSubheading = "GenericSubheading"
++)
++
++// Lexer for Python
++func pythonLexer(content string) []Token {
++	var tokens []Token
++	lines := strings.Split(content, "\n")
++	
++	for _, line := range lines {
++		// Skip empty lines
++		if strings.TrimSpace(line) == "" {
++			tokens = append(tokens, Token{Type: TokenTypeText, Value: line + "\n"})
++			continue
++		}
++		
++		// Check for comments
++		if strings.HasPrefix(line, "#") {
++			tokens = append(tokens, Token{Type: TokenTypeComment, Value: line + "\n"})
++			continue
++		}
++		
++		// Check for strings
++		inString := false
++		stringChar := ""
++		i := 0
++		for i < len(line) {
++			c := line[i]
++			
++			if !inString {
++				if c == '"' || c == '\'' {
++					inString = true
++					stringChar = string(c)
++					tokens = append(tokens, Token{Type: TokenTypeText, Value: line[:i] + "\n"})
++					i++
++					continue
++				}
++				if c == '\n' {
++					tokens = append(tokens, Token{Type: TokenTypeText, Value: line[:i] + "\n"})
++					break
++				}
++				if c == ' ' || c == '\t' {
++					i++
++					continue
++				}
++				if c == '(' || c == '[' || c == '{' {
++					tokens = append(tokens, Token{Type: TokenTypePunctuation, Value: string(c) + "\n"})
++					i++
++					continue
++				}
++				if c == ')' || c == ']' || c == '}' {
++					tokens = append(tokens, Token{Type: TokenTypePunctuation, Value: string(c) + "\n"})
++					i++
++					continue
++				}
++				if c == ':' {
++					tokens = append(tokens, Token{Type: TokenTypeKeyword, Value: string(c) + "\n"})
++					i++
++					continue
++				}
++				if c == '.' {
++					tokens = append(tokens, Token{Type: TokenTypePunctuation, Value: string(c) + "\n"})
++					i++
++					continue
++				}
++				if c == '+' || c == '-' || c == '*' || c == '/' || c == '%' || c == '^' || c == '&' || c == '|' || c == '~' || c == '=' || c == '<' || c == '>' || c == '!' || c == '@' || c == '$' || c == '#' || c == '?' || c == '\\' || c == '`' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' || c == '|' ||
+diff --git a/test.py b/test.py
+new file mode 100644
+index 0000000..b376c99
+--- /dev/null
++++ b/test.py
+@@ -0,0 +1 @@
++print('hello')

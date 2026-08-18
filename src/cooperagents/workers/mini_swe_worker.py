@@ -275,6 +275,15 @@ def build_model(
         model_kwargs["temperature"] = float(os.environ["COOPER_TEMPERATURE"])
     if temperature is not None:  # explicit per-call override (e.g. Q3 diversity)
         model_kwargs["temperature"] = temperature
+    # Per-model sampling profile via env (e.g. Qwen3.8-27B thinking mode wants
+    # temperature=1.0 top_p=0.95 per model card; 9B stays pinned at 0.0).
+    # COOPER_TEMPERATURE_FORCE outranks the per-call pin above.
+    if os.getenv("COOPER_TEMPERATURE_FORCE"):
+        model_kwargs["temperature"] = float(os.environ["COOPER_TEMPERATURE_FORCE"])
+    if os.getenv("COOPER_TOP_P"):
+        model_kwargs["top_p"] = float(os.environ["COOPER_TOP_P"])
+    if os.getenv("COOPER_MAX_TOKENS"):
+        model_kwargs["max_tokens"] = int(os.environ["COOPER_MAX_TOKENS"])
     # Short request timeout: the litellm/httpx default (~600s) makes an agent
     # hang 10 minutes on a dead pooled connection (socket to a scaled-down
     # serving container that vanished without RST) before retrying onto a
