@@ -1,0 +1,392 @@
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..ce9360c
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,4 @@
++#!/bin/bash
++set -e
++cd /workspace
++go build -o executable main.go
+diff --git a/main.go b/main.go
+new file mode 100644
+index 0000000..1de2a56
+--- /dev/null
++++ b/main.go
+@@ -0,0 +1,376 @@
++package main
++
++import (
++	"bufio"
++	"fmt"
++	"os"
++	"path/filepath"
++	"sort"
++	"strings"
++	"time"
++)
++
++const Version = "1.13.0"
++
++type FileEntry struct {
++	Name     string
++	IsDir    bool
++	IsHidden bool
++	Size     int64
++	Mode     os.FileMode
++	ModTime  time.Time
++}
++
++type State struct {
++	CurrentDir   string
++	Files        []FileEntry
++	Selected     int
++	PreviewMode  bool
++	PreviewFile  *FileEntry
++	SearchQuery  string
++	SearchResults []FileEntry
++	SearchIndex  int
++	HideHidden   bool
++	Border       bool
++	Icons        bool
++	DirOnly      bool
++	ExitWithoutCD bool
++}
++
++func main() {
++	state := initState()
++	
++	args := os.Args[1:]
++	for i := 0; i < len(args); i++ {
++		switch args[i] {
++		case "--icons":
++			state.Icons = true
++		case "--dir-only":
++			state.DirOnly = true
++		case "--hide-hidden":
++			state.HideHidden = true
++		case "--preview":
++			state.PreviewMode = true
++		case "--with-border":
++			state.Border = true
++		case "--fuzzy":
++			state.SearchQuery = ""
++			state.SearchResults = state.Files
++			state.SearchIndex = 0
++		case "--help":
++			printHelp()
++			os.Exit(0)
++		case "--version":
++			fmt.Println("walk version", Version)
++			os.Exit(0)
++		}
++	}
++	
++	if !hasTTY() {
++		fmt.Println("walk: terminal required")
++		os.Exit(1)
++	}
++	
++	if len(os.Args) > 1 {
++		state.CurrentDir = os.Args[1]
++	}
++	
++	loadFiles(state)
++	
++	if state.SearchQuery != "" {
++		state.SearchResults = fuzzySearch(state.Files, state.SearchQuery)
++		state.SearchIndex = 0
++	}
++	
++	reader := bufio.NewReader(os.Stdin)
++	
++	for {
++		render(state, reader)
++		ch, err := reader.ReadByte()
++		if err != nil {
++			break
++		}
++		handleInput(state, reader, ch)
++	}
++}
++
++func hasTTY() bool {
++	return os.IsTerminal(int(os.Stdin.Fd()))
++}
++
++func printHelp() {
++	fmt.Println("Walk — a terminal navigator; a cd and ls replacement.")
++	fmt.Println()
++	fmt.Println("Usage:")
++	fmt.Println("  walk [options] [directory]")
++	fmt.Println()
++	fmt.Println("Options:")
++	fmt.Println("  --icons       Show icons")
++	fmt.Println("  --dir-only    Show dirs only")
++	fmt.Println("  --hide-hidden Hide hidden files")
++	fmt.Println("  --preview     Start with preview mode on")
++	fmt.Println("  --with-border Show border in preview mode")
++	fmt.Println("  --fuzzy       Start with fuzzy search on")
++	fmt.Println("  --help        Show this help message")
++	fmt.Println("  --version     Show version")
++	fmt.Println()
++	fmt.Println("Key bindings:")
++	fmt.Println("  arrows, hjkl: Move cursor")
++	fmt.Println("  shift + arrows: Jump to start/end")
++	fmt.Println("  Enter: Enter directory")
++	fmt.Println("  Backspace: Exit directory")
++	fmt.Println("  Space: Toggle preview")
++	fmt.Println("  Esc, q: Exit with cd")
++	fmt.Println("  Ctrl+C: Exit without cd")
++	fmt.Println("  /: Fuzzy search")
++	fmt.Println("  d, Delete: Delete file or directory")
++	fmt.Println("  y: Yank current dir")
++	fmt.Println("  .: Hide hidden files")
++}
++
++func initState() *State {
++	return &State{
++		CurrentDir: ".",
++		Files:      []FileEntry{},
++		Selected:   0,
++		PreviewMode: false,
++		PreviewFile: nil,
++		SearchQuery: "",
++		SearchResults: []FileEntry{},
++		SearchIndex: 0,
++		HideHidden: false,
++		Border: false,
++		Icons: false,
++		DirOnly: false,
++		ExitWithoutCD: false,
++	}
++}
++
++func loadFiles(state *State) {
++	entries, err := os.ReadDir(state.CurrentDir)
++	if err != nil {
++		return
++	}
++	
++	for _, entry := range entries {
++		if entry.IsDir() {
++			continue
++		}
++		
++		info, err := entry.Info()
++		if err != nil {
++			continue
++		}
++		
++		name := entry.Name()
++		isHidden := strings.HasPrefix(name, ".")
++		
++		if state.HideHidden && isHidden {
++			continue
++		}
++		
++		if state.DirOnly && !entry.IsDir() {
++			continue
++		}
++		
++		file := FileEntry{
++			Name:     name,
++			IsDir:    entry.IsDir(),
++			IsHidden: isHidden,
++			Size:     info.Size(),
++			Mode:     info.Mode(),
++			ModTime:  info.ModTime(),
++		}
++		
++		state.Files = append(state.Files, file)
++	}
++	
++	sort.Slice(state.Files, func(i, j int) bool {
++		if state.Files[i].IsDir != state.Files[j].IsDir {
++			return state.Files[i].IsDir
++		}
++		return state.Files[i].Name < state.Files[j].Name
++	})
++}
++
++func handleInput(state *State, reader *bufio.Reader, ch byte) {
++	switch ch {
++	case '\r', '\n':
++		if state.PreviewMode {
++			state.PreviewMode = false
++		} else {
++			enterDirectory(state)
++		}
++	case '\x7f':
++		backspace(state)
++	case ' ':
++		togglePreview(state)
++	case 27:
++		escape(state)
++	case 'q':
++		escape(state)
++	case '\x03':
++		state.ExitWithoutCD = true
++	case '/':
++		fuzzySearchStart(state)
++	case 'd', 8:
++		deleteFile(state)
++	case 'y':
++		yank(state)
++	case '.':
++		state.HideHidden = !state.HideHidden
++		loadFiles(state)
++	case 'u':
++		undo(state)
++	case 'h', 'j', 'k', 'l':
++		hjklNavigation(state, ch)
++	case 1:
++		jumpToStart(state)
++	case 5:
++		jumpToEnd(state)
++	default:
++		if state.SearchQuery != "" {
++			state.SearchQuery += string(ch)
++			state.SearchResults = fuzzySearch(state.Files, state.SearchQuery)
++			state.SearchIndex = 0
++		}
++	}
++}
++
++func enterDirectory(state *State) {
++	if state.PreviewMode {
++		state.PreviewMode = false
++	} else {
++		if state.Selected < len(state.Files) {
++			file := state.Files[state.Selected]
++			if file.IsDir {
++				state.CurrentDir = filepath.Join(state.CurrentDir, file.Name)
++				loadFiles(state)
++				state.Selected = 0
++			}
++		}
++	}
++}
++
++func backspace(state *State) {
++	if state.PreviewMode {
++		state.PreviewMode = false
++	} else {
++		if state.Selected < len(state.Files) {
++			file := state.Files[state.Selected]
++			if file.IsDir {
++				state.CurrentDir = filepath.Dir(state.CurrentDir)
++				loadFiles(state)
++				state.Selected = 0
++			}
++		}
++	}
++}
++
++func togglePreview(state *State) {
++	state.PreviewMode = !state.PreviewMode
++	if state.PreviewMode {
++		if state.Selected < len(state.Files) {
++			state.PreviewFile = &state.Files[state.Selected]
++		}
++	}
++}
++
++func escape(state *State) {
++	if state.PreviewMode {
++		state.PreviewMode = false
++	} else {
++		if state.Selected < len(state.Files) {
++			file := state.Files[state.Selected]
++			if file.IsDir {
++				state.CurrentDir = filepath.Join(state.CurrentDir, file.Name)
++				loadFiles(state)
++				state.Selected = 0
++			}
++		}
++	}
++}
++
++func fuzzySearchStart(state *State) {
++	state.SearchQuery = ""
++	state.SearchResults = state.Files
++	state.SearchIndex = 0
++}
++
++func fuzzySearch(files []FileEntry, query string) []FileEntry {
++	if query == "" {
++		return files
++	}
++	
++	var results []FileEntry
++	for _, file := range files {
++		if strings.Contains(strings.ToLower(file.Name), strings.ToLower(query)) {
++			results = append(results, file)
++		}
++	}
++	return results
++}
++
++func deleteFile(state *State) {
++	if state.Selected < len(state.Files) {
++		file := state.Files[state.Selected]
++		if file.IsDir {
++			return
++		}
++		
++		os.Remove(filepath.Join(state.CurrentDir, file.Name))
++		state.Files = append(state.Files[:state.Selected], state.Files[state.Selected+1:]...)
++		if state.Selected >= len(state.Files) {
++			state.Selected = len(state.Files) - 1
++		}
++	}
++}
++
++func yank(state *State) {
++	if state.Selected < len(state.Files) {
++		file := state.Files[state.Selected]
++		fmt.Printf("Yanked: %s\n", file.Name)
++	}
++}
++
++func undo(state *State) {
++}
++
++func hjklNavigation(state *State, ch byte) {
++	if state.SearchQuery != "" {
++		if ch == 'j' || ch == 'l' {
++			state.SearchIndex++
++			if state.SearchIndex >= len(state.SearchResults) {
++				state.SearchIndex = 0
++			}
++		} else if ch == 'k' || ch == 'h' {
++			state.SearchIndex--
++			if state.SearchIndex < 0 {
++				state.SearchIndex = len(state.SearchResults) - 1
++			}
++		}
++	} else {
++		if ch == 'j' || ch == 'l' {
++			state.Selected++
++			if state.Selected >= len(state.Files) {
++				state.Selected = 0
++			}
++		} else if ch == 'k' || ch == 'h' {
++			state.Selected--
++			if state.Selected < 0 {
++				state.Selected = len(state.Files) - 1
++			}
++		}
++	}
++}
++
++func jumpToStart(state *State) {
++	state.Selected = 0
++}
++
++func jumpToEnd(state *State) {
++	state.Selected = len(state.Files) - 1
++}
++
++func render(state *State, reader *bufio.Reader) {
++}

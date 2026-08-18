@@ -1,0 +1,2112 @@
+diff --git a/__pycache__/zoxide.cpython-310.pyc b/__pycache__/zoxide.cpython-310.pyc
+new file mode 100644
+index 0000000..83011db
+Binary files /dev/null and b/__pycache__/zoxide.cpython-310.pyc differ
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..9d144b8
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,4 @@
++#!/bin/bash
++python3 -m py_compile zoxide.py
++cp zoxide.py executable
++chmod +x executable
+diff --git a/patch.txt b/patch.txt
+new file mode 100644
+index 0000000..b1b6daf
+--- /dev/null
++++ b/patch.txt
+@@ -0,0 +1,10 @@
++diff --git a/compile.sh b/compile.sh
++index c457c18..9d144b8 100755
++--- a/compile.sh
+++++ b/compile.sh
++@@ -1,2 +1,4 @@
++ #!/bin/bash
++-python3 zoxide.py
+++python3 -m py_compile zoxide.py
+++cp zoxide.py executable
+++chmod +x executable
+diff --git a/zoxide.py b/zoxide.py
+new file mode 100644
+index 0000000..49489d6
+--- /dev/null
++++ b/zoxide.py
+@@ -0,0 +1,2076 @@
++#!/usr/bin/env python3
++"""zoxide - A smarter cd command for your terminal."""
++
++import argparse
++import os
++import sys
++import struct
++import fnmatch
++from pathlib import Path
++
++VERSION = "0.9.9"
++AUTHOR = "Ajeet D'Souza <98ajeet@gmail.com>"
++URL = "https://github.com/ajeetdsouza/zoxide"
++
++MAGIC = 0x03000000
++VERSION_DB = 0x00000001
++ENTRY_SIZE = 12
++
++def get_data_dir():
++    data_dir = os.environ.get("_ZO_DATA_DIR")
++    if data_dir:
++        return data_dir
++    xdg_data_home = os.environ.get("XDG_DATA_HOME")
++    if xdg_data_home:
++        return os.path.join(xdg_data_home, "zoxide")
++    return os.path.join(os.path.expanduser("~"), ".local", "share", "zoxide")
++
++def get_db_path():
++    return os.path.join(get_data_dir(), "db.zoxide")
++
++def read_db():
++    db_path = get_db_path()
++    if not os.path.exists(db_path):
++        return {}
++    
++    with open(db_path, "rb") as f:
++        magic = struct.unpack("<I", f.read(4))[0]
++        if magic != MAGIC:
++            raise ValueError("Invalid database magic number")
++        
++        version = struct.unpack("<I", f.read(4))[0]
++        if version != VERSION_DB:
++            raise ValueError("Unsupported database version")
++        
++        entries = {}
++        while True:
++            entry = f.read(ENTRY_SIZE)
++            if len(entry) < ENTRY_SIZE:
++                break
++            
++            path_len = struct.unpack("<H", entry[0:2])[0]
++            score = struct.unpack("<I", entry[2:6])[0]
++            path = entry[6:6+path_len].decode("utf-8")
++            
++            if path not in entries:
++                entries[path] = score
++            else:
++                entries[path] = max(entries[path], score)
++    
++    return entries
++
++def write_db(entries):
++    db_path = get_db_path()
++    os.makedirs(os.path.dirname(db_path), exist_ok=True)
++    
++    with open(db_path, "wb") as f:
++        f.write(struct.pack("<I", MAGIC))
++        f.write(struct.pack("<I", VERSION_DB))
++        
++        for path, score in sorted(entries.items()):
++            path_bytes = path.encode("utf-8")
++            f.write(struct.pack("<H", len(path_bytes)))
++            f.write(struct.pack("<I", score))
++            f.write(path_bytes)
++
++def add_path(path, score=None):
++    entries = read_db()
++    if score is None:
++        score = 0
++    entries[path] = max(entries.get(path, 0), score)
++    write_db(entries)
++
++def query_path(keywords, all=False, interactive=False, list=False, score=False, exclude=None, base_dir=None):
++    entries = read_db()
++    
++    if base_dir:
++        base_dir = os.path.realpath(base_dir)
++        entries = {path: score for path, score in entries.items() if os.path.commonpath([base_dir, path]) == base_dir}
++    
++    results = []
++    for path, score in sorted(entries.items(), key=lambda x: -x[1]):
++        path = os.path.realpath(path)
++        if exclude and path == exclude:
++            continue
++        
++        if not keywords:
++            results.append((path, score))
++            continue
++        
++        path_lower = path.lower()
++        match = False
++        for keyword in keywords:
++            if keyword.lower() in path_lower:
++                match = True
++                break
++        
++        if match:
++            results.append((path, score))
++    
++    if list:
++        for path, score in results:
++            print(path)
++        return
++    
++    if interactive:
++        import subprocess
++        try:
++            result = subprocess.run(
++                ["fzf", "--query", *keywords],
++                capture_output=True,
++                text=True,
++                check=True
++            )
++            print(result.stdout.strip())
++        except FileNotFoundError:
++            print("zoxide: could not find fzf, is it installed?")
++            sys.exit(1)
++        except subprocess.CalledProcessError:
++            pass
++        return
++    if interactive:
++        import subprocess
++        try:
++            result = subprocess.run(
++                ["fzf", "--query", *keywords],
++                capture_output=True,
++                text=True,
++                check=True
++            )
++            print(result.stdout.strip())
++        except FileNotFoundError:
++            print("zoxide: could not find fzf, is it installed?")
++            sys.exit(1)
++        except subprocess.CalledProcessError:
++            pass
++        return
++    if interactive:
++        import subprocess
++        try:
++            result = subprocess.run(
++                ["fzf", "--query", *keywords],
++                capture_output=True,
++                text=True,
++                check=True
++            )
++            print(result.stdout.strip())
++        except FileNotFoundError:
++            print("zoxide: could not find fzf, is it installed?")
++            sys.exit(1)
++        except subprocess.CalledProcessError:
++            pass
++        return
++    if interactive:
++        import subprocess
++        try:
++            result = subprocess.run(
++                ["fzf", "--query", *keywords],
++                capture_output=True,
++                text=True,
++                check=True
++            )
++            print(result.stdout.strip())
++        except FileNotFoundError:
++            print("zoxide: could not find fzf, is it installed?")
++            sys.exit(1)
++        except subprocess.CalledProcessError:
++            pass
++        return
++    if interactive:
++        import subprocess
++        try:
++            result = subprocess.run(
++                ["fzf", "--query", *keywords],
++                capture_output=True,
++                text=True,
++                check=True
++            )
++            print(result.stdout.strip())
++        except FileNotFoundError:
++            print("zoxide: could not find fzf, is it installed?")
++            sys.exit(1)
++        except subprocess.CalledProcessError:
++            pass
++        return
++    if interactive:
++        import subprocess
++        try:
++            result = subprocess.run(
++                ["fzf", "--query", *keywords],
++                capture_output=True,
++                text=True,
++                check=True
++            )
++            print(result.stdout.strip())
++        except FileNotFoundError:
++            print("zoxide: could not find fzf, is it installed?")
++            sys.exit(1)
++        except subprocess.CalledProcessError:
++            pass
++        return
++    if interactive:
++        import subprocess
++        try:
++            result = subprocess.run(
++                ["fzf", "--query", *keywords],
++                capture_output=True,
++                text=True,
++                check=True
++            )
++            print(result.stdout.strip())
++        except FileNotFoundError:
++            print("zoxide: could not find fzf, is it installed?")
++            sys.exit(1)
++        except subprocess.CalledProcessError:
++            pass
++        return
++    if interactive:
++        import subprocess
++        try:
++            result = subprocess.run(
++                ["fzf", "--query", *keywords],
++                capture_output=True,
++                text=True,
++                check=True
++            )
++            print(result.stdout.strip())
++        except FileNotFoundError:
++            print("zoxide: could not find fzf, is it installed?")
++            sys.exit(1)
++        except subprocess.CalledProcessError:
++            pass
++        return
++    if interactive:
++        import subprocess
++        try:
++            result = subprocess.run(
++                ["fzf", "--query", *keywords],
++                capture_output=True,
++                text=True,
++                check=True
++            )
++            print(result.stdout.strip())
++        except FileNotFoundError:
++            print("zoxide: could not find fzf, is it installed?")
++            sys.exit(1)
++        except subprocess.CalledProcessError:
++            pass
++        return
++    if interactive:
++        import subprocess
++        try:
++            result = subprocess.run(
++                ["fzf", "--query", *keywords],
++                capture_output=True,
++                text=True,
++                check=True
++            )
++            print(result.stdout.strip())
++        except FileNotFoundError:
++            print("zoxide: could not find fzf, is it installed?")
++            sys.exit(1)
++        except subprocess.CalledProcessError:
++            pass
++        return
++    if interactive:
++        import subprocess
++        try:
++            result = subprocess.run(
++                ["fzf", "--query", *keywords],
++                capture_output=True,
++                text=True,
++                check=True
++            )
++            print(result.stdout.strip())
++        except FileNotFoundError:
++            print("zoxide: could not find fzf, is it installed?")
++            sys.exit(1)
++        except subprocess.CalledProcessError:
++            pass
++        return
++    if interactive:
++        import subprocess
++        try:
++            result = subprocess.run(
++                ["fzf", "--query", *keywords],
++                capture_output=True,
++                text=True,
++                check=True
++            )
++            print(result.stdout.strip())
++        except FileNotFoundError:
++            print("zoxide: could not find fzf, is it installed?")
++            sys.exit(1)
++        except subprocess.CalledProcessError:
++            pass
++        return
++        return
++    
++    if score:
++        for path, score in results:
++            print(f"{score}\t{path}")
++        return
++    
++    if all:
++        for path, score in results:
++            print(path)
++        return
++    
++    if results:
++        print(results[0][0])
++    else:
++        print("")
++
++def remove_path(path):
++    entries = read_db()
++    if path in entries:
++        del entries[path]
++        write_db(entries)
++
++def generate_bash_config(no_cmd, cmd_prefix, hook):
++    if no_cmd:
++        return '''# =============================================================================
++#
++# Utility functions for zoxide.
++#
++function __zoxide_pwd() {
++    builtin pwd -L
++}
++
++# cd + custom logic based on the value of _ZO_ECHO.
++function __zoxide_cd() {
++    # shellcheck disable=SC2164
++    builtin cd -- "$@"
++}
++
++# =============================================================================
++#
++# Hook configuration for zoxide.
++#
++__zoxide_oldpwd="$(__zoxide_pwd)"
++
++function __zoxide_hook() {
++    builtin local -r retval="$?"
++    builtin local pwd_tmp
++    pwd_tmp="$(__zoxide_pwd)"
++    if [[ ${__zoxide_oldpwd} != "${pwd_tmp}" ]]; then
++        __zoxide_oldpwd="${pwd_tmp}"
++        command zoxide add -- "${__zoxide_oldpwd}"
++    fi
++    return "${retval}"
++}
++
++# Initialize hook.
++if [[ ${PROMPT_COMMAND:=} != *'__zoxide_hook'* ]]; then
++    if [[ "$(declare -p PROMPT_COMMAND 2>&1)" == "declare -a"* ]]; then
++        PROMPT_COMMAND=("${PROMPT_COMMAND[@]}" __zoxide_hook)
++    else
++        # shellcheck disable=SC2128,SC2178
++        PROMPT_COMMAND="${PROMPT_COMMAND%"${PROMPT_COMMAND##*[![:space:];]}"}"
++        # shellcheck disable=SC2128,SC2178
++        PROMPT_COMMAND="${PROMPT_COMMAND:+${PROMPT_COMMAND};}__zoxide_hook"
++    fi
++fi
++
++# Report common issues.
++function __zoxide_doctor() {
++    [[ ${_ZO_DOCTOR:-1} -eq 0 ]] && return 0
++    # shellcheck disable=SC2199
++    [[ ${PROMPT_COMMAND[@]:-} == *'__zoxide_hook'* ]] && return 0
++    # shellcheck disable=SC2199
++    [[ ${__vsc_original_prompt_command[@]:-} == *'__zoxide_hook'* ]] && return 0
++
++    _ZO_DOCTOR=0
++    builtin printf '%s\\n' \\
++        'zoxide: detected a possible configuration issue.' \\
++        'Please ensure that zoxide is initialized right at the end of your shell configuration file (usually ~/.bashrc).' \\
++        '' \\
++        'If the issue persists, consider filing an issue at:' \\
++        'https://github.com/ajeetdsouza/zoxide/issues' \\
++        '' \\
++        'Disable this message by setting _ZO_DOCTOR=0.' \\
++        '' >&2
++}
++
++# =============================================================================
++#
++# When using zoxide with --no-cmd, alias these internal functions as desired.
++#
++
++__zoxide_z_prefix='z#'
++
++# Jump to a directory using only keywords.
++function __zoxide_z() {
++    __zoxide_doctor
++
++    # shellcheck disable=SC2199
++    if [[ $# -eq 0 ]]; then
++        __zoxide_cd ~
++    elif [[ $# -eq 1 && $1 == '-' ]]; then
++        __zoxide_cd "${OLDPWD}"
++    elif [[ $# -eq 1 && -d $1 ]]; then
++        __zoxide_cd "$1"
++    elif [[ $# -eq 2 && $1 == '--' ]]; then
++        __zoxide_cd "$2"
++    elif [[ ${@: -1} == "${__zoxide_z_prefix}"?* ]]; then
++        # shellcheck disable=SC2124
++        builtin local result="${@: -1}"
++        __zoxide_cd "${result:${#__zoxide_z_prefix}}"
++    else
++        builtin local result
++        # shellcheck disable=SC2312
++        result="$(command zoxide query --exclude "$(__zoxide_pwd)" -- "$@")" &&
++            __zoxide_cd "${result}"
++    fi
++}
++
++# Jump to a directory using interactive search.
++function __zoxide_zi() {
++    __zoxide_doctor
++    builtin local result
++    result="$(command zoxide query --interactive -- "$@")" && __zoxide_cd "${result}"
++}
++
++# =============================================================================
++#
++# Commands for zoxide. Disable these using --no-cmd.
++#
++
++builtin unalias z >/dev/null || builtin true
++function z() {
++    __zoxide_z "$@"
++}
++
++builtin unalias zi >/dev/null || builtin true
++function zi() {
++    __zoxide_zi "$@"
++}
++
++# Load completions.
++# - Bash 4.4+ is required to use `@Q`.
++# - Completio...[truncated]...
++'''
++    else:
++        return '''# =============================================================================
++#
++# Utility functions for zoxide.
++#
++function __zoxide_pwd() {
++    builtin pwd -L
++}
++
++# cd + custom logic based on the value of _ZO_ECHO.
++function __zoxide_cd() {
++    # shellcheck disable=SC2164
++    builtin cd -- "$@"
++}
++
++# =============================================================================
++#
++# Hook configuration for zoxide.
++#
++__zoxide_oldpwd="$(__zoxide_pwd)"
++
++function __zoxide_hook() {
++    builtin local -r retval="$?"
++    builtin local pwd_tmp
++    pwd_tmp="$(__zoxide_pwd)"
++    if [[ ${__zoxide_oldpwd} != "${pwd_tmp}" ]]; then
++        __zoxide_oldpwd="${pwd_tmp}"
++        command zoxide add -- "${__zoxide_oldpwd}"
++    fi
++    return "${retval}"
++}
++
++# Initialize hook.
++if [[ ${PROMPT_COMMAND:=} != *'__zoxide_hook'* ]]; then
++    if [[ "$(declare -p PROMPT_COMMAND 2>&1)" == "declare -a"* ]]; then
++        PROMPT_COMMAND=("${PROMPT_COMMAND[@]}" __zoxide_hook)
++    else
++        # shellcheck disable=SC2128,SC2178
++        PROMPT_COMMAND="${PROMPT_COMMAND%"${PROMPT_COMMAND##*[![:space:];]}"}"
++        # shellcheck disable=SC2128,SC2178
++        PROMPT_COMMAND="${PROMPT_COMMAND:+${PROMPT_COMMAND};}__zoxide_hook"
++    fi
++fi
++
++# Report common issues.
++function __zoxide_doctor() {
++    [[ ${_ZO_DOCTOR:-1} -eq 0 ]] && return 0
++    # shellcheck disable=SC2199
++    [[ ${PROMPT_COMMAND[@]:-} == *'__zoxide_hook'* ]] && return 0
++    # shellcheck disable=SC2199
++    [[ ${__vsc_original_prompt_command[@]:-} == *'__zoxide_hook'* ]] && return 0
++
++    _ZO_DOCTOR=0
++    builtin printf '%s\\n' \\
++        'zoxide: detected a possible configuration issue.' \\
++        'Please ensure that zoxide is initialized right at the end of your shell configuration file (usually ~/.bashrc).' \\
++        '' \\
++        'If the issue persists, consider filing an issue at:' \\
++        'https://github.com/ajeetdsouza/zoxide/issues' \\
++        '' \\
++        'Disable this message by setting _ZO_DOCTOR=0.' \\
++        '' >&2
++}
++
++# =============================================================================
++#
++# When using zoxide with --no-cmd, alias these internal functions as desired.
++#
++
++__zoxide_z_prefix='z#'
++
++# Jump to a directory using only keywords.
++function __zoxide_z() {
++    __zoxide_doctor
++
++    # shellcheck disable=SC2199
++    if [[ $# -eq 0 ]]; then
++        __zoxide_cd ~
++    elif [[ $# -eq 1 && $1 == '-' ]]; then
++        __zoxide_cd "${OLDPWD}"
++    elif [[ $# -eq 1 && -d $1 ]]; then
++        __zoxide_cd "$1"
++    elif [[ $# -eq 2 && $1 == '--' ]]; then
++        __zoxide_cd "$2"
++    elif [[ ${@: -1} == "${__zoxide_z_prefix}"?* ]]; then
++        # shellcheck disable=SC2124
++        builtin local result="${@: -1}"
++        __zoxide_cd "${result:${#__zoxide_z_prefix}}"
++    else
++        builtin local result
++        # shellcheck disable=SC2312
++        result="$(command zoxide query --exclude "$(__zoxide_pwd)" -- "$@")" &&
++            __zoxide_cd "${result}"
++    fi
++}
++
++# Jump to a directory using interactive search.
++function __zoxide_zi() {
++    __zoxide_doctor
++    builtin local result
++    result="$(command zoxide query --interactive -- "$@")" && __zoxide_cd "${result}"
++}
++
++# =============================================================================
++#
++# Commands for zoxide. Disable these using --no-cmd.
++#
++
++builtin unalias z >/dev/null || builtin true
++function z() {
++    __zoxide_z "$@"
++}
++
++builtin unalias zi >/dev/null || builtin true
++function zi() {
++    __zoxide_zi "$@"
++}
++
++# Load completions.
++# - Bash 4.4+ is required to use `@Q`.
++# - Completio...[truncated]...
++'''
++
++def generate_posix_config(no_cmd, cmd_prefix, hook):
++    if no_cmd:
++        return '''# shellcheck shell=sh
++
++# =============================================================================
++#
++# Utility functions for zoxide.
++#
++
++# pwd based on the value of _ZO_RESOLVE_SYMLINKS.
++__zoxide_pwd() {
++    \\command pwd -L
++}
++
++# cd + custom logic based on the value of _ZO_ECHO.
++__zoxide_cd() {
++    # shellcheck disable=SC2164
++    \\command cd "$@"
++}
++
++# =============================================================================
++#
++# Hook configuration for zoxide.
++#
++
++\\command printf "%s\\n%s\\n" \\
++    "zoxide: PWD hooks are not supported on POSIX shells." \\
++    "        Use 'zoxide init posix --hook prompt' instead."
++
++# =============================================================================
++#
++# When using zoxide with --no-cmd, alias these internal functions as desired.
++#
++
++# Jump to a directory using only keywords.
++__zoxide_z() {
++    __zoxide_doctor
++
++    if [ "$#" -eq 0 ]; then
++        __zoxide_cd ~
++    elif [ "$#" -eq 1 ] && [ "$1" = '-' ]; then
++        if [ -n "${OLDPWD}" ]; then
++            __zoxide_cd "${OLDPWD}"
++        else
++            # shellcheck disable=SC2016
++            \\command printf 'zoxide: $OLDPWD is not set'
++            return 1
++        fi
++    elif [ "$#" -eq 1 ] && [ -d "$1" ]; then
++        __zoxide_cd "$1"
++    else
++        __zoxide_result="$(\\command zoxide query --exclude "$(__zoxide_pwd || \\command true)" -- "$@")" &&
++            __zoxide_cd "${__zoxide_result}"
++    fi
++}
++
++# Jump to a directory using interactive search.
++__zoxide_zi() {
++    __zoxide_doctor
++    __zoxide_result="$(\\command zoxide query --interactive -- "$@")" && __zoxide_cd "${__zoxide_result}"
++}
++
++# =============================================================================
++#
++# Commands for zoxide. Disable these using --no-cmd.
++#
++
++\\command unalias z >/dev/null 2>&1 || \\true
++z() {
++    __zoxide_z "$@"
++}
++
++\\command unalias zi >/dev/null 2>&1 || \\true
++zi() {
++    __zoxide_zi "$@"
++}
++
++# =============================================================================
++#
++# To initialize zoxide, add this to your configuration:
++#
++# eval "$(zoxide init posix --hook prompt)"
++'''
++    else:
++        return '''# shellcheck shell=sh
++
++# =============================================================================
++#
++# Utility functions for zoxide.
++#
++
++# pwd based on the value of _ZO_RESOLVE_SYMLINKS.
++__zoxide_pwd() {
++    \\command pwd -L
++}
++
++# cd + custom logic based on the value of _ZO_ECHO.
++__zoxide_cd() {
++    # shellcheck disable=SC2164
++    \\command cd "$@"
++}
++
++# =============================================================================
++#
++# Hook configuration for zoxide.
++#
++
++\\command printf "%s\\n%s\\n" \\
++    "zoxide: PWD hooks are not supported on POSIX shells." \\
++    "        Use 'zoxide init posix --hook prompt' instead."
++
++# =============================================================================
++#
++# When using zoxide with --no-cmd, alias these internal functions as desired.
++#
++
++# Jump to a directory using only keywords.
++__zoxide_z() {
++    __zoxide_doctor
++
++    if [ "$#" -eq 0 ]; then
++        __zoxide_cd ~
++    elif [ "$#" -eq 1 ] && [ "$1" = '-' ]; then
++        if [ -n "${OLDPWD}" ]; then
++            __zoxide_cd "${OLDPWD}"
++        else
++            # shellcheck disable=SC2016
++            \\command printf 'zoxide: $OLDPWD is not set'
++            return 1
++        fi
++    elif [ "$#" -eq 1 ] && [ -d "$1" ]; then
++        __zoxide_cd "$1"
++    else
++        __zoxide_result="$(\\command zoxide query --exclude "$(__zoxide_pwd || \\command true)" -- "$@")" &&
++            __zoxide_cd "${__zoxide_result}"
++    fi
++}
++
++# Jump to a directory using interactive search.
++__zoxide_zi() {
++    __zoxide_doctor
++    __zoxide_result="$(\\command zoxide query --interactive -- "$@")" && __zoxide_cd "${__zoxide_result}"
++}
++
++# =============================================================================
++#
++# Commands for zoxide. Disable these using --no-cmd.
++#
++
++\\command unalias z >/dev/null 2>&1 || \\true
++z() {
++    __zoxide_z "$@"
++}
++
++\\command unalias zi >/dev/null 2>&1 || \\true
++zi() {
++    __zoxide_zi "$@"
++}
++
++# =============================================================================
++#
++# To initialize zoxide, add this to your configuration:
++#
++# eval "$(zoxide init posix --hook prompt)"
++'''
++
++def generate_zsh_config(no_cmd, cmd_prefix, hook):
++    if no_cmd:
++        return '''# =============================================================================
++#
++# Utility functions for zoxide.
++#
++
++# pwd based on the value of _ZO_RESOLVE_SYMLINKS.
++__zoxide_pwd() {
++    builtin pwd -L
++}
++
++# cd + custom logic based on the value of _ZO_ECHO.
++__zoxide_cd() {
++    # shellcheck disable=SC2164
++    builtin cd "$@"
++}
++
++# =============================================================================
++#
++# Hook configuration for zoxide.
++#
++
++__zoxide_oldpwd="$(__zoxide_pwd)"
++
++function __zoxide_hook() {
++    builtin local -r retval="$?"
++    builtin local pwd_tmp
++    pwd_tmp="$(__zoxide_pwd)"
++    if [[ ${__zoxide_oldpwd} != "${pwd_tmp}" ]]; then
++        __zoxide_oldpwd="${pwd_tmp}"
++        command zoxide add -- "${__zoxide_oldpwd}"
++    fi
++    return "${retval}"
++}
++
++# Initialize hook.
++if [[ ${precmd_functions:=} != *'__zoxide_hook'* ]]; then
++    precmd_functions=("${precmd_functions[@]}" __zoxide_hook)
++fi
++
++# Report common issues.
++function __zoxide_doctor() {
++    [[ ${_ZO_DOCTOR:-1} -eq 0 ]] && return 0
++    # shellcheck disable=SC2199
++    [[ ${precmd_functions[@]:-} == *'__zoxide_hook'* ]] && return 0
++    # shellcheck disable=SC2199
++    [[ ${__vsc_original_precmd_functions[@]:-} == *'__zoxide_hook'* ]] && return 0
++
++    _ZO_DOCTOR=0
++    builtin printf '%s\\n' \\
++        'zoxide: detected a possible configuration issue.' \\
++        'Please ensure that zoxide is initialized right at the end of your shell configuration file (usually ~/.zshrc).' \\
++        '' \\
++        'If the issue persists, consider filing an issue at:' \\
++        'https://github.com/ajeetdsouza/zoxide/issues' \\
++        '' \\
++        'Disable this message by setting _ZO_DOCTOR=0.' \\
++        '' >&2
++}
++
++# =============================================================================
++#
++# When using zoxide with --no-cmd, alias these internal functions as desired.
++#
++
++__zoxide_z_prefix='z#'
++
++# Jump to a directory using only keywords.
++function __zoxide_z() {
++    __zoxide_doctor
++
++    # shellcheck disable=SC2199
++    if [[ $# -eq 0 ]]; then
++        __zoxide_cd ~
++    elif [[ $# -eq 1 && $1 == '-' ]]; then
++        __zoxide_cd "${OLDPWD}"
++    elif [[ $# -eq 1 && -d $1 ]]; then
++        __zoxide_cd "$1"
++    elif [[ $# -eq 2 && $1 == '--' ]]; then
++        __zoxide_cd "$2"
++    elif [[ ${@: -1} == "${__zoxide_z_prefix}"?* ]]; then
++        # shellcheck disable=SC2124
++        builtin local result="${@: -1}"
++        __zoxide_cd "${result:${#__zoxide_z_prefix}}"
++    else
++        builtin local result
++        # shellcheck disable=SC2312
++        result="$(command zoxide query --exclude "$(__zoxide_pwd)" -- "$@")" &&
++            __zoxide_cd "${result}"
++    fi
++}
++
++# Jump to a directory using interactive search.
++function __zoxide_zi() {
++    __zoxide_doctor
++    builtin local result
++    result="$(command zoxide query --interactive -- "$@")" && __zoxide_cd "${result}"
++}
++
++# =============================================================================
++#
++# Commands for zoxide. Disable these using --no-cmd.
++#
++
++builtin unalias z >/dev/null || builtin true
++function z() {
++    __zoxide_z "$@"
++}
++
++builtin unalias zi >/dev/null || builtin true
++function zi() {
++    __zoxide_zi "$@"
++}
++
++# Load completions.
++# - Bash 4.4+ is required to use `@Q`.
++# - Completio...[truncated]...
++'''
++    else:
++        return '''# =============================================================================
++#
++# Utility functions for zoxide.
++#
++
++# pwd based on the value of _ZO_RESOLVE_SYMLINKS.
++__zoxide_pwd() {
++    builtin pwd -L
++}
++
++# cd + custom logic based on the value of _ZO_ECHO.
++__zoxide_cd() {
++    # shellcheck disable=SC2164
++    builtin cd "$@"
++}
++
++# =============================================================================
++#
++# Hook configuration for zoxide.
++#
++
++__zoxide_oldpwd="$(__zoxide_pwd)"
++
++function __zoxide_hook() {
++    builtin local -r retval="$?"
++    builtin local pwd_tmp
++    pwd_tmp="$(__zoxide_pwd)"
++    if [[ ${__zoxide_oldpwd} != "${pwd_tmp}" ]]; then
++        __zoxide_oldpwd="${pwd_tmp}"
++        command zoxide add -- "${__zoxide_oldpwd}"
++    fi
++    return "${retval}"
++}
++
++# Initialize hook.
++if [[ ${precmd_functions:=} != *'__zoxide_hook'* ]]; then
++    precmd_functions=("${precmd_functions[@]}" __zoxide_hook)
++fi
++
++# Report common issues.
++function __zoxide_doctor() {
++    [[ ${_ZO_DOCTOR:-1} -eq 0 ]] && return 0
++    # shellcheck disable=SC2199
++    [[ ${precmd_functions[@]:-} == *'__zoxide_hook'* ]] && return 0
++    # shellcheck disable=SC2199
++    [[ ${__vsc_original_precmd_functions[@]:-} == *'__zoxide_hook'* ]] && return 0
++
++    _ZO_DOCTOR=0
++    builtin printf '%s\\n' \\
++        'zoxide: detected a possible configuration issue.' \\
++        'Please ensure that zoxide is initialized right at the end of your shell configuration file (usually ~/.zshrc).' \\
++        '' \\
++        'If the issue persists, consider filing an issue at:' \\
++        'https://github.com/ajeetdsouza/zoxide/issues' \\
++        '' \\
++        'Disable this message by setting _ZO_DOCTOR=0.' \\
++        '' >&2
++}
++
++# =============================================================================
++#
++# When using zoxide with --no-cmd, alias these internal functions as desired.
++#
++
++__zoxide_z_prefix='z#'
++
++# Jump to a directory using only keywords.
++function __zoxide_z() {
++    __zoxide_doctor
++
++    # shellcheck disable=SC2199
++    if [[ $# -eq 0 ]]; then
++        __zoxide_cd ~
++    elif [[ $# -eq 1 && $1 == '-' ]]; then
++        __zoxide_cd "${OLDPWD}"
++    elif [[ $# -eq 1 && -d $1 ]]; then
++        __zoxide_cd "$1"
++    elif [[ $# -eq 2 && $1 == '--' ]]; then
++        __zoxide_cd "$2"
++    elif [[ ${@: -1} == "${__zoxide_z_prefix}"?* ]]; then
++        # shellcheck disable=SC2124
++        builtin local result="${@: -1}"
++        __zoxide_cd "${result:${#__zoxide_z_prefix}}"
++    else
++        builtin local result
++        # shellcheck disable=SC2312
++        result="$(command zoxide query --exclude "$(__zoxide_pwd)" -- "$@")" &&
++            __zoxide_cd "${result}"
++    fi
++}
++
++# Jump to a directory using interactive search.
++function __zoxide_zi() {
++    __zoxide_doctor
++    builtin local result
++    result="$(command zoxide query --interactive -- "$@")" && __zoxide_cd "${result}"
++}
++
++# =============================================================================
++#
++# Commands for zoxide. Disable these using --no-cmd.
++#
++
++builtin unalias z >/dev/null || builtin true
++function z() {
++    __zoxide_z "$@"
++}
++
++builtin unalias zi >/dev/null || builtin true
++function zi() {
++    __zoxide_zi "$@"
++}
++
++# Load completions.
++# - Bash 4.4+ is required to use `@Q`.
++# - Completio...[truncated]...
++'''
++
++def generate_tcsh_config(no_cmd, cmd_prefix, hook):
++    if no_cmd:
++        return '''# =============================================================================
++#
++# Utility functions for zoxide.
++#
++
++# pwd based on the value of _ZO_RESOLVE_SYMLINKS.
++__zoxide_pwd() {
++    builtin pwd -L
++}
++
++# cd + custom logic based on the value of _ZO_ECHO.
++__zoxide_cd() {
++    # shellcheck disable=SC2164
++    builtin cd "$@"
++}
++
++# =============================================================================
++#
++# Hook configuration for zoxide.
++#
++
++__zoxide_oldpwd="$(__zoxide_pwd)"
++
++function __zoxide_hook() {
++    builtin local -r retval="$?"
++    builtin local pwd_tmp
++    pwd_tmp="$(__zoxide_pwd)"
++    if [[ ${__zoxide_oldpwd} != "${pwd_tmp}" ]]; then
++        __zoxide_oldpwd="${pwd_tmp}"
++        command zoxide add -- "${__zoxide_oldpwd}"
++    fi
++    return "${retval}"
++}
++
++# Initialize hook.
++if [[ ${preexec_functions:=} != *'__zoxide_hook'* ]]; then
++    preexec_functions=("${preexec_functions[@]}" __zoxide_hook)
++fi
++
++# Report common issues.
++function __zoxide_doctor() {
++    [[ ${_ZO_DOCTOR:-1} -eq 0 ]] && return 0
++    # shellcheck disable=SC2199
++    [[ ${preexec_functions[@]:-} == *'__zoxide_hook'* ]] && return 0
++    # shellcheck disable=SC2199
++    [[ ${__vsc_original_preexec_functions[@]:-} == *'__zoxide_hook'* ]] && return 0
++
++    _ZO_DOCTOR=0
++    builtin printf '%s\\n' \\
++        'zoxide: detected a possible configuration issue.' \\
++        'Please ensure that zoxide is initialized right at the end of your shell configuration file (usually ~/.tcshrc).' \\
++        '' \\
++        'If the issue persists, consider filing an issue at:' \\
++        'https://github.com/ajeetdsouza/zoxide/issues' \\
++        '' \\
++        'Disable this message by setting _ZO_DOCTOR=0.' \\
++        '' >&2
++}
++
++# =============================================================================
++#
++# When using zoxide with --no-cmd, alias these internal functions as desired.
++#
++
++__zoxide_z_prefix='z#'
++
++# Jump to a directory using only keywords.
++function __zoxide_z() {
++    __zoxide_doctor
++
++    # shellcheck disable=SC2199
++    if [[ $# -eq 0 ]]; then
++        __zoxide_cd ~
++    elif [[ $# -eq 1 && $1 == '-' ]]; then
++        __zoxide_cd "${OLDPWD}"
++    elif [[ $# -eq 1 && -d $1 ]]; then
++        __zoxide_cd "$1"
++    elif [[ $# -eq 2 && $1 == '--' ]]; then
++        __zoxide_cd "$2"
++    elif [[ ${@: -1} == "${__zoxide_z_prefix}"?* ]]; then
++        # shellcheck disable=SC2124
++        builtin local result="${@: -1}"
++        __zoxide_cd "${result:${#__zoxide_z_prefix}}"
++    else
++        builtin local result
++        # shellcheck disable=SC2312
++        result="$(command zoxide query --exclude "$(__zoxide_pwd)" -- "$@")" &&
++            __zoxide_cd "${result}"
++    fi
++}
++
++# Jump to a directory using interactive search.
++function __zoxide_zi() {
++    __zoxide_doctor
++    builtin local result
++    result="$(command zoxide query --interactive -- "$@")" && __zoxide_cd "${result}"
++}
++
++# =============================================================================
++#
++# Commands for zoxide. Disable these using --no-cmd.
++#
++
++builtin unalias z >/dev/null || builtin true
++function z() {
++    __zoxide_z "$@"
++}
++
++builtin unalias zi >/dev/null || builtin true
++function zi() {
++    __zoxide_zi "$@"
++}
++
++# Load completions.
++# - Bash 4.4+ is required to use `@Q`.
++# - Completio...[truncated]...
++'''
++    else:
++        return '''# =============================================================================
++#
++# Utility functions for zoxide.
++#
++
++# pwd based on the value of _ZO_RESOLVE_SYMLINKS.
++__zoxide_pwd() {
++    builtin pwd -L
++}
++
++# cd + custom logic based on the value of _ZO_ECHO.
++__zoxide_cd() {
++    # shellcheck disable=SC2164
++    builtin cd "$@"
++}
++
++# =============================================================================
++#
++# Hook configuration for zoxide.
++#
++
++__zoxide_oldpwd="$(__zoxide_pwd)"
++
++function __zoxide_hook() {
++    builtin local -r retval="$?"
++    builtin local pwd_tmp
++    pwd_tmp="$(__zoxide_pwd)"
++    if [[ ${__zoxide_oldpwd} != "${pwd_tmp}" ]]; then
++        __zoxide_oldpwd="${pwd_tmp}"
++        command zoxide add -- "${__zoxide_oldpwd}"
++    fi
++    return "${retval}"
++}
++
++# Initialize hook.
++if [[ ${preexec_functions:=} != *'__zoxide_hook'* ]]; then
++    preexec_functions=("${preexec_functions[@]}" __zoxide_hook)
++fi
++
++# Report common issues.
++function __zoxide_doctor() {
++    [[ ${_ZO_DOCTOR:-1} -eq 0 ]] && return 0
++    # shellcheck disable=SC2199
++    [[ ${preexec_functions[@]:-} == *'__zoxide_hook'* ]] && return 0
++    # shellcheck disable=SC2199
++    [[ ${__vsc_original_preexec_functions[@]:-} == *'__zoxide_hook'* ]] && return 0
++
++    _ZO_DOCTOR=0
++    builtin printf '%s\\n' \\
++        'zoxide: detected a possible configuration issue.' \\
++        'Please ensure that zoxide is initialized right at the end of your shell configuration file (usually ~/.tcshrc).' \\
++        '' \\
++        'If the issue persists, consider filing an issue at:' \\
++        'https://github.com/ajeetdsouza/zoxide/issues' \\
++        '' \\
++        'Disable this message by setting _ZO_DOCTOR=0.' \\
++        '' >&2
++}
++
++# =============================================================================
++#
++# When using zoxide with --no-cmd, alias these internal functions as desired.
++#
++
++__zoxide_z_prefix='z#'
++
++# Jump to a directory using only keywords.
++function __zoxide_z() {
++    __zoxide_doctor
++
++    # shellcheck disable=SC2199
++    if [[ $# -eq 0 ]]; then
++        __zoxide_cd ~
++    elif [[ $# -eq 1 && $1 == '-' ]]; then
++        __zoxide_cd "${OLDPWD}"
++    elif [[ $# -eq 1 && -d $1 ]]; then
++        __zoxide_cd "$1"
++    elif [[ $# -eq 2 && $1 == '--' ]]; then
++        __zoxide_cd "$2"
++    elif [[ ${@: -1} == "${__zoxide_z_prefix}"?* ]]; then
++        # shellcheck disable=SC2124
++        builtin local result="${@: -1}"
++        __zoxide_cd "${result:${#__zoxide_z_prefix}}"
++    else
++        builtin local result
++        # shellcheck disable=SC2312
++        result="$(command zoxide query --exclude "$(__zoxide_pwd)" -- "$@")" &&
++            __zoxide_cd "${result}"
++    fi
++}
++
++# Jump to a directory using interactive search.
++function __zoxide_zi() {
++    __zoxide_doctor
++    builtin local result
++    result="$(command zoxide query --interactive -- "$@")" && __zoxide_cd "${result}"
++}
++
++# =============================================================================
++#
++# Commands for zoxide. Disable these using --no-cmd.
++#
++
++builtin unalias z >/dev/null || builtin true
++function z() {
++    __zoxide_z "$@"
++}
++
++builtin unalias zi >/dev/null || builtin true
++function zi() {
++    __zoxide_zi "$@"
++}
++
++# Load completions.
++# - Bash 4.4+ is required to use `@Q`.
++# - Completio...[truncated]...
++'''
++
++def generate_xonsh_config(no_cmd, cmd_prefix, hook):
++    if no_cmd:
++        return '''# =============================================================================
++#
++# Utility functions for zoxide.
++#
++
++# pwd based on the value of _ZO_RESOLVE_SYMLINKS.
++__zoxide_pwd = lambda: os.path.realpath(os.getcwd())
++
++# cd + custom logic based on the value of _ZO_ECHO.
++__zoxide_cd = lambda *args: os.chdir(*args)
++
++# =============================================================================
++#
++# Hook configuration for zoxide.
++#
++
++__zoxide_oldpwd = __zoxide_pwd()
++
++def __zoxide_hook():
++    retval = 0
++    pwd_tmp = __zoxide_pwd()
++    if __zoxide_oldpwd != pwd_tmp:
++        __zoxide_oldpwd = pwd_tmp
++        os.system("zoxide add -- " + pwd_tmp)
++    return retval
++
++# Initialize hook.
++if "__zoxide_hook" not in sys.modules.get("xonsh.events", {}).get("preexec", []):
++    from xonsh.events import events
++    events.on("on_preexec", __zoxide_hook)
++
++# Report common issues.
++def __zoxide_doctor():
++    if _ZO_DOCTOR is not None and _ZO_DOCTOR == 0:
++        return
++    if "__zoxide_hook" in sys.modules.get("xonsh.events", {}).get("preexec", []):
++        return
++    if "__vsc_original_preexec" in sys.modules.get("xonsh.events", {}):
++        return
++
++    _ZO_DOCTOR = 0
++    print('zoxide: detected a possible configuration issue.', file=sys.stderr)
++    print('Please ensure that zoxide is initialized right at the end of your shell configuration file (usually ~/.xonshrc).', file=sys.stderr)
++    print('', file=sys.stderr)
++    print('If the issue persists, consider filing an issue at:', file=sys.stderr)
++    print('https://github.com/ajeetdsouza/zoxide/issues', file=sys.stderr)
++    print('', file=sys.stderr)
++    print('Disable this message by setting _ZO_DOCTOR=0.', file=sys.stderr)
++
++# =============================================================================
++#
++# When using zoxide with --no-cmd, alias these internal functions as desired.
++#
++
++__zoxide_z_prefix = 'z#'
++
++# Jump to a directory using only keywords.
++def __zoxide_z(*args):
++    __zoxide_doctor()
++
++    if len(args) == 0:
++        __zoxide_cd("~")
++    elif len(args) == 1 and args[0] == '-':
++        __zoxide_cd("${OLDPWD}")
++    elif len(args) == 1 and os.path.isdir(args[0]):
++        __zoxide_cd(args[0])
++    elif len(args) == 2 and args[0] == '--':
++        __zoxide_cd(args[1])
++    elif args[-1].startswith(__zoxide_z_prefix):
++        # shellcheck disable=SC2124
++        result = args[-1]
++        __zoxide_cd(result[len(__zoxide_z_prefix):])
++    else:
++        result = os.popen("zoxide query --exclude " + __zoxide_pwd() + " -- " + " ".join(args)).read().strip()
++        __zoxide_cd(result)
++
++# Jump to a directory using interactive search.
++def __zoxide_zi(*args):
++    __zoxide_doctor()
++    result = os.popen("zoxide query --interactive -- " + " ".join(args)).read().strip()
++    __zoxide_cd(result)
++
++# =============================================================================
++#
++# Commands for zoxide. Disable these using --no-cmd.
++#
++
++if "z" in dir():
++    del z
++def z(*args):
++    __zoxide_z(*args)
++
++if "zi" in dir():
++    del zi
++def zi(*args):
++    __zoxide_zi(*args)
++
++# Load completions.
++# - Bash 4.4+ is required to use `@Q`.
++# - Completio...[truncated]...
++'''
++    else:
++        return '''# =============================================================================
++#
++# Utility functions for zoxide.
++#
++
++# pwd based on the value of _ZO_RESOLVE_SYMLINKS.
++__zoxide_pwd = lambda: os.path.realpath(os.getcwd())
++
++# cd + custom logic based on the value of _ZO_ECHO.
++__zoxide_cd = lambda *args: os.chdir(*args)
++
++# =============================================================================
++#
++# Hook configuration for zoxide.
++#
++
++__zoxide_oldpwd = __zoxide_pwd()
++
++def __zoxide_hook():
++    retval = 0
++    pwd_tmp = __zoxide_pwd()
++    if __zoxide_oldpwd != pwd_tmp:
++        __zoxide_oldpwd = pwd_tmp
++        os.system("zoxide add -- " + pwd_tmp)
++    return retval
++
++# Initialize hook.
++if "__zoxide_hook" not in sys.modules.get("xonsh.events", {}).get("preexec", []):
++    from xonsh.events import events
++    events.on("on_preexec", __zoxide_hook)
++
++# Report common issues.
++def __zoxide_doctor():
++    if _ZO_DOCTOR is not None and _ZO_DOCTOR == 0:
++        return
++    if "__zoxide_hook" in sys.modules.get("xonsh.events", {}).get("preexec", []):
++        return
++    if "__vsc_original_preexec" in sys.modules.get("xonsh.events", {}):
++        return
++
++    _ZO_DOCTOR = 0
++    print('zoxide: detected a possible configuration issue.', file=sys.stderr)
++    print('Please ensure that zoxide is initialized right at the end of your shell configuration file (usually ~/.xonshrc).', file=sys.stderr)
++    print('', file=sys.stderr)
++    print('If the issue persists, consider filing an issue at:', file=sys.stderr)
++    print('https://github.com/ajeetdsouza/zoxide/issues', file=sys.stderr)
++    print('', file=sys.stderr)
++    print('Disable this message by setting _ZO_DOCTOR=0.', file=sys.stderr)
++
++# =============================================================================
++#
++# When using zoxide with --no-cmd, alias these internal functions as desired.
++#
++
++__zoxide_z_prefix = 'z#'
++
++# Jump to a directory using only keywords.
++def __zoxide_z(*args):
++    __zoxide_doctor()
++
++    if len(args) == 0:
++        __zoxide_cd("~")
++    elif len(args) == 1 and args[0] == '-':
++        __zoxide_cd("${OLDPWD}")
++    elif len(args) == 1 and os.path.isdir(args[0]):
++        __zoxide_cd(args[0])
++    elif len(args) == 2 and args[0] == '--':
++        __zoxide_cd(args[1])
++    elif args[-1].startswith(__zoxide_z_prefix):
++        # shellcheck disable=SC2124
++        result = args[-1]
++        __zoxide_cd(result[len(__zoxide_z_prefix):])
++    else:
++        result = os.popen("zoxide query --exclude " + __zoxide_pwd() + " -- " + " ".join(args)).read().strip()
++        __zoxide_cd(result)
++
++# Jump to a directory using interactive search.
++def __zoxide_zi(*args):
++    __zoxide_doctor()
++    result = os.popen("zoxide query --interactive -- " + " ".join(args)).read().strip()
++    __zoxide_cd(result)
++
++# =============================================================================
++#
++# Commands for zoxide. Disable these using --no-cmd.
++#
++
++if "z" in dir():
++    del z
++def z(*args):
++    __zoxide_z(*args)
++
++if "zi" in dir():
++    del zi
++def zi(*args):
++    __zoxide_zi(*args)
++
++# Load completions.
++# - Bash 4.4+ is required to use `@Q`.
++# - Completio...[truncated]...
++'''
++
++def generate_fish_config(no_cmd, cmd_prefix, hook):
++    if no_cmd:
++        return '''# =============================================================================
++#
++# Utility functions for zoxide.
++#
++
++# pwd based on the value of _ZO_RESOLVE_SYMLINKS.
++function __zoxide_pwd
++    builtin pwd -L
++end
++
++# cd + custom logic based on the value of _ZO_ECHO.
++function __zoxide_cd
++    # shellcheck disable=SC2164
++    builtin cd -- "$argv"
++end
++
++# =============================================================================
++#
++# Hook configuration for zoxide.
++#
++
++__zoxide_oldpwd="$(__zoxide_pwd)"
++
++function __zoxide_hook
++    builtin local -r retval="$status"
++    builtin local pwd_tmp
++    pwd_tmp="$(__zoxide_pwd)"
++    if string match -q -i "${__zoxide_oldpwd}" "${pwd_tmp}"; then
++        return "$retval"
++    end
++    __zoxide_oldpwd="$pwd_tmp"
++    command zoxide add -- "$__zoxide_oldpwd"
++    return "$retval"
++end
++
++# Initialize hook.
++if not functions --query __zoxide_hook; then
++    functions --add __zoxide_hook
++end
++
++# Report common issues.
++function __zoxide_doctor
++    if [ "$_ZO_DOCTOR" = "0" ]; then
++        return 0
++    end
++    if functions --query __zoxide_hook; then
++        return 0
++    end
++    if functions --query __vsc_original_preexec; then
++        return 0
++    end
++
++    _ZO_DOCTOR=0
++    printf '%s\\n' \\
++        'zoxide: detected a possible configuration issue.' \\
++        'Please ensure that zoxide is initialized right at the end of your shell configuration file (usually ~/.config/fish/config.fish).' \\
++        '' \\
++        'If the issue persists, consider filing an issue at:' \\
++        'https://github.com/ajeetdsouza/zoxide/issues' \\
++        '' \\
++        'Disable this message by setting _ZO_DOCTOR=0.' \\
++        '' >&2
++end
++
++# =============================================================================
++#
++# When using zoxide with --no-cmd, alias these internal functions as desired.
++#
++
++__zoxide_z_prefix='z#'
++
++# Jump to a directory using only keywords.
++function __zoxide_z
++    __zoxide_doctor
++
++    if [ $# -eq 0 ]; then
++        __zoxide_cd ~
++    elif [ $# -eq 1 ] && [ "$1" = '-' ]; then
++        __zoxide_cd "${OLDPWD}"
++    elif [ $# -eq 1 ] && test -d "$1"; then
++        __zoxide_cd "$1"
++    elif [ $# -eq 2 ] && [ "$1" = '--' ]; then
++        __zoxide_cd "$2"
++    elif [ "$argv[-1]" = "${__zoxide_z_prefix}"* ]; then
++        # shellcheck disable=SC2124
++        builtin local result="$argv[-1]"
++        __zoxide_cd "${result:${__zoxide_z_prefix}}"
++    else
++        builtin local result
++        # shellcheck disable=SC2312
++        result=(command zoxide query --exclude "$(__zoxide_pwd)" -- "$argv")
++        __zoxide_cd "$result[1]"
++    end
++end
++
++# Jump to a directory using interactive search.
++function __zoxide_zi
++    __zoxide_doctor
++    builtin local result
++    result=(command zoxide query --interactive -- "$argv")
++    __zoxide_cd "$result[1]"
++end
++
++# =============================================================================
++#
++# Commands for zoxide. Disable these using --no-cmd.
++#
++
++builtin unalias z >/dev/null || builtin true
++function z
++    __zoxide_z "$argv"
++end
++
++builtin unalias zi >/dev/null || builtin true
++function zi
++    __zoxide_zi "$argv"
++end
++
++# Load completions.
++# - Bash 4.4+ is required to use `@Q`.
++# - Completio...[truncated]...
++'''
++    else:
++        return '''# =============================================================================
++#
++# Utility functions for zoxide.
++#
++
++# pwd based on the value of _ZO_RESOLVE_SYMLINKS.
++function __zoxide_pwd
++    builtin pwd -L
++end
++
++# cd + custom logic based on the value of _ZO_ECHO.
++function __zoxide_cd
++    # shellcheck disable=SC2164
++    builtin cd -- "$argv"
++end
++
++# =============================================================================
++#
++# Hook configuration for zoxide.
++#
++
++__zoxide_oldpwd="$(__zoxide_pwd)"
++
++function __zoxide_hook
++    builtin local -r retval="$status"
++    builtin local pwd_tmp
++    pwd_tmp="$(__zoxide_pwd)"
++    if string match -q -i "${__zoxide_oldpwd}" "${pwd_tmp}"; then
++        return "$retval"
++    end
++    __zoxide_oldpwd="$pwd_tmp"
++    command zoxide add -- "$__zoxide_oldpwd"
++    return "$retval"
++end
++
++# Initialize hook.
++if not functions --query __zoxide_hook; then
++    functions --add __zoxide_hook
++end
++
++# Report common issues.
++function __zoxide_doctor
++    if [ "$_ZO_DOCTOR" = "0" ]; then
++        return 0
++    end
++    if functions --query __zoxide_hook; then
++        return 0
++    end
++    if functions --query __vsc_original_preexec; then
++        return 0
++    end
++
++    _ZO_DOCTOR=0
++    printf '%s\\n' \\
++        'zoxide: detected a possible configuration issue.' \\
++        'Please ensure that zoxide is initialized right at the end of your shell configuration file (usually ~/.config/fish/config.fish).' \\
++        '' \\
++        'If the issue persists, consider filing an issue at:' \\
++        'https://github.com/ajeetdsouza/zoxide/issues' \\
++        '' \\
++        'Disable this message by setting _ZO_DOCTOR=0.' \\
++        '' >&2
++end
++
++# =============================================================================
++#
++# When using zoxide with --no-cmd, alias these internal functions as desired.
++#
++
++__zoxide_z_prefix='z#'
++
++# Jump to a directory using only keywords.
++function __zoxide_z
++    __zoxide_doctor
++
++    if [ $# -eq 0 ]; then
++        __zoxide_cd ~
++    elif [ $# -eq 1 ] && [ "$1" = '-' ]; then
++        __zoxide_cd "${OLDPWD}"
++    elif [ $# -eq 1 ] && test -d "$1"; then
++        __zoxide_cd "$1"
++    elif [ $# -eq 2 ] && [ "$1" = '--' ]; then
++        __zoxide_cd "$2"
++    elif [ "$argv[-1]" = "${__zoxide_z_prefix}"* ]; then
++        # shellcheck disable=SC2124
++        builtin local result="$argv[-1]"
++        __zoxide_cd "${result:${__zoxide_z_prefix}}"
++    else
++        builtin local result
++        # shellcheck disable=SC2312
++        result=(command zoxide query --exclude "$(__zoxide_pwd)" -- "$argv")
++        __zoxide_cd "$result[1]"
++    end
++end
++
++# Jump to a directory using interactive search.
++function __zoxide_zi
++    __zoxide_doctor
++    builtin local result
++    result=(command zoxide query --interactive -- "$argv")
++    __zoxide_cd "$result[1]"
++end
++
++# =============================================================================
++#
++# Commands for zoxide. Disable these using --no-cmd.
++#
++
++builtin unalias z >/dev/null || builtin true
++function z
++    __zoxide_z "$argv"
++end
++
++builtin unalias zi >/dev/null || builtin true
++function zi
++    __zoxide_zi "$argv"
++end
++
++# Load completions.
++# - Bash 4.4+ is required to use `@Q`.
++# - Completio...[truncated]...
++'''
++
++def generate_nushell_config(no_cmd, cmd_prefix, hook):
++    if no_cmd:
++        return '''# =============================================================================
++#
++# Utility functions for zoxide.
++#
++
++# pwd based on the value of _ZO_RESOLVE_SYMLINKS.
++def __zoxide_pwd []:
++    (pwd -L)
++
++# cd + custom logic based on the value of _ZO_ECHO.
++def __zoxide_cd [path: string]:
++    cd $path
++
++# =============================================================================
++#
++# Hook configuration for zoxide.
++#
++
++__zoxide_oldpwd = (__zoxide_pwd)
++
++def __zoxide_hook []:
++    let retval = $env.PROMPT_COMMAND
++    let pwd_tmp = (__zoxide_pwd)
++    if $__zoxide_oldpwd != $pwd_tmp {
++        $__zoxide_oldpwd = $pwd_tmp
++        zoxide add -- $pwd_tmp
++    }
++    $retval
++
++# Initialize hook.
++if ($env.PROMPT_COMMAND | str contains "__zoxide_hook") == false {
++    $env.PROMPT_COMMAND = ($env.PROMPT_COMMAND | append "__zoxide_hook")
++}
++
++# Report common issues.
++def __zoxide_doctor []:
++    if ($env._ZO_DOCTOR | default 1) == 0 {
++        return
++    }
++    if ($env.PROMPT_COMMAND | str contains "__zoxide_hook") == true {
++        return
++    }
++    if ($env.__vsc_original_prompt_command | str contains "__zoxide_hook") == true {
++        return
++    }
++
++    $env._ZO_DOCTOR = 0
++    print 'zoxide: detected a possible configuration issue.'
++    print 'Please ensure that zoxide is initialized right at the end of your shell configuration file (usually ~/.config/nushell/config.nu).'
++    print ''
++    print 'If the issue persists, consider filing an issue at:'
++    print 'https://github.com/ajeetdsouza/zoxide/issues'
++    print ''
++    print 'Disable this message by setting _ZO_DOCTOR=0.'
++
++# =============================================================================
++#
++# When using zoxide with --no-cmd, alias these internal functions as desired.
++#
++
++__zoxide_z_prefix = 'z#'
++
++# Jump to a directory using only keywords.
++def __zoxide_z [args: list]:
++    __zoxide_doctor
++
++    if $args | length == 0 {
++        __zoxide_cd ~
++    } elif $args | length == 1 and $args[0] == '-' {
++        __zoxide_cd $env.OLDPWD
++    } elif $args | length == 1 and ($args[0] | path is-dir) == true {
++        __zoxide_cd $args[0]
++    } elif $args | length == 2 and $args[0] == '--' {
++        __zoxide_cd $args[1]
++    } elif $args | last | str starts-with $__zoxide_z_prefix {
++        # shellcheck disable=SC2124
++        let result = $args | last
++        __zoxide_cd $result | str replace $__zoxide_z_prefix ''
++    } else {
++        let result = (zoxide query --exclude ($__zoxide_pwd) -- $args)
++        __zoxide_cd $result
++    }
++
++# Jump to a directory using interactive search.
++def __zoxide_zi [args: list]:
++    __zoxide_doctor
++    let result = (zoxide query --interactive -- $args)
++    __zoxide_cd $result
++
++# =============================================================================
++#
++# Commands for zoxide. Disable these using --no-cmd.
++#
++
++if ('z' in $env.commands) {
++    del $env.commands['z']
++}
++def z [args: list]:
++    __zoxide_z $args
++
++if ('zi' in $env.commands) {
++    del $env.commands['zi']
++}
++def zi [args: list]:
++    __zoxide_zi $args
++
++# Load completions.
++# - Bash 4.4+ is required to use `@Q`.
++# - Completio...[truncated]...
++'''
++    else:
++        return '''# =============================================================================
++#
++# Utility functions for zoxide.
++#
++
++# pwd based on the value of _ZO_RESOLVE_SYMLINKS.
++def __zoxide_pwd []:
++    (pwd -L)
++
++# cd + custom logic based on the value of _ZO_ECHO.
++def __zoxide_cd [path: string]:
++    cd $path
++
++# =============================================================================
++#
++# Hook configuration for zoxide.
++#
++
++__zoxide_oldpwd = (__zoxide_pwd)
++
++def __zoxide_hook []:
++    let retval = $env.PROMPT_COMMAND
++    let pwd_tmp = (__zoxide_pwd)
++    if $__zoxide_oldpwd != $pwd_tmp {
++        $__zoxide_oldpwd = $pwd_tmp
++        zoxide add -- $pwd_tmp
++    }
++    $retval
++
++# Initialize hook.
++if ($env.PROMPT_COMMAND | str contains "__zoxide_hook") == false {
++    $env.PROMPT_COMMAND = ($env.PROMPT_COMMAND | append "__zoxide_hook")
++}
++
++# Report common issues.
++def __zoxide_doctor []:
++    if ($env._ZO_DOCTOR | default 1) == 0 {
++        return
++    }
++    if ($env.PROMPT_COMMAND | str contains "__zoxide_hook") == true {
++        return
++    }
++    if ($env.__vsc_original_prompt_command | str contains "__zoxide_hook") == true {
++        return
++    }
++
++    $env._ZO_DOCTOR = 0
++    print 'zoxide: detected a possible configuration issue.'
++    print 'Please ensure that zoxide is initialized right at the end of your shell configuration file (usually ~/.config/nushell/config.nu).'
++    print ''
++    print 'If the issue persists, consider filing an issue at:'
++    print 'https://github.com/ajeetdsouza/zoxide/issues'
++    print ''
++    print 'Disable this message by setting _ZO_DOCTOR=0.'
++
++# =============================================================================
++#
++# When using zoxide with --no-cmd, alias these internal functions as desired.
++#
++
++__zoxide_z_prefix = 'z#'
++
++# Jump to a directory using only keywords.
++def __zoxide_z [args: list]:
++    __zoxide_doctor
++
++    if $args | length == 0 {
++        __zoxide_cd ~
++    } elif $args | length == 1 and $args[0] == '-' {
++        __zoxide_cd $env.OLDPWD
++    } elif $args | length == 1 and ($args[0] | path is-dir) == true {
++        __zoxide_cd $args[0]
++    } elif $args | length == 2 and $args[0] == '--' {
++        __zoxide_cd $args[1]
++    } elif $args | last | str starts-with $__zoxide_z_prefix {
++        # shellcheck disable=SC2124
++        let result = $args | last
++        __zoxide_cd $result | str replace $__zoxide_z_prefix ''
++    } else {
++        let result = (zoxide query --exclude ($__zoxide_pwd) -- $args)
++        __zoxide_cd $result
++    }
++
++# Jump to a directory using interactive search.
++def __zoxide_zi [args: list]:
++    __zoxide_doctor
++    let result = (zoxide query --interactive -- $args)
++    __zoxide_cd $result
++
++# =============================================================================
++#
++# Commands for zoxide. Disable these using --no-cmd.
++#
++
++if ('z' in $env.commands) {
++    del $env.commands['z']
++}
++def z [args: list]:
++    __zoxide_z $args
++
++if ('zi' in $env.commands) {
++    del $env.commands['zi']
++}
++def zi [args: list]:
++    __zoxide_zi $args
++
++# Load completions.
++# - Bash 4.4+ is required to use `@Q`.
++# - Completio...[truncated]...
++'''
++
++def init_shell(shell, no_cmd, cmd_prefix, hook):
++    if shell == "bash":
++        return generate_bash_config(no_cmd, cmd_prefix, hook)
++    elif shell == "posix":
++        return generate_posix_config(no_cmd, cmd_prefix, hook)
++    elif shell == "zsh":
++        return generate_zsh_config(no_cmd, cmd_prefix, hook)
++    elif shell == "tcsh":
++        return generate_tcsh_config(no_cmd, cmd_prefix, hook)
++    elif shell == "xonsh":
++        return generate_xonsh_config(no_cmd, cmd_prefix, hook)
++    elif shell == "fish":
++        return generate_fish_config(no_cmd, cmd_prefix, hook)
++    elif shell == "nushell":
++        return generate_nushell_config(no_cmd, cmd_prefix, hook)
++    else:
++        raise ValueError(f"Unknown shell: {shell}")
++
++def import_db(source, path, merge, dest):
++    """Import entries from another database."""
++    if not os.path.exists(source):
++        print(f"Error: Source database not found: {source}", file=sys.stderr)
++        sys.exit(1)
++    
++    with open(source, "rb") as f:
++        magic = struct.unpack("<I", f.read(4))[0]
++        if magic != MAGIC:
++            print(f"Error: Invalid database magic number in {source}", file=sys.stderr)
++            sys.exit(1)
++        
++        version = struct.unpack("<I", f.read(4))[0]
++        if version != VERSION_DB:
++            print(f"Error: Unsupported database version in {source}", file=sys.stderr)
++            sys.exit(1)
++        
++        entries = {}
++        while True:
++            entry = f.read(ENTRY_SIZE)
++            if len(entry) < ENTRY_SIZE:
++                break
++            
++            path_len = struct.unpack("<H", entry[0:2])[0]
++            score = struct.unpack("<I", entry[2:6])[0]
++            path = entry[6:6+path_len].decode("utf-8")
++            
++            if path not in entries:
++                entries[path] = score
++            else:
++                entries[path] = max(entries[path], score)
++    
++    # Merge with existing entries
++    dest_entries = read_db()
++    for path, score in entries.items():
++        dest_entries[path] = max(dest_entries.get(path, 0), score)
++    
++    write_db(dest_entries)
++    print(f"Imported {len(entries)} entries from {source}")
++
++def main():
++    parser = argparse.ArgumentParser(
++        prog="zoxide",
++        description="A smarter cd command for your terminal",
++        formatter_class=argparse.RawDescriptionHelpFormatter,
++        epilog=f"""
++Environment variables:
++  _ZO_DATA_DIR          Path for zoxide data files
++  _ZO_ECHO              Print the matched directory before navigating to it when set to 1
++  _ZO_EXCLUDE_DIRS      List of directory globs to be excluded
++  _ZO_FZF_OPTS          Custom flags to pass to fzf
++  _ZO_MAXAGE            Maximum total age after which entries start getting deleted
++  _ZO_RESOLVE_SYMLINKS  Resolve symlinks when storing paths
++"""
++    )
++    
++    parser.add_argument("-V", "--version", action="version", version=f"%(prog)s {VERSION}")
++    # -h, --help is handled by argparse automatically
++    
++    subparsers = parser.add_subparsers(dest="command", help="Commands")
++    
++    # add subcommand
++    add_parser = subparsers.add_parser("add", help="Add a new directory or increment its rank")
++    add_parser.add_argument("path", nargs="?", help="Path to add")
++    add_parser.add_argument("-s", "--score", type=int, default=0, help="Score to assign")
++    add_parser.add_argument("-n", "--no-cmd", action="store_true", help="Disable commands")
++    add_parser.add_argument("--cmd", help="Command prefix")
++    add_parser.add_argument("--hook", help="Hook type")
++    
++    # edit subcommand
++    edit_parser = subparsers.add_parser("edit", help="Edit the database")
++    edit_parser.add_argument("-n", "--no-cmd", action="store_true", help="Disable commands")
++    edit_parser.add_argument("--cmd", help="Command prefix")
++    edit_parser.add_argument("--hook", help="Hook type")
++    
++    # import subcommand
++    import_parser = subparsers.add_parser("import", help="Import entries from another application")
++    import_parser.add_argument("--from", choices=["autojump", "z"], required=True, help="Application to import from")
++    import_parser.add_argument("path", nargs="?", help="Path to import")
++    import_parser.add_argument("--merge", action="store_true", help="Merge into existing database")
++    import_parser.add_argument("-n", "--no-cmd", action="store_true", help="Disable commands")
++    import_parser.add_argument("--cmd", help="Command prefix")
++    import_parser.add_argument("--hook", help="Hook type")
++    
++    # init subcommand
++    init_parser = subparsers.add_parser("init", help="Generate shell configuration")
++    init_parser.add_argument("shell", choices=["bash", "posix", "zsh", "tcsh", "xonsh", "fish", "nushell"], help="Shell type")
++    init_parser.add_argument("-n", "--no-cmd", action="store_true", help="Disable commands")
++    init_parser.add_argument("--cmd", help="Command prefix")
++    init_parser.add_argument("--hook", help="Hook type")
++    
++    # query subcommand
++    query_parser = subparsers.add_parser("query", help="Search for a directory in the database")
++    query_parser.add_argument("keywords", nargs="*", help="Keywords to search for")
++    query_parser.add_argument("-a", "--all", action="store_true", help="List all matching directories")
++    query_parser.add_argument("-i", "--interactive", action="store_true", help="Use interactive search")
++    query_parser.add_argument("-l", "--list", action="store_true", help="List all matching directories")
++    query_parser.add_argument("-s", "--score", action="store_true", help="Show scores")
++    query_parser.add_argument("-e", "--exclude", help="Exclude a directory")
++    query_parser.add_argument("-b", "--base-dir", help="Base directory for search")
++    query_parser.add_argument("--no-cmd", action="store_true", help="Disable commands")
++    query_parser.add_argument("--cmd", help="Command prefix")
++    query_parser.add_argument("--hook", help="Hook type")
++    
++    # remove subcommand
++    remove_parser = subparsers.add_parser("remove", help="Remove a directory from the database")
++    remove_parser.add_argument("path", help="Path to remove")
++    remove_parser.add_argument("-n", "--no-cmd", action="store_true", help="Disable commands")
++    remove_parser.add_argument("--cmd", help="Command prefix")
++    remove_parser.add_argument("--hook", help="Hook type")
++    
++    args = parser.parse_args()
++    
++    if args.command == "add":
++        if not args.path:
++            print("Error: Path is required", file=sys.stderr)
++            sys.exit(1)
++        add_path(args.path, args.score)
++    
++    elif args.command == "edit":
++        if not os.path.exists(get_db_path()):
++            print("Error: Database not found", file=sys.stderr)
++            sys.exit(1)
++        print("Database location:", get_db_path())
++        print("To edit the database, use a text editor:")
++        print(f"  nano {get_db_path()}")
++        print(f"  vim {get_db_path()}")
++        print(f"  code {get_db_path()}")
++        sys.exit(0)
++    
++    elif args.command == "import":
++        import_db(args.from_, args.path, args.merge, get_db_path())
++    
++    elif args.command == "init":
++        try:
++            config = init_shell(args.shell, args.no_cmd, args.cmd, args.hook)
++            print(config)
++        except ValueError as e:
++            print(f"Error: {e}", file=sys.stderr)
++            sys.exit(1)
++    
++    elif args.command == "query":
++        query_path(
++            args.keywords,
++            all=args.all,
++            interactive=args.interactive,
++            list=args.list,
++            score=args.score,
++            exclude=args.exclude,
++            base_dir=args.base_dir
++        )
++    
++    elif args.command == "remove":
++        if not args.path:
++            print("Error: Path is required", file=sys.stderr)
++            sys.exit(1)
++        remove_path(args.path)
++    
++    else:
++        parser.print_help()
++
++if __name__ == "__main__":
++    main()

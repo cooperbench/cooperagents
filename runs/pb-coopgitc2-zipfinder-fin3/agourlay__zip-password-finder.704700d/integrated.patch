@@ -1,0 +1,179 @@
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..8a8d8c3
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,3 @@
++#!/bin/bash
++cp main.py ./executable
++chmod +x ./executable
+diff --git a/main.py b/main.py
+new file mode 100755
+index 0000000..7c2b629
+--- /dev/null
++++ b/main.py
+@@ -0,0 +1,164 @@
++#!/usr/bin/env python3
++import argparse
++import sys
++import time
++import zipfile
++import os
++from itertools import product
++
++def parse_charset_file(path):
++    charsets = set()
++    try:
++        with open(path, 'r') as f:
++            for line in f:
++                line = line.strip()
++                if not line:
++                    continue
++                for c in line:
++                    if c in 'ludhHs':
++                        charsets.add(c)
++    except FileNotFoundError:
++        print(f"CLI argument error - \"'charsetFile' does not exist\"")
++        sys.exit(1)
++    except Exception as e:
++        print(f"CLI argument error - Failed to open charset file: {e}")
++        sys.exit(1)
++    
++    if not charsets:
++        print("CLI argument error - \"'charset' must not be empty\"")
++        sys.exit(1)
++    
++    return charsets
++
++def get_charset_chars(charset_types):
++    charset_map = {
++        'l': 'abcdefghijklmnopqrstuvwxyz',
++        'u': 'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
++        'd': '0123456789',
++        'h': '0123456789abcdef',
++        'H': '0123456789ABCDEF',
++        's': ' \t\n\r!@#$%^&*()_+-=[]{}|;:\'",./<>?',
++    }
++    all_chars = []
++    for c in sorted(charset_types):
++        all_chars.append(charset_map.get(c, ''))
++    return ''.join(all_chars)
++
++def generate_passwords(charset, min_len, max_len, starting_password=None):
++    passwords = []
++    if starting_password:
++        passwords.append(starting_password)
++    for length in range(min_len, max_len + 1):
++        if length == 0:
++            continue
++        for combo in product(charset, repeat=length):
++            passwords.append(''.join(combo))
++    seen = set()
++    unique_passwords = []
++    for p in passwords:
++        if p not in seen:
++            seen.add(p)
++            unique_passwords.append(p)
++    return unique_passwords
++
++def test_password(zip_path, password, file_number):
++    try:
++        with zipfile.ZipFile(zip_path, 'r') as zf:
++            if file_number >= len(zf.namelist()):
++                return False
++            try:
++                with zf.open(zf.namelist()[file_number], pwd=password.encode()) as f:
++                    return True
++            except Exception:
++                return False
++    except Exception:
++        return False
++
++def main():
++    parser = argparse.ArgumentParser(
++        prog='executable',
++        description='Find the password of protected ZIP files',
++        formatter_class=argparse.RawDescriptionHelpFormatter,
++        epilog='''
++Examples:
++  executable --inputFile secret.zip --passwordDictionary words.txt
++  executable --inputFile secret.zip --charset l --minPasswordLen 1 --maxPasswordLen 6
++'''
++    )
++    parser.add_argument('-i', '--inputFile', required=True, help='path to zip input file')
++    parser.add_argument('-w', '--workers', type=int, default=1, help='number of workers')
++    parser.add_argument('-p', '--passwordDictionary', help='path to a password dictionary file')
++    parser.add_argument('-c', '--charset', default='lud', help='charset to use to generate password')
++    parser.add_argument('--charsetFile', help='path to a charset file')
++    parser.add_argument('--minPasswordLen', type=int, default=1, help='minimum password length')
++    parser.add_argument('--maxPasswordLen', type=int, default=10, help='maximum password length')
++    parser.add_argument('--fileNumber', type=int, default=0, help='file number in the zip archive')
++    parser.add_argument('-s', '--startingPassword', help='password to start from')
++    parser.add_argument('-V', '--version', action='version', version='zip-password-finder 0.10.3')
++    args = parser.parse_args()
++    
++    if not os.path.exists(args.inputFile):
++        print(f"CLI argument error - \"'inputFile' does not exist\"")
++        sys.exit(1)
++    
++    if args.charsetFile:
++        charset_types = parse_charset_file(args.charsetFile)
++    else:
++        charset_types = set(args.charset)
++    
++    if not charset_types:
++        print("CLI argument error - \"'charset' must not be empty\"")
++        sys.exit(1)
++    
++    if args.workers == 0:
++        print("CLI argument error - \"'workers' must be positive\"")
++        sys.exit(1)
++    
++    if args.maxPasswordLen < args.minPasswordLen:
++        print("CLI argument error - \"'maxPasswordLen' must be equal or greater than 'minPasswordLen'\"")
++        sys.exit(1)
++    
++    charset = get_charset_chars(charset_types)
++    starting_password = args.startingPassword
++    passwords = generate_passwords(charset, args.minPasswordLen, args.maxPasswordLen, starting_password)
++    
++    start_time = time.time()
++    
++    if args.workers == 1:
++        for password in passwords:
++            if test_password(args.inputFile, password, args.fileNumber):
++                elapsed = time.time() - start_time
++                print(f"Time elapsed: {elapsed:.6f}s")
++                print(f"Password found:{password}")
++                sys.exit(0)
++        elapsed = time.time() - start_time
++        print(f"Time elapsed: {elapsed:.6f}s")
++        print("Password not found")
++        sys.exit(1)
++    else:
++        import threading
++        results = []
++        results_lock = threading.Lock()
++        def worker(password):
++            if test_password(args.inputFile, password, args.fileNumber):
++                with results_lock:
++                    results.append(password)
++        threads = []
++        for password in passwords:
++            t = threading.Thread(target=worker, args=(password,))
++            threads.append(t)
++            t.start()
++        for t in threads:
++            t.join()
++        if results:
++            elapsed = time.time() - start_time
++            print(f"Time elapsed: {elapsed:.6f}s")
++            print(f"Password found:{results[0]}")
++            sys.exit(0)
++        elapsed = time.time() - start_time
++        print(f"Time elapsed: {elapsed:.6f}s")
++        print("Password not found")
++        sys.exit(1)
++
++if __name__ == '__main__':
++    main()

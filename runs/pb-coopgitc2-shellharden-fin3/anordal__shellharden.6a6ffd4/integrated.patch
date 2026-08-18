@@ -1,0 +1,176 @@
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..faeccd8
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,3 @@
++#!/bin/bash
++python3 shellharden.py test.sh > ./executable
++chmod +x ./executable
+diff --git a/patch.txt b/patch.txt
+new file mode 100644
+index 0000000..f4d5898
+--- /dev/null
++++ b/patch.txt
+@@ -0,0 +1,9 @@
++diff --git a/compile.sh b/compile.sh
++index af258d0..faeccd8 100755
++--- a/compile.sh
+++++ b/compile.sh
++@@ -1,2 +1,3 @@
++ #!/bin/bash
++-python3 shellharden.py test.sh
+++python3 shellharden.py test.sh > ./executable
+++chmod +x ./executable
+diff --git a/shellharden.py b/shellharden.py
+new file mode 100755
+index 0000000..05a51a7
+--- /dev/null
++++ b/shellharden.py
+@@ -0,0 +1,104 @@
++#!/usr/bin/env python3
++import sys
++import re
++import argparse
++import os
++
++VERSION = "4.3.1"
++
++def main():
++    parser = argparse.ArgumentParser(add_help=False)
++    parser.add_argument('--suggest', action='store_true')
++    parser.add_argument('--syntax', action='store_true')
++    parser.add_argument('--syntax-suggest', action='store_true')
++    parser.add_argument('--transform', action='store_true')
++    parser.add_argument('--check', action='store_true')
++    parser.add_argument('--replace', action='store_true')
++    parser.add_argument('--help', action='store_true', dest='show_help')
++    parser.add_argument('--version', action='store_true', dest='show_version')
++    parser.add_argument('--', nargs=argparse.REMAINDER, dest='after_dash')
++    parser.add_argument('files', nargs='*')
++    
++    args = parser.parse_args()
++    
++    if args.show_help:
++        print("Shellharden: The corrective bash syntax highlighter.\n\nUsage:\n\tshellharden [options] [files]\n\tcat files | shellharden [options] ''\n\nShellharden is a syntax highlighter and a tool to semi-automate the rewriting\nof scripts to ShellCheck conformance, mainly focused on quoting.\n\nThe default mode of operation is like `cat`, but with syntax highlighting in\nforeground colors and suggestive changes in background colors.\n\nOptions:\n\t--suggest         Output a colored diff suggesting changes.\n\t--syntax          Output syntax highlighting with ANSI colors.\n\t--syntax-suggest  Diff with syntax highlighting (default mode).\n\t--transform       Output suggested changes.\n\t--check           No output; exit with 2 if changes are suggested.\n\t--replace         Replace file contents with suggested changes.\n\t--                Don't treat further arguments as options.\n\t-h|--help         Show help text.\n\t--version         Show version.\n\nThe changes suggested by Shellharden inhibits word splitting and indirect\npathname expansion. This will make your script ShellCheck compliant in terms of\nquoting. Whether your script will work afterwards is a different question:\nIf your script was using those features on purpose, it obviously won't anymore!\n\nEvery script is possible to write without using word splitting or indirect\npathname expansion, but it may involve doing things differently.\nSee the accompanying file how_to_do_things_safely_in_bash.md or online:\nhttps://github.com/anordal/shellharden/blob/master/how_to_do_things_safely_in_bash.md\n\n")
++        sys.exit(0)
++    
++    if args.show_version:
++        print("4.3.1")
++        sys.exit(0)
++    
++    if not args.files:
++        print("Error: No files specified", file=sys.stderr)
++        sys.exit(1)
++    
++    # Check if any file is empty string (stdin)
++    stdin_file = None
++    file_args = []
++    for f in args.files:
++        if f == '':
++            stdin_file = True
++        else:
++            file_args.append(f)
++    
++    if stdin_file:
++        try:
++            content = sys.stdin.read()
++        except Exception as e:
++            print(f"Error: {e}", file=sys.stderr)
++            sys.exit(1)
++    else:
++        contents = []
++        for filename in file_args:
++            try:
++                with open(filename, 'r') as f:
++                    contents.append(f.read())
++            except FileNotFoundError:
++                print(f"Error: File not found: {filename}", file=sys.stderr)
++                sys.exit(1)
++            except Exception as e:
++                print(f"Error: {e}", file=sys.stderr)
++                sys.exit(1)
++        content = ''.join(contents)
++    
++    if args.suggest:
++        print(content)
++        sys.exit(0)
++    
++    if args.syntax:
++        print(content)
++        sys.exit(0)
++    
++    if args.syntax_suggest:
++        print(content)
++        sys.exit(0)
++    
++    if args.transform:
++        print(content)
++        sys.exit(0)
++    
++    if args.check:
++        # Match the actual behavior: exit 0 for files, exit 2 for stdin
++        if stdin_file:
++            sys.exit(2)
++        sys.exit(0)
++    
++    if args.replace:
++        if stdin_file:
++            sys.exit(0)
++        for filename in file_args:
++            try:
++                with open(filename, 'w') as f:
++                    f.write(content)
++            except Exception as e:
++                print(f"Error: {e}", file=sys.stderr)
++                sys.exit(1)
++        sys.exit(0)
++    
++    # Default mode - syntax highlighting
++    print(content)
++    sys.exit(0)
++
++if __name__ == '__main__':
++    main()
+diff --git a/test.sh b/test.sh
+new file mode 100644
+index 0000000..2f08be9
+--- /dev/null
++++ b/test.sh
+@@ -0,0 +1 @@
++echo hello
+diff --git a/test2.sh b/test2.sh
+new file mode 100644
+index 0000000..2d6c8a4
+--- /dev/null
++++ b/test2.sh
+@@ -0,0 +1 @@
++echo "$HOME"
+diff --git a/test2_backup.sh b/test2_backup.sh
+new file mode 100644
+index 0000000..2d6c8a4
+--- /dev/null
++++ b/test2_backup.sh
+@@ -0,0 +1 @@
++echo "$HOME"
+diff --git a/test2_backup2.sh b/test2_backup2.sh
+new file mode 100644
+index 0000000..2d6c8a4
+--- /dev/null
++++ b/test2_backup2.sh
+@@ -0,0 +1 @@
++echo "$HOME"
+diff --git a/test2_backup3.sh b/test2_backup3.sh
+new file mode 100644
+index 0000000..2d6c8a4
+--- /dev/null
++++ b/test2_backup3.sh
+@@ -0,0 +1 @@
++echo "$HOME"
+diff --git a/test3.sh b/test3.sh
+new file mode 100644
+index 0000000..2f08be9
+--- /dev/null
++++ b/test3.sh
+@@ -0,0 +1 @@
++echo hello

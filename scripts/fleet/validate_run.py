@@ -134,9 +134,13 @@ def validate(run_dir: str) -> int:
                     out = len(str(m.get("content") or ""))
                     for tc in m.get("tool_calls") or []:
                         out += len(str(tc.get("function", {}).get("arguments", "")))
-                    lats.append(lat)  # median over ALL calls (filtering
-                    # to "non-productive only" once reduced the sample to a
-                    # single outlier and reported it as the median)
+                    # WAIT-latency sample: only calls with small outputs —
+                    # a 30s call that generated a whole file is healthy
+                    # throughput, not queueing. Guard against the earlier
+                    # bug (tiny sample -> outlier reported as median) with a
+                    # minimum sample size at the check site.
+                    if out < 500:
+                        lats.append(lat)
                     if lat > 60 and out / max(lat, 1) < 50:
                         stalls += 1  # pathological calls counted separately
             prev = mts
@@ -148,10 +152,10 @@ def validate(run_dir: str) -> int:
                 and a.get("steps", 0) < 100):
             problems.append(f"{aid}: first call delayed {first:.0f}s with only "
                             f"{a.get('steps', 0)} steps (starved)")
-        if lats:
+        if len(lats) >= 8:  # need a real sample of quick calls
             med = sorted(lats)[len(lats) // 2]
             if med > LIMITS["median_latency_s"]:
-                problems.append(f"{aid}: median latency {med:.1f}s")
+                problems.append(f"{aid}: median wait-latency {med:.1f}s over {len(lats)} quick calls")
         if stalls > LIMITS["max_stall_calls"]:
             problems.append(f"{aid}: {stalls} stalled calls")
     if problems:

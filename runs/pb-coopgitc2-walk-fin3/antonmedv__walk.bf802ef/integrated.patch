@@ -1,0 +1,924 @@
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..2146abd
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,3 @@
++#!/bin/bash
++set -e
++go build -o executable main.go
+diff --git a/main.go b/main.go
+new file mode 100644
+index 0000000..1721c62
+--- /dev/null
++++ b/main.go
+@@ -0,0 +1,444 @@
++package main
++
++import (
++	"bufio"
++	"fmt"
++	"os"
++	"path/filepath"
++	"strings"
++	
++)
++
++const Version = "v1.13.0"
++
++func main() {
++	if len(os.Args) > 1 {
++		if os.Args[1] == "--help" || os.Args[1] == "-h" {
++			printHelp()
++			os.Exit(0)
++		}
++		if os.Args[1] == "--version" || os.Args[1] == "-v" {
++			fmt.Println(Version)
++			os.Exit(0)
++		}
++	}
++
++	// Check for TTY
++	if !hasTTY() {
++		fmt.Println("Error: walk requires a terminal")
++		os.Exit(1)
++	}
++
++	// Parse flags
++	flags := parseFlags(os.Args[1:])
++	
++	// Get initial path
++	path := "."
++	if len(os.Args) > 2 {
++		path = os.Args[2]
++	}
++	
++	// Initialize app
++	app := NewApp(flags, path)
++	app.Run()
++}
++
++func hasTTY() bool {
++	f, err := os.OpenFile("/dev/tty", os.O_RDONLY, 0)
++	if err != nil {
++		return false
++	}
++	f.Close()
++	return true
++}
++
++func parseFlags(args []string) Flags {
++	flags := Flags{}
++	for _, arg := range args {
++		switch arg {
++		case "--icons":
++			flags.icons = true
++		case "--dir-only":
++			flags.dirOnly = true
++		case "--hide-hidden":
++			flags.hideHidden = true
++		case "--preview":
++			flags.preview = true
++		case "--with-border":
++			flags.withBorder = true
++		case "--fuzzy":
++			flags.fuzzy = true
++		}
++	}
++	return flags
++}
++
++type Flags struct {
++	icons       bool
++	dirOnly     bool
++	hideHidden  bool
++	preview     bool
++	withBorder  bool
++	fuzzy       bool
++}
++
++func printHelp() {
++	fmt.Println(`
++  walk v1.13.0
++
++  Usage: walk [path]
++
++    arrows, hjkl  Move cursor
++    enter         Enter directory
++    backspace     Exit directory
++    space         Toggle preview
++    esc, q        Exit with cd
++    ctrl+c        Exit without cd
++    /             Fuzzy search
++    d, delete     Delete file or dir
++    y, copy       Copy to clipboard
++    .             Hide hidden files
++    ?             Show help
++
++  Flags:
++
++    --icons        display icons
++    --dir-only     show dirs only
++    --hide-hidden  hide hidden files
++    --preview      display preview
++    --with-border  preview with border
++    --fuzzy        fuzzy mode
++`)
++}
++
++type App struct {
++	flags Flags
++	path  string
++	
++	// State
++	files      []string
++	selected   int
++	previewOn  bool
++	searchMode bool
++	searchText string
++	
++	// Clipboard
++	clipboard string
++	
++	// Undo stack
++	undoStack []string
++	
++	// TTY
++	tty *os.File
++	
++	// Status bar expression
++	statusBarExpr string
++}
++
++func NewApp(flags Flags, path string) *App {
++	app := &App{
++		flags: flags,
++		path:  path,
++	}
++	return app
++}
++
++func (a *App) Run() {
++	// Setup TTY
++	a.setupTTY()
++	
++	// Load status bar expression
++	a.loadStatusBarExpr()
++	
++	// Load files
++	a.loadFiles()
++	
++	// Start event loop
++	a.runEventLoop()
++}
++
++func (a *App) setupTTY() {
++	// Open TTY
++	var err error
++	a.tty, err = os.OpenFile("/dev/tty", os.O_RDWR, 0)
++	if err != nil {
++		fmt.Fprintf(os.Stderr, "Error: could not open a new TTY: %v\n", err)
++		os.Exit(1)
++	}
++}
++
++func (a *App) loadStatusBarExpr() {
++	a.statusBarExpr = os.Getenv("WALK_STATUS_BAR")
++}
++
++func (a *App) loadFiles() {
++	files, err := a.listFiles(a.path)
++	if err != nil {
++		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
++		os.Exit(1)
++	}
++	
++	a.files = files
++	a.selected = 0
++	a.updateList()
++}
++
++func (a *App) listFiles(path string) ([]string, error) {
++	entries, err := os.ReadDir(path)
++	if err != nil {
++		return nil, err
++	}
++	
++	var files []string
++	for _, entry := range entries {
++		if a.shouldHide(entry) {
++			continue
++		}
++		files = append(files, entry.Name())
++	}
++	
++	return files, nil
++}
++
++func (a *App) shouldHide(entry os.DirEntry) bool {
++	if a.flags.dirOnly {
++		return !entry.IsDir()
++	}
++	if a.flags.hideHidden {
++		return strings.HasPrefix(entry.Name(), ".")
++	}
++	return false
++}
++
++func (a *App) updateList() {
++	a.files, _ = a.listFiles(a.path)
++	a.selected = 0
++}
++
++func (a *App) runEventLoop() {
++	// Read input from TTY
++	reader := bufio.NewReader(a.tty)
++	
++	for {
++		// Check for Ctrl+C
++		if a.checkInterrupt() {
++			break
++		}
++		
++		// Read key
++		key, _, err := reader.ReadRune()
++		if err != nil {
++			break
++		}
++		
++		// Handle key
++		a.handleKey(key)
++	}
++}
++
++func (a *App) checkInterrupt() bool {
++	// Check if terminal received SIGINT
++	return false
++}
++
++func (a *App) handleKey(key rune) {
++	switch key {
++	case '\x1b': // Escape
++		a.exitWithCD()
++	case 'q':
++		a.exitWithCD()
++	case '\r': // Enter
++		a.enterDirectory()
++	case '\x7f': // Backspace
++		a.goUp()
++	case ' ':
++		a.togglePreview()
++	case '/':
++		a.startSearch()
++	case 'd':
++		a.deleteFile()
++	case 'u':
++		a.undoDelete()
++	case 'y':
++		a.yank()
++	case '.':
++		a.toggleHidden()
++	case '?':
++		a.showHelp()
++	case 'h', 'j', 'k', 'l':
++		a.handleHJKL(key)
++	case '\x03': // Ctrl+C
++		os.Exit(0)
++	}
++}
++
++func (a *App) handleHJKL(key rune) {
++	switch key {
++	case 'h':
++		a.moveLeft()
++	case 'j':
++		a.moveDown()
++	case 'k':
++		a.moveUp()
++	case 'l':
++		a.moveRight()
++	}
++}
++
++func (a *App) moveUp() {
++	if a.selected > 0 {
++		a.selected--
++		a.updateList()
++	}
++}
++
++func (a *App) moveDown() {
++	if a.selected < len(a.files)-1 {
++		a.selected++
++		a.updateList()
++	}
++}
++
++func (a *App) moveLeft() {
++	if a.selected > 0 {
++		a.selected = 0
++		a.updateList()
++	}
++}
++
++func (a *App) moveRight() {
++	if a.selected < len(a.files)-1 {
++		a.selected = len(a.files) - 1
++		a.updateList()
++	}
++}
++
++func (a *App) enterDirectory() {
++	if a.selected >= 0 && a.selected < len(a.files) {
++		file := a.files[a.selected]
++		newPath := filepath.Join(a.path, file)
++		
++		if info, err := os.Stat(newPath); err == nil && info.IsDir() {
++			a.path = newPath
++			a.files = []string{}
++			a.selected = 0
++			a.loadFiles()
++		}
++	}
++}
++
++func (a *App) goUp() {
++	parent := filepath.Dir(a.path)
++	if parent != a.path {
++		a.path = parent
++		a.files = []string{}
++		a.selected = 0
++		a.loadFiles()
++	}
++}
++
++func (a *App) exitWithCD() {
++	// Change to selected directory
++	if a.selected >= 0 && a.selected < len(a.files) {
++		file := a.files[a.selected]
++		newPath := filepath.Join(a.path, file)
++		
++		if info, err := os.Stat(newPath); err == nil && info.IsDir() {
++			os.Chdir(newPath)
++		}
++	}
++	
++	// Exit
++	os.Exit(0)
++}
++
++func (a *App) togglePreview() {
++	a.previewOn = !a.previewOn
++}
++
++func (a *App) startSearch() {
++	a.searchMode = true
++	a.searchText = ""
++}
++
++func (a *App) deleteFile() {
++	if a.selected >= 0 && a.selected < len(a.files) {
++		file := a.files[a.selected]
++		path := filepath.Join(a.path, file)
++		
++		if info, err := os.Stat(path); err == nil {
++			if info.IsDir() {
++				a.deleteDir(path)
++			} else {
++				a.deleteFileInternal(path)
++			}
++		}
++	}
++}
++
++func (a *App) deleteFileInternal(path string) {
++	os.Remove(path)
++	a.undoStack = append(a.undoStack, path)
++	a.loadFiles()
++}
++
++func (a *App) deleteDir(path string) {
++	os.RemoveAll(path)
++	a.undoStack = append(a.undoStack, path)
++	a.loadFiles()
++}
++
++func (a *App) undoDelete() {
++	if len(a.undoStack) > 0 {
++		path := a.undoStack[len(a.undoStack)-1]
++		a.undoStack = a.undoStack[:len(a.undoStack)-1]
++		
++		if info, err := os.Stat(path); err == nil && info.IsDir() {
++			os.MkdirAll(path, 0755)
++		} else {
++			os.WriteFile(path, []byte{}, 0644)
++		}
++		a.loadFiles()
++	}
++}
++
++func (a *App) yank() {
++	if a.selected >= 0 && a.selected < len(a.files) {
++		file := a.files[a.selected]
++		a.clipboard = file
++	}
++}
++
++func (a *App) toggleHidden() {
++	a.flags.hideHidden = !a.flags.hideHidden
++	a.loadFiles()
++}
++
++func (a *App) showHelp() {
++	fmt.Println(`
++  walk v1.13.0
++
++  Usage: walk [path]
++
++    arrows, hjkl  Move cursor
++    enter         Enter directory
++    backspace     Exit directory
++    space         Toggle preview
++    esc, q        Exit with cd
++    ctrl+c        Exit without cd
++    /             Fuzzy search
++    d, delete     Delete file or dir
++    y, copy       Copy to clipboard
++    .             Hide hidden files
++    ?             Show help
++
++  Flags:
++
++    --icons        display icons
++    --dir-only     show dirs only
++    --hide-hidden  hide hidden files
++    --preview      display preview
++    --with-border  preview with border
++    --fuzzy        fuzzy mode
++`)
++}
+diff --git a/patch.txt b/patch.txt
+new file mode 100644
+index 0000000..4bb8c39
+--- /dev/null
++++ b/patch.txt
+@@ -0,0 +1,459 @@
++diff --git a/compile.sh b/compile.sh
++new file mode 100755
++index 0000000..2146abd
++--- /dev/null
+++++ b/compile.sh
++@@ -0,0 +1,3 @@
+++#!/bin/bash
+++set -e
+++go build -o executable main.go
++diff --git a/main.go b/main.go
++new file mode 100644
++index 0000000..1721c62
++--- /dev/null
+++++ b/main.go
++@@ -0,0 +1,444 @@
+++package main
+++
+++import (
+++	"bufio"
+++	"fmt"
+++	"os"
+++	"path/filepath"
+++	"strings"
+++	
+++)
+++
+++const Version = "v1.13.0"
+++
+++func main() {
+++	if len(os.Args) > 1 {
+++		if os.Args[1] == "--help" || os.Args[1] == "-h" {
+++			printHelp()
+++			os.Exit(0)
+++		}
+++		if os.Args[1] == "--version" || os.Args[1] == "-v" {
+++			fmt.Println(Version)
+++			os.Exit(0)
+++		}
+++	}
+++
+++	// Check for TTY
+++	if !hasTTY() {
+++		fmt.Println("Error: walk requires a terminal")
+++		os.Exit(1)
+++	}
+++
+++	// Parse flags
+++	flags := parseFlags(os.Args[1:])
+++	
+++	// Get initial path
+++	path := "."
+++	if len(os.Args) > 2 {
+++		path = os.Args[2]
+++	}
+++	
+++	// Initialize app
+++	app := NewApp(flags, path)
+++	app.Run()
+++}
+++
+++func hasTTY() bool {
+++	f, err := os.OpenFile("/dev/tty", os.O_RDONLY, 0)
+++	if err != nil {
+++		return false
+++	}
+++	f.Close()
+++	return true
+++}
+++
+++func parseFlags(args []string) Flags {
+++	flags := Flags{}
+++	for _, arg := range args {
+++		switch arg {
+++		case "--icons":
+++			flags.icons = true
+++		case "--dir-only":
+++			flags.dirOnly = true
+++		case "--hide-hidden":
+++			flags.hideHidden = true
+++		case "--preview":
+++			flags.preview = true
+++		case "--with-border":
+++			flags.withBorder = true
+++		case "--fuzzy":
+++			flags.fuzzy = true
+++		}
+++	}
+++	return flags
+++}
+++
+++type Flags struct {
+++	icons       bool
+++	dirOnly     bool
+++	hideHidden  bool
+++	preview     bool
+++	withBorder  bool
+++	fuzzy       bool
+++}
+++
+++func printHelp() {
+++	fmt.Println(`
+++  walk v1.13.0
+++
+++  Usage: walk [path]
+++
+++    arrows, hjkl  Move cursor
+++    enter         Enter directory
+++    backspace     Exit directory
+++    space         Toggle preview
+++    esc, q        Exit with cd
+++    ctrl+c        Exit without cd
+++    /             Fuzzy search
+++    d, delete     Delete file or dir
+++    y, copy       Copy to clipboard
+++    .             Hide hidden files
+++    ?             Show help
+++
+++  Flags:
+++
+++    --icons        display icons
+++    --dir-only     show dirs only
+++    --hide-hidden  hide hidden files
+++    --preview      display preview
+++    --with-border  preview with border
+++    --fuzzy        fuzzy mode
+++`)
+++}
+++
+++type App struct {
+++	flags Flags
+++	path  string
+++	
+++	// State
+++	files      []string
+++	selected   int
+++	previewOn  bool
+++	searchMode bool
+++	searchText string
+++	
+++	// Clipboard
+++	clipboard string
+++	
+++	// Undo stack
+++	undoStack []string
+++	
+++	// TTY
+++	tty *os.File
+++	
+++	// Status bar expression
+++	statusBarExpr string
+++}
+++
+++func NewApp(flags Flags, path string) *App {
+++	app := &App{
+++		flags: flags,
+++		path:  path,
+++	}
+++	return app
+++}
+++
+++func (a *App) Run() {
+++	// Setup TTY
+++	a.setupTTY()
+++	
+++	// Load status bar expression
+++	a.loadStatusBarExpr()
+++	
+++	// Load files
+++	a.loadFiles()
+++	
+++	// Start event loop
+++	a.runEventLoop()
+++}
+++
+++func (a *App) setupTTY() {
+++	// Open TTY
+++	var err error
+++	a.tty, err = os.OpenFile("/dev/tty", os.O_RDWR, 0)
+++	if err != nil {
+++		fmt.Fprintf(os.Stderr, "Error: could not open a new TTY: %v\n", err)
+++		os.Exit(1)
+++	}
+++}
+++
+++func (a *App) loadStatusBarExpr() {
+++	a.statusBarExpr = os.Getenv("WALK_STATUS_BAR")
+++}
+++
+++func (a *App) loadFiles() {
+++	files, err := a.listFiles(a.path)
+++	if err != nil {
+++		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+++		os.Exit(1)
+++	}
+++	
+++	a.files = files
+++	a.selected = 0
+++	a.updateList()
+++}
+++
+++func (a *App) listFiles(path string) ([]string, error) {
+++	entries, err := os.ReadDir(path)
+++	if err != nil {
+++		return nil, err
+++	}
+++	
+++	var files []string
+++	for _, entry := range entries {
+++		if a.shouldHide(entry) {
+++			continue
+++		}
+++		files = append(files, entry.Name())
+++	}
+++	
+++	return files, nil
+++}
+++
+++func (a *App) shouldHide(entry os.DirEntry) bool {
+++	if a.flags.dirOnly {
+++		return !entry.IsDir()
+++	}
+++	if a.flags.hideHidden {
+++		return strings.HasPrefix(entry.Name(), ".")
+++	}
+++	return false
+++}
+++
+++func (a *App) updateList() {
+++	a.files, _ = a.listFiles(a.path)
+++	a.selected = 0
+++}
+++
+++func (a *App) runEventLoop() {
+++	// Read input from TTY
+++	reader := bufio.NewReader(a.tty)
+++	
+++	for {
+++		// Check for Ctrl+C
+++		if a.checkInterrupt() {
+++			break
+++		}
+++		
+++		// Read key
+++		key, _, err := reader.ReadRune()
+++		if err != nil {
+++			break
+++		}
+++		
+++		// Handle key
+++		a.handleKey(key)
+++	}
+++}
+++
+++func (a *App) checkInterrupt() bool {
+++	// Check if terminal received SIGINT
+++	return false
+++}
+++
+++func (a *App) handleKey(key rune) {
+++	switch key {
+++	case '\x1b': // Escape
+++		a.exitWithCD()
+++	case 'q':
+++		a.exitWithCD()
+++	case '\r': // Enter
+++		a.enterDirectory()
+++	case '\x7f': // Backspace
+++		a.goUp()
+++	case ' ':
+++		a.togglePreview()
+++	case '/':
+++		a.startSearch()
+++	case 'd':
+++		a.deleteFile()
+++	case 'u':
+++		a.undoDelete()
+++	case 'y':
+++		a.yank()
+++	case '.':
+++		a.toggleHidden()
+++	case '?':
+++		a.showHelp()
+++	case 'h', 'j', 'k', 'l':
+++		a.handleHJKL(key)
+++	case '\x03': // Ctrl+C
+++		os.Exit(0)
+++	}
+++}
+++
+++func (a *App) handleHJKL(key rune) {
+++	switch key {
+++	case 'h':
+++		a.moveLeft()
+++	case 'j':
+++		a.moveDown()
+++	case 'k':
+++		a.moveUp()
+++	case 'l':
+++		a.moveRight()
+++	}
+++}
+++
+++func (a *App) moveUp() {
+++	if a.selected > 0 {
+++		a.selected--
+++		a.updateList()
+++	}
+++}
+++
+++func (a *App) moveDown() {
+++	if a.selected < len(a.files)-1 {
+++		a.selected++
+++		a.updateList()
+++	}
+++}
+++
+++func (a *App) moveLeft() {
+++	if a.selected > 0 {
+++		a.selected = 0
+++		a.updateList()
+++	}
+++}
+++
+++func (a *App) moveRight() {
+++	if a.selected < len(a.files)-1 {
+++		a.selected = len(a.files) - 1
+++		a.updateList()
+++	}
+++}
+++
+++func (a *App) enterDirectory() {
+++	if a.selected >= 0 && a.selected < len(a.files) {
+++		file := a.files[a.selected]
+++		newPath := filepath.Join(a.path, file)
+++		
+++		if info, err := os.Stat(newPath); err == nil && info.IsDir() {
+++			a.path = newPath
+++			a.files = []string{}
+++			a.selected = 0
+++			a.loadFiles()
+++		}
+++	}
+++}
+++
+++func (a *App) goUp() {
+++	parent := filepath.Dir(a.path)
+++	if parent != a.path {
+++		a.path = parent
+++		a.files = []string{}
+++		a.selected = 0
+++		a.loadFiles()
+++	}
+++}
+++
+++func (a *App) exitWithCD() {
+++	// Change to selected directory
+++	if a.selected >= 0 && a.selected < len(a.files) {
+++		file := a.files[a.selected]
+++		newPath := filepath.Join(a.path, file)
+++		
+++		if info, err := os.Stat(newPath); err == nil && info.IsDir() {
+++			os.Chdir(newPath)
+++		}
+++	}
+++	
+++	// Exit
+++	os.Exit(0)
+++}
+++
+++func (a *App) togglePreview() {
+++	a.previewOn = !a.previewOn
+++}
+++
+++func (a *App) startSearch() {
+++	a.searchMode = true
+++	a.searchText = ""
+++}
+++
+++func (a *App) deleteFile() {
+++	if a.selected >= 0 && a.selected < len(a.files) {
+++		file := a.files[a.selected]
+++		path := filepath.Join(a.path, file)
+++		
+++		if info, err := os.Stat(path); err == nil {
+++			if info.IsDir() {
+++				a.deleteDir(path)
+++			} else {
+++				a.deleteFileInternal(path)
+++			}
+++		}
+++	}
+++}
+++
+++func (a *App) deleteFileInternal(path string) {
+++	os.Remove(path)
+++	a.undoStack = append(a.undoStack, path)
+++	a.loadFiles()
+++}
+++
+++func (a *App) deleteDir(path string) {
+++	os.RemoveAll(path)
+++	a.undoStack = append(a.undoStack, path)
+++	a.loadFiles()
+++}
+++
+++func (a *App) undoDelete() {
+++	if len(a.undoStack) > 0 {
+++		path := a.undoStack[len(a.undoStack)-1]
+++		a.undoStack = a.undoStack[:len(a.undoStack)-1]
+++		
+++		if info, err := os.Stat(path); err == nil && info.IsDir() {
+++			os.MkdirAll(path, 0755)
+++		} else {
+++			os.WriteFile(path, []byte{}, 0644)
+++		}
+++		a.loadFiles()
+++	}
+++}
+++
+++func (a *App) yank() {
+++	if a.selected >= 0 && a.selected < len(a.files) {
+++		file := a.files[a.selected]
+++		a.clipboard = file
+++	}
+++}
+++
+++func (a *App) toggleHidden() {
+++	a.flags.hideHidden = !a.flags.hideHidden
+++	a.loadFiles()
+++}
+++
+++func (a *App) showHelp() {
+++	fmt.Println(`
+++  walk v1.13.0
+++
+++  Usage: walk [path]
+++
+++    arrows, hjkl  Move cursor
+++    enter         Enter directory
+++    backspace     Exit directory
+++    space         Toggle preview
+++    esc, q        Exit with cd
+++    ctrl+c        Exit without cd
+++    /             Fuzzy search
+++    d, delete     Delete file or dir
+++    y, copy       Copy to clipboard
+++    .             Hide hidden files
+++    ?             Show help
+++
+++  Flags:
+++
+++    --icons        display icons
+++    --dir-only     show dirs only
+++    --hide-hidden  hide hidden files
+++    --preview      display preview
+++    --with-border  preview with border
+++    --fuzzy        fuzzy mode
+++`)
+++}

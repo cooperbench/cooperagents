@@ -1,0 +1,172 @@
+diff --git a/__pycache__/main.cpython-310.pyc b/__pycache__/main.cpython-310.pyc
+new file mode 100644
+index 0000000..8fe56e9
+Binary files /dev/null and b/__pycache__/main.cpython-310.pyc differ
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..8cd2337
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,8 @@
++#!/bin/bash
++# Compile script for fx JSON viewer
++# Creates executable from Python source
++
++python3 -m py_compile main.py
++chmod +x main.py
++rm -f ./executable
++cp main.py ./executable
+diff --git a/main.py b/main.py
+new file mode 100755
+index 0000000..9447e51
+--- /dev/null
++++ b/main.py
+@@ -0,0 +1,145 @@
++#!/usr/bin/env python3
++"""
++fx - A JSON viewer
++Based on github.com/antonmedv/fx
++"""
++
++import sys
++import json
++import subprocess
++import os
++
++VERSION = "39.2.0"
++THEMES = [
++    "0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
++    "🔥", "🔵", "🟢", "🍵"
++]
++
++def print_help():
++    help_text = """\r\n  fx 39.2.0\r\n    Terminal JSON viewer\r\n\r\n  Usage\r\n    fx data.json\r\n    fx data.json .field\r\n    curl ... | fx\r\n\r\n  Flags\r\n    -h, --help            print help\r\n    -v, --version         print version\r\n    --themes              print themes\r\n    --comp <shell>        print completion script\r\n    -r, --raw             treat input as a raw string\r\n    -s, --slurp           read all inputs into an array\r\n    --yaml                parse input as YAML\r\n    --toml                parse input as TOML\r\n    --strict              strict mode\r\n    --no-inline           disable inlining in output\r\n    --game-of-life        play the game of life\r\n\r\n  More info\r\n    https://fx.wtf\r\n\r\n  Author\r\n    Anton Medvedev <anton@medv.io>\r\n\r\n\r\n"""
++    print(help_text, end='')
++
++def print_themes():
++    sample_json = {
++        "string": "Fox jumps over the lazy dog",
++        "number": 1234567890,
++        "boolean": True,
++        "null": None,
++        "collapsed": {"preview": "..."}
++    }
++    for theme in THEMES:
++        print(f'export FX_THEME="{theme}"')
++        print(json.dumps(sample_json, indent=2))
++    print()
++
++def print_compilation_command(lang):
++    print("complete -o filenames -C fx fx")
++
++def format_json(data, theme="0"):
++    """Format JSON with optional theme"""
++    return json.dumps(data, indent=2)
++
++def main():
++    # Parse arguments manually to match original behavior
++    args = sys.argv[1:]
++    
++    # Check for --help
++    if args and args[0] in ['-h', '--help']:
++        print_help()
++        sys.exit(0)
++    
++    # Check for --version
++    if args and args[0] in ['-v', '--version']:
++        print(VERSION)
++        sys.exit(0)
++    
++    # Check for --themes
++    if args and args[0] == '--themes':
++        print_themes()
++        sys.exit(0)
++    
++    # Check for --comp
++    if args and args[0] == '--comp':
++        if len(args) < 2:
++            print("Usage: fx --comp <language>")
++            sys.exit(1)
++        print_compilation_command(args[1])
++        sys.exit(0)
++    
++    # Check for -r (raw)
++    raw_mode = False
++    if args and (args[0] == '-r' or args[0] == '--raw'):
++        raw_mode = True
++        args = args[1:]
++    
++    # Check for -s (slurp)
++    slurp_mode = False
++    if args and (args[0] == '-s' or args[0] == '--slurp'):
++        slurp_mode = True
++        args = args[1:]
++    
++    # Check for --yaml
++    yaml_mode = False
++    if args and args[0] == '--yaml':
++        yaml_mode = True
++        args = args[1:]
++    
++    # Check for --toml
++    toml_mode = False
++    if args and args[0] == '--toml':
++        toml_mode = True
++        args = args[1:]
++    
++    # Check for --strict
++    strict_mode = False
++    if args and args[0] == '--strict':
++        strict_mode = True
++        args = args[1:]
++    
++    # Check for --no-inline
++    no_inline = False
++    if args and args[0] == '--no-inline':
++        no_inline = True
++        args = args[1:]
++    
++    # Check for --game-of-life
++    game_of_life = False
++    if args and args[0] == '--game-of-life':
++        game_of_life = True
++        args = args[1:]
++    
++    # Check for file input
++    filename = None
++    if args:
++        filename = args[0]
++        args = args[1:]
++    
++    # Read data
++    data = ""
++    if filename:
++        try:
++            with open(filename, 'r') as f:
++                data = f.read()
++        except FileNotFoundError:
++            print(f"Error: File not found: {filename}")
++            sys.exit(1)
++        except Exception as e:
++            print(f"Error: {e}")
++            sys.exit(1)
++    else:
++        # Read from stdin
++        data = sys.stdin.read()
++    
++    # Parse JSON
++    try:
++        parsed = json.loads(data)
++    except json.JSONDecodeError as e:
++        print(f"Error: Invalid JSON: {e}")
++        sys.exit(1)
++    
++    # Output formatted JSON
++    print(format_json(parsed))
++    sys.exit(0)
++
++if __name__ == "__main__":
++    main()
+diff --git a/patch.txt b/patch.txt
+new file mode 100644
+index 0000000..e69de29

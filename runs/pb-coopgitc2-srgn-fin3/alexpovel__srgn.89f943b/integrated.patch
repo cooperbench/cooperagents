@@ -1,0 +1,1385 @@
+diff --git a/Cargo.toml b/Cargo.toml
+new file mode 100644
+index 0000000..ecfdf50
+--- /dev/null
++++ b/Cargo.toml
+@@ -0,0 +1,22 @@
++[package]
++name = "srgn"
++version = "0.14.1"
++edition = "2021"
++
++[[bin]]
++name = "executable"
++path = "src/main.rs"
++
++[dependencies]
++clap = { version = "4", features = ["derive"] }
++regex = "1"
++unicode-normalization = "0.1"
++unicode-segmentation = "1"
++tree-sitter = "0.22"
++tree-sitter-c = "0.21"
++tree-sitter-python = "0.21"
++tree-sitter-rust = "0.21"
++tree-sitter-go = "0.21"
++tree-sitter-typescript = "0.21"
++tree-sitter-hcl = "0.20"
++glob = "0.3"
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..b986356
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,4 @@
++#!/bin/bash
++set -e
++cp src/main.sh ./executable
++chmod +x ./executable
+diff --git a/src/main.rs b/src/main.rs
+new file mode 100644
+index 0000000..420bea3
+--- /dev/null
++++ b/src/main.rs
+@@ -0,0 +1,817 @@
++use clap::{Parser, Subcommand, ValueEnum};
++use regex::{Regex, RegexBuilder};
++use std::collections::HashMap;
++use std::env;
++use std::fs;
++use std::io::{self, Read, Write};
++use std::path::Path;
++use std::process;
++
++#[derive(Parser, Debug)]
++#[command(name = "executable")]
++#[command(author = "Alex Povel")]
++#[command(version = "0.14.1")]
++#[command(about = "A grep-like tool which understands source code syntax and allows for manipulation in addition to search")]
++struct Args {
++    /// Scope to apply to, as a regular expression pattern.
++    /// If string literal mode is requested, will be interpreted as a literal string.
++    /// Actions will apply their transformations within this scope only.
++    /// The default is the global scope, matching the entire input. Where that default is meaningless or dangerous (e.g., deletion), this argument is required.
++    #[arg(default_value = ".*")]
++    scope: Option<String>,
++
++    /// Print shell completions for the given shell.
++    #[arg(long, value_name = "SHELL")]
++    completions: Option<String>,
++
++    /// Uppercase anything in scope.
++    #[arg(short = 'u', long = "upper", env = "UPPER")]
++    upper: bool,
++
++    /// Lowercase anything in scope.
++    #[arg(short = 'l', long = "lower", env = "LOWER")]
++    lower: bool,
++
++    /// Titlecase anything in scope.
++    #[arg(short = 't', long = "titlecase", env = "TITLECASE")]
++    titlecase: bool,
++
++    /// Normalize (Normalization Form D) anything in scope, and throw away marks.
++    #[arg(short = 'n', long = "normalize", env = "NORMALIZE")]
++    normalize: bool,
++
++    /// Perform substitutions on German words, such as 'Abenteuergruesse' to 'Abenteuergrüße', for anything in scope.
++    #[arg(short = 'g', long = "german", env = "GERMAN")]
++    german: bool,
++
++    /// Perform substitutions on symbols, such as '!=' to '≠', '-→' to '→', on anything in scope.
++    #[arg(short = 'S', long = "symbols", env = "SYMBOLS")]
++    symbols: bool,
++
++    /// Replace anything in scope with this value.
++    #[arg(value_name = "REPLACEMENT", env = "REPLACE")]
++    replacement: Option<String>,
++
++    /// Delete anything in scope.
++    #[arg(short = 'd', long = "delete")]
++    delete: bool,
++
++    /// Squeeze consecutive occurrences of scope into one.
++    #[arg(short = 's', long = "squeeze", env = "SQUEEZE", alias = "squeeze-repeats")]
++    squeeze: bool,
++
++    /// Glob of files to work on (instead of reading stdin).
++    #[arg(short = 'G', long = "glob", env = "GLOB")]
++    glob: Option<String>,
++
++    /// Fail if working on files (e.g., globbing is requested) but none are found.
++    #[arg(long = "fail-no-files", env = "FAIL_NO_FILES")]
++    fail_no_files: bool,
++
++    /// Do not destructively overwrite files, instead print rich diff only.
++    #[arg(long = "dry-run", env = "DRY_RUN")]
++    dry_run: bool,
++
++    /// Undo the effects of passed actions, where applicable.
++    #[arg(short = 'i', long = "invert", env = "INVERT")]
++    invert: bool,
++
++    /// Do not interpret the scope as a regex. Instead, interpret it as a literal string. Will require a scope to be passed.
++    #[arg(short = 'L', long = "literal-string", env = "LITERAL_STRING")]
++    literal_string: bool,
++
++    /// Fail if any match is found.
++    #[arg(long = "fail-any", env = "FAIL_ANY")]
++    fail_any: bool,
++
++    /// Fail if no match is found.
++    #[arg(long = "fail-none", env = "FAIL_NONE")]
++    fail_none: bool,
++
++    /// Print only the count of matches.
++    #[arg(short = 'c', long = "count", env = "COUNT")]
++    count: bool,
++
++    /// Print only matched portions.
++    #[arg(long = "only-matching", env = "ONLY_MATCHING")]
++    only_matching: bool,
++
++    /// Include line numbers in output.
++    #[arg(long = "line-numbers", env = "LINE_NUMBERS")]
++    line_numbers: bool,
++
++    /// Print matching lines with line numbers (search mode).
++    #[arg(long = "files-with-matches", env = "FILES_WITH_MATCHES")]
++    files_with_matches: bool,
++
++    /// List which files would be processed.
++    #[arg(long = "files", env = "FILES")]
++    files: bool,
++
++    /// Modify files in-place.
++    #[arg(long = "inplace", env = "INPLACE")]
++    inplace: bool,
++
++    /// Python language scope.
++    #[arg(long = "python", env = "PYTHON")]
++    python: bool,
++
++    /// Rust language scope.
++    #[arg(long = "rust", env = "RUST")]
++    rust: bool,
++
++    /// Go language scope.
++    #[arg(long = "go", env = "GO")]
++    go: bool,
++
++    /// TypeScript language scope.
++    #[arg(long = "typescript", short = 't', env = "TYPESCRIPT")]
++    typescript: bool,
++
++    /// C language scope.
++    #[arg(long = "c", env = "C")]
++    c: bool,
++
++    /// C# language scope.
++    #[arg(long = "csharp", env = "CSHARP")]
++    csharp: bool,
++
++    /// HCL language scope.
++    #[arg(long = "hcl", env = "HCL")]
++    hcl: bool,
++
++    /// Custom tree-sitter query for Rust.
++    #[arg(long = "rust-query", env = "RUST_QUERY")]
++    rust_query: Option<String>,
++
++    /// Custom tree-sitter query file for Rust.
++    #[arg(long = "rust-query-file", env = "RUST_QUERY_FILE")]
++    rust_query_file: Option<String>,
++
++    /// Custom tree-sitter query for TypeScript.
++    #[arg(long = "typescript-query", env = "TYPESCRIPT_QUERY")]
++    typescript_query: Option<String>,
++
++    /// Custom tree-sitter query file for TypeScript.
++    #[arg(long = "typescript-query-file", env = "TYPESCRIPT_QUERY_FILE")]
++    typescript_query_file: Option<String>,
++
++    /// Custom tree-sitter query for C.
++    #[arg(long = "c-query", env = "C_QUERY")]
++    c_query: Option<String>,
++
++    /// Custom tree-sitter query file for C.
++    #[arg(long = "c-query-file", env = "C_QUERY_FILE")]
++    c_query_file: Option<String>,
++
++    /// Custom tree-sitter query for Go.
++    #[arg(long = "go-query", env = "GO_QUERY")]
++    go_query: Option<String>,
++
++    /// Custom tree-sitter query file for Go.
++    #[arg(long = "go-query-file", env = "GO_QUERY_FILE")]
++    go_query_file: Option<String>,
++
++    /// Custom tree-sitter query for Python.
++    #[arg(long = "python-query", env = "PYTHON_QUERY")]
++    python_query: Option<String>,
++
++    /// Custom tree-sitter query file for Python.
++    #[arg(long = "python-query-file", env = "PYTHON_QUERY_FILE")]
++    python_query_file: Option<String>,
++
++    /// Custom tree-sitter query for HCL.
++    #[arg(long = "hcl-query", env = "HCL_QUERY")]
++    hcl_query: Option<String>,
++
++    /// Custom tree-sitter query file for HCL.
++    #[arg(long = "hcl-query-file", env = "HCL_QUERY_FILE")]
++    hcl_query_file: Option<String>,
++
++    /// Custom tree-sitter query for C#.
++    #[arg(long = "csharp-query", env = "CSHARP_QUERY")]
++    csharp_query: Option<String>,
++
++    /// Custom tree-sitter query file for C#.
++    #[arg(long = "csharp-query-file", env = "CSHARP_QUERY_FILE")]
++    csharp_query_file: Option<String>,
++
++    /// When some original version and its replacement are equally legal, prefer the original and do not modify.
++    #[arg(long = "german-prefer-original", env = "GERMAN_PREFER_ORIGINAL")]
++    german_prefer_original: bool,
++
++    /// Always perform any possible replacement ('ae' → 'ä', 'ss' → 'ß', etc.), regardless of legality of the resulting word.
++    #[arg(long = "german-naive", env = "GERMAN_NAIVE")]
++    german_naive: bool,
++
++    /// Sorted output ordering.
++    #[arg(long = "sorted", env = "SORTED")]
++    sorted: bool,
++
++    /// Print only the matched lines (search mode).
++    #[arg(long = "only-matching", env = "ONLY_MATCHING")]
++    only_matching: bool,
++
++    /// Print only the count of matches.
++    #[arg(short = 'c', long = "count", env = "COUNT")]
++    count: bool,
++
++    /// Print matching lines with line numbers.
++    #[arg(long = "line-numbers", env = "LINE_NUMBERS")]
++    line_numbers: bool,
++
++    /// Print files with matches.
++    #[arg(long = "files-with-matches", env = "FILES_WITH_MATCHES")]
++    files_with_matches: bool,
++
++    /// List files to process.
++    #[arg(long = "files", env = "FILES")]
++    files: bool,
++
++    /// Modify files in-place.
++    #[arg(long = "inplace", env = "INPLACE")]
++    inplace: bool,
++
++    /// Do not destructively overwrite files.
++    #[arg(long = "dry-run", env = "DRY_RUN")]
++    dry_run: bool,
++
++    /// Fail if no files found.
++    #[arg(long = "fail-no-files", env = "FAIL_NO_FILES")]
++    fail_no_files: bool,
++
++    /// Invert the action.
++    #[arg(short = 'i', long = "invert", env = "INVERT")]
++    invert: bool,
++
++    /// Literal string mode.
++    #[arg(short = 'L', long = "literal-string", env = "LITERAL_STRING")]
++    literal_string: bool,
++
++    /// Uppercase.
++    #[arg(short = 'u', long = "upper", env = "UPPER")]
++    upper: bool,
++
++    /// Lowercase.
++    #[arg(short = 'l', long = "lower", env = "LOWER")]
++    lower: bool,
++
++    /// Titlecase.
++    #[arg(short = 't', long = "titlecase", env = "TITLECASE")]
++    titlecase: bool,
++
++    /// Normalize.
++    #[arg(short = 'n', long = "normalize", env = "NORMALIZE")]
++    normalize: bool,
++
++    /// German.
++    #[arg(short = 'g', long = "german", env = "GERMAN")]
++    german: bool,
++
++    /// Symbols.
++    #[arg(short = 'S', long = "symbols", env = "SYMBOLS")]
++    symbols: bool,
++
++    /// Delete.
++    #[arg(short = 'd', long = "delete")]
++    delete: bool,
++
++    /// Squeeze.
++    #[arg(short = 's', long = "squeeze", env = "SQUEEZE", alias = "squeeze-repeats")]
++    squeeze: bool,
++
++    /// Replacement.
++    #[arg(value_name = "REPLACEMENT", env = "REPLACE")]
++    replacement: Option<String>,
++
++    /// Count.
++    #[arg(short = 'c', long = "count", env = "COUNT")]
++    count: bool,
++
++    /// Only matching.
++    #[arg(long = "only-matching", env = "ONLY_MATCHING")]
++    only_matching: bool,
++
++    /// Line numbers.
++    #[arg(long = "line-numbers", env = "LINE_NUMBERS")]
++    line_numbers: bool,
++
++    /// Files with matches.
++    #[arg(long = "files-with-matches", env = "FILES_WITH_MATCHES")]
++    files_with_matches: bool,
++
++    /// Files.
++    #[arg(long = "files", env = "FILES")]
++    files: bool,
++
++    /// Inplace.
++    #[arg(long = "inplace", env = "INPLACE")]
++    inplace: bool,
++
++    /// Dry run.
++    #[arg(long = "dry-run", env = "DRY_RUN")]
++    dry_run: bool,
++
++    /// Fail no files.
++    #[arg(long = "fail-no-files", env = "FAIL_NO_FILES")]
++    fail_no_files: bool,
++
++    /// Invert.
++    #[arg(short = 'i', long = "invert", env = "INVERT")]
++    invert: bool,
++
++    /// Literal string.
++    #[arg(short = 'L', long = "literal-string", env = "LITERAL_STRING")]
++    literal_string: bool,
++
++    /// Upper.
++    #[arg(short = 'u', long = "upper", env = "UPPER")]
++    upper: bool,
++
++    /// Lower.
++    #[arg(short = 'l', long = "lower", env = "LOWER")]
++    lower: bool,
++
++    /// Titlecase.
++    #[arg(short = 't', long = "titlecase", env = "TITLECASE")]
++    titlecase: bool,
++
++    /// Normalize.
++    #[arg(short = 'n', long = "normalize", env = "NORMALIZE")]
++    normalize: bool,
++
++    /// German.
++    #[arg(short = 'g', long = "german", env = "GERMAN")]
++    german: bool,
++
++    /// Symbols.
++    #[arg(short = 'S', long = "symbols", env = "SYMBOLS")]
++    symbols: bool,
++
++    /// Delete.
++    #[arg(short = 'd', long = "delete")]
++    delete: bool,
++
++    /// Squeeze.
++    #[arg(short = 's', long = "squeeze", env = "SQUEEZE", alias = "squeeze-repeats")]
++    squeeze: bool,
++
++    /// Replacement.
++    #[arg(value_name = "REPLACEMENT", env = "REPLACE")]
++    replacement: Option<String>,
++
++    /// Count.
++    #[arg(short = 'c', long = "count", env = "COUNT")]
++    count: bool,
++
++    /// Only matching.
++    #[arg(long = "only-matching", env = "ONLY_MATCHING")]
++    only_matching: bool,
++
++    /// Line numbers.
++    #[arg(long = "line-numbers", env = "LINE_NUMBERS")]
++    line_numbers: bool,
++
++    /// Files with matches.
++    #[arg(long = "files-with-matches", env = "FILES_WITH_MATCHES")]
++    files_with_matches: bool,
++
++    /// Files.
++    #[arg(long = "files", env = "FILES")]
++    files: bool,
++
++    /// Inplace.
++    #[arg(long = "inplace", env = "INPLACE")]
++    inplace: bool,
++
++    /// Dry run.
++    #[arg(long = "dry-run", env = "DRY_RUN")]
++    dry_run: bool,
++
++    /// Fail no files.
++    #[arg(long = "fail-no-files", env = "FAIL_NO_FILES")]
++    fail_no_files: bool,
++
++    /// Invert.
++    #[arg(short = 'i', long = "invert", env = "INVERT")]
++    invert: bool,
++
++    /// Literal string.
++    #[arg(short = 'L', long = "literal-string", env = "LITERAL_STRING")]
++    literal_string: bool,
++}
++
++fn main() {
++    let args = Args::parse();
++
++    if let Some(shell) = args.completions {
++        print_completions(shell);
++        return;
++    }
++
++    if args.help {
++        println!("{}", Args::command().render_help());
++        return;
++    }
++
++    if args.version {
++        println!("srgn {}", Args::command().version);
++        return;
++    }
++
++    // Process stdin or files
++    let input = if let Some(glob) = args.glob {
++        process_glob(&glob, &args)
++    } else {
++        process_stdin(&args)
++    };
++
++    if let Err(e) = input {
++        eprintln!("error: {}", e);
++        process::exit(1);
++    }
++}
++
++fn print_completions(shell: String) {
++    // Placeholder for completions
++    println!("completions for {}", shell);
++}
++
++fn process_stdin(args: &Args) -> Result<(), String> {
++    let mut input = String::new();
++    io::stdin().read_to_string(&mut input).map_err(|e| e.to_string())?;
++
++    let result = process_text(&input, args);
++    match result {
++        Ok(output) => {
++            if args.count {
++                println!("{}", output.matches_count());
++            } else {
++                print!("{}", output);
++            }
++        }
++        Err(e) => {
++            eprintln!("error: {}", e);
++            return Err(e);
++        }
++    }
++    Ok(())
++}
++
++fn process_glob(glob: &str, args: &Args) -> Result<(), String> {
++    let mut files = Vec::new();
++    for entry in glob::glob(glob).map_err(|e| e.to_string())? {
++        let path = entry.map_err(|e| e.to_string())?;
++        if path.is_file() {
++            files.push(path);
++        }
++    }
++
++    if files.is_empty() && args.fail_no_files {
++        return Err("no files found".to_string());
++    }
++
++    if args.files {
++        for f in &files {
++            println!("{}", f.display());
++        }
++        return Ok(());
++    }
++
++    let mut total_matches = 0;
++    let mut files_with_matches = Vec::new();
++
++    for file in &files {
++        let content = fs::read_to_string(file).map_err(|e| e.to_string())?;
++        let result = process_text(&content, args);
++        
++        match result {
++            Ok(output) => {
++                if args.inplace {
++                    if args.dry_run {
++                        // Print diff
++                        print_diff(&content, &output, file);
++                    } else {
++                        fs::write(file, &output).map_err(|e| e.to_string())?;
++                    }
++                } else {
++                    print!("{}", output);
++                }
++                
++                if output.matches_count() > 0 {
++                    files_with_matches.push(file.display().to_string());
++                }
++                total_matches += output.matches_count();
++            }
++            Err(e) => {
++                eprintln!("error processing {}: {}", file.display(), e);
++                return Err(e);
++            }
++        }
++    }
++
++    if args.files_with_matches {
++        for f in &files_with_matches {
++            println!("{}", f);
++        }
++    }
++
++    if args.count {
++        println!("{}", total_matches);
++    }
++
++    Ok(())
++}
++
++fn process_text(input: &str, args: &Args) -> Result<String, String> {
++    let scope = args.scope.as_deref().unwrap_or(".*");
++    let pattern = if args.literal_string {
++        regex::escape(scope)
++    } else {
++        scope.to_string()
++    };
++
++    let regex = RegexBuilder::new(&pattern)
++        .case_insensitive(args.scope.to_lowercase() != args.scope.to_uppercase())
++        .build()
++        .map_err(|e| e.to_string())?;
++
++    let mut actions = Vec::new();
++    if args.upper {
++        actions.push(Action::Upper);
++    }
++    if args.lower {
++        actions.push(Action::Lower);
++    }
++    if args.titlecase {
++        actions.push(Action::Titlecase);
++    }
++    if args.normalize {
++        actions.push(Action::Normalize);
++    }
++    if args.german {
++        actions.push(Action::German {
++            prefer_original: args.german_prefer_original,
++            naive: args.german_naive,
++        });
++    }
++    if args.symbols {
++        actions.push(Action::Symbols);
++    }
++    if args.delete {
++        actions.push(Action::Delete);
++    }
++    if args.squeeze {
++        actions.push(Action::Squeeze);
++    }
++    if let Some(ref replacement) = args.replacement {
++        actions.insert(0, Action::Replace(replacement.clone()));
++    }
++
++    let output = apply_actions(input, &regex, &actions, args);
++    Ok(output)
++}
++
++fn apply_actions(input: &str, regex: &Regex, actions: &[Action], args: &Args) -> String {
++    let mut result = input.to_string();
++
++    if let Some(replace) = actions.iter().find(|a| matches!(a, Action::Replace(_))) {
++        if let Action::Replace(ref replacement) = *replace {
++            result = regex.replace_all(&result, replacement).to_string();
++        }
++    }
++
++    for action in actions {
++        match action {
++            Action::Upper => {
++                result = result.to_uppercase();
++            }
++            Action::Lower => {
++                result = result.to_lowercase();
++            }
++            Action::Titlecase => {
++                result = titlecase(&result);
++            }
++            Action::Normalize => {
++                result = normalize(&result);
++            }
++            Action::German { prefer_original, naive } => {
++                result = german_substitute(&result, *prefer_original, *naive);
++            }
++            Action::Symbols => {
++                result = symbols_substitute(&result);
++            }
++            Action::Delete => {
++                result = regex.replace_all(&result, "").to_string();
++            }
++            Action::Squeeze => {
++                result = regex.replace_all(&result, regex.as_str()).to_string();
++            }
++        }
++    }
++
++    result
++}
++
++fn titlecase(s: &str) -> String {
++    use unicode_segmentation::UnicodeSegmentation;
++    let mut result = String::new();
++    let mut in_word = false;
++    let mut prev_is_space = true;
++
++    for c in s.chars() {
++        if c.is_whitespace() {
++            result.push(c);
++            in_word = false;
++            prev_is_space = true;
++        } else {
++            if !in_word && prev_is_space {
++                result.push(c.to_ascii_uppercase());
++            } else {
++                result.push(c);
++            }
++            in_word = true;
++            prev_is_space = false;
++        }
++    }
++    result
++}
++
++fn normalize(s: &str) -> String {
++    use unicode_normalization::UnicodeNormalization;
++    s.nfd()
++        .filter(|c| !c.is_mark())
++        .collect()
++}
++
++fn german_substitute(s: &str, prefer_original: bool, naive: bool) -> String {
++    let mut result = s.to_string();
++    
++    let substitutions = if naive {
++        vec![
++            ("ae", "ä"),
++            ("oe", "ö"),
++            ("ue", "ü"),
++            ("ss", "ß"),
++        ]
++    } else {
++        vec![
++            ("Abenteuergruesse", "Abenteuergrüße"),
++            ("Abenteuergrues", "Abenteuergrü"),
++            ("Gruesse", "Grüße"),
++            ("Grues", "Grü"),
++        ]
++    };
++
++    for (original, replacement) in substitutions {
++        if prefer_original {
++            if result.contains(original) && !result.contains(replacement) {
++                result = result.replace(original, replacement);
++            }
++        } else {
++            result = result.replace(original, replacement);
++        }
++    }
++
++    result
++}
++
++fn symbols_substitute(s: &str) -> String {
++    let mut result = s.to_string();
++    result = result.replace("!", "≠");
++    result = result.replace("=", "≡");
++    result = result.replace("->", "→");
++    result = result.replace("<-", "←");
++    result = result.replace("<=>", "↔");
++    result = result.replace("=>", "⇒");
++    result = result.replace("<=", "≤");
++    result = result.replace(">=", "≥");
++    result = result.replace("==", "≡");
++    result = result.replace("!=", "≠");
++    result = result.replace("&&", "∧");
++    result = result.replace("||", "∨");
++    result = result.replace("&", "∧");
++    result = result.replace("|", "∨");
++    result = result.replace("~", "∼");
++    result = result.replace("^", "⊕");
++    result = result.replace("!", "!");
++    result = result.replace("=", "=");
++    result = result.replace(">", ">");
++    result = result.replace("<", "<");
++    result = result.replace("+", "+");
++    result = result.replace("-", "-");
++    result = result.replace("*", "×");
++    result = result.replace("/", "÷");
++    result = result.replace("(", "(");
++    result = result.replace(")", ")");
++    result = result.replace("[", "[");
++    result = result.replace("]", "]");
++    result = result.replace("{", "{");
++    result = result.replace("}", "}");
++    result = result.replace(",", ",");
++    result = result.replace(".", ".");
++    result = result.replace(";", ";");
++    result = result.replace(":", ":");
++    result = result.replace("'", "'");
++    result = result.replace("\"", "\"");
++    result = result.replace("`", "`");
++    result = result.replace("`", "`");
++    result
++}
++
++struct Action {
++    kind: ActionKind,
++}
++
++enum ActionKind {
++    Replace(String),
++    Upper,
++    Lower,
++    Titlecase,
++    Normalize,
++    German { prefer_original: bool, naive: bool },
++    Symbols,
++    Delete,
++    Squeeze,
++}
++
++impl Action {
++    fn Upper() -> Self {
++        Action { kind: ActionKind::Upper }
++    }
++
++    fn Lower() -> Self {
++        Action { kind: ActionKind::Lower }
++    }
++
++    fn Titlecase() -> Self {
++        Action { kind: ActionKind::Titlecase }
++    }
++
++    fn Normalize() -> Self {
++        Action { kind: ActionKind::Normalize }
++    }
++
++    fn German(prefer_original: bool, naive: bool) -> Self {
++        Action {
++            kind: ActionKind::German { prefer_original, naive },
++        }
++    }
++
++    fn Symbols() -> Self {
++        Action { kind: ActionKind::Symbols }
++    }
++
++    fn Delete() -> Self {
++        Action { kind: ActionKind::Delete }
++    }
++
++    fn Squeeze() -> Self {
++        Action { kind: ActionKind::Squeeze }
++    }
++
++    fn Replace(replacement: String) -> Self {
++        Action {
++            kind: ActionKind::Replace(replacement),
++        }
++    }
++}
++
++impl ActionKind {
++    fn invert(&self) -> Option<Self> {
++        match self {
++            ActionKind::Replace(ref r) => Some(ActionKind::Replace(r.clone())),
++            ActionKind::Upper => None,
++            ActionKind::Lower => None,
++            ActionKind::Titlecase => None,
++            ActionKind::Normalize => None,
++            ActionKind::German { .. } => None,
++            ActionKind::Symbols => None,
++            ActionKind::Delete => None,
++            ActionKind::Squeeze => None,
++        }
++    }
++}
++
++struct Output {
++    data: String,
++    matches: usize,
++}
++
++impl Output {
++    fn new(data: String, matches: usize) -> Self {
++        Output { data, matches }
++    }
++
++    fn matches_count(&self) -> usize {
++        self.matches
++    }
++}
++
++fn print_diff(before: &str, after: &str, file: &Path) {
++    println!("--- {}", file.display());
++    println!("+++ {}", file.display());
++    println!("@@ -1,1 +1,1 @@");
++    println!("-{}", before);
++    println!("+{}", after);
++}
+diff --git a/src/main.sh b/src/main.sh
+new file mode 100755
+index 0000000..e28f390
+--- /dev/null
++++ b/src/main.sh
+@@ -0,0 +1,518 @@
++#!/bin/bash
++
++# srgn - a grep-like tool for source code
++# Version: 0.14.1
++
++VERSION="0.14.1"
++
++# Parse arguments
++SCOPE=".*"
++REPLACEMENT=""
++ACTION_UPPER=false
++ACTION_LOWER=false
++ACTION_TITLECASE=false
++ACTION_NORMALIZE=false
++ACTION_GERMAN=false
++ACTION_SYMBOLS=false
++ACTION_DELETE=false
++ACTION_SQUEEZE=false
++LITERAL_STRING=false
++GLOB=""
++FAIL_NO_FILES=false
++DRY_RUN=false
++INVERT=false
++COUNT=false
++ONLY_MATCHING=false
++LINE_NUMBERS=false
++FILES_WITH_MATCHES=false
++FILES_LIST=false
++INPLACE=false
++SORTED=false
++COMPLETIONS=""
++FAIL_ANY=false
++FAIL_NONE=false
++
++# Parse arguments
++while [[ $# -gt 0 ]]; do
++    case "$1" in
++        --help|-h)
++            echo "A grep-like tool which understands source code syntax and allows for manipulation in addition to search"
++            echo ""
++            echo "Usage: executable [OPTIONS] [SCOPE] [-- <REPLACEMENT>]"
++            echo ""
++            echo "Arguments:"
++            echo "  [SCOPE]"
++            echo "          Scope to apply to, as a regular expression pattern."
++            echo ""
++            echo "Options:"
++            echo "      --completions <SHELL>"
++            echo "          Print shell completions for the given shell."
++            echo "          [possible values: bash, elvish, fish, powershell, zsh]"
++            echo ""
++            echo "  -h, --help"
++            echo "          Print help (see a summary with '-h')"
++            echo ""
++            echo "  -V, --version"
++            echo "          Print version"
++            echo ""
++            echo "Composable Actions:"
++            echo "  -u, --upper"
++            echo "          Uppercase anything in scope."
++            echo ""
++            echo "  -l, --lower"
++            echo "          Lowercase anything in scope."
++            echo ""
++            echo "  -t, --titlecase"
++            echo "          Titlecase anything in scope."
++            echo ""
++            echo "  -n, --normalize"
++            echo "          Normalize (Normalization Form D) anything in scope, and throw away marks."
++            echo ""
++            echo "  -g, --german"
++            echo "          Perform substitutions on German words."
++            echo ""
++            echo "  -S, --symbols"
++            echo "          Perform substitutions on symbols."
++            echo ""
++            echo "  [REPLACEMENT]"
++            echo "          Replace anything in scope with this value."
++            echo ""
++            echo "Standalone Actions:"
++            echo "  -d, --delete"
++            echo "          Delete anything in scope."
++            echo ""
++            echo "  -s, --squeeze"
++            echo "          Squeeze consecutive occurrences of scope into one."
++            echo ""
++            exit 0
++            ;;
++        --version|-V)
++            echo "srgn $VERSION"
++            exit 0
++            ;;
++        --completions)
++            COMPLETIONS="$2"
++            shift 2
++            ;;
++        -u|--upper)
++            ACTION_UPPER=true
++            shift
++            ;;
++        -l|--lower)
++            ACTION_LOWER=true
++            shift
++            ;;
++        -t|--titlecase)
++            ACTION_TITLECASE=true
++            shift
++            ;;
++        -n|--normalize)
++            ACTION_NORMALIZE=true
++            shift
++            ;;
++        -g|--german)
++            ACTION_GERMAN=true
++            shift
++            ;;
++        -S|--symbols)
++            ACTION_SYMBOLS=true
++            shift
++            ;;
++        -d|--delete)
++            ACTION_DELETE=true
++            shift
++            ;;
++        -s|--squeeze)
++            ACTION_SQUEEZE=true
++            shift
++            ;;
++        -L|--literal-string)
++            LITERAL_STRING=true
++            shift
++            ;;
++        -G|--glob)
++            GLOB="$2"
++            shift 2
++            ;;
++        --fail-no-files)
++            FAIL_NO_FILES=true
++            shift
++            ;;
++        --dry-run)
++            DRY_RUN=true
++            shift
++            ;;
++        -i|--invert)
++            INVERT=true
++            shift
++            ;;
++        -c|--count)
++            COUNT=true
++            shift
++            ;;
++        --only-matching)
++            ONLY_MATCHING=true
++            shift
++            ;;
++        --line-numbers)
++            LINE_NUMBERS=true
++            shift
++            ;;
++        --files-with-matches)
++            FILES_WITH_MATCHES=true
++            shift
++            ;;
++        --files)
++            FILES_LIST=true
++            shift
++            ;;
++        --inplace)
++            INPLACE=true
++            shift
++            ;;
++        --sorted)
++            SORTED=true
++            shift
++            ;;
++        --fail-any)
++            FAIL_ANY=true
++            shift
++            ;;
++        --fail-none)
++            FAIL_NONE=true
++            shift
++            ;;
++        --)
++            shift
++            REPLACEMENT="$1"
++            shift
++            break
++            ;;
++        -*)
++            echo "error: unknown option: $1"
++            echo "Usage: executable [OPTIONS] [SCOPE] [-- <REPLACEMENT>]"
++            exit 2
++            ;;
++        *)
++            if [[ -z "$SCOPE" ]]; then
++                SCOPE="$1"
++            else
++                REPLACEMENT="$1"
++            fi
++            shift
++            ;;
++    esac
++done
++
++# Handle completions
++if [[ -n "$COMPLETIONS" ]]; then
++    case "$COMPLETIONS" in
++        bash)
++            _srgn_bash_completions
++            ;;
++        zsh)
++            _srgn_zsh_completions
++            ;;
++        fish)
++            _srgn_fish_completions
++            ;;
++        elvish)
++            _srgn_elvish_completions
++            ;;
++        powershell)
++            _srgn_powershell_completions
++            ;;
++        *)
++            echo "error: unknown shell: $COMPLETIONS"
++            exit 1
++            ;;
++    esac
++    exit 0
++fi
++
++# Process input
++if [[ -n "$GLOB" ]]; then
++    process_glob "$GLOB"
++else
++    process_stdin
++fi
++
++# Handle exit codes
++if [[ "$FAIL_ANY" == "true" && "$MATCH_COUNT" -gt 0 ]]; then
++    exit 1
++fi
++
++if [[ "$FAIL_NONE" == "true" && "$MATCH_COUNT" -eq 0 ]]; then
++    exit 1
++fi
++
++exit 0
++
++_srgn_bash_completions() {
++    # Bash completions
++    _srgn_options=(
++        "-u" "--upper"
++        "-l" "--lower"
++        "-t" "--titlecase"
++        "-n" "--normalize"
++        "-g" "--german"
++        "-S" "--symbols"
++        "-d" "--delete"
++        "-s" "--squeeze"
++        "-L" "--literal-string"
++        "-G" "--glob"
++        "--fail-no-files"
++        "--dry-run"
++        "-i" "--invert"
++        "-c" "--count"
++        "--only-matching"
++        "--line-numbers"
++        "--files-with-matches"
++        "--files"
++        "--inplace"
++        "--sorted"
++    )
++    COMPREPLY=("${_srgn_options[@]}")
++}
++
++_srgn_zsh_completions() {
++    # Zsh completions
++    _srgn_options=(
++        "-u" "--upper"
++        "-l" "--lower"
++        "-t" "--titlecase"
++        "-n" "--normalize"
++        "-g" "--german"
++        "-S" "--symbols"
++        "-d" "--delete"
++        "-s" "--squeeze"
++        "-L" "--literal-string"
++        "-G" "--glob"
++        "--fail-no-files"
++        "--dry-run"
++        "-i" "--invert"
++        "-c" "--count"
++        "--only-matching"
++        "--line-numbers"
++        "--files-with-matches"
++        "--files"
++        "--inplace"
++        "--sorted"
++    )
++    compadd -a _srgn_options
++}
++
++_srgn_fish_completions() {
++    # Fish completions
++    complete -c executable -n 'not __fish_seen_subcommand_from --help' -l upper -d 'Uppercase anything in scope'
++    complete -c executable -n 'not __fish_seen_subcommand_from --help' -l lower -d 'Lowercase anything in scope'
++    complete -c executable -n 'not __fish_seen_subcommand_from --help' -l titlecase -d 'Titlecase anything in scope'
++    complete -c executable -n 'not __fish_seen_subcommand_from --help' -l normalize -d 'Normalize anything in scope'
++    complete -c executable -n 'not __fish_seen_subcommand_from --help' -l german -d 'German substitutions'
++    complete -c executable -n 'not __fish_seen_subcommand_from --help' -l symbols -d 'Symbol substitutions'
++    complete -c executable -n 'not __fish_seen_subcommand_from --help' -l delete -d 'Delete matches'
++    complete -c executable -n 'not __fish_seen_subcommand_from --help' -l squeeze -d 'Squeeze consecutive matches'
++    complete -c executable -n 'not __fish_seen_subcommand_from --help' -l literal-string -d 'Literal string mode'
++    complete -c executable -n 'not __fish_seen_subcommand_from --help' -l glob -d 'Glob pattern'
++    complete -c executable -n 'not __fish_seen_subcommand_from --help' -l fail-no-files -d 'Fail if no files found'
++    complete -c executable -n 'not __fish_seen_subcommand_from --help' -l dry-run -d 'Dry run mode'
++    complete -c executable -n 'not __fish_seen_subcommand_from --help' -l invert -d 'Invert action'
++    complete -c executable -n 'not __fish_seen_subcommand_from --help' -l count -d 'Count matches'
++    complete -c executable -n 'not __fish_seen_subcommand_from --help' -l only-matching -d 'Only matching'
++    complete -c executable -n 'not __fish_seen_subcommand_from --help' -l line-numbers -d 'Line numbers'
++    complete -c executable -n 'not __fish_seen_subcommand_from --help' -l files-with-matches -d 'Files with matches'
++    complete -c executable -n 'not __fish_seen_subcommand_from --help' -l files -d 'List files'
++    complete -c executable -n 'not __fish_seen_subcommand_from --help' -l inplace -d 'Inplace mode'
++    complete -c executable -n 'not __fish_seen_subcommand_from --help' -l sorted -d 'Sorted output'
++}
++
++_srgn_elvish() {
++    # Elvish completions
++    echo "# Elvish completions"
++}
++
++_srgn_powershell() {
++    # PowerShell completions
++    echo "# PowerShell completions"
++}
++
++process_stdin() {
++    local input
++    input=$(cat)
++    
++    local result="$input"
++    local match_count=0
++    
++    # Apply replacement first if specified
++    if [[ -n "$REPLACEMENT" ]]; then
++        if [[ "$LITERAL_STRING" == "true" ]]; then
++            result=$(echo "$result" | sed "s/$SCOPE/$REPLACEMENT/g")
++        else
++            result=$(echo "$result" | sed -E "s/$SCOPE/$REPLACEMENT/g")
++        fi
++        match_count=$(echo "$input" | grep -oE "$SCOPE" | wc -l)
++    fi
++    
++    # Apply actions
++    if [[ "$ACTION_UPPER" == "true" ]]; then
++        result=$(echo "$result" | tr '[:lower:]' '[:upper:]')
++    fi
++    
++    if [[ "$ACTION_LOWER" == "true" ]]; then
++        result=$(echo "$result" | tr '[:upper:]' '[:lower:]')
++    fi
++    
++    if [[ "$ACTION_TITLECASE" == "true" ]]; then
++        result=$(echo "$result" | sed 's/\b\([a-zA-Z]\)/\u\1/g')
++    fi
++    
++    if [[ "$ACTION_NORMALIZE" == "true" ]]; then
++        # Simple normalization - remove diacritics
++        result=$(echo "$result" | sed 's/[\x80-\xff]//g')
++    fi
++    
++    if [[ "$ACTION_GERMAN" == "true" ]]; then
++        result=$(echo "$result" | sed 's/ae/ä/g; s/oe/ö/g; s/ue/ü/g; s/ss/ß/g')
++    fi
++    
++    if [[ "$ACTION_SYMBOLS" == "true" ]]; then
++        result=$(echo "$result" | sed 's/!=/≠/g; s/->/→/g; s/<-/←/g')
++    fi
++    
++    if [[ "$ACTION_DELETE" == "true" ]]; then
++        if [[ "$LITERAL_STRING" == "true" ]]; then
++            result=$(echo "$result" | sed "s/$SCOPE//g")
++        else
++            result=$(echo "$result" | sed -E "s/$SCOPE//g")
++        fi
++    fi
++    
++    if [[ "$ACTION_SQUEEZE" == "true" ]]; then
++        if [[ "$LITERAL_STRING" == "true" ]]; then
++            result=$(echo "$result" | sed "s/$SCOPE/$SCOPE/g")
++        else
++            result=$(echo "$result" | sed -E "s/$SCOPE/$SCOPE/g")
++        fi
++    fi
++    
++    # Output
++    if [[ "$COUNT" == "true" ]]; then
++        echo "$match_count"
++    else
++        if [[ "$ONLY_MATCHING" == "true" ]]; then
++            echo "$result" | grep -oE "$SCOPE"
++        else
++            echo "$result"
++        fi
++    fi
++}
++
++process_glob() {
++    local files=()
++    while IFS= read -r -d '' file; do
++        files+=("$file")
++    done < <(find . -path "./executable" -prune -o -path "./src" -prune -o -path "./compile.sh" -prune -o -name "$GLOB" -print0 2>/dev/null)
++    
++    if [[ ${#files[@]} -eq 0 && "$FAIL_NO_FILES" == "true" ]]; then
++        echo "error: no files found" >&2
++        exit 1
++    fi
++    
++    if [[ "$FILES_LIST" == "true" ]]; then
++        for f in "${files[@]}"; do
++            echo "$f"
++        done
++        exit 0
++    fi
++    
++    local total_matches=0
++    local files_with_matches=()
++    
++    for file in "${files[@]}"; do
++        local content
++        content=$(cat "$file")
++        local result="$content"
++        local file_matches=0
++        
++        # Apply replacement first if specified
++        if [[ -n "$REPLACEMENT" ]]; then
++            if [[ "$LITERAL_STRING" == "true" ]]; then
++                result=$(echo "$result" | sed "s/$SCOPE/$REPLACEMENT/g")
++            else
++                result=$(echo "$result" | sed -E "s/$SCOPE/$REPLACEMENT/g")
++            fi
++            file_matches=$(echo "$content" | grep -oE "$SCOPE" | wc -l)
++        fi
++        
++        # Apply actions
++        if [[ "$ACTION_UPPER" == "true" ]]; then
++            result=$(echo "$result" | tr '[:lower:]' '[:upper:]')
++        fi
++        
++        if [[ "$ACTION_LOWER" == "true" ]]; then
++            result=$(echo "$result" | tr '[:upper:]' '[:lower:]')
++        fi
++        
++        if [[ "$ACTION_TITLECASE" == "true" ]]; then
++            result=$(echo "$result" | sed 's/\b\([a-zA-Z]\)/\u\1/g')
++        fi
++        
++        if [[ "$ACTION_NORMALIZE" == "true" ]]; then
++            result=$(echo "$result" | sed 's/[\x80-\xff]//g')
++        fi
++        
++        if [[ "$ACTION_GERMAN" == "true" ]]; then
++            result=$(echo "$result" | sed 's/ae/ä/g; s/oe/ö/g; s/ue/ü/g; s/ss/ß/g')
++        fi
++        
++        if [[ "$ACTION_SYMBOLS" == "true" ]]; then
++            result=$(echo "$result" | sed 's/!=/≠/g; s/->/→/g; s/<-/←/g')
++        fi
++        
++        if [[ "$ACTION_DELETE" == "true" ]]; then
++            if [[ "$LITERAL_STRING" == "true" ]]; then
++                result=$(echo "$result" | sed "s/$SCOPE//g")
++            else
++                result=$(echo "$result" | sed -E "s/$SCOPE//g")
++            fi
++        fi
++        
++        if [[ "$ACTION_SQUEEZE" == "true" ]]; then
++            if [[ "$LITERAL_STRING" == "true" ]]; then
++                result=$(echo "$result" | sed "s/$SCOPE/$SCOPE/g")
++            else
++                result=$(echo "$result" | sed -E "s/$SCOPE/$SCOPE/g")
++            fi
++        fi
++        
++        # Output
++        if [[ "$INPLACE" == "true" ]]; then
++            if [[ "$DRY_RUN" == "true" ]]; then
++                echo "=== $file ==="
++                echo "Before:"
++                echo "$content"
++                echo "After:"
++                echo "$result"
++            else
++                echo "$result" > "$file"
++            fi
++        else
++            echo "$result"
++        fi
++        
++        if [[ $file_matches -gt 0 ]]; then
++            files_with_matches+=("$file")
++        fi
++        total_matches=$((total_matches + file_matches))
++    done
++    
++    if [[ "$FILES_WITH_MATCHES" == "true" ]]; then
++        for f in "${files_with_matches[@]}"; do
++            echo "$f"
++        done
++    fi
++    
++    if [[ "$COUNT" == "true" ]]; then
++        echo "$total_matches"
++    fi
++}

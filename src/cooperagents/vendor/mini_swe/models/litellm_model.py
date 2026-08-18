@@ -87,7 +87,31 @@ class LitellmModel:
         if self.config.litellm_model_registry and Path(self.config.litellm_model_registry).is_file():
             litellm.utils.register_model(json.loads(Path(self.config.litellm_model_registry).read_text()))
 
+    _HARD_TIMEOUT_S = 240  # ceiling on any single completion call
+
     def _query(self, messages: list[dict[str, str]], **kwargs):
+        # The litellm/httpx `timeout` kwarg does not reliably arm the READ
+        # timeout on this stack: py-spy showed calls blocked >2h in
+        # ssl.read waiting for response headers with timeout=180 passed
+        # (four solo runs stuck this way). Enforce the bound ourselves: run
+        # the completion in a worker thread and abandon it on expiry — the
+        # raised Timeout feeds the existing tenacity retry, which reissues
+        # on a fresh connection.
+        import concurrent.futures as _cf
+
+        if not hasattr(self, "_qpool"):
+            self._qpool = _cf.ThreadPoolExecutor(max_workers=4)
+        fut = self._qpool.submit(self._query_inner, messages, **kwargs)
+        try:
+            return fut.result(timeout=self._HARD_TIMEOUT_S)
+        except _cf.TimeoutError:
+            fut.cancel()
+            raise litellm.Timeout(
+                f"completion exceeded hard cap {self._HARD_TIMEOUT_S}s (read-timeout bug workaround)",
+                model=self.config.model_name, llm_provider="openai",
+            ) from None
+
+    def _query_inner(self, messages: list[dict[str, str]], **kwargs):
         try:
             return litellm.completion(
                 model=self.config.model_name,

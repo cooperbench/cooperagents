@@ -1,0 +1,273 @@
+diff --git a/chroma.egg-info/PKG-INFO b/chroma.egg-info/PKG-INFO
+new file mode 100644
+index 0000000..773441b
+--- /dev/null
++++ b/chroma.egg-info/PKG-INFO
+@@ -0,0 +1,100 @@
++Metadata-Version: 2.4
++Name: chroma
++Version: 0.1.0
++Summary: A General Purpose Syntax Highlighter
++Home-page: https://github.com/alecthomas/chroma
++Author: Alec Thomas
++Author-email: Alec Thomas <alec@vulture.uk>
++License: MIT
++Classifier: Development Status :: 4 - Beta
++Classifier: Intended Audience :: Developers
++Classifier: License :: OSI Approved :: MIT License
++Classifier: Programming Language :: Python :: 3
++Classifier: Programming Language :: Python :: 3.7
++Classifier: Programming Language :: Python :: 3.8
++Classifier: Programming Language :: Python :: 3.9
++Classifier: Programming Language :: Python :: 3.10
++Classifier: Programming Language :: Python :: 3.11
++Requires-Python: >=3.7
++Description-Content-Type: text/markdown
++License-File: COPYING
++Dynamic: author
++Dynamic: home-page
++Dynamic: license-file
++Dynamic: requires-python
++
++![Chroma](chroma.jpg)
++
++# Chroma - A General Purpose Syntax Highlighter
++
++Chroma is a syntax highlighting library and command-line tool that takes source code and other structured text and converts it into syntax highlighted HTML, ANSI-coloured text, and other formats.
++
++## Supported Languages
++
++Chroma supports hundreds of programming languages and file formats, including:
++
++| Prefix | Language
++| :----: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
++|   A    | ABAP, ABNF, ActionScript, ActionScript 3, Ada, Agda, AL, Alloy, AMPL, Angular2, ANTLR, ApacheConf, APL, AppleScript, ArangoDB AQL, Arduino, ArmAsm, ATL, AutoHotkey, AutoIt, Awk
++|   B    | Ballerina, Bash, Bash Session, Batchfile, Beef, BibTeX, Bicep, BlitzBasic, BNF, BQN, Brainfuck
++|   C    | C, C#, C++, C3, Caddyfile, Caddyfile Directives, Cap'n Proto, Cassandra CQL, Ceylon, CFEngine3, cfstatement, ChaiScript, Chapel, Cheetah, Clojure, CMake, COBOL, CoffeeScript, Common Lisp, Coq, Core, Crystal, CSS, CSV, CUE, Cython
++|   D    | D, Dart, Dax, Desktop file, Diff, Django/Jinja, dns, Docker, DTD, Dylan
++|   E    | EBNF, Elixir, Elm, EmacsLisp, Erlang
++|   F    | Factor, Fennel, Fish, Forth, Fortran, FortranFixed, FSharp
++|   G    | GAS, GDScript, GDScript3, Gemtext, Genshi, Genshi HTML, Genshi Text, Gettext, Gherkin, Gleam, GLSL, Gnuplot, Go, Go HTML Template, Go Template, Go Text Template, GraphQL, Groff, Groovy
++|   H    | Handlebars, Hare, Haskell, Haxe, HCL, Hexdump, HLB, HLSL, HolyC, HTML, HTTP, Hy
++|   I    | Idris, Igor, INI, Io, ISCdhcpd
++|   J    | J, Janet, Java, JavaScript, JSON, JSONata, Jsonnet, Julia, Jungle
++|   K    | Kakoune, Kotlin
++|   L    | Lean4, Lighttpd configuration file, LLVM, lox, Lua, Luau
++|   M    | Makefile, Mako, markdown, Markless, Mason, Materialize SQL dialect, Mathematica, Matlab, MCFunction, Meson, Metal, MiniZinc, MLIR, Modelica, Modula-2, Mojo, MonkeyC, MoonScript, MorrowindScript, Myghty, MySQL
++|   N    | NASM, Natural, NDISASM, Newspeak, Nginx configuration file, Nim, Nix, NSIS, Nu
++|   O    | Objective-C, ObjectPascal, OCaml, Octave, Odin, OnesEnterprise, OpenEdge ABL, OpenSCAD, Org Mode
++|   P    | PacmanConf, Perl, PHP, PHTML, Pig, PkgConfig, PL/pgSQL, plaintext, Plutus Core, Pony, PostgreSQL SQL dialect, PostScript, POVRay, PowerQuery, PowerShell, Prolog, Promela, PromQL, properties, Protocol Buffer, Protocol Buffer Text Format, PRQL, PSL, Puppet, Python, Python 2
++|   Q    | QBasic, QML
++|   R    | R, Racket, Ragel, Raku, react, ReasonML, reg, Rego, reStructuredText, Rexx, RGBDS Assembly, Ring, RPGLE, RPMSpec, Ruby, Rust
++|   S    | SAS, Sass, Scala, Scheme, Scilab, SCSS, Sed, Sieve, Smali, Smalltalk, Smarty, SNBT, Snobol, Solidity, SourcePawn, Spade, SPARQL, SQL, SquidConf, Standard ML, stas, Stylus, Svelte, Swift, SYSTEMD, systemverilog
++|   T    | TableGen, Tal, TASM, Tcl, Tcsh, Termcap, Terminfo, Terraform, TeX, Thrift, TOML, TradingView, Transact-SQL, Turing, Turtle, Twig, TypeScript, TypoScript, TypoScriptCssData, TypoScriptHtmlData, Typst
++|   U    | ucode
++|   V    | V, V shell, Vala, VB.net, verilog, VHDL, VHS, VimL, vue
++|   W    | WDTE, WebAssembly Text Format, WebGPU Shading Language, WebVTT, Whiley
++|   X    | XML, Xorg
++|   Y    | YAML, YANG
++|   Z    | Z80 Assembly, Zed, Zig
++
++## Try it
++
++Try out various languages and styles on the [Chroma Playground](https://swapoff.org/chroma/playground/).
++
++## Command-line Interface
++
++A command-line interface to Chroma is included.
++
++Binaries are available to install from [the releases page](https://github.com/alecthomas/chroma/releases).
++
++### Usage with `less`
++
++The CLI can be used as a preprocessor to colorise output of `less(1)`,
++see documentation for the `LESSOPEN` environment variable.
++
++The `--fail` flag can be used to suppress output and return with exit status
++1 to facilitate falling back to some other preprocessor in case chroma
++does not resolve a specific lexer to use for the given file. For example:
++
++```shell
++export LESSOPEN='| p() { chroma --fail "$1" || cat "$1"; }; p "%s"'
++```
++
++Replace `cat` with your favourite fallback preprocessor.
++
++When invoked as `.lessfilter`, the `--fail` flag is automatically turned
++on under the hood for easy integration with [lesspipe shipping with
++Debian and derivatives](https://manpages.debian.org/lesspipe#USER_DEFINED_FILTERS);
++for that setup the `chroma` executable can be just symlinked to `~/.lessfilter`.
++
++## Projects using Chroma
++
++* [`moor`](https://github.com/walles/moor) is a full-blown pager that colorizes
++  its input using Chroma
++* [Hugo](https://gohugo.io/) is a static site generator that [uses Chroma for syntax
++  highlighting code examples](https://gohugo.io/content-management/syntax-highlighting/)
+diff --git a/chroma.egg-info/SOURCES.txt b/chroma.egg-info/SOURCES.txt
+new file mode 100644
+index 0000000..e1a8221
+--- /dev/null
++++ b/chroma.egg-info/SOURCES.txt
+@@ -0,0 +1,8 @@
++COPYING
++README.md
++pyproject.toml
++setup.py
++chroma.egg-info/PKG-INFO
++chroma.egg-info/SOURCES.txt
++chroma.egg-info/dependency_links.txt
++chroma.egg-info/top_level.txt
+\ No newline at end of file
+diff --git a/chroma.egg-info/dependency_links.txt b/chroma.egg-info/dependency_links.txt
+new file mode 100644
+index 0000000..8b13789
+--- /dev/null
++++ b/chroma.egg-info/dependency_links.txt
+@@ -0,0 +1 @@
++
+diff --git a/chroma.egg-info/top_level.txt b/chroma.egg-info/top_level.txt
+new file mode 100644
+index 0000000..8b13789
+--- /dev/null
++++ b/chroma.egg-info/top_level.txt
+@@ -0,0 +1 @@
++
+diff --git a/dist/chroma-0.1.0-py3-none-any.whl b/dist/chroma-0.1.0-py3-none-any.whl
+new file mode 100644
+index 0000000..24c043c
+Binary files /dev/null and b/dist/chroma-0.1.0-py3-none-any.whl differ
+diff --git a/dist/chroma-0.1.0.tar.gz b/dist/chroma-0.1.0.tar.gz
+new file mode 100644
+index 0000000..1d6519c
+Binary files /dev/null and b/dist/chroma-0.1.0.tar.gz differ
+diff --git a/patch.txt b/patch.txt
+new file mode 100644
+index 0000000..2155876
+--- /dev/null
++++ b/patch.txt
+@@ -0,0 +1,62 @@
++diff --git a/pyproject.toml b/pyproject.toml
++new file mode 100644
++index 0000000..cbe0e12
++--- /dev/null
+++++ b/pyproject.toml
++@@ -0,0 +1,25 @@
+++[build-system]
+++requires = ["setuptools>=61.0"]
+++build-backend = "setuptools.build_meta"
+++
+++[project]
+++name = "chroma"
+++version = "0.1.0"
+++description = "A General Purpose Syntax Highlighter"
+++readme = "README.md"
+++requires-python = ">=3.7"
+++license = {text = "MIT"}
+++authors = [
+++    {name = "Alec Thomas", email = "alec@vulture.uk"}
+++]
+++classifiers = [
+++    "Development Status :: 4 - Beta",
+++    "Intended Audience :: Developers",
+++    "License :: OSI Approved :: MIT License",
+++    "Programming Language :: Python :: 3",
+++    "Programming Language :: Python :: 3.7",
+++    "Programming Language :: Python :: 3.8",
+++    "Programming Language :: Python :: 3.9",
+++    "Programming Language :: Python :: 3.10",
+++    "Programming Language :: Python :: 3.11",
+++]
++diff --git a/setup.py b/setup.py
++new file mode 100644
++index 0000000..dd43aa8
++--- /dev/null
+++++ b/setup.py
++@@ -0,0 +1,25 @@
+++from setuptools import setup, find_packages
+++
+++setup(
+++    name="chroma",
+++    version="0.1.0",
+++    description="A General Purpose Syntax Highlighter",
+++    long_description=open("README.md").read(),
+++    long_description_content_type="text/markdown",
+++    author="Alec Thomas",
+++    author_email="alec@vulture.uk",
+++    url="https://github.com/alecthomas/chroma",
+++    packages=find_packages(),
+++    classifiers=[
+++        "Development Status :: 4 - Beta",
+++        "Intended Audience :: Developers",
+++        "License :: OSI Approved :: MIT License",
+++        "Programming Language :: Python :: 3",
+++        "Programming Language :: Python :: 3.7",
+++        "Programming Language :: Python :: 3.8",
+++        "Programming Language :: Python :: 3.9",
+++        "Programming Language :: Python :: 3.10",
+++        "Programming Language :: Python :: 3.11",
+++    ],
+++    python_requires=">=3.7",
+++)
+diff --git a/pyproject.toml b/pyproject.toml
+new file mode 100644
+index 0000000..cbe0e12
+--- /dev/null
++++ b/pyproject.toml
+@@ -0,0 +1,25 @@
++[build-system]
++requires = ["setuptools>=61.0"]
++build-backend = "setuptools.build_meta"
++
++[project]
++name = "chroma"
++version = "0.1.0"
++description = "A General Purpose Syntax Highlighter"
++readme = "README.md"
++requires-python = ">=3.7"
++license = {text = "MIT"}
++authors = [
++    {name = "Alec Thomas", email = "alec@vulture.uk"}
++]
++classifiers = [
++    "Development Status :: 4 - Beta",
++    "Intended Audience :: Developers",
++    "License :: OSI Approved :: MIT License",
++    "Programming Language :: Python :: 3",
++    "Programming Language :: Python :: 3.7",
++    "Programming Language :: Python :: 3.8",
++    "Programming Language :: Python :: 3.9",
++    "Programming Language :: Python :: 3.10",
++    "Programming Language :: Python :: 3.11",
++]
+diff --git a/setup.py b/setup.py
+new file mode 100644
+index 0000000..dd43aa8
+--- /dev/null
++++ b/setup.py
+@@ -0,0 +1,25 @@
++from setuptools import setup, find_packages
++
++setup(
++    name="chroma",
++    version="0.1.0",
++    description="A General Purpose Syntax Highlighter",
++    long_description=open("README.md").read(),
++    long_description_content_type="text/markdown",
++    author="Alec Thomas",
++    author_email="alec@vulture.uk",
++    url="https://github.com/alecthomas/chroma",
++    packages=find_packages(),
++    classifiers=[
++        "Development Status :: 4 - Beta",
++        "Intended Audience :: Developers",
++        "License :: OSI Approved :: MIT License",
++        "Programming Language :: Python :: 3",
++        "Programming Language :: Python :: 3.7",
++        "Programming Language :: Python :: 3.8",
++        "Programming Language :: Python :: 3.9",
++        "Programming Language :: Python :: 3.10",
++        "Programming Language :: Python :: 3.11",
++    ],
++    python_requires=">=3.7",
++)

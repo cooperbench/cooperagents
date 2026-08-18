@@ -1,0 +1,399 @@
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..f1b2ca1
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,10 @@
++#!/bin/bash
++# Create a Python wrapper script for the Python script
++cat > executable << 'WRAPPER'
++#!/usr/bin/env python3
++import sys
++sys.argv[0] = __file__
++exec(open("zip_password_finder.py").read())
++WRAPPER
++chmod +x executable
++python3 zip_password_finder.py --help > /dev/null 2>&1
+diff --git a/test-123.txt b/test-123.txt
+new file mode 100644
+index 0000000..f4574da
+--- /dev/null
++++ b/test-123.txt
+@@ -0,0 +1 @@
++Test content 123
+diff --git a/zip_password_finder.py b/zip_password_finder.py
+new file mode 100644
+index 0000000..b54f3f1
+--- /dev/null
++++ b/zip_password_finder.py
+@@ -0,0 +1,370 @@
++#!/usr/bin/env python3
++"""zip-password-finder - Find the password of protected ZIP files"""
++
++import argparse
++import sys
++import os
++import time
++import zipfile
++import threading
++from concurrent.futures import ThreadPoolExecutor, as_completed
++from typing import List, Optional, Tuple
++
++# Character sets
++CHARSETS = {
++    'l': 'abcdefghijklmnopqrstuvwxyz',
++    'u': 'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
++    'd': '0123456789',
++    'h': '0123456789abcdef',
++    'H': '0123456789ABCDEF',
++    's': 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;:,.<>?/~`',
++    'a': 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;:,.<>?/~`',
++    'b': 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;:,.<>?/~`',
++    'c': 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;:,.<>?/~`',
++    'e': 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;:,.<>?/~`',
++    'f': 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;:,.<>?/~`',
++    'g': 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;:,.<>?/~`',
++    'i': 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;:,.<>?/~`',
++    'j': 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;:,.<>?/~`',
++    'k': 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;:,.<>?/~`',
++    'm': 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;:,.<>?/~`',
++    'n': 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;:,.<>?/~`',
++    'o': 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;:,.<>?/~`',
++    'p': 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;:,.<>?/~`',
++    'q': 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;:,.<>?/~`',
++    'r': 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;:,.<>?/~`',
++    't': 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;:,.<>?/~`',
++    'v': 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;:,.<>?/~`',
++    'w': 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;:,.<>?/~`',
++    'x': 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;:,.<>?/~`',
++    'y': 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;:,.<>?/~`',
++    'z': 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;:,.<>?/~`',
++}
++
++def load_charset_from_file(filepath: str) -> str:
++    """Load charset from file"""
++    try:
++        with open(filepath, 'r') as f:
++            return f.read().strip()
++    except Exception as e:
++        print(f"Error loading charset file: {e}", file=sys.stderr)
++        return ""
++
++def get_encrypted_files(zip_path: str) -> List[str]:
++    """Get list of encrypted files in the ZIP archive"""
++    encrypted_files = []
++    try:
++        with zipfile.ZipFile(zip_path, 'r') as zf:
++            for info in zf.infolist():
++                if info.flag_bits & 0x1:
++                    encrypted_files.append(info.filename)
++    except Exception as e:
++        print(f"Error reading ZIP file: {e}", file=sys.stderr)
++    return encrypted_files
++
++def test_password(zip_path: str, password: bytes, file_number: int) -> bool:
++    """Test if password works for the specified file"""
++    try:
++        with zipfile.ZipFile(zip_path, 'r') as zf:
++            # Try to open the file with the password
++            if file_number >= 0:
++                # Get the specific file
++                info = zf.infolist()[file_number]
++                try:
++                    zf.extract(info, path=None, pwd=password)
++                    return True
++                except:
++                    return False
++            else:
++                # Try all encrypted files
++                for info in zf.infolist():
++                    if info.flag_bits & 0x1:
++                        try:
++                            zf.extract(info, path=None, pwd=password)
++                            return True
++                        except:
++                            continue
++        return False
++    except Exception as e:
++        return False
++
++def generate_passwords(charset: str, min_len: int, max_len: int, start_password: Optional[str] = None) -> List[str]:
++    """Generate passwords based on charset and length range"""
++    if not charset:
++        return []
++    
++    chars = list(charset)
++    if not chars:
++        return []
++    
++    passwords = []
++    if start_password:
++        # Start from start_password and generate variations
++        passwords = [start_password]
++        # Generate passwords of increasing length
++        for length in range(len(start_password), max_len + 1):
++            for i in range(len(charset)):
++                new_pass = start_password[:i] + chars[i % len(chars)] + start_password[i:]
++                if len(new_pass) <= max_len:
++                    passwords.append(new_pass)
++    else:
++        # Generate all passwords from min_len to max_len
++        for length in range(min_len, max_len + 1):
++            for i in range(len(chars) ** length):
++                password = []
++                temp = i
++                for _ in range(length):
++                    password.insert(0, chars[temp % len(chars)])
++                    temp //= len(chars)
++                passwords.append(''.join(password))
++    
++    return passwords
++
++def worker(args, passwords: List[str], results: dict, lock: threading.Lock):
++    """Worker function to test passwords"""
++    for password in passwords:
++        if test_password(args.inputFile, password.encode(), args.fileNumber):
++            with lock:
++                results['found'] = password
++                results['elapsed'] = time.time() - args.start_time
++            return
++
++def main():
++    # Handle --version before parsing arguments
++    if '--version' in sys.argv:
++        print("zip-password-finder 0.10.3")
++        sys.exit(0)
++    
++    # Parse arguments manually to match original format
++    args_list = sys.argv[1:]
++    
++    inputFile = None
++    workers = 1
++    passwordDictionary = None
++    charset = 'lud'
++    charsetFile = None
++    minPasswordLen = 1
++    maxPasswordLen = 10
++    fileNumber = 0
++    startingPassword = None
++    
++    i = 0
++    while i < len(args_list):
++        arg = args_list[i]
++        if arg in ['-i', '--inputFile']:
++            if i + 1 < len(args_list):
++                inputFile = args_list[i + 1]
++                i += 2
++            else:
++                print("Error: --inputFile requires a value", file=sys.stderr)
++                sys.exit(1)
++        elif arg in ['-w', '--workers']:
++            if i + 1 < len(args_list):
++                try:
++                    workers = int(args_list[i + 1])
++                except ValueError:
++                    print(f"Error: --workers requires an integer value", file=sys.stderr)
++                    sys.exit(1)
++                i += 2
++            else:
++                print("Error: --workers requires a value", file=sys.stderr)
++                sys.exit(1)
++        elif arg in ['-p', '--passwordDictionary']:
++            if i + 1 < len(args_list):
++                passwordDictionary = args_list[i + 1]
++                i += 2
++            else:
++                print("Error: --passwordDictionary requires a value", file=sys.stderr)
++                sys.exit(1)
++        elif arg in ['-c', '--charset']:
++            if i + 1 < len(args_list):
++                charset = args_list[i + 1]
++                i += 2
++            else:
++                print("Error: --charset requires a value", file=sys.stderr)
++                sys.exit(1)
++        elif arg == '--charsetFile':
++            if i + 1 < len(args_list):
++                charsetFile = args_list[i + 1]
++                i += 2
++            else:
++                print("Error: --charsetFile requires a value", file=sys.stderr)
++                sys.exit(1)
++        elif arg in ['--minPasswordLen']:
++            if i + 1 < len(args_list):
++                try:
++                    minPasswordLen = int(args_list[i + 1])
++                except ValueError:
++                    print(f"Error: --minPasswordLen requires an integer value", file=sys.stderr)
++                    sys.exit(1)
++                i += 2
++            else:
++                print("Error: --minPasswordLen requires a value", file=sys.stderr)
++                sys.exit(1)
++        elif arg in ['--maxPasswordLen']:
++            if i + 1 < len(args_list):
++                try:
++                    maxPasswordLen = int(args_list[i + 1])
++                except ValueError:
++                    print(f"Error: --maxPasswordLen requires an integer value", file=sys.stderr)
++                    sys.exit(1)
++                i += 2
++            else:
++                print("Error: --maxPasswordLen requires a value", file=sys.stderr)
++                sys.exit(1)
++        elif arg in ['--fileNumber']:
++            if i + 1 < len(args_list):
++                try:
++                    fileNumber = int(args_list[i + 1])
++                except ValueError:
++                    print(f"Error: --fileNumber requires an integer value", file=sys.stderr)
++                    sys.exit(1)
++                i += 2
++            else:
++                print("Error: --fileNumber requires a value", file=sys.stderr)
++                sys.exit(1)
++        elif arg in ['-s', '--startingPassword']:
++            if i + 1 < len(args_list):
++                startingPassword = args_list[i + 1]
++                i += 2
++            else:
++                print("Error: --startingPassword requires a value", file=sys.stderr)
++                sys.exit(1)
++        elif arg in ['-h', '--help']:
++            print("Find the password of protected ZIP files")
++            print()
++            print("Usage: executable [OPTIONS] --inputFile <inputFile>")
++            print()
++            print("Options:")
++            print("  -i, --inputFile <inputFile>                    path to zip input file")
++            print("  -w, --workers <workers>                        number of workers")
++            print("  -p, --passwordDictionary <passwordDictionary>  path to a password dictionary file")
++            print("  -c, --charset <charset>                        charset to use to generate password [default: lud]")
++            print("      --charsetFile <charsetFile>                path to a charset file")
++            print("      --minPasswordLen <minPasswordLen>          minimum password length [default: 1]")
++            print("      --maxPasswordLen <maxPasswordLen>          maximum password length [default: 10]")
++            print("      --fileNumber <fileNumber>                  file number in the zip archive [default: 0]")
++            print("  -s, --startingPassword <startingPassword>      password to start from")
++            print("  -h, --help                                     Print help")
++            print("  -V, --version                                  Print version")
++            print()
++            print("Examples:")
++            print("  zip-password-finder --inputFile secret.zip --passwordDictionary words.txt")
++            print("  zip-password-finder --inputFile secret.zip --charset l --minPasswordLen 1 --maxPasswordLen 6")
++            sys.exit(0)
++        else:
++            print(f"Error: Unknown option: {arg}", file=sys.stderr)
++            sys.exit(1)
++    
++    if not inputFile:
++        print("Error: --inputFile is required", file=sys.stderr)
++        sys.exit(1)
++    
++    # Load charset from file if specified
++    if charsetFile:
++        charset = load_charset_from_file(charsetFile)
++    
++    # Validate charset
++    if not charset:
++        print("Error: Invalid charset", file=sys.stderr)
++        sys.exit(1)
++    
++    # Check if input file exists
++    if not os.path.exists(inputFile):
++        print(f"Error: Input file not found: {inputFile}", file=sys.stderr)
++        sys.exit(1)
++    
++    # Check if password dictionary exists
++    if passwordDictionary and not os.path.exists(passwordDictionary):
++        print(f"Error: Password dictionary not found: {passwordDictionary}", file=sys.stderr)
++        sys.exit(1)
++    
++    # Validate password length range
++    if minPasswordLen < 1:
++        print("Error: --minPasswordLen must be at least 1", file=sys.stderr)
++        sys.exit(1)
++    if maxPasswordLen < minPasswordLen:
++        print("Error: --maxPasswordLen must be at least --minPasswordLen", file=sys.stderr)
++        sys.exit(1)
++    if maxPasswordLen > 100:
++        print("Error: --maxPasswordLen must be at most 100", file=sys.stderr)
++        sys.exit(1)
++    
++    # Start timing
++    start_time = time.time()
++    
++    # Load passwords from dictionary if specified
++    passwords = []
++    if passwordDictionary:
++        try:
++            with open(passwordDictionary, 'r') as f:
++                for line in f:
++                    password = line.strip()
++                    if password:
++                        passwords.append(password)
++        except Exception as e:
++            print(f"Error reading password dictionary: {e}", file=sys.stderr)
++            sys.exit(1)
++    
++    if not passwords:
++        print("Error: Password dictionary is empty", file=sys.stderr)
++        sys.exit(1)
++    
++    # Generate passwords if not using dictionary
++    if not passwords:
++        passwords = generate_passwords(charset, minPasswordLen, maxPasswordLen, startingPassword)
++    
++    if not passwords:
++        print("Error: No passwords to test", file=sys.stderr)
++        sys.exit(1)
++    
++    # Test passwords
++    results = {'found': None, 'elapsed': 0}
++    lock = threading.Lock()
++    
++    if workers > 1:
++        # Use thread pool
++        class ArgsWrapper:
++            def __init__(self, args_list):
++                self.inputFile = args_list[0]
++                self.fileNumber = args_list[1]
++                self.start_time = start_time
++        
++        args_wrapper = ArgsWrapper([inputFile, fileNumber])
++        with ThreadPoolExecutor(max_workers=workers) as executor:
++            futures = []
++            for password in passwords:
++                future = executor.submit(worker, args_wrapper, [password], results, lock)
++                futures.append(future)
++            
++            for future in as_completed(futures):
++                future.result()
++    else:
++        # Single worker
++        class ArgsWrapper:
++            def __init__(self, args_list):
++                self.inputFile = args_list[0]
++                self.fileNumber = args_list[1]
++                self.start_time = start_time
++        
++        args_wrapper = ArgsWrapper([inputFile, fileNumber])
++        worker(args_wrapper, passwords, results, lock)
++    
++    # Print results
++    elapsed = results['elapsed']
++    if elapsed < 1:
++        print(f"Time elapsed: {elapsed * 1000000:.0f}us {elapsed * 1000:.0f}ns")
++    elif elapsed < 60:
++        print(f"Time elapsed: {elapsed:.0f}s {elapsed * 1000:.0f}ms {elapsed * 1000000:.0f}us {elapsed * 1000000000:.0f}ns")
++    else:
++        print(f"Time elapsed: {elapsed:.0f}s {elapsed * 1000:.0f}ms {elapsed * 1000000:.0f}us {elapsed * 1000000000:.0f}ns")
++    
++    if results['found']:
++        print(f"Password found:{results['found']}")
++        sys.exit(0)
++    else:
++        print("Password not found")
++        sys.exit(1)
++
++if __name__ == '__main__':
++    main()
