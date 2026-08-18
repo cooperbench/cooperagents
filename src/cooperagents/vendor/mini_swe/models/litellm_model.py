@@ -97,19 +97,33 @@ class LitellmModel:
         # the completion in a worker thread and abandon it on expiry — the
         # raised Timeout feeds the existing tenacity retry, which reissues
         # on a fresh connection.
-        import concurrent.futures as _cf
+        # THREAD-PER-CALL, not a pool: an abandoned hung call permanently
+        # occupies its thread; with a fixed pool a few hangs clog the queue
+        # and every later call times out against dead workers (observed:
+        # 3/4 agents idle in retry loops). A fresh daemon thread per call
+        # leaks at most one thread per genuine hang and never blocks others.
+        import queue as _q
+        import threading as _t
 
-        if not hasattr(self, "_qpool"):
-            self._qpool = _cf.ThreadPoolExecutor(max_workers=4)
-        fut = self._qpool.submit(self._query_inner, messages, **kwargs)
+        box: _q.Queue = _q.Queue(maxsize=1)
+
+        def _run():
+            try:
+                box.put(("ok", self._query_inner(messages, **kwargs)))
+            except BaseException as e:  # noqa: BLE001
+                box.put(("err", e))
+
+        _t.Thread(target=_run, daemon=True).start()
         try:
-            return fut.result(timeout=self._HARD_TIMEOUT_S)
-        except _cf.TimeoutError:
-            fut.cancel()
+            kind, val = box.get(timeout=self._HARD_TIMEOUT_S)
+        except _q.Empty:
             raise litellm.Timeout(
                 f"completion exceeded hard cap {self._HARD_TIMEOUT_S}s (read-timeout bug workaround)",
                 model=self.config.model_name, llm_provider="openai",
             ) from None
+        if kind == "err":
+            raise val
+        return val
 
     def _query_inner(self, messages: list[dict[str, str]], **kwargs):
         try:
