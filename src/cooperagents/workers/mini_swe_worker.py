@@ -275,6 +275,13 @@ def build_model(
         model_kwargs["temperature"] = float(os.environ["COOPER_TEMPERATURE"])
     if temperature is not None:  # explicit per-call override (e.g. Q3 diversity)
         model_kwargs["temperature"] = temperature
+    # Short request timeout: the litellm/httpx default (~600s) makes an agent
+    # hang 10 minutes on a dead pooled connection (socket to a scaled-down
+    # serving container that vanished without RST) before retrying onto a
+    # healthy one — measured as 8-25min mid-run stalls while the endpoint
+    # answered fresh probes in <3s. Healthy calls are 1-3s; productive
+    # long generations <=90s; 180s cuts dead-socket waits 3x with margin.
+    model_kwargs.setdefault("timeout", 180)
     # litellm needs the openai/ provider prefix to treat it as OpenAI-compatible.
     # HF-style names ("Qwen/Qwen3.5-9B") contain a slash but are not provider
     # prefixes, so only skip the prefix for explicit litellm providers.

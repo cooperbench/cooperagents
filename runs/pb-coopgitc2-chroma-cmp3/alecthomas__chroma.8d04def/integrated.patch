@@ -1,0 +1,1010 @@
+diff --git a/__pycache__/test.cpython-310.pyc b/__pycache__/test.cpython-310.pyc
+new file mode 100644
+index 0000000..3e0d949
+Binary files /dev/null and b/__pycache__/test.cpython-310.pyc differ
+diff --git a/chroma.py b/chroma.py
+new file mode 100755
+index 0000000..60ed756
+--- /dev/null
++++ b/chroma.py
+@@ -0,0 +1,784 @@
++#!/usr/bin/env python3
++"""
++Chroma - A General Purpose Syntax Highlighter
++
++A command-line tool that takes source code and other structured text
++and converts it into syntax highlighted HTML, ANSI-coloured text, and other formats.
++"""
++
++import argparse
++import sys
++import os
++import re
++import json
++from typing import List, Dict, Any, Optional, Tuple, Union
++from dataclasses import dataclass
++from enum import Enum, auto
++
++# ============================================================================
++# LEXERS
++# ============================================================================
++
++class Lexer:
++    """Base lexer class"""
++    def __init__(self, name: str, aliases: List[str] = None, filenames: List[str] = None, mimetypes: List[str] = None):
++        self.name = name
++        self.aliases = aliases or []
++        self.filenames = filenames or []
++        self.mimetypes = mimetypes or []
++    
++    def __repr__(self):
++        return f"Lexer({self.name})"
++
++# Define lexers
++LEXERS = [
++    Lexer("ABAP", ["abap"]),
++    Lexer("ABNF", ["abnf"]),
++    Lexer("ActionScript", ["as", "actionscript"]),
++    Lexer("ActionScript 3", ["as3", "actionscript3"]),
++    Lexer("Ada", ["ada", "ada95", "ada2005"]),
++    Lexer("Agda", ["agda"]),
++    Lexer("AL", ["al"]),
++    Lexer("Alloy", ["alloy"]),
++    Lexer("AMPL", ["ampl"]),
++    Lexer("Angular2", ["ng2"]),
++    Lexer("ANTLR", ["antlr"]),
++    Lexer("ApacheConf", ["apacheconf", "aconf", "apache"]),
++    Lexer("APL", ["apl"]),
++    Lexer("AppleScript", ["applescript"]),
++    Lexer("ArangoDB AQL", ["aql"]),
++    Lexer("Arduino", ["arduino"]),
++    Lexer("ArmAsm", ["armasm"]),
++    Lexer("ATL", ["atl"]),
++    Lexer("AutoHotkey", ["autohotkey"]),
++    Lexer("AutoIt", ["autoit"]),
++    Lexer("Awk", ["awk"]),
++    Lexer("Ballerina", ["ballerina"]),
++    Lexer("Bash", ["bash", "sh"]),
++    Lexer("Bash Session", ["bash-session"]),
++    Lexer("Batchfile", ["bat", "batch"]),
++    Lexer("Beef", ["beef"]),
++    Lexer("BibTeX", ["bibtex"]),
++    Lexer("Bicep", ["bicep"]),
++    Lexer("BlitzBasic", ["blitzbasic"]),
++    Lexer("BNF", ["bnf"]),
++    Lexer("BQN", ["bqn"]),
++    Lexer("Brainfuck", ["brainfuck"]),
++    Lexer("C", ["c"]),
++    Lexer("C#", ["csharp", "cs"]),
++    Lexer("C++", ["cpp", "cc", "cxx", "h", "hpp"]),
++    Lexer("C3", ["c3"]),
++    Lexer("Caddyfile", ["caddyfile"]),
++    Lexer("Caddyfile Directives", ["caddyfile-directives"]),
++    Lexer("Cap'n Proto", ["capnp"]),
++    Lexer("Cassandra CQL", ["cassandra", "cql"]),
++    Lexer("Ceylon", ["ceylon"]),
++    Lexer("CFEngine3", ["cfengine3"]),
++    Lexer("cfstatement", ["cfstatement"]),
++    Lexer("ChaiScript", ["chaiscript"]),
++    Lexer("Chapel", ["chapel"]),
++    Lexer("Cheetah", ["cheetah"]),
++    Lexer("Clojure", ["clojure"]),
++    Lexer("CMake", ["cmake"]),
++    Lexer("COBOL", ["cobol"]),
++    Lexer("CoffeeScript", ["coffeescript", "coffee"]),
++    Lexer("Common Lisp", ["lisp", "cl"]),
++    Lexer("Coq", ["coq"]),
++    Lexer("Core", ["core"]),
++    Lexer("Crystal", ["crystal"]),
++    Lexer("CSS", ["css", "scss", "sass"]),
++    Lexer("CSV", ["csv"]),
++    Lexer("CUE", ["cue"]),
++    Lexer("Cython", ["cython", "pyx"]),
++    Lexer("D", ["d"]),
++    Lexer("Dart", ["dart"]),
++    Lexer("Dax", ["dax"]),
++    Lexer("Desktop file", ["desktop"]),
++    Lexer("Diff", ["diff", "patch"]),
++    Lexer("Django/Jinja", ["django", "jinja", "jinja2", "j2"]),
++    Lexer("dns", ["dns"]),
++    Lexer("Docker", ["dockerfile", "docker"]),
++    Lexer("DTD", ["dtd", "xml"]),
++    Lexer("Dylan", ["dylan"]),
++    Lexer("EBNF", ["ebnf"]),
++    Lexer("Elixir", ["elixir"]),
++    Lexer("Elm", ["elm"]),
++    Lexer("EmacsLisp", ["emacs", "el"]),
++    Lexer("Erlang", ["erlang", "erl"]),
++    Lexer("Factor", ["factor"]),
++    Lexer("Fennel", ["fennel"]),
++    Lexer("Fish", ["fish"]),
++    Lexer("Forth", ["forth"]),
++    Lexer("Fortran", ["fortran", "f90", "f95", "f77"]),
++    Lexer("FortranFixed", ["fortran-fixed"]),
++    Lexer("FSharp", ["fsharp", "fs"]),
++    Lexer("GAS", ["gas", "asm"]),
++    Lexer("GDScript", ["gdscript"]),
++    Lexer("GDScript3", ["gdscript3"]),
++    Lexer("Gemtext", ["gemtext"]),
++    Lexer("Genshi", ["genshi"]),
++    Lexer("Genshi HTML", ["genshi-html"]),
++    Lexer("Genshi Text", ["genshi-text"]),
++    Lexer("Gettext", ["gettext", "po"]),
++    Lexer("Gherkin", ["gherkin", "feature"]),
++    Lexer("Gleam", ["gleam"]),
++    Lexer("GLSL", ["glsl", "vert", "frag", "geom", "tesc", "tese"]),
++    Lexer("Gnuplot", ["gnuplot", "gp"]),
++    Lexer("Go", ["go", "golang"]),
++    Lexer("Go HTML Template", ["go-html-template", "html.go"]),
++    Lexer("Go Template", ["go-template", "tmpl"]),
++    Lexer("Go Text Template", ["go-text-template", "txt.go"]),
++    Lexer("GraphQL", ["graphql", "gql"]),
++    Lexer("Groff", ["groff", "man", "1", "2", "3", "4", "5", "6", "7", "8", "9"]),
++    Lexer("Groovy", ["groovy", "gradle"]),
++    Lexer("Handlebars", ["handlebars", "hbs", "mustache"]),
++    Lexer("Hare", ["hare"]),
++    Lexer("Haskell", ["haskell", "hs"]),
++    Lexer("Haxe", ["haxe", "hx"]),
++    Lexer("HCL", ["hcl"]),
++    Lexer("Hexdump", ["hexdump", "hex"]),
++    Lexer("HLB", ["hlb"]),
++    Lexer("HLSL", ["hlsl", "vert", "frag", "geom", "tesc", "tese"]),
++    Lexer("HolyC", ["holy"]),
++    Lexer("HTML", ["html", "htm"]),
++    Lexer("HTTP", ["http"]),
++    Lexer("Hy", ["hy"]),
++    Lexer("Idris", ["idris", "idr"]),
++    Lexer("Igor", ["igor"]),
++    Lexer("INI", ["ini", "conf", "cfg"]),
++    Lexer("Io", ["io"]),
++    Lexer("ISCdhcpd", ["iscdhcpd"]),
++    Lexer("J", ["j"]),
++    Lexer("Janet", ["janet"]),
++    Lexer("Java", ["java"]),
++    Lexer("JavaScript", ["javascript", "js", "jsx", "mjs", "cjs"]),
++    Lexer("JSON", ["json"]),
++    Lexer("JSONata", ["jsonata"]),
++    Lexer("Jsonnet", ["jsonnet", "jinja"]),
++    Lexer("Julia", ["julia", "jl"]),
++    Lexer("Jungle", ["jungle"]),
++    Lexer("Kakoune", ["kakoune"]),
++    Lexer("Kotlin", ["kotlin", "kt"]),
++    Lexer("Lean4", ["lean4", "lean"]),
++    Lexer("Lighttpd configuration file", ["lighttpd"]),
++    Lexer("LLVM", ["llvm"]),
++    Lexer("lox", ["lox"]),
++    Lexer("Lua", ["lua"]),
++    Lexer("Luau", ["luau"]),
++    Lexer("Makefile", ["makefile", "make", "mk"]),
++    Lexer("Mako", ["mako"]),
++    Lexer("markdown", ["markdown", "md", "mkdown", "mkd", "markdown", "text", "mdown", "mdwn", "mdtxt", "mdtext"]),
++    Lexer("Markless", ["markless"]),
++    Lexer("Mason", ["mason"]),
++    Lexer("Materialize SQL dialect", ["materialize", "materialized"]),
++    Lexer("Mathematica", ["mathematica", "nb"]),
++    Lexer("Matlab", ["matlab", "m"]),
++    Lexer("MCFunction", ["mcfunction"]),
++    Lexer("Meson", ["meson"]),
++    Lexer("Metal", ["metal"]),
++    Lexer("MiniZinc", ["minizinc"]),
++    Lexer("MLIR", ["mlir"]),
++    Lexer("Modelica", ["modelica"]),
++    Lexer("Modula-2", ["modula-2", "m2"]),
++    Lexer("Mojo", ["mojo"]),
++    Lexer("MonkeyC", ["monkeyc"]),
++    Lexer("MoonScript", ["moonscript", "moon"]),
++    Lexer("MorrowindScript", ["morrowindscript"]),
++    Lexer("Myghty", ["myghty"]),
++    Lexer("MySQL", ["mysql", "sql"]),
++    Lexer("NASM", ["nasm", "asm"]),
++    Lexer("Natural", ["natural"]),
++    Lexer("NDISASM", ["ndisasm"]),
++    Lexer("Newspeak", ["newspeak"]),
++    Lexer("Nginx configuration file", ["nginx"]),
++    Lexer("Nim", ["nim", "nimrod"]),
++    Lexer("Nix", ["nix"]),
++    Lexer("NSIS", ["nsis"]),
++    Lexer("Nu", ["nu"]),
++    Lexer("Objective-C", ["objectivec", "objc", "m"]),
++    Lexer("ObjectPascal", ["objectpascal", "pas"]),
++    Lexer("OCaml", ["ocaml", "ml", "mli", "mll", "mly"]),
++    Lexer("Octave", ["octave", "m"]),
++    Lexer("Odin", ["odin"]),
++    Lexer("OnesEnterprise", ["onesenterprise"]),
++    Lexer("OpenEdge ABL", ["openedge", "abl"]),
++    Lexer("OpenSCAD", ["openscad", "scad"]),
++    Lexer("Org Mode", ["org", "orgmode"]),
++    Lexer("PacmanConf", ["pacmanconf"]),
++    Lexer("Perl", ["perl", "pl", "pm"]),
++    Lexer("PHP", ["php", "phtml"]),
++    Lexer("PHTML", ["phtml"]),
++    Lexer("Pig", ["pig"]),
++    Lexer("PkgConfig", ["pkgconfig", "pc"]),
++    Lexer("PL/pgSQL", ["plpgsql"]),
++    Lexer("plaintext", ["plaintext", "text"]),
++    Lexer("Plutus Core", ["plutus", "plc"]),
++    Lexer("Pony", ["pony"]),
++    Lexer("PostgreSQL SQL dialect", ["postgresql", "pgsql"]),
++    Lexer("PostScript", ["postscript", "ps"]),
++    Lexer("POVRay", ["povray", "pov"]),
++    Lexer("PowerQuery", ["powerquery", "pq"]),
++    Lexer("PowerShell", ["powershell", "ps1", "psm1"]),
++    Lexer("Prolog", ["prolog", "pl", "pro"]),
++    Lexer("Promela", ["promela"]),
++    Lexer("PromQL", ["promql"]),
++    Lexer("properties", ["properties"]),
++    Lexer("Protocol Buffer", ["protobuf", "proto"]),
++    Lexer("Protocol Buffer Text Format", ["protobuf-text"]),
++    Lexer("PRQL", ["prql"]),
++    Lexer("PSL", ["psl"]),
++    Lexer("Puppet", ["puppet"]),
++    Lexer("Python", ["python", "py"]),
++    Lexer("Python 2", ["python2", "py2"]),
++    Lexer("QBasic", ["qbasic", "bas"]),
++    Lexer("QML", ["qml"]),
++    Lexer("R", ["r", "rscript"]),
++    Lexer("Racket", ["racket", "rkt"]),
++    Lexer("Ragel", ["ragel"]),
++    Lexer("Raku", ["raku", "rakumod", "rakutest", "raku-t", "raku-tr", "rakudoc"]),
++    Lexer("react", ["react", "jsx", "tsx"]),
++    Lexer("ReasonML", ["reasonml", "re"]),
++    Lexer("reg", ["reg"]),
++    Lexer("Rego", ["rego"]),
++    Lexer("reStructuredText", ["restructuredtext", "rst"]),
++    Lexer("Rexx", ["rexx"]),
++    Lexer("RGBDS Assembly", ["rgbdas", "rgbda"]),
++    Lexer("Ring", ["ring"]),
++    Lexer("RPGLE", ["rpgle"]),
++    Lexer("RPMSpec", ["rpmspec", "spec"]),
++    Lexer("Ruby", ["ruby", "rb"]),
++    Lexer("Rust", ["rust", "rs"]),
++    Lexer("SAS", ["sas"]),
++    Lexer("Sass", ["sass", "scss"]),
++    Lexer("Scala", ["scala"]),
++    Lexer("Scheme", ["scheme", "scm", "ss"]),
++    Lexer("Scilab", ["scilab", "sci"]),
++    Lexer("SCSS", ["scss"]),
++    Lexer("Sed", ["sed"]),
++    Lexer("Sieve", ["sieve"]),
++    Lexer("Smali", ["smali"]),
++    Lexer("Smalltalk", ["smalltalk", "st"]),
++    Lexer("Smarty", ["smarty"]),
++    Lexer("SNBT", ["snbt"]),
++    Lexer("Snobol", ["snobol"]),
++    Lexer("Solidity", ["solidity", "sol"]),
++    Lexer("SourcePawn", ["sourcepawn", "sp"]),
++    Lexer("Spade", ["spade"]),
++    Lexer("SPARQL", ["sparql"]),
++    Lexer("SQL", ["sql"]),
++    Lexer("SquidConf", ["squidconf"]),
++    Lexer("Standard ML", ["standardml", "sml"]),
++    Lexer("stas", ["stas"]),
++    Lexer("Stylus", ["stylus", "styl"]),
++    Lexer("Svelte", ["svelte", "svelte.js", "svelte.ts"]),
++    Lexer("Swift", ["swift"]),
++    Lexer("SYSTEMD", ["systemd", "conf.d"]),
++    Lexer("systemverilog", ["systemverilog", "sv", "svh", "vh"]),
++    Lexer("TableGen", ["tablegen", "td"]),
++    Lexer("Tal", ["tal"]),
++    Lexer("TASM", ["tasm"]),
++    Lexer("Tcl", ["tcl"]),
++    Lexer("Tcsh", ["tcsh"]),
++    Lexer("Termcap", ["termcap"]),
++    Lexer("Terminfo", ["terminfo", "termcap"]),
++    Lexer("Terraform", ["terraform", "tf"]),
++    Lexer("TeX", ["tex", "ltx", "latex", "bib", "cls", "sty", "texi", "texinfo"]),
++    Lexer("Thrift", ["thrift", "thrift"]),
++    Lexer("TOML", ["toml"]),
++    Lexer("TradingView", ["tradingview"]),
++    Lexer("Transact-SQL", ["transact-sql", "tsql"]),
++    Lexer("Turing", ["turing"]),
++    Lexer("Turtle", ["turtle", "ttl"]),
++    Lexer("Twig", ["twig"]),
++    Lexer("TypeScript", ["typescript", "ts", "tsx"]),
++    Lexer("TypoScript", ["typo", "ts"]),
++    Lexer("TypoScriptCssData", ["typoscssdata"]),
++    Lexer("TypoScriptHtmlData", ["typohtmldata"]),
++    Lexer("Typst", ["typst", "ty"]),
++    Lexer("ucode", ["ucode"]),
++    Lexer("V", ["v"]),
++    Lexer("V shell", ["vshell", "vsh"]),
++    Lexer("Vala", ["vala", "vapi"]),
++    Lexer("VB.net", ["vb", "vb.net"]),
++    Lexer("verilog", ["verilog", "v", "veo"]),
++    Lexer("VHDL", ["vhdl", "vhd", "vhf", "vhi", "vho", "vht", "vhw"]),
++    Lexer("VHS", ["vhs"]),
++    Lexer("VimL", ["viml", "vim"]),
++    Lexer("vue", ["vue"]),
++    Lexer("WDTE", ["wdte"]),
++    Lexer("WebAssembly Text Format", ["wast", "wat"]),
++    Lexer("WebGPU Shading Language", ["wgsl"]),
++    Lexer("WebVTT", ["webvtt", "vtt"]),
++    Lexer("Whiley", ["whiley"]),
++    Lexer("XML", ["xml"]),
++    Lexer("Xorg", ["xorg"]),
++    Lexer("YAML", ["yaml", "yml"]),
++    Lexer("YANG", ["yang"]),
++    Lexer("Z80 Assembly", ["z80asm", "z80"]),
++    Lexer("Zed", ["zed"]),
++    Lexer("Zig", ["zig"]),
++]
++
++# Create lexer lookup
++LEXER_BY_NAME = {lexer.name: lexer for lexer in LEXERS}
++LEXER_BY_ALIAS = {}
++for lexer in LEXERS:
++    for alias in lexer.aliases:
++        LEXER_BY_ALIAS[alias] = lexer
++
++# ============================================================================
++# STYLES
++# ============================================================================
++
++STYLES = [
++    "abap", "algol", "algol_nu", "arduino", "ashen", "aura-theme-dark",
++    "aura-theme-dark-soft", "autumn", "average", "base16-snazzy", "borland",
++    "bw", "catppuccin-frappe", "catppuccin-latte", "catppuccin-macchiato",
++    "catppuccin-mocha", "colorful", "darcula", "doom-one", "doom-one2",
++    "dracula", "emacs", "evergarden", "friendly", "fruity", "github",
++    "github-dark", "gruvbox", "gruvbox-light", "hr_high_contrast", "hrdark",
++    "igor", "kanagawa-dragon", "kanagawa-lotus", "kanagawa-wave", "lovelace",
++    "manni", "modus-operandi", "modus-vivendi", "monokai", "monokailight",
++    "murphy", "native", "nord", "nordic", "onedark", "onesenterprise",
++    "paraiso-dark", "paraiso-light", "pastie", "perldoc", "pygments",
++    "rainbow_dash", "rose-pine", "rose-pine-dawn", "rose-pine-moon", "rpgle",
++    "rrt", "solarized-dark", "solarized-dark256", "solarized-light", "swapoff",
++    "tango", "tokyonight-day", "tokyonight-moon", "tokyonight-night",
++    "tokyonight-storm", "trac", "vim", "vs", "vulcan", "witchhazel",
++    "xcode", "xcode-dark",
++]
++
++# ============================================================================
++# FORMATTERS
++# ============================================================================
++
++FORMATTERS = [
++    "html", "json", "noop", "svg", "terminal", "terminal16", "terminal16m",
++    "terminal256", "terminal8", "tokens",
++]
++
++# ============================================================================
++# TOKEN TYPES
++# ============================================================================
++
++class TokenType(Enum):
++    Text = auto()
++    Keyword = auto()
++    KeywordConstant = auto()
++    KeywordDeclaration = auto()
++    KeywordNamespace = auto()
++    KeywordPseudo = auto()
++    KeywordReserved = auto()
++    KeywordType = auto()
++    NameAttribute = auto()
++    NameBuiltin = auto()
++    NameBuiltinPseudo = auto()
++    NameClass = auto()
++    NameDecorator = auto()
++    NameEntity = auto()
++    NameFunction = auto()
++    NameFunctionMagic = auto()
++    NameFunctionMacro = auto()
++    NameLabel = auto()
++    NameNamespace = auto()
++    NameOther = auto()
++    NameProperty = auto()
++    NameTag = auto()
++    NameVariable = auto()
++    NameVariableClass = auto()
++    NameVariableGlobal = auto()
++    NameVariableInstance = auto()
++    NameVariableMagic = auto()
++    Operator = auto()
++    OperatorWord = auto()
++    Punctuation = auto()
++    Comment = auto()
++    CommentMultiline = auto()
++    CommentSingle = auto()
++    CommentSpecial = auto()
++    CommentHash = auto()
++    Doctest = auto()
++    Generic = auto()
++    GenericDeleted = auto()
++    GenericEmph = auto()
++    GenericError = auto()
++    GenericHeading = auto()
++    GenericInserted = auto()
++    GenericOutput = auto()
++    GenericPrompt = auto()
++    GenericStrong = auto()
++    GenericSubheading = auto()
++    GenericTraceback = auto()
++    GenericUnderline = auto()
++    LiteralNumber = auto()
++    LiteralNumberBin = auto()
++    LiteralNumberFloat = auto()
++    LiteralNumberHex = auto()
++    LiteralNumberInteger = auto()
++    LiteralNumberOct = auto()
++    LiteralString = auto()
++    LiteralStringAffix = auto()
++    LiteralStringBacktick = auto()
++    LiteralStringChar = auto()
++    LiteralStringDouble = auto()
++    LiteralStringDoc = auto()
++    LiteralStringDocTrailing = auto()
++    LiteralStringDoubleDoc = auto()
++    LiteralStringDoubleQuote = auto()
++    LiteralStringDocRaw = auto()
++    LiteralStringInterpol = auto()
++    LiteralStringOther = auto()
++    LiteralStringRaw = auto()
++    LiteralStringRegex = auto()
++    LiteralStringSingle = auto()
++    LiteralStringSingleDoc = auto()
++    LiteralStringSymbol = auto()
++    LiteralStringTripleDouble = auto()
++    LiteralStringTripleDoubleDoc = auto()
++    LiteralStringTripleQuote = auto()
++    LiteralStringTripleSingle = auto()
++    LiteralStringUnicode = auto()
++    LiteralStringWhitespace = auto()
++    Other = auto()
++    OtherBlock = auto()
++    OtherInline = auto()
++    Whitespace = auto()
++
++# ============================================================================
++# TOKEN COLOR MAPPINGS
++# ============================================================================
++
++TOKEN_COLORS = {
++    TokenType.Text: "Text",
++    TokenType.Keyword: "Keyword",
++    TokenType.KeywordConstant: "KeywordConstant",
++    TokenType.KeywordDeclaration: "KeywordDeclaration",
++    TokenType.KeywordNamespace: "KeywordNamespace",
++    TokenType.KeywordPseudo: "KeywordPseudo",
++    TokenType.KeywordReserved: "KeywordReserved",
++    TokenType.KeywordType: "KeywordType",
++    TokenType.NameAttribute: "NameAttribute",
++    TokenType.NameBuiltin: "NameBuiltin",
++    TokenType.NameBuiltinPseudo: "NameBuiltinPseudo",
++    TokenType.NameClass: "NameClass",
++    TokenType.NameDecorator: "NameDecorator",
++    TokenType.NameEntity: "NameEntity",
++    TokenType.NameFunction: "NameFunction",
++    TokenType.NameFunctionMagic: "NameFunctionMagic",
++    TokenType.NameFunctionMacro: "NameFunctionMacro",
++    TokenType.NameLabel: "NameLabel",
++    TokenType.NameNamespace: "NameNamespace",
++    TokenType.NameOther: "NameOther",
++    TokenType.NameProperty: "NameProperty",
++    TokenType.NameTag: "NameTag",
++    TokenType.NameVariable: "NameVariable",
++    TokenType.NameVariableClass: "NameVariableClass",
++    TokenType.NameVariableGlobal: "NameVariableGlobal",
++    TokenType.NameVariableInstance: "NameVariableInstance",
++    TokenType.NameVariableMagic: "NameVariableMagic",
++    TokenType.Operator: "Operator",
++    TokenType.OperatorWord: "OperatorWord",
++    TokenType.Punctuation: "Punctuation",
++    TokenType.Comment: "Comment",
++    TokenType.CommentMultiline: "CommentMultiline",
++    TokenType.CommentSingle: "CommentSingle",
++    TokenType.CommentSpecial: "CommentSpecial",
++    TokenType.CommentHash: "CommentHash",
++    TokenType.Doctest: "Doctest",
++    TokenType.Generic: "Generic",
++    TokenType.GenericDeleted: "GenericDeleted",
++    TokenType.GenericEmph: "GenericEmph",
++    TokenType.GenericError: "GenericError",
++    TokenType.GenericHeading: "GenericHeading",
++    TokenType.GenericInserted: "GenericInserted",
++    TokenType.GenericOutput: "GenericOutput",
++    TokenType.GenericPrompt: "GenericPrompt",
++    TokenType.GenericStrong: "GenericStrong",
++    TokenType.GenericSubheading: "GenericSubheading",
++    TokenType.GenericTraceback: "GenericTraceback",
++    TokenType.GenericUnderline: "GenericUnderline",
++    TokenType.LiteralNumber: "LiteralNumber",
++    TokenType.LiteralNumberBin: "LiteralNumberBin",
++    TokenType.LiteralNumberFloat: "LiteralNumberFloat",
++    TokenType.LiteralNumberHex: "LiteralNumberHex",
++    TokenType.LiteralNumberInteger: "LiteralNumberInteger",
++    TokenType.LiteralNumberOct: "LiteralNumberOct",
++    TokenType.LiteralString: "LiteralString",
++    TokenType.LiteralStringAffix: "LiteralStringAffix",
++    TokenType.LiteralStringBacktick: "LiteralStringBacktick",
++    TokenType.LiteralStringChar: "LiteralStringChar",
++    TokenType.LiteralStringDouble: "LiteralStringDouble",
++    TokenType.LiteralStringDoc: "LiteralStringDoc",
++    TokenType.LiteralStringDocTrailing: "LiteralStringDocTrailing",
++    TokenType.LiteralStringDoubleDoc: "LiteralStringDoubleDoc",
++    TokenType.LiteralStringDoubleQuote: "LiteralStringDoubleQuote",
++    TokenType.LiteralStringDocRaw: "LiteralStringDocRaw",
++    TokenType.LiteralStringInterpol: "LiteralStringInterpol",
++    TokenType.LiteralStringOther: "LiteralStringOther",
++    TokenType.LiteralStringRaw: "LiteralStringRaw",
++    TokenType.LiteralStringRegex: "LiteralStringRegex",
++    TokenType.LiteralStringSingle: "LiteralStringSingle",
++    TokenType.LiteralStringSingleDoc: "LiteralStringSingleDoc",
++    TokenType.LiteralStringSymbol: "LiteralStringSymbol",
++    TokenType.LiteralStringTripleDouble: "LiteralStringTripleDouble",
++    TokenType.LiteralStringTripleDoubleDoc: "LiteralStringTripleDoubleDoc",
++    TokenType.LiteralStringTripleQuote: "LiteralStringTripleQuote",
++    TokenType.LiteralStringTripleSingle: "LiteralStringTripleSingle",
++    TokenType.LiteralStringUnicode: "LiteralStringUnicode",
++    TokenType.LiteralStringWhitespace: "LiteralStringWhitespace",
++    TokenType.Other: "Other",
++    TokenType.OtherBlock: "OtherBlock",
++    TokenType.OtherInline: "OtherInline",
++    TokenType.Whitespace: "Whitespace",
++}
++
++# ============================================================================
++# SIMPLE TOKENIZER (for demonstration)
++# ============================================================================
++
++def tokenize_python(code: str) -> List[Tuple[TokenType, str]]:
++    """Simple Python tokenizer for demonstration"""
++    tokens = []
++    i = 0
++    while i < len(code):
++        # Skip whitespace
++        if code[i].isspace():
++            tokens.append((TokenType.Whitespace, code[i]))
++            i += 1
++            continue
++        
++        # Comments
++        if code[i] == '#':
++            end = code.find('\n', i)
++            if end == -1:
++                end = len(code)
++            tokens.append((TokenType.CommentSingle, code[i:end]))
++            i = end + 1
++            continue
++        
++        # Strings
++        if code[i] in '"\'':
++            quote = code[i]
++            j = i + 1
++            while j < len(code) and code[j] != quote:
++                if code[j] == '\\' and j + 1 < len(code):
++                    j += 2
++                else:
++                    j += 1
++            if j < len(code):
++                j += 1
++            tokens.append((TokenType.LiteralStringSingle, code[i:j]))
++            i = j
++            continue
++        
++        # Keywords
++        keywords = {'def', 'class', 'if', 'else', 'elif', 'for', 'while', 'return',
++                   'import', 'from', 'as', 'try', 'except', 'finally', 'with',
++                   'lambda', 'yield', 'pass', 'break', 'continue', 'raise',
++                   'assert', 'global', 'nonlocal', 'async', 'await', 'True',
++                   'False', 'None', 'and', 'or', 'not', 'in', 'is'}
++        
++        if code[i:i+5] == 'def ':
++            j = i + 4
++            while j < len(code) and (code[j].isalnum() or code[j] == '_'):
++                j += 1
++            tokens.append((TokenType.Keyword, code[i:j]))
++            i = j
++            continue
++        
++        if code[i:i+6] == 'class ':
++            j = i + 6
++            while j < len(code) and (code[j].isalnum() or code[j] == '_'):
++                j += 1
++            tokens.append((TokenType.NameClass, code[i:j]))
++            i = j
++            continue
++        
++        if code[i:i+4] == 'for ':
++            j = i + 4
++            while j < len(code) and (code[j].isalnum() or code[j] == '_'):
++                j += 1
++            tokens.append((TokenType.Keyword, code[i:j]))
++            i = j
++            continue
++        
++        if code[i:i+5] == 'while ':
++            j = i + 5
++            while j < len(code) and (code[j].isalnum() or code[j] == '_'):
++                j += 1
++            tokens.append((TokenType.Keyword, code[i:j]))
++            i = j
++            continue
++        
++        if code[i:i+6] == 'return ':
++            j = i + 6
++            while j < len(code) and (code[j].isalnum() or code[j] == '_'):
++                j += 1
++            tokens.append((TokenType.Keyword, code[i:j]))
++            i = j
++            continue
++        
++        if code[i:i+5] == 'print':
++            j = i + 5
++            while j < len(code) and (code[j].isalnum() or code[j] == '_'):
++                j += 1
++            tokens.append((TokenType.NameBuiltin, code[i:j]))
++            i = j
++            continue
++        
++        # Regular identifier
++        if code[i].isalpha() or code[i] == '_':
++            j = i
++            while j < len(code) and (code[j].isalnum() or code[j] == '_'):
++                j += 1
++            word = code[i:j]
++            if word in keywords:
++                tokens.append((TokenType.Keyword, word))
++            else:
++                tokens.append((TokenType.NameBuiltin, word))
++            i = j
++            continue
++        
++        # Operators and punctuation
++        if code[i] in '()[]{};:,':
++            tokens.append((TokenType.Punctuation, code[i]))
++            i += 1
++            continue
++        
++        if code[i] in '+-*/%=<>!&|^~?:':
++            tokens.append((TokenType.Operator, code[i]))
++            i += 1
++            continue
++        
++        # Numbers
++        if code[i].isdigit():
++            j = i
++            while j < len(code) and (code[j].isdigit() or code[j] in '.eE'):
++                j += 1
++            tokens.append((TokenType.LiteralNumber, code[i:j]))
++            i = j
++            continue
++        
++        # Unknown character
++        tokens.append((TokenType.Other, code[i]))
++        i += 1
++    
++    return tokens
++
++# ============================================================================
++# STYLE DEFINITIONS
++# ============================================================================
++
++STYLE_COLORS = {
++    "dracula": {
++        "Keyword": "#ff79c6",
++        "NameBuiltin": "#8be9fd",
++        "NameClass": "#50fa7b",
++        "NameFunction": "#50fa7b",
++        "LiteralString": "#f1fa8c",
++        "Comment": "#6272a4",
++        "Operator": "#ff79c6",
++        "Punctuation": "#f8f8f2",
++        "Name": "#f8f8f2",
++        "Generic": "#f8f8f2",
++    },
++    "swapoff": {
++        "Keyword": "#ff79c6",
++        "NameBuiltin": "#8be9fd",
++        "NameClass": "#50fa7b",
++        "NameFunction": "#50fa7b",
++        "LiteralString": "#f1fa8c",
++        "Comment": "#6272a4",
++        "Operator": "#ff79c6",
++        "Punctuation": "#f8f8f2",
++        "Name": "#f8f8f2",
++        "Generic": "#f8f8f2",
++    },
++}
++
++# ============================================================================
++# TERMINAL FORMATTER
++# ============================================================================
++
++class TerminalFormatter:
++    def __init__(self, mode: str = "terminal"):
++        self.mode = mode
++        self.colors = {
++            "Keyword": "\033[1m\033[37m",
++            "NameBuiltin": "\033[1m\033[37m",
++            "NameClass": "\033[1m\033[32m",
++            "NameFunction": "\033[1m\033[37m",
++            "LiteralString": "\033[3m\033[37m",
++            "Comment": "\033[3m\033[37m",
++            "Operator": "\033[1m\033[37m",
++            "Punctuation": "\033[1m\033[37m",
++            "Name": "\033[1m\033[37m",
++            "Generic": "\033[1m\033[37m",
++        }
++    
++    def format(self, tokens: List[Tuple[TokenType, str]]) -> str:
++        result = []
++        for token_type, value in tokens:
++            color_name = TOKEN_COLORS.get(token_type, "Generic")
++            color = self.colors.get(color_name, "\033[0m")
++            result.append(color + value + "\033[0m")
++        return "".join(result)
++
++# ============================================================================
++# HTML FORMATTER
++# ============================================================================
++
++class HTMLFormatter:
++    def __init__(self, prefix: str = "chroma", styles: bool = False, all_styles: bool = False,
++                 only: bool = False, inline_styles: bool = False, tab_width: int = 8,
++                 lines: bool = False, lines_table: bool = False, lines_style: str = "",
++                 highlight: List[int] = None, highlight_style: str = "", base_line: int = 1,
++                 prevent_surrounding_pre: bool = False, linkable_lines: bool = False):
++        self.prefix = prefix
++        self.styles = styles
++        self.all_styles = all_styles
++        self.only = only
++        self.inline_styles = inline_styles
++        self.tab_width = tab_width
++        self.lines = lines
++        self.lines_table = lines_table
++        self.lines_style = lines_style
++        self.highlight = highlight or []
++        self.highlight_style = highlight_style
++        self.base_line = base_line
++        self.prevent_surrounding_pre = prevent_surrounding_pre
++        self.linkable_lines = linkable_lines
++    
++    def format(self, tokens: List[Tuple[TokenType, str]]) -> str:
++        result = []
++        
++        if self.styles or self.all_styles:
++            result.append("<style type=\"text/css\">\n")
++            result.append("/* Background */ .bg { color: #f8f8f2; background-color: #282a36; }\n")
++            result.append("/* PreWrapper */ .chroma { color: #f8f8f2; background-color: #282a36; -webkit-text-size-adjust: none; }\n")
++            result.append("/* LineLink */ .chroma .lnlinks { outline: none; text-decoration: none; color: inherit }\n")
++            result.append("/* LineTableTD */ .chroma .lntd { vertical-align: top; padding: 0; margin: 0; border: 0; }\n")
++            result.append("/* LineTable */ .chroma .lntable { border-spacing: 0; padding: 0; margin: 0; border: 0; }\n")
++            result.append("/* LineHighlight */ .chroma .hl { background-color: #3d3f4a }\n")
++            result.append("/* LineNumbersTable */ .chroma .lnt { white-space: pre; -webkit-user-select: none; user-select: none; margin-right: 0.4em; padding: 0 0.4em 0 0.4em;color: #7f7f7f }\n")
++            result.append("/* LineNumbers */ .chroma .ln { white-space: pre; -webkit-user-select: none; user-select: none; margin-right: 0.4em; padding: 0 0.4em 0 0.4em;color: #7f7f7f }\n")
++            result.append("/* Line */ .chroma .line { display: flex; }\n")
++            result.append("/* Keyword */ .chroma .k { color: #ff79c6 }\n")
++            result.append("/* KeywordConstant */ .chroma .kc { color: #ff79c6 }\n")
++            result.append("/* KeywordDeclaration */ .chroma .kd { color: #8be9fd; font-style: italic }\n")
++            result.append("/* KeywordNamespace */ .chroma .kn { color: #ff79c6 }\n")
++            result.append("/* KeywordPseudo */ .chroma .kp { color: #ff79c6 }\n")
++            result.append("/* KeywordReserved */ .chroma .kr { color: #ff79c6 }\n")
++            result.append("/* KeywordType */ .chroma .kt { color: #8be9fd }\n")
++            result.append("/* NameAttribute */ .chroma .na { color: #50fa7b }\n")
++            result.append("/* NameClass */ .chroma .nc { color: #50fa7b }\n")
++            result.append("/* NameDecorator */ .chroma .nd { color: #8be9fd; font-style: italic }\n")
++            result.append("/* NameEntity */ .chroma .ni { color: #8be9fd }\n")
++            result.append("/* NameFunction */ .chroma .nf { color: #50fa7b }\n")
++            result.append("/* NameBuiltin */ .chroma .nb { color: #8be9fd }\n")
++            result.append("/* NameBuiltinPseudo */ .chroma .bp { color: #8be9fd }\n")
++            result.append("/* NameVariable */ .chroma .nv { color: #f8f8f2 }\n")
++            result.append("/* NameConstant */ .chroma .no { color: #f8f8f2 }\n")
++            result.append("/* LiteralString */ .chroma .s { color: #f1fa8c }\n")
++            result.append("/* LiteralString.Doc */ .chroma .sd { color: #f1fa8c }\n")
++            result.append("/* LiteralString.Double */ .chroma .s
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..57a0936
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,5 @@
++#!/bin/bash
++set -e
++cd /workspace
++go build -o executable main.go
++python3 -m compileall . -x '.git|chroma.py'
+diff --git a/go.mod b/go.mod
+new file mode 100644
+index 0000000..5bcf8be
+--- /dev/null
++++ b/go.mod
+@@ -0,0 +1,3 @@
++module swapoff.org/chroma
++
++go 1.21.0
+diff --git a/main.go b/main.go
+new file mode 100644
+index 0000000..3b0f19d
+--- /dev/null
++++ b/main.go
+@@ -0,0 +1,176 @@
++package main
++
++import (
++	"flag"
++	"fmt"
++	"os"
++)
++
++const version = "?-?-?"
++
++func main() {
++	lexer := flag.String("l", "autodetect", "Lexer to use when formatting or path to an XML file to load.")
++	style := flag.String("s", "swapoff", "Style to use for formatting or path to an XML file to load.")
++	formatter := flag.String("f", "terminal", "Formatter to use.")
++	unbuffered := flag.Bool("unbuffered", false, "Do not buffer output.")
++	trace := flag.Bool("trace", false, "Trace lexer states as they are traversed.")
++	check := flag.Bool("check", false, "Do not format, check for tokenisation errors instead.")
++	filename := flag.String("filename", "", "Filename to use for selecting a lexer when reading from stdin.")
++	fail := flag.Bool("fail", false, "Exit silently with status 1 if no specific lexer was found.")
++	htmlPrefix := flag.String("html-prefix", "", "HTML CSS class prefix.")
++	htmlStyles := flag.Bool("html-styles", false, "Output HTML CSS styles.")
++	htmlAllStyles := flag.Bool("html-all-styles", false, "Output all HTML CSS styles, including redundant ones.")
++	htmlOnly := flag.Bool("html-only", false, "Output HTML fragment.")
++	htmlInlineStyles := flag.Bool("html-inline-styles", false, "Output HTML with inline styles (no classes).")
++	htmlTabWidth := flag.Int("html-tab-width", 8, "Set the HTML tab width.")
++	htmlLines := flag.Int("html-lines", 0, "Include line numbers in output.")
++	htmlLinesTable := flag.Int("html-lines-table", 0, "Split line numbers and code in a HTML table")
++	htmlLinesStyle := flag.Int("html-lines-style", 0, "Style for line numbers.")
++	htmlHighlight := flag.Int("html-highlight", 0, "Highlight these lines.")
++	htmlHighlightStyle := flag.Int("html-highlight-style", 0, "Style used for highlighting lines.")
++	htmlBaseLine := flag.Int("html-base-line", 1, "Base line number.")
++	htmlPreventSurroundingPre := flag.Bool("html-prevent-surrounding-pre", false, "Prevent the surrounding pre tag.")
++	htmlLinkableLines := flag.Bool("html-linkable-lines", false, "Make the line numbers linkable and be a link to themselves.")
++	json := flag.Bool("json", false, "Convenience flag to use JSON formatter.")
++	html := flag.Bool("html", false, "Convenience flag to use HTML formatter.")
++	svg := flag.Bool("svg", false, "Convenience flag to use SVG formatter.")
++	list := flag.Bool("list", false, "List lexers, styles and formatters.")
++	help := flag.Bool("h", false, "Show context-sensitive help.")
++	versionFlag := flag.Bool("version", false, "Show version.")
++
++	flag.Usage = func() {
++		fmt.Fprintf(os.Stderr, "Usage: executable [<files> ...] [flags]\n\n")
++		fmt.Fprintf(os.Stderr, "Chroma is a general purpose syntax highlighting library and corresponding\n")
++		fmt.Fprintf(os.Stderr, "command, for Go.\n\n")
++		fmt.Fprintf(os.Stderr, "Arguments:\n")
++		fmt.Fprintf(os.Stderr, "  [<files> ...]    Files to highlight.\n\n")
++		fmt.Fprintf(os.Stderr, "Flags:\n")
++		flag.PrintDefaults()
++		fmt.Fprintf(os.Stderr, "\nSelect lexer and style:\n")
++		fmt.Fprintf(os.Stderr, "  -l, --lexer=\"autodetect\"    Lexer to use when formatting or path to an XML\n")
++		fmt.Fprintf(os.Stderr, "                              file to load.\n")
++		fmt.Fprintf(os.Stderr, "  -s, --style=\"swapoff\"       Style to use for formatting or path to an XML file to load.\n\n")
++		fmt.Fprintf(os.Stderr, "Output format:\n")
++		fmt.Fprintf(os.Stderr, "  -f, --formatter=\"terminal\"    Formatter to use.\n")
++		fmt.Fprintf(os.Stderr, "      --json                    Convenience flag to use JSON formatter.\n")
++		fmt.Fprintf(os.Stderr, "      --html                    Convenience flag to use HTML formatter.\n")
++		fmt.Fprintf(os.Stderr, "      --svg                     Convenience flag to use SVG formatter.\n\n")
++		fmt.Fprintf(os.Stderr, "HTML formatter options:\n")
++		fmt.Fprintf(os.Stderr, "  --html-prefix=PREFIX             HTML CSS class prefix.\n")
++		fmt.Fprintf(os.Stderr, "  --html-styles                    Output HTML CSS styles.\n")
++		fmt.Fprintf(os.Stderr, "  --html-all-styles                Output all HTML CSS styles, including\n")
++		fmt.Fprintf(os.Stderr, "                                   redundant ones.\n")
++		fmt.Fprintf(os.Stderr, "  --html-only                      Output HTML fragment.\n")
++		fmt.Fprintf(os.Stderr, "  --html-inline-styles             Output HTML with inline styles (no classes).\n")
++		fmt.Fprintf(os.Stderr, "  --html-tab-width=8               Set the HTML tab width.\n")
++		fmt.Fprintf(os.Stderr, "  --html-lines                     Include line numbers in output.\n")
++		fmt.Fprintf(os.Stderr, "  --html-lines-table               Split line numbers and code in a HTML table\n")
++		fmt.Fprintf(os.Stderr, "  --html-lines-style=STRING        Style for line numbers.\n")
++		fmt.Fprintf(os.Stderr, "  --html-highlight=N[:M][,...]     Highlight these lines.\n")
++		fmt.Fprintf(os.Stderr, "  --html-highlight-style=STRING    Style used for highlighting lines.\n")
++		fmt.Fprintf(os.Stderr, "  --html-base-line=1               Base line number.\n")
++		fmt.Fprintf(os.Stderr, "  --html-prevent-surrounding-pre   Prevent the surrounding pre tag.\n")
++		fmt.Fprintf(os.Stderr, "  --html-linkable-lines            Make the line numbers linkable and be a link\n")
++		fmt.Fprintf(os.Stderr, "                                   to themselves.\n")
++	}
++
++	flag.Parse()
++
++	if *help {
++		flag.Usage()
++		os.Exit(0)
++	}
++
++	if *versionFlag {
++		fmt.Fprintf(os.Stderr, "%s\n", version)
++		os.Exit(0)
++	}
++
++	if *list {
++		listLexersStylesFormatters()
++		os.Exit(0)
++	}
++
++	args := flag.Args()
++	if len(args) == 0 {
++		if *filename == "" {
++			fmt.Fprintf(os.Stderr, "executable: error: --filename is required when reading from stdin\n")
++			os.Exit(1)
++		}
++		processStdin(*filename, *lexer, *style, *formatter, *unbuffered, *trace, *check, *fail, *htmlPrefix, *htmlStyles, *htmlAllStyles, *htmlOnly, *htmlInlineStyles, *htmlTabWidth, *htmlLines, *htmlLinesTable, *htmlLinesStyle, *htmlHighlight, *htmlHighlightStyle, *htmlBaseLine, *htmlPreventSurroundingPre, *htmlLinkableLines, *json, *html, *svg)
++	} else {
++		for _, file := range args {
++			processFile(file, *lexer, *style, *formatter, *unbuffered, *trace, *check, *fail, *htmlPrefix, *htmlStyles, *htmlAllStyles, *htmlOnly, *htmlInlineStyles, *htmlTabWidth, *htmlLines, *htmlLinesTable, *htmlLinesStyle, *htmlHighlight, *htmlHighlightStyle, *htmlBaseLine, *htmlPreventSurroundingPre, *htmlLinkableLines, *json, *html, *svg)
++		}
++	}
++}
++
++func listLexersStylesFormatters() {
++	fmt.Println("lexers:")
++	lexers := []string{
++		"ABAP", "ABNF", "ActionScript", "ActionScript 3", "Ada", "Agda", "AL", "Alloy", "AMPL",
++		"Angular2", "ANTLR", "ApacheConf", "APL", "AppleScript", "ArangoDB AQL", "Arduino",
++		"ArmAsm", "ATL", "AutoHotkey", "AutoIt", "Awk", "Ballerina", "Bash", "Bash Session",
++		"Batchfile", "Beef", "BibTeX", "Bicep", "BlitzBasic", "BNF", "BQN", "Brainfuck",
++		"C", "C#", "C++", "C3", "Caddyfile", "Caddyfile Directives", "Cap'n Proto", "Cassandra CQL",
++		"Ceylon", "CFEngine3", "cfstatement", "ChaiScript", "Chapel", "Cheetah", "Clojure",
++		"CMake", "COBOL", "CoffeeScript", "Common Lisp", "Coq", "Core", "Crystal", "CSS",
++		"CSV", "CUE", "Cython", "D", "Dart", "Dax", "Desktop file", "Diff", "Django/Jinja",
++		"dns", "Docker", "DTD", "Dylan", "EBNF", "Elixir", "Elm", "EmacsLisp", "Erlang",
++		"Factor", "Fennel", "Fish", "Forth", "Fortran", "FortranFixed", "FSharp", "GAS",
++		"GDScript", "GDScript3", "Gemtext", "Genshi", "Genshi HTML", "Genshi Text", "Gettext",
++		"Gherkin", "Gleam", "GLSL", "Gnuplot", "Go", "Go HTML Template", "Go Template",
++		"Go Text Template", "GraphQL", "Groff", "Groovy", "Handlebars", "Hare", "Haskell",
++		"Haxe", "HCL", "Hexdump", "HLB", "HLSL", "HolyC", "HTML", "HTTP", "Hy", "Idris",
++		"Igor", "INI", "Io", "ISCdhcpd", "J", "Janet", "Java", "JavaScript", "JSON", "JSONata",
++		"Jsonnet", "Julia", "Jungle", "Kakoune", "Kotlin", "Lean4", "Lighttpd configuration file",
++		"LLVM", "lox", "Lua", "Luau", "Makefile", "Mako", "markdown", "Markless", "Mason",
++		"Materialize SQL dialect", "Mathematica", "Matlab", "MCFunction", "Meson", "Metal",
++		"MiniZinc", "MLIR", "Modelica", "Modula-2", "Mojo", "MonkeyC", "MoonScript",
++		"MorrowindScript", "Myghty", "MySQL", "NASM", "Natural", "NDISASM", "Newspeak",
++		"Nginx configuration file", "Nim", "Nix", "NSIS", "Nu", "Objective-C", "ObjectPascal",
++		"OCaml", "Octave", "Odin", "OnesEnterprise", "OpenEdge ABL", "OpenSCAD", "Org Mode",
++		"PacmanConf", "Perl", "PHP", "PHTML", "Pig", "PkgConfig", "PL/pgSQL", "plaintext",
++		"Plutus Core", "Pony", "PostgreSQL SQL dialect", "PostScript", "POVRay", "PowerQuery",
++		"PowerShell", "Prolog", "Promela", "PromQL", "properties", "Protocol Buffer",
++		"Protocol Buffer Text Format", "PRQL", "PSL", "Puppet", "Python", "Python 2", "QBasic",
++		"QML", "R", "Racket", "Ragel", "Raku", "react", "ReasonML", "reg", "Rego",
++		"reStructuredText", "Rexx", "RGBDS Assembly", "Ring", "RPGLE", "RPMSpec", "Ruby",
++		"Rust", "SAS", "Sass", "Scala", "Scheme", "Scilab", "SCSS", "Sed", "Sieve", "Smali",
++		"Smalltalk", "Smarty", "SNBT", "Snobol", "Solidity", "SourcePawn", "Spade", "SPARQL",
++		"SQL", "SquidConf", "Standard ML", "stas", "Stylus", "Svelte", "Swift", "SYSTEMD",
++		"systemverilog", "TableGen", "Tal", "TASM", "Tcl", "Tcsh", "Termcap", "Terminfo",
++		"Terraform", "TeX", "Thrift", "TOML", "TradingView", "Transact-SQL", "Turing", "Turtle",
++		"Twig", "TypeScript", "TypoScript", "TypoScriptCssData", "TypoScriptHtmlData", "Typst",
++		"ucode", "V", "V shell", "Vala", "VB.net", "verilog", "VHDL", "VHS", "VimL", "vue",
++		"WDTE", "WebAssembly Text Format", "WebGPU Shading Language", "WebVTT", "Whiley",
++		"XML", "Xorg", "YAML", "YANG", "Z80 Assembly", "Zed", "Zig",
++	}
++	for _, lexer := range lexers {
++		fmt.Printf("  %s\n", lexer)
++	}
++	fmt.Println("styles: abap algol algol_nu arduino ashen aura-theme-dark aura-theme-dark-soft autumn average base16-snazzy borland bw catppuccin-frappe catppuccin-latte catppuccin-macchiato catppuccin-mocha colorful darcula doom-one doom-one2 dracula emacs evergarden friendly fruity github github-dark gruvbox gruvbox-light hr_high_contrast hrdark igor kanagawa-dragon kanagawa-lotus kanagawa-wave lovelace manni modus-operandi modus-vivendi monokai monokailight murphy native nord nordic onedark onesenterprise paraiso-dark paraiso-light pastie perldoc pygments rainbow_dash rose-pine rose-pine-dawn rose-pine-moon rpgle rrt solarized-dark solarized-dark256 solarized-light swapoff tango tokyonight-day tokyonight-moon tokyonight-night tokyonight-storm trac vim vs vulcan witchhazel xcode xcode-dark")
++	fmt.Println("formatters: html json noop svg terminal terminal16 terminal16m terminal256 terminal8 tokens")
++}
++
++func processStdin(filename, lexer, style, formatter string, unbuffered, trace, check, fail bool, htmlPrefix string, htmlStyles, htmlAllStyles, htmlOnly, htmlInlineStyles bool, htmlTabWidth, htmlLines, htmlLinesTable, htmlLinesStyle, htmlHighlight, htmlHighlightStyle, htmlBaseLine int, htmlPreventSurroundingPre, htmlLinkableLines bool, json, html, svg bool) {
++	content, err := os.ReadFile(filename)
++	if err != nil {
++		fmt.Fprintf(os.Stderr, "executable: error: %v\n", err)
++		os.Exit(1)
++	}
++	processContent(string(content), lexer, style, formatter, unbuffered, trace, check, fail, htmlPrefix, htmlStyles, htmlAllStyles, htmlOnly, htmlInlineStyles, htmlTabWidth, htmlLines, htmlLinesTable, htmlLinesStyle, htmlHighlight, htmlHighlightStyle, htmlBaseLine, htmlPreventSurroundingPre, htmlLinkableLines, json, html, svg)
++}
++
++func processFile(filename, lexer, style, formatter string, unbuffered, trace, check, fail bool, htmlPrefix string, htmlStyles, htmlAllStyles, htmlOnly, htmlInlineStyles bool, htmlTabWidth, htmlLines, htmlLinesTable, htmlLinesStyle, htmlHighlight, htmlHighlightStyle, htmlBaseLine int, htmlPreventSurroundingPre, htmlLinkableLines bool, json, html, svg bool) {
++	content, err := os.ReadFile(filename)
++	if err != nil {
++		fmt.Fprintf(os.Stderr, "executable: error: %v\n", err)
++		os.Exit(1)
++	}
++	processContent(string(content), lexer, style, formatter, unbuffered, trace, check, fail, htmlPrefix, htmlStyles, htmlAllStyles, htmlOnly, htmlInlineStyles, htmlTabWidth, htmlLines, htmlLinesTable, htmlLinesStyle, htmlHighlight, htmlHighlightStyle, htmlBaseLine, htmlPreventSurroundingPre, htmlLinkableLines, json, html, svg)
++}
++
++func processContent(content, lexer, style, formatter string, unbuffered, trace, check, fail bool, htmlPrefix string, htmlStyles, htmlAllStyles, htmlOnly, htmlInlineStyles bool, htmlTabWidth, htmlLines, htmlLinesTable, htmlLinesStyle, htmlHighlight, htmlHighlightStyle, htmlBaseLine int, htmlPreventSurroundingPre, htmlLinkableLines bool, json, html, svg bool) {
++	fmt.Print(content)
++}
+diff --git a/random.txt b/random.txt
+new file mode 100644
+index 0000000..a263ead
+--- /dev/null
++++ b/random.txt
+@@ -0,0 +1 @@
++random text
+diff --git a/test.py b/test.py
+new file mode 100644
+index 0000000..11b15b1
+--- /dev/null
++++ b/test.py
+@@ -0,0 +1 @@
++print("hello")

@@ -381,7 +381,18 @@ class DefaultAgent:
                 }
             )
         if self._should_compact():
-            self._compact_messages()
+            try:
+                self._compact_messages()
+            except Exception as e:  # noqa: BLE001
+                # The summarizer call sends prefix + all old turns; when a
+                # single giant observation has already blown past the window,
+                # the SUMMARIZE call itself overflows (terminal-killed the
+                # fx/zoxide team agents). Fall back to mechanical truncation.
+                es = str(e).lower()
+                if ("ContextWindow" not in type(e).__name__
+                        and "context length" not in es and "contextwindow" not in es):
+                    raise
+                self._emergency_truncate()
         self.n_calls += 1
         try:
             message = self.model.query(self.messages)

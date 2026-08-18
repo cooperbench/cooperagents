@@ -22,6 +22,8 @@ RUNS = Path(__file__).resolve().parent.parent / "runs"
 OUT = RUNS / "hf_export"
 
 BATCH_PATTERNS = [  # (regex on rep suffix, batch label)
+    (r"-cmp3r?\d?$|-cmps r?\d?$|-cmp3r\d|-cmpsr\d|-cmp3$|-cmps$", "realcmp-team-vs-solo"),
+    (r"-starv|smoke", "smoke-diagnostics"),
     (r"-t[34]i7", "scalability-t3t4"),
     (r"-i7", "iteration7-presub-merge"),
     (r"-i6", "iteration6-gate-brief"),

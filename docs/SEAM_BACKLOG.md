@@ -1197,3 +1197,31 @@ than the fixed baseline and one regression — NOT adopted.
 Implication: every bf16-era run paid a step/token tax on this bug
 (heaviest: scalability batch, 893 incidents), one more reason the
 pending clean re-measurement supersedes those numbers.
+
+REALCMP — VALIDATED TEAM-VS-SOLO ON HEALTHY INFRASTRUCTURE (2026-08-18).
+Design: 10 mbench tasks x {coopgitc2 team-size 3 full i7 stack, solo with
+gate+brief+repair}, standard limits (1000 steps / 3600s per agent), every
+cell gated by scripts/fleet/validate_run.py (first-call delay, latency
+medians, stall/format-error counts); resource-damaged cells excluded and
+rerun. Preflight (endpoint warm-up + 3x concurrent 22k-token probe + fleet
+reachability) gated dispatch; monitor_health.sh watched live.
+CLEAN PAIRS (both arms validated): cmatrix 67.6/82.1, srgn 10.1/33.8,
+i3style 0/32.8, shellharden 0/27.9, chroma 0/0 — solo mean 15.5, TEAM MEAN
+35.3; team wins 4/5, ties 1. Validated singles: solo-tuijournal 42.2,
+team-walk 43.0, solo-{fx,zipfinder,zoxide,walk-pending} 0/0/0/-.
+Excluded team cells STILL outscored solo even damaged: tuijournal 53.2
+(>42.2), zipfinder 38.0 (solo 0), zoxide 17.2 (solo 0), fx 8.2 (solo 0) —
+the clean verdict is a conservative LOWER BOUND on the team advantage.
+VERDICT: the historical "solo beats team multi-task" result (mbench10:
+solo 23.2 vs team 17.2) was an infrastructure artifact; with sound serving
+the 3-agent coordinator team decisively beats solo.
+Validator lessons encoded en route: median over ALL calls (a productive-
+call exemption once left a single outlier as "the median"); starvation =
+late first call AND <100 steps (compaction hides early timestamps of
+long-running agents); live exec-sampling cannot distinguish fast agents
+from hung ones — trajectory timestamps are the only ground truth.
+Remaining defect fixed and fleet-synced: proactive compaction's SUMMARIZE
+call overflows when one giant observation blows past the window before the
+trigger; overflow now falls back to mechanical truncation (unit-tested).
+r3 reruns of the 4 excluded team cells + solo-walk in flight to complete
+the paired table.

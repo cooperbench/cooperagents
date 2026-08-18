@@ -1,0 +1,1029 @@
+diff --git a/__pycache__/shellharden.cpython-310.pyc b/__pycache__/shellharden.cpython-310.pyc
+new file mode 100644
+index 0000000..926c9db
+Binary files /dev/null and b/__pycache__/shellharden.cpython-310.pyc differ
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..d989ac1
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,5 @@
++#!/bin/bash
++# Compile script for shellharden
++# Copy the Python script to executable and make it executable
++cp shellharden.py ./executable
++chmod +x ./executable
+diff --git a/shellharden b/shellharden
+new file mode 100755
+index 0000000..1a92c58
+--- /dev/null
++++ b/shellharden
+@@ -0,0 +1,332 @@
++#!/usr/bin/env python3
++import sys
++import argparse
++
++# ANSI color codes
++class Colors:
++    RESET = '\033[0m'
++    BOLD = '\033[1m'
++    BLUE = '\033[0;38;2;192;0;128m'
++    CYAN = '\033[0;38;2;255;0;0m'
++    GREEN = '\033[0;38;2;63;127;207m'
++    YELLOW = '\033[0;38;2;255;140;0m'
++    MAGENTA = '\033[0;38;2;255;0;128m'
++    WHITE = '\033[0;38;2;0;127;255m'
++    BG_CYAN = '\033[0;48;2;63;127;207m'
++    BG_YELLOW = '\033[0;48;2;255;140;0m'
++    BG_MAGENTA = '\033[0;48;2;255;0;128m'
++
++def tokenize(line):
++    tokens = []
++    i = 0
++    while i < len(line):
++        if line[i].isspace():
++            tokens.append(('whitespace', line[i]))
++            i += 1
++        elif line[i] == '#':
++            end = line.find('\n', i)
++            if end == -1:
++                end = len(line)
++            tokens.append(('comment', line[i:end]))
++            i = end + 1
++        elif line[i] == '"' or line[i] == "'":
++            quote = line[i]
++            j = i + 1
++            while j < len(line) and line[j] != quote:
++                if line[j] == '\\' and j + 1 < len(line):
++                    j += 2
++                else:
++                    j += 1
++            if j < len(line):
++                j += 1
++            tokens.append(('string', line[i:j]))
++            i = j
++        elif line[i] == '$':
++            j = i + 1
++            while j < len(line) and (line[j].isalnum() or line[j] in '[]{}*?_'):
++                j += 1
++            tokens.append(('variable', line[i:j]))
++            i = j
++        elif line[i] == '`':
++            j = i + 1
++            while j < len(line) and line[j] != '`':
++                j += 1
++            if j < len(line):
++                j += 1
++            tokens.append(('backtick', line[i:j]))
++            i = j
++        elif line[i] == '(' and i + 1 < len(line) and line[i+1] == '$':
++            j = i + 2
++            depth = 1
++            while j < len(line) and depth > 0:
++                if line[j:j+2] == '$(':
++                    depth += 1
++                    j += 2
++                elif line[j:j+2] == ')':
++                    depth -= 1
++                    j += 2
++                else:
++                    j += 1
++            if depth == 0 and j < len(line):
++                j += 1
++            tokens.append(('subshell', line[i:j]))
++            i = j
++        elif line[i] in '=<>|&;':
++            j = i
++            while j < len(line) and line[j] in '=<>|&;':
++                j += 1
++            tokens.append(('operator', line[i:j]))
++            i = j
++        elif line[i] in '[]{}':
++            tokens.append(('bracket', line[i]))
++            i += 1
++        elif line[i] in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_':
++            j = i
++            while j < len(line) and (line[j].isalnum() or line[j] in '_-'):
++                j += 1
++            tokens.append(('identifier', line[i:j]))
++            i = j
++        else:
++            tokens.append(('unknown', line[i]))
++            i += 1
++    return tokens
++
++def highlight_syntax(tokens, mode='syntax'):
++    result = []
++    for token_type, text in tokens:
++        if mode == 'syntax':
++            if token_type == 'whitespace':
++                result.append(text)
++            elif token_type == 'comment':
++                result.append(Colors.WHITE + text + Colors.RESET)
++            elif token_type == 'string':
++                result.append(Colors.CYAN + text + Colors.RESET)
++            elif token_type == 'variable':
++                result.append(Colors.GREEN + text + Colors.RESET)
++            elif token_type == 'backtick':
++                result.append(Colors.MAGENTA + text + Colors.RESET)
++            elif token_type == 'subshell':
++                result.append(Colors.MAGENTA + text + Colors.RESET)
++            elif token_type == 'operator':
++                result.append(Colors.YELLOW + text + Colors.RESET)
++            elif token_type == 'bracket':
++                result.append(Colors.WHITE + text + Colors.RESET)
++            elif token_type == 'identifier':
++                result.append(Colors.WHITE + text + Colors.RESET)
++            else:
++                result.append(text)
++        elif mode == 'transform':
++            result.append(text)
++        elif mode == 'suggest':
++            if token_type == 'variable':
++                result.append(Colors.BG_CYAN + text + Colors.RESET)
++            elif token_type == 'backtick':
++                result.append(Colors.BG_MAGENTA + text + Colors.RESET)
++            elif token_type == 'subshell':
++                result.append(Colors.BG_MAGENTA + text + Colors.RESET)
++            elif token_type == 'operator':
++                result.append(Colors.BG_YELLOW + text + Colors.RESET)
++            else:
++                result.append(text)
++    return ''.join(result)
++
++def transform_line(line):
++    result = []
++    i = 0
++    while i < len(line):
++        if line[i].isspace():
++            result.append(line[i])
++            i += 1
++        elif line[i] == '#':
++            end = line.find('\n', i)
++            if end == -1:
++                end = len(line)
++            result.append(line[i:end])
++            i = end + 1
++        elif line[i] == '"' or line[i] == "'":
++            quote = line[i]
++            j = i + 1
++            while j < len(line) and line[j] != quote:
++                if line[j] == '\\' and j + 1 < len(line):
++                    j += 2
++                else:
++                    j += 1
++            if j < len(line):
++                j += 1
++            result.append(line[i:j])
++            i = j
++        elif line[i] == '$':
++            j = i + 1
++            while j < len(line) and (line[j].isalnum() or line[j] in '[]{}*?_'):
++                j += 1
++            var = line[i:j]
++            if var in '$?$$!#${#':
++                result.append(var)
++            else:
++                result.append('"' + var + '"')
++            i = j
++        elif line[i] == '`':
++            j = i + 1
++            while j < len(line) and line[j] != '`':
++                j += 1
++            if j < len(line):
++                j += 1
++            result.append('$(' + line[i+1:j-1] + ')')
++            i = j
++        elif line[i] == '(' and i + 1 < len(line) and line[i+1] == '$':
++            j = i + 2
++            depth = 1
++            while j < len(line) and depth > 0:
++                if line[j:j+2] == '$(':
++                    depth += 1
++                    j += 2
++                elif line[j:j+2] == ')':
++                    depth -= 1
++                    j += 2
++                else:
++                    j += 1
++            if depth == 0 and j < len(line):
++                j += 1
++            result.append(line[i:j])
++            i = j
++        elif line[i] in '=<>|&;':
++            j = i
++            while j < len(line) and line[j] in '=<>|&;':
++                j += 1
++            result.append(line[i:j])
++            i = j
++        elif line[i] in '[]{}':
++            result.append(line[i])
++            i += 1
++        elif line[i] in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_':
++            j = i
++            while j < len(line) and (line[j].isalnum() or line[j] in '_-'):
++                j += 1
++            result.append(line[i:j])
++            i = j
++        else:
++            result.append(line[i])
++            i += 1
++    return ''.join(result)
++
++def process_file(filename, mode='syntax'):
++    try:
++        with open(filename, 'r') as f:
++            lines = f.readlines()
++    except FileNotFoundError:
++        print(f'Error: File not found: {filename}', file=sys.stderr)
++        return 1
++    
++    if mode == 'transform':
++        transformed_lines = [transform_line(line.rstrip('\n')) + '\n' for line in lines]
++        return ''.join(transformed_lines)
++    elif mode == 'check':
++        has_changes = False
++        for line in lines:
++            if transform_line(line.rstrip('\n')) != line.rstrip('\n'):
++                has_changes = True
++        return 2 if has_changes else 0
++    else:
++        result_lines = []
++        for line in lines:
++            if line.endswith('\n'):
++                line_content = line[:-1]
++            else:
++                line_content = line
++            tokens = tokenize(line_content)
++            highlighted = highlight_syntax(tokens, mode)
++            result_lines.append(highlighted + '\n')
++        return ''.join(result_lines)
++
++def main():
++    parser = argparse.ArgumentParser(
++        description='Shellharden: The corrective bash syntax highlighter.',
++        formatter_class=argparse.RawDescriptionHelpFormatter,
++        epilog='''
++The changes suggested by Shellharden inhibits word splitting and indirect
++pathname expansion. This will make your script ShellCheck compliant in terms of
++quoting. Whether your script will work afterwards is a different question:
++If your script was using those features on purpose, it obviously won't anymore!
++
++Every script is possible to write without using word splitting or indirect
++pathname expansion, but it may involve doing things differently.
++See the accompanying file how_to_do_things_safely_in_bash.md or online:
++https://github.com/anordal/shellharden/blob/master/how_to_do_things_safely_in_bash.md
++'''
++    )
++    parser.add_argument('--suggest', action='store_true', help='Output a colored diff suggesting changes.')
++    parser.add_argument('--syntax', action='store_true', help='Output syntax highlighting with ANSI colors.')
++    parser.add_argument('--syntax-suggest', action='store_true', help='Diff with syntax highlighting (default mode).')
++    parser.add_argument('--transform', action='store_true', help='Output suggested changes.')
++    parser.add_argument('--check', action='store_true', help='No output; exit with 2 if changes are suggested.')
++    parser.add_argument('--replace', action='store_true', help='Replace file contents with suggested changes.')
++    
++    
++    parser.add_argument('--', nargs='*', dest='--', help="Don't treat further arguments as options.")
++    parser.add_argument('--version', action='store_true', help='Show version.')
++    
++    args = parser.parse_args()
++    
++    if args.version:
++        print('4.3.1')
++        return 0
++    
++    if "--help" in sys.argv:
++        parser.print_help()
++        return 0
++    
++    mode = 'syntax-suggest'
++    if args.suggest:
++        mode = 'suggest'
++    elif args.syntax:
++        mode = 'syntax'
++    elif args.transform:
++        mode = 'transform'
++    elif args.check:
++        mode = 'check'
++    
++    if args.replace:
++        if len(sys.argv) < 3:
++            print('Error: --replace requires a filename', file=sys.stderr)
++            return 1
++        filename = sys.argv[2]
++        result = process_file(filename, mode)
++        if result == 1:
++            return 1
++        with open(filename, 'w') as f:
++            f.write(result)
++        return 0
++    
++    files = []
++    if args.replace:
++        files = [sys.argv[2]]
++    elif len(sys.argv) > 1:
++        files = sys.argv[1:]
++    
++    if not files:
++        content = sys.stdin.read()
++        if mode == 'transform':
++            transformed = [transform_line(line.rstrip('\n')) + '\n' for line in content.split('\n')]
++            print(''.join(transformed), end='')
++        elif mode == 'check':
++            has_changes = False
++            for line in content.split('\n'):
++                if transform_line(line.rstrip('\n')) != line.rstrip('\n'):
++                    has_changes = True
++            return 2 if has_changes else 0
++        else:
++            tokens = tokenize(content)
++            highlighted = highlight_syntax(tokens, mode)
++            print(highlighted, end='')
++        return 0
++    
++    for filename in files:
++        result = process_file(filename, mode)
++        if result == 1:
++            return 1
++        print(result, end='')
++    
++    return 0
++
++if __name__ == '__main__':
++    sys.exit(main())
+diff --git a/shellharden.py b/shellharden.py
+new file mode 100644
+index 0000000..0126c9a
+--- /dev/null
++++ b/shellharden.py
+@@ -0,0 +1,333 @@
++#!/usr/bin/env python3
++import sys
++import argparse
++
++# ANSI color codes
++class Colors:
++    RESET = '\033[0m'
++    BOLD = '\033[1m'
++    BLUE = '\033[0;38;2;192;0;128m'
++    CYAN = '\033[0;38;2;255;0;0m'
++    GREEN = '\033[0;38;2;63;127;207m'
++    YELLOW = '\033[0;38;2;255;140;0m'
++    MAGENTA = '\033[0;38;2;255;0;128m'
++    WHITE = '\033[0;38;2;0;127;255m'
++    BG_CYAN = '\033[0;48;2;63;127;207m'
++    BG_YELLOW = '\033[0;48;2;255;140;0m'
++    BG_MAGENTA = '\033[0;48;2;255;0;128m'
++
++def tokenize(line):
++    tokens = []
++    i = 0
++    while i < len(line):
++        if line[i].isspace():
++            tokens.append(('whitespace', line[i]))
++            i += 1
++        elif line[i] == '#':
++            end = line.find('\n', i)
++            if end == -1:
++                end = len(line)
++            tokens.append(('comment', line[i:end]))
++            i = end + 1
++        elif line[i] == '"' or line[i] == "'":
++            quote = line[i]
++            j = i + 1
++            while j < len(line) and line[j] != quote:
++                if line[j] == '\\' and j + 1 < len(line):
++                    j += 2
++                else:
++                    j += 1
++            if j < len(line):
++                j += 1
++            tokens.append(('string', line[i:j]))
++            i = j
++        elif line[i] == '$':
++            j = i + 1
++            while j < len(line) and (line[j].isalnum() or line[j] in '[]{}*?_'):
++                j += 1
++            tokens.append(('variable', line[i:j]))
++            i = j
++        elif line[i] == '`':
++            j = i + 1
++            while j < len(line) and line[j] != '`':
++                j += 1
++            if j < len(line):
++                j += 1
++            tokens.append(('backtick', line[i:j]))
++            i = j
++        elif line[i] == '(' and i + 1 < len(line) and line[i+1] == '$':
++            j = i + 2
++            depth = 1
++            while j < len(line) and depth > 0:
++                if line[j:j+2] == '$(':
++                    depth += 1
++                    j += 2
++                elif line[j:j+2] == ')':
++                    depth -= 1
++                    j += 2
++                else:
++                    j += 1
++            if depth == 0 and j < len(line):
++                j += 1
++            tokens.append(('subshell', line[i:j]))
++            i = j
++        elif line[i] in '=<>|&;':
++            j = i
++            while j < len(line) and line[j] in '=<>|&;':
++                j += 1
++            tokens.append(('operator', line[i:j]))
++            i = j
++        elif line[i] in '[]{}':
++            tokens.append(('bracket', line[i]))
++            i += 1
++        elif line[i] in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_':
++            j = i
++            while j < len(line) and (line[j].isalnum() or line[j] in '_-'):
++                j += 1
++            tokens.append(('identifier', line[i:j]))
++            i = j
++        else:
++            tokens.append(('unknown', line[i]))
++            i += 1
++    return tokens
++
++def highlight_syntax(tokens, mode='syntax'):
++    result = []
++    for token_type, text in tokens:
++        if mode == 'syntax':
++            if token_type == 'whitespace':
++                result.append(text)
++            elif token_type == 'comment':
++                result.append(Colors.WHITE + text + Colors.RESET)
++            elif token_type == 'string':
++                result.append(Colors.CYAN + text + Colors.RESET)
++            elif token_type == 'variable':
++                result.append(Colors.GREEN + text + Colors.RESET)
++            elif token_type == 'backtick':
++                result.append(Colors.MAGENTA + text + Colors.RESET)
++            elif token_type == 'subshell':
++                result.append(Colors.MAGENTA + text + Colors.RESET)
++            elif token_type == 'operator':
++                result.append(Colors.YELLOW + text + Colors.RESET)
++            elif token_type == 'bracket':
++                result.append(Colors.WHITE + text + Colors.RESET)
++            elif token_type == 'identifier':
++                result.append(Colors.WHITE + text + Colors.RESET)
++            else:
++                result.append(text)
++        elif mode == 'transform':
++            result.append(text)
++        elif mode == 'suggest':
++            if token_type == 'variable':
++                result.append(Colors.BG_CYAN + text + Colors.RESET)
++            elif token_type == 'backtick':
++                result.append(Colors.BG_MAGENTA + text + Colors.RESET)
++            elif token_type == 'subshell':
++                result.append(Colors.BG_MAGENTA + text + Colors.RESET)
++            elif token_type == 'operator':
++                result.append(Colors.BG_YELLOW + text + Colors.RESET)
++            else:
++                result.append(text)
++    return ''.join(result)
++
++def transform_line(line):
++    result = []
++    i = 0
++    while i < len(line):
++        if line[i].isspace():
++            result.append(line[i])
++            i += 1
++        elif line[i] == '#':
++            end = line.find('\n', i)
++            if end == -1:
++                end = len(line)
++            result.append(line[i:end])
++            i = end + 1
++        elif line[i] == '"' or line[i] == "'":
++            quote = line[i]
++            j = i + 1
++            while j < len(line) and line[j] != quote:
++                if line[j] == '\\' and j + 1 < len(line):
++                    j += 2
++                else:
++                    j += 1
++            if j < len(line):
++                j += 1
++            result.append(line[i:j])
++            i = j
++        elif line[i] == '$':
++            j = i + 1
++            while j < len(line) and (line[j].isalnum() or line[j] in '[]{}*?_'):
++                j += 1
++            var = line[i:j]
++            if var in '$?$$!#${#':
++                result.append(var)
++            else:
++                result.append('"' + var + '"')
++            i = j
++        elif line[i] == '`':
++            j = i + 1
++            while j < len(line) and line[j] != '`':
++                j += 1
++            if j < len(line):
++                j += 1
++            result.append('$(' + line[i+1:j-1] + ')')
++            i = j
++        elif line[i] == '(' and i + 1 < len(line) and line[i+1] == '$':
++            j = i + 2
++            depth = 1
++            while j < len(line) and depth > 0:
++                if line[j:j+2] == '$(':
++                    depth += 1
++                    j += 2
++                elif line[j:j+2] == ')':
++                    depth -= 1
++                    j += 2
++                else:
++                    j += 1
++            if depth == 0 and j < len(line):
++                j += 1
++            result.append(line[i:j])
++            i = j
++        elif line[i] in '=<>|&;':
++            j = i
++            while j < len(line) and line[j] in '=<>|&;':
++                j += 1
++            result.append(line[i:j])
++            i = j
++        elif line[i] in '[]{}':
++            result.append(line[i])
++            i += 1
++        elif line[i] in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_':
++            j = i
++            while j < len(line) and (line[j].isalnum() or line[j] in '_-'):
++                j += 1
++            result.append(line[i:j])
++            i = j
++        else:
++            result.append(line[i])
++            i += 1
++    return ''.join(result)
++
++def process_file(filename, mode='syntax'):
++    try:
++        with open(filename, 'r') as f:
++            lines = f.readlines()
++    except FileNotFoundError:
++        print(f'Error: File not found: {filename}', file=sys.stderr)
++        return 1
++    
++    if mode == 'transform':
++        transformed_lines = [transform_line(line.rstrip('\n')) + '\n' for line in lines]
++        return ''.join(transformed_lines)
++    elif mode == 'check':
++        has_changes = False
++        for line in lines:
++            if transform_line(line.rstrip('\n')) != line.rstrip('\n'):
++                has_changes = True
++        return 2 if has_changes else 0
++    else:
++        result_lines = []
++        for line in lines:
++            if line.endswith('\n'):
++                line_content = line[:-1]
++            else:
++                line_content = line
++            tokens = tokenize(line_content)
++            highlighted = highlight_syntax(tokens, mode)
++            result_lines.append(highlighted + '\n')
++        return ''.join(result_lines)
++
++def main():
++    parser = argparse.ArgumentParser(
++        description='Shellharden: The corrective bash syntax highlighter.',
++        formatter_class=argparse.RawDescriptionHelpFormatter,
++        epilog='''
++The changes suggested by Shellharden inhibits word splitting and indirect
++pathname expansion. This will make your script ShellCheck compliant in terms of
++quoting. Whether your script will work afterwards is a different question:
++If your script was using those features on purpose, it obviously won't anymore!
++
++Every script is possible to write without using word splitting or indirect
++pathname expansion, but it may involve doing things differently.
++See the accompanying file how_to_do_things_safely_in_bash.md or online:
++https://github.com/anordal/shellharden/blob/master/how_to_do_things_safely_in_bash.md
++'''
++    )
++    parser.add_argument('--suggest', action='store_true', help='Output a colored diff suggesting changes.')
++    parser.add_argument('--syntax', action='store_true', help='Output syntax highlighting with ANSI colors.')
++    parser.add_argument('--syntax-suggest', action='store_true', help='Diff with syntax highlighting (default mode).')
++    parser.add_argument('--transform', action='store_true', help='Output suggested changes.')
++    parser.add_argument('--check', action='store_true', help='No output; exit with 2 if changes are suggested.')
++    parser.add_argument('--replace', action='store_true', help='Replace file contents with suggested changes.')
++    
++    
++    parser.add_argument('--version', action='store_true', help='Show version.')
++    
++    parser.add_argument("--", nargs="*", dest="--", help="Don't treat further arguments as options.")
++    parser.add_argument("files", nargs="*", help="Files to process.")
++    known_args = parser.parse_intermixed_args()
++    
++    if known_args.version:
++        print('4.3.1')
++        return 0
++    
++    if "--help" in sys.argv:
++        parser.print_help()
++        return 0
++    
++    mode = 'syntax-suggest'
++    if known_args.suggest:
++        mode = 'suggest'
++    elif known_args.syntax:
++        mode = 'syntax'
++    elif known_args.transform:
++        mode = 'transform'
++    elif known_args.check:
++        mode = 'check'
++    
++    if known_args.replace:
++        if len(known_args.files) < 1:
++            print('Error: --replace requires a filename', file=sys.stderr)
++            return 1
++        filename = known_args.files[0]
++        result = process_file(filename, mode)
++        if result == 1:
++            return 1
++        with open(filename, 'w') as f:
++            f.write(result)
++        return 0
++    
++    files = []
++    if known_args.replace:
++        files = known_args.files
++    elif len(known_args.files) > 0:
++        files = known_args.files
++    
++    if not files:
++        content = sys.stdin.read()
++        if mode == 'transform':
++            transformed = [transform_line(line.rstrip('\n')) + '\n' for line in content.split('\n')]
++            print(''.join(transformed), end='')
++        elif mode == 'check':
++            has_changes = False
++            for line in content.split('\n'):
++                if transform_line(line.rstrip('\n')) != line.rstrip('\n'):
++                    has_changes = True
++            return 2 if has_changes else 0
++        else:
++            tokens = tokenize(content)
++            highlighted = highlight_syntax(tokens, mode)
++            print(highlighted, end='')
++        return 0
++    
++    for filename in files:
++        result = process_file(filename, mode)
++        if result == 1:
++            return 1
++        print(result, end='')
++    
++    return 0
++
++if __name__ == '__main__':
++    sys.exit(main())
+diff --git a/shellharden_new.py b/shellharden_new.py
+new file mode 100755
+index 0000000..5a3d0c6
+--- /dev/null
++++ b/shellharden_new.py
+@@ -0,0 +1,331 @@
++#!/usr/bin/env python3
++import sys
++import argparse
++
++# ANSI color codes
++class Colors:
++    RESET = '\033[0m'
++    BOLD = '\033[1m'
++    BLUE = '\033[0;38;2;192;0;128m'
++    CYAN = '\033[0;38;2;255;0;0m'
++    GREEN = '\033[0;38;2;63;127;207m'
++    YELLOW = '\033[0;38;2;255;140;0m'
++    MAGENTA = '\033[0;38;2;255;0;128m'
++    WHITE = '\033[0;38;2;0;127;255m'
++    BG_CYAN = '\033[0;48;2;63;127;207m'
++    BG_YELLOW = '\033[0;48;2;255;140;0m'
++    BG_MAGENTA = '\033[0;48;2;255;0;128m'
++
++def tokenize(line):
++    tokens = []
++    i = 0
++    while i < len(line):
++        if line[i].isspace():
++            tokens.append(('whitespace', line[i]))
++            i += 1
++        elif line[i] == '#':
++            end = line.find('\n', i)
++            if end == -1:
++                end = len(line)
++            tokens.append(('comment', line[i:end]))
++            i = end + 1
++        elif line[i] == '"' or line[i] == "'":
++            quote = line[i]
++            j = i + 1
++            while j < len(line) and line[j] != quote:
++                if line[j] == '\\' and j + 1 < len(line):
++                    j += 2
++                else:
++                    j += 1
++            if j < len(line):
++                j += 1
++            tokens.append(('string', line[i:j]))
++            i = j
++        elif line[i] == '$':
++            j = i + 1
++            while j < len(line) and (line[j].isalnum() or line[j] in '[]{}*?_'):
++                j += 1
++            tokens.append(('variable', line[i:j]))
++            i = j
++        elif line[i] == '`':
++            j = i + 1
++            while j < len(line) and line[j] != '`':
++                j += 1
++            if j < len(line):
++                j += 1
++            tokens.append(('backtick', line[i:j]))
++            i = j
++        elif line[i] == '(' and i + 1 < len(line) and line[i+1] == '$':
++            j = i + 2
++            depth = 1
++            while j < len(line) and depth > 0:
++                if line[j:j+2] == '$(':
++                    depth += 1
++                    j += 2
++                elif line[j:j+2] == ')':
++                    depth -= 1
++                    j += 2
++                else:
++                    j += 1
++            if depth == 0 and j < len(line):
++                j += 1
++            tokens.append(('subshell', line[i:j]))
++            i = j
++        elif line[i] in '=<>|&;':
++            j = i
++            while j < len(line) and line[j] in '=<>|&;':
++                j += 1
++            tokens.append(('operator', line[i:j]))
++            i = j
++        elif line[i] in '[]{}':
++            tokens.append(('bracket', line[i]))
++            i += 1
++        elif line[i] in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_':
++            j = i
++            while j < len(line) and (line[j].isalnum() or line[j] in '_-'):
++                j += 1
++            tokens.append(('identifier', line[i:j]))
++            i = j
++        else:
++            tokens.append(('unknown', line[i]))
++            i += 1
++    return tokens
++
++def highlight_syntax(tokens, mode='syntax'):
++    result = []
++    for token_type, text in tokens:
++        if mode == 'syntax':
++            if token_type == 'whitespace':
++                result.append(text)
++            elif token_type == 'comment':
++                result.append(Colors.WHITE + text + Colors.RESET)
++            elif token_type == 'string':
++                result.append(Colors.CYAN + text + Colors.RESET)
++            elif token_type == 'variable':
++                result.append(Colors.GREEN + text + Colors.RESET)
++            elif token_type == 'backtick':
++                result.append(Colors.MAGENTA + text + Colors.RESET)
++            elif token_type == 'subshell':
++                result.append(Colors.MAGENTA + text + Colors.RESET)
++            elif token_type == 'operator':
++                result.append(Colors.YELLOW + text + Colors.RESET)
++            elif token_type == 'bracket':
++                result.append(Colors.WHITE + text + Colors.RESET)
++            elif token_type == 'identifier':
++                result.append(Colors.WHITE + text + Colors.RESET)
++            else:
++                result.append(text)
++        elif mode == 'transform':
++            result.append(text)
++        elif mode == 'suggest':
++            if token_type == 'variable':
++                result.append(Colors.BG_CYAN + text + Colors.RESET)
++            elif token_type == 'backtick':
++                result.append(Colors.BG_MAGENTA + text + Colors.RESET)
++            elif token_type == 'subshell':
++                result.append(Colors.BG_MAGENTA + text + Colors.RESET)
++            elif token_type == 'operator':
++                result.append(Colors.BG_YELLOW + text + Colors.RESET)
++            else:
++                result.append(text)
++    return ''.join(result)
++
++def transform_line(line):
++    result = []
++    i = 0
++    while i < len(line):
++        if line[i].isspace():
++            result.append(line[i])
++            i += 1
++        elif line[i] == '#':
++            end = line.find('\n', i)
++            if end == -1:
++                end = len(line)
++            result.append(line[i:end])
++            i = end + 1
++        elif line[i] == '"' or line[i] == "'":
++            quote = line[i]
++            j = i + 1
++            while j < len(line) and line[j] != quote:
++                if line[j] == '\\' and j + 1 < len(line):
++                    j += 2
++                else:
++                    j += 1
++            if j < len(line):
++                j += 1
++            result.append(line[i:j])
++            i = j
++        elif line[i] == '$':
++            j = i + 1
++            while j < len(line) and (line[j].isalnum() or line[j] in '[]{}*?_'):
++                j += 1
++            var = line[i:j]
++            if var in '$?$$!#${#':
++                result.append(var)
++            else:
++                result.append('"' + var + '"')
++            i = j
++        elif line[i] == '`':
++            j = i + 1
++            while j < len(line) and line[j] != '`':
++                j += 1
++            if j < len(line):
++                j += 1
++            result.append('$(' + line[i+1:j-1] + ')')
++            i = j
++        elif line[i] == '(' and i + 1 < len(line) and line[i+1] == '$':
++            j = i + 2
++            depth = 1
++            while j < len(line) and depth > 0:
++                if line[j:j+2] == '$(':
++                    depth += 1
++                    j += 2
++                elif line[j:j+2] == ')':
++                    depth -= 1
++                    j += 2
++                else:
++                    j += 1
++            if depth == 0 and j < len(line):
++                j += 1
++            result.append(line[i:j])
++            i = j
++        elif line[i] in '=<>|&;':
++            j = i
++            while j < len(line) and line[j] in '=<>|&;':
++                j += 1
++            result.append(line[i:j])
++            i = j
++        elif line[i] in '[]{}':
++            result.append(line[i])
++            i += 1
++        elif line[i] in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_':
++            j = i
++            while j < len(line) and (line[j].isalnum() or line[j] in '_-'):
++                j += 1
++            result.append(line[i:j])
++            i = j
++        else:
++            result.append(line[i])
++            i += 1
++    return ''.join(result)
++
++def process_file(filename, mode='syntax'):
++    try:
++        with open(filename, 'r') as f:
++            lines = f.readlines()
++    except FileNotFoundError:
++        print(f'Error: File not found: {filename}', file=sys.stderr)
++        return 1
++    
++    if mode == 'transform':
++        transformed_lines = [transform_line(line.rstrip('\n')) + '\n' for line in lines]
++        return ''.join(transformed_lines)
++    elif mode == 'check':
++        has_changes = False
++        for line in lines:
++            if transform_line(line.rstrip('\n')) != line.rstrip('\n'):
++                has_changes = True
++        return 2 if has_changes else 0
++    else:
++        result_lines = []
++        for line in lines:
++            if line.endswith('\n'):
++                line_content = line[:-1]
++            else:
++                line_content = line
++            tokens = tokenize(line_content)
++            highlighted = highlight_syntax(tokens, mode)
++            result_lines.append(highlighted + '\n')
++        return ''.join(result_lines)
++
++def main():
++    parser = argparse.ArgumentParser(
++        description='Shellharden: The corrective bash syntax highlighter.',
++        formatter_class=argparse.RawDescriptionHelpFormatter,
++        epilog='''
++The changes suggested by Shellharden inhibits word splitting and indirect
++pathname expansion. This will make your script ShellCheck compliant in terms of
++quoting. Whether your script will work afterwards is a different question:
++If your script was using those features on purpose, it obviously won't anymore!
++
++Every script is possible to write without using word splitting or indirect
++pathname expansion, but it may involve doing things differently.
++See the accompanying file how_to_do_things_safely_in_bash.md or online:
++https://github.com/anordal/shellharden/blob/master/how_to_do_things_safely_in_bash.md
++'''
++    )
++    parser.add_argument('--suggest', action='store_true', help='Output a colored diff suggesting changes.')
++    parser.add_argument('--syntax', action='store_true', help='Output syntax highlighting with ANSI colors.')
++    parser.add_argument('--syntax-suggest', action='store_true', help='Diff with syntax highlighting (default mode).')
++    parser.add_argument('--transform', action='store_true', help='Output suggested changes.')
++    parser.add_argument('--check', action='store_true', help='No output; exit with 2 if changes are suggested.')
++    parser.add_argument('--replace', action='store_true', help='Replace file contents with suggested changes.')
++    parser.add_argument('--', nargs='*', help="Don't treat further arguments as options.")
++    parser.add_argument('-h', '--help', action='store_true', help='Show help text.')
++    parser.add_argument('--version', action='store_true', help='Show version.')
++    
++    args = parser.parse_args()
++    
++    if args.version:
++        print('4.3.1')
++        return 0
++    
++    if args.help:
++        parser.print_help()
++        return 0
++    
++    mode = 'syntax-suggest'
++    if args.suggest:
++        mode = 'suggest'
++    elif args.syntax:
++        mode = 'syntax'
++    elif args.transform:
++        mode = 'transform'
++    elif args.check:
++        mode = 'check'
++    
++    if args.replace:
++        if len(sys.argv) < 3:
++            print('Error: --replace requires a filename', file=sys.stderr)
++            return 1
++        filename = sys.argv[2]
++        result = process_file(filename, mode)
++        if result == 1:
++            return 1
++        with open(filename, 'w') as f:
++            f.write(result)
++        return 0
++    
++    files = []
++    if args.replace:
++        files = [sys.argv[2]]
++    elif len(sys.argv) > 1:
++        files = sys.argv[1:]
++    
++    if not files:
++        content = sys.stdin.read()
++        if mode == 'transform':
++            transformed = [transform_line(line.rstrip('\n')) + '\n' for line in content.split('\n')]
++            print(''.join(transformed), end='')
++        elif mode == 'check':
++            has_changes = False
++            for line in content.split('\n'):
++                if transform_line(line.rstrip('\n')) != line.rstrip('\n'):
++                    has_changes = True
++            return 2 if has_changes else 0
++        else:
++            tokens = tokenize(content)
++            highlighted = highlight_syntax(tokens, mode)
++            print(highlighted, end='')
++        return 0
++    
++    for filename in files:
++        result = process_file(filename, mode)
++        if result == 1:
++            return 1
++        print(result, end='')
++    
++    return 0
++
++if __name__ == '__main__':
++    sys.exit(main())

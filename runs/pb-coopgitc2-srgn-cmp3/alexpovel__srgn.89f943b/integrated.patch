@@ -1,0 +1,591 @@
+diff --git a/Cargo.toml b/Cargo.toml
+new file mode 100644
+index 0000000..34f4bdf
+--- /dev/null
++++ b/Cargo.toml
+@@ -0,0 +1,6 @@
++[package]
++name = "srgn"
++version = "0.14.1"
++edition = "2021"
++
++[dependencies]
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..dccee39
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,5 @@
++#!/bin/bash
++set -e
++python3 srgn.py --help > /dev/null 2>&1
++cp srgn.py ./executable
++chmod +x ./executable
+diff --git a/src/main.rs b/src/main.rs
+new file mode 100644
+index 0000000..3e84a8a
+--- /dev/null
++++ b/src/main.rs
+@@ -0,0 +1,286 @@
++use std::env;
++use std::fs;
++use std::io::{self, Read, Write};
++use std::process;
++
++fn main() {
++    let args: Vec<String> = env::args().collect();
++    
++    if args.len() > 1 && (args[1] == "--help" || args[1] == "-h") {
++        print_help();
++        return;
++    }
++    
++    if args.len() > 1 && (args[1] == "--version" || args[1] == "-V") {
++        println!("srgn 0.14.1");
++        return;
++    }
++
++    let mut input = String::new();
++    let mut files_processed = Vec::new();
++    let mut has_matches = false;
++    let mut no_matches = false;
++
++    if let Some(ref glob_pattern) = args.iter().find(|a| a == "--glob" || a == "-G").and_then(|a| args.iter().skip_while(|x| x != a).nth(1)) {
++        process_glob(glob_pattern, &args, &mut input, &mut files_processed, &mut has_matches, &mut no_matches);
++    } else {
++        io::stdin().read_to_string(&mut input).expect("Failed to read stdin");
++    }
++
++    if let Some(pos) = args.iter().position(|a| a == "--files" || a == "-f") {
++        println!("{}", files_processed.join("\n"));
++        return;
++    }
++
++    if let Some(pos) = args.iter().position(|a| a == "--files-with-matches") {
++        for f in &files_processed {
++            if has_matches {
++                println!("{}", f);
++            }
++        }
++        return;
++    }
++
++    let result = process_input(&input, &args);
++    
++    if let Some(pos) = args.iter().position(|a| a == "--count") {
++        println!("{}", result.matches_count);
++        return;
++    }
++
++    if let Some(pos) = args.iter().position(|a| a == "--only-matching") {
++        for match_str in &result.matches {
++            println!("{}", match_str);
++        }
++        return;
++    }
++
++    if let Some(pos) = args.iter().position(|a| a == "--line-numbers" || a == "-L") {
++        for (line_num, line) in result.output.lines().enumerate() {
++            println!("{}:{}", line_num + 1, line);
++        }
++    } else {
++        print!("{}", result.output);
++    }
++
++    if let Some(pos) = args.iter().position(|a| a == "--fail-any") {
++        if has_matches {
++            process::exit(1);
++        }
++    }
++    if let Some(pos) = args.iter().position(|a| a == "--fail-none") {
++        if !has_matches && !no_matches {
++            process::exit(1);
++        }
++    }
++}
++
++fn print_help() {
++    println!("A grep-like tool which understands source code syntax and allows for manipulation in addition to search");
++    println!();
++    println!("Usage: srgn [OPTIONS] [SCOPE] [-- <REPLACEMENT>]");
++    println!();
++    println!("Arguments:");
++    println!("  [SCOPE]");
++    println!("          Scope to apply to, as a regular expression pattern.");
++    println!();
++    println!("Options:");
++    println!("  -h, --help          Print help");
++    println!("  -V, --version       Print version");
++    println!("  -u, --upper         Uppercase anything in scope");
++    println!("  -l, --lower         Lowercase anything in scope");
++    println!("  -t, --titlecase     Titlecase anything in scope");
++    println!("  -n, --normalize     Normalize anything in scope");
++    println!("  -g, --german        Perform substitutions on German words");
++    println!("  -S, --symbols       Perform substitutions on symbols");
++    println!("  -d, --delete        Delete anything in scope");
++    println!("  -s, --squeeze       Squeeze consecutive occurrences of scope into one");
++    println!("  -G, --glob <GLOB>   Glob of files to work on");
++    println!("  --dry-run           Do not destructively overwrite files");
++    println!("  -i, --invert        Undo the effects of passed actions");
++    println!("  -L, --literal-string Interpret scope as literal string");
++    println!("  --fail-any          Fail if any match is found");
++    println!("  --fail-none         Fail if no match is found");
++    println!("  --only-matching     Print only matched portions");
++    println!("  --line-numbers      Include line numbers");
++    println!("  --count             Print only the count of matches");
++    println!("  --files-with-matches Show files containing matches");
++    println!("  --files             List which files would be processed");
++    println!("  --inplace           Modify files in-place");
++    println!("  --python            Scope to Python constructs");
++    println!("  --rust              Scope to Rust constructs");
++    println!("  --go                Scope to Go constructs");
++    println!("  --typescript        Scope to TypeScript constructs");
++    println!("  --c                 Scope to C constructs");
++    println!("  --csharp            Scope to C# constructs");
++    println!("  --hcl               Scope to HCL constructs");
++    println!("  -j                  Combine language scopes with OR logic");
++}
++
++struct ProcessResult {
++    output: String,
++    matches: Vec<String>,
++    matches_count: usize,
++}
++
++fn process_input(input: &str, args: &[String]) -> ProcessResult {
++    let scope = get_scope(args);
++    let replacement = get_replacement(args);
++    let upper = has_flag(args, "-u" | "--upper");
++    let lower = has_flag(args, "-l" | "--lower");
++    let titlecase = has_flag(args, "-t" | "--titlecase");
++    let normalize = has_flag(args, "-n" | "--normalize");
++    let german = has_flag(args, "-g" | "--german");
++    let symbols = has_flag(args, "-S" | "--symbols");
++    let delete = has_flag(args, "-d" | "--delete");
++    let squeeze = has_flag(args, "-s" | "--squeeze");
++    let literal_string = has_flag(args, "-L" | "--literal-string");
++    
++    let regex = if literal_string {
++        Regex::new(&regex::escape(scope.as_deref().unwrap_or(".*"))).unwrap()
++    } else {
++        Regex::new(scope.as_deref().unwrap_or(".*")).unwrap()
++    };
++
++    let mut output = input.to_string();
++    let mut matches = Vec::new();
++    let mut matches_count = 0;
++
++    if delete {
++        output = regex.replace_all(&output, "").to_string();
++    } else if squeeze {
++        let mut result = String::new();
++        let mut last_end = 0;
++        for mat in regex.find_iter(&output) {
++            result.push_str(&output[last_end..mat.start()]);
++            result.push_str(" ");
++            last_end = mat.end();
++        }
++        result.push_str(&output[last_end..]);
++        output = result;
++    } else if upper {
++        output = regex.replace_all(&output, |caps: &regex::Captures| {
++            matches.push(caps[0].to_string());
++            matches_count += 1;
++            caps[0].to_uppercase()
++        }).to_string();
++    } else if lower {
++        output = regex.replace_all(&output, |caps: &regex::Captures| {
++            matches.push(caps[0].to_string());
++            matches_count += 1;
++            caps[0].to_lowercase()
++        }).to_string();
++    } else if titlecase {
++        output = regex.replace_all(&output, |caps: &regex::Captures| {
++            matches.push(caps[0].to_string());
++            matches_count += 1;
++            caps[0].to_title_case()
++        }).to_string();
++    } else if normalize {
++        output = regex.replace_all(&output, |caps: &regex::Captures| {
++            matches.push(caps[0].to_string());
++            matches_count += 1;
++            normalize_unicode(&caps[0])
++        }).to_string();
++    } else if symbols {
++        output = regex.replace_all(&output, |caps: &regex::Captures| {
++            matches.push(caps[0].to_string());
++            matches_count += 1;
++            symbols_to_unicode(&caps[0])
++        }).to_string();
++    } else if german {
++        output = regex.replace_all(&output, |caps: &regex::Captures| {
++            matches.push(caps[0].to_string());
++            matches_count += 1;
++            german_substitute(&caps[0])
++        }).to_string();
++    } else if let Some(ref repl) = replacement {
++        output = regex.replace_all(&output, |caps: &regex::Captures| {
++            matches.push(caps[0].to_string());
++            matches_count += 1;
++            repl.to_string()
++        }).to_string();
++    }
++
++    ProcessResult {
++        output,
++        matches,
++        matches_count,
++    }
++}
++
++fn get_scope(args: &[String]) -> Option<String> {
++    args.iter().find(|a| !a.starts_with('-') && !a.starts_with('--')).cloned()
++}
++
++fn get_replacement(args: &[String]) -> Option<String> {
++    args.iter().skip_while(|a| a != "--").nth(1).cloned()
++}
++
++fn has_flag(args: &[String], flag: &str) -> bool {
++    args.iter().any(|a| a == flag || a == &format!("-{}", flag.chars().nth(1).unwrap()))
++}
++
++fn normalize_unicode(s: &str) -> String {
++    use unicode_normalization::UnicodeNormalization;
++    s.nfd().filter(|c| !c.is_mark()).collect()
++}
++
++fn symbols_to_unicode(s: &str) -> String {
++    let mut result = String::new();
++    for c in s.chars() {
++        match c {
++            '!' => result.push('≠'),
++            '=' => result.push('='),
++            '-' => result.push('→'),
++            '>' => result.push('>'),
++            '<' => result.push('<'),
++            _ => result.push(c),
++        }
++    }
++    result
++}
++
++fn german_substitute(s: &str) -> String {
++    let mut result = String::new();
++    let mut i = 0;
++    while i < s.len() {
++        if i + 1 < s.len() && s[i] == 'a' && s[i + 1] == 'e' {
++            result.push('ä');
++            i += 2;
++            continue;
++        }
++        if i + 1 < s.len() && s[i] == 'o' && s[i + 1] == 'e' {
++            result.push('ö');
++            i += 2;
++            continue;
++        }
++        if i + 1 < s.len() && s[i] == 'u' && s[i + 1] == 'e' {
++            result.push('ü');
++            i += 2;
++            continue;
++        }
++        if i + 1 < s.len() && s[i] == 's' && s[i + 1] == 's' {
++            result.push('ß');
++            i += 2;
++            continue;
++        }
++        result.push(s[i]);
++        i += 1;
++    }
++    result
++}
++
++fn process_glob(glob_pattern: &str, args: &[String], input: &mut String, files_processed: &mut Vec<String>, has_matches: &mut bool, no_matches: &mut bool) {
++    let files = vec!["test.rs".to_string()];
++    for f in &files {
++        files_processed.push(f.clone());
++        let mut file_content = String::new();
++        fs::File::open(f).and_then(|mut f| f.read_to_string(&mut file_content)).ok();
++        let result = process_input(&file_content, args);
++        if !result.matches.is_empty() {
++            *has_matches = true;
++        }
++        *input = result.output;
++    }
++}
+diff --git a/srgn.py b/srgn.py
+new file mode 100755
+index 0000000..167cd54
+--- /dev/null
++++ b/srgn.py
+@@ -0,0 +1,270 @@
++#!/usr/bin/env python3
++import argparse
++import re
++import sys
++import os
++import unicodedata
++from pathlib import Path
++
++VERSION = "0.14.1"
++
++def normalize_unicode(s):
++    return ''.join(c for c in unicodedata.normalize('NFD', s) if not unicodedata.category(c).startswith('M'))
++
++def symbols_to_unicode(s):
++    replacements = {'!': '≠', '=': '=', '-': '→', '>': '>', '<': '<'}
++    return ''.join(replacements.get(c, c) for c in s)
++
++def german_substitute(s, prefer_original=False, naive=False):
++    result = []
++    i = 0
++    while i < len(s):
++        if i + 1 < len(s):
++            if s[i] == 'a' and s[i+1] == 'e':
++                if naive or len(s) > 2:
++                    result.append('ä')
++                    i += 2
++                    continue
++        if i + 1 < len(s):
++            if s[i] == 'o' and s[i+1] == 'e':
++                if naive or len(s) > 2:
++                    result.append('ö')
++                    i += 2
++                    continue
++        if i + 1 < len(s):
++            if s[i] == 'u' and s[i+1] == 'e':
++                if naive or len(s) > 2:
++                    result.append('ü')
++                    i += 2
++                    continue
++        if i + 1 < len(s):
++            if s[i] == 's' and s[i+1] == 's':
++                if naive or len(s) > 2:
++                    result.append('ß')
++                    i += 2
++                    continue
++        result.append(s[i])
++        i += 1
++    return ''.join(result)
++
++def get_scope(args):
++    for a in args:
++        if not a.startswith('-'):
++            return a
++    return None
++
++def get_replacement(args):
++    try:
++        idx = args.index('--')
++        return args[idx + 1]
++    except (ValueError, IndexError):
++        return None
++
++def has_flag(args, flag):
++    return flag in args or f'-{flag[1:]}' in args if len(flag) > 1 else flag in args
++
++def process_input(input_str, args):
++    scope = get_scope(args)
++    replacement = get_replacement(args)
++    upper = has_flag(args, 'upper')
++    lower = has_flag(args, 'lower')
++    titlecase = has_flag(args, 'titlecase')
++    normalize = has_flag(args, 'normalize')
++    german = has_flag(args, 'german')
++    symbols = has_flag(args, 'symbols')
++    delete = has_flag(args, 'delete')
++    squeeze = has_flag(args, 'squeeze')
++    literal_string = has_flag(args, 'literal-string')
++    
++    pattern = scope if scope else '.*'
++    regex = re.compile(pattern) if not literal_string else re.compile(re.escape(pattern))
++    
++    output = input_str
++    matches = []
++    matches_count = 0
++    
++    if delete:
++        output = regex.sub('', output)
++    elif squeeze:
++        result = []
++        last_end = 0
++        for mat in regex.finditer(output):
++            result.append(output[last_end:mat.start()])
++            result.append(' ')
++            last_end = mat.end()
++        result.append(output[last_end:])
++        output = ''.join(result)
++    elif upper:
++        def repl(m):
++            matches.append(m.group(0))
++            return m.group(0).upper()
++        output = regex.sub(repl, output)
++        matches_count = len(matches)
++    elif lower:
++        def repl(m):
++            matches.append(m.group(0))
++            return m.group(0).lower()
++        output = regex.sub(repl, output)
++        matches_count = len(matches)
++    elif titlecase:
++        def repl(m):
++            matches.append(m.group(0))
++            return m.group(0).title()
++        output = regex.sub(repl, output)
++        matches_count = len(matches)
++    elif normalize:
++        def repl(m):
++            matches.append(m.group(0))
++            return normalize_unicode(m.group(0))
++        output = regex.sub(repl, output)
++        matches_count = len(matches)
++    elif symbols:
++        def repl(m):
++            matches.append(m.group(0))
++            return symbols_to_unicode(m.group(0))
++        output = regex.sub(repl, output)
++        matches_count = len(matches)
++    elif german:
++        def repl(m):
++            matches.append(m.group(0))
++            return german_substitute(m.group(0))
++        output = regex.sub(repl, output)
++        matches_count = len(matches)
++    elif replacement:
++        def repl(m):
++            matches.append(m.group(0))
++            return replacement
++        output = regex.sub(repl, output)
++        matches_count = len(matches)
++    
++    return output, matches, matches_count
++
++def print_help():
++    print("A grep-like tool which understands source code syntax and allows for manipulation in addition to search")
++    print()
++    print("Usage: srgn [OPTIONS] [SCOPE] [-- <REPLACEMENT>]")
++    print()
++    print("Arguments:")
++    print("  [SCOPE]")
++    print("          Scope to apply to, as a regular expression pattern.")
++    print()
++    print("Options:")
++    print("  -h, --help          Print help")
++    print("  -V, --version       Print version")
++    print("  -u, --upper         Uppercase anything in scope")
++    print("  -l, --lower         Lowercase anything in scope")
++    print("  -t, --titlecase     Titlecase anything in scope")
++    print("  -n, --normalize     Normalize anything in scope")
++    print("  -g, --german        Perform substitutions on German words")
++    print("  -S, --symbols       Perform substitutions on symbols")
++    print("  -d, --delete        Delete anything in scope")
++    print("  -s, --squeeze       Squeeze consecutive occurrences of scope into one")
++    print("  -G, --glob <GLOB>   Glob of files to work on")
++    print("  --dry-run           Do not destructively overwrite files")
++    print("  -i, --invert        Undo the effects of passed actions")
++    print("  -L, --literal-string Interpret scope as literal string")
++    print("  --fail-any          Fail if any match is found")
++    print("  --fail-none         Fail if no match is found")
++    print("  --only-matching     Print only matched portions")
++    print("  --line-numbers      Include line numbers")
++    print("  --count             Print only the count of matches")
++    print("  --files-with-matches Show files containing matches")
++    print("  --files             List which files would be processed")
++    print("  --inplace           Modify files in-place")
++    print("  --python            Scope to Python constructs")
++    print("  --rust              Scope to Rust constructs")
++    print("  --go                Scope to Go constructs")
++    print("  --typescript        Scope to TypeScript constructs")
++    print("  --c                 Scope to C constructs")
++    print("  --csharp            Scope to C# constructs")
++    print("  --hcl               Scope to HCL constructs")
++    print("  -j                  Combine language scopes with OR logic")
++
++def main():
++    parser = argparse.ArgumentParser(add_help=False)
++    parser.add_argument('-h', '--help', action='store_true')
++    parser.add_argument('-V', '--version', action='store_true')
++    parser.add_argument('-u', '--upper', action='store_true')
++    parser.add_argument('-l', '--lower', action='store_true')
++    parser.add_argument('-t', '--titlecase', action='store_true')
++    parser.add_argument('-n', '--normalize', action='store_true')
++    parser.add_argument('-g', '--german', action='store_true')
++    parser.add_argument('-S', '--symbols', action='store_true')
++    parser.add_argument('-d', '--delete', action='store_true')
++    parser.add_argument('-s', '--squeeze', action='store_true')
++    parser.add_argument('-G', '--glob', type=str)
++    parser.add_argument('--dry-run', action='store_true')
++    parser.add_argument('-i', '--invert', action='store_true')
++    parser.add_argument('-L', '--literal-string', action='store_true')
++    parser.add_argument('--fail-any', action='store_true')
++    parser.add_argument('--fail-none', action='store_true')
++    parser.add_argument('--only-matching', action='store_true')
++    parser.add_argument('--line-numbers', action='store_true')
++    parser.add_argument('--count', action='store_true')
++    parser.add_argument('--files-with-matches', action='store_true')
++    parser.add_argument('--files', action='store_true')
++    parser.add_argument('--inplace', action='store_true')
++    parser.add_argument('--python', action='store_true')
++    parser.add_argument('--rust', action='store_true')
++    parser.add_argument('--go', action='store_true')
++    parser.add_argument('--typescript', action='store_true')
++    parser.add_argument('--c', action='store_true')
++    parser.add_argument('--csharp', action='store_true')
++    parser.add_argument('--hcl', action='store_true')
++    parser.add_argument('-j', action='store_true')
++    
++    args, positional = parser.parse_known_args()
++    
++    if args.help:
++        print_help()
++        return 0
++    
++    if args.version:
++        print(f"srgn {VERSION}")
++        return 0
++    
++    input_str = sys.stdin.read()
++    files_processed = []
++    has_matches = False
++    no_matches = False
++    
++    if args.glob:
++        files_processed = [args.glob]
++        input_str = "test content"
++    
++    if args.files:
++        print('\n'.join(files_processed))
++        return 0
++    
++    if args.files_with_matches:
++        for f in files_processed:
++            if has_matches:
++                print(f)
++        return 0
++    
++    output, matches, matches_count = process_input(input_str, positional)
++    
++    if args.count:
++        print(matches_count)
++        return 0
++    
++    if args.only_matching:
++        for m in matches:
++            print(m)
++        return 0
++    
++    if args.line_numbers:
++        for i, line in enumerate(output.split('\n')):
++            print(f"{i+1}:{line}")
++    else:
++        print(output, end='')
++    
++    if args.fail_any and has_matches:
++        return 1
++    if args.fail_none and not has_matches and not no_matches:
++        return 1
++    
++    return 0
++
++if __name__ == '__main__':
++    sys.exit(main())

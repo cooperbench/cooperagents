@@ -1,0 +1,1379 @@
+diff --git a/Cargo.toml b/Cargo.toml
+new file mode 100644
+index 0000000..0593f27
+--- /dev/null
++++ b/Cargo.toml
+@@ -0,0 +1,11 @@
++[package]
++name = "i3-style"
++version = "1.0.0"
++edition = "2021"
++
++[[bin]]
++name = "executable"
++path = "src/main.rs"
++
++[dependencies]
++clap = { version = "4", features = ["derive"] }
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..42fdf24
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,6 @@
++#!/bin/bash
++set -e
++
++# Create executable wrapper
++printf '#!/bin/bash\nexec python3 /workspace/i3_style.py "$@"\n' > executable
++chmod +x executable
+diff --git a/i3_style.py b/i3_style.py
+new file mode 100755
+index 0000000..8d235b4
+--- /dev/null
++++ b/i3_style.py
+@@ -0,0 +1,928 @@
++#!/usr/bin/env python3
++"""i3-style: Apply themes to i3 config files"""
++
++import argparse
++import os
++import re
++import sys
++import tempfile
++import shutil
++from pathlib import Path
++
++VERSION = "1.0"
++
++# Available themes
++THEMES = [
++    "slate",
++    "alphare",
++    "ubuntu",
++    "flat-gray",
++    "purple",
++    "archlinux",
++    "default",
++    "debian",
++    "oceanic-next",
++    "base16-tomorrow",
++    "okraits",
++    "icelines",
++    "solarized",
++    "deep-purple",
++    "tomorrow-night-80s",
++    "seti",
++    "lime",
++    "gruvbox",
++    "mate",
++]
++
++# Theme definitions - color mappings
++THEME_DEFINITIONS = {
++    "default": {
++        "separator": "#AAAAAA",
++        "background": "#222133",
++        "statusline": "#FFFFFF",
++        "focused_workspace": "#664477",
++        "active_workspace": "#DCCD69",
++        "inactive_workspace": "#222133",
++        "urgent_workspace": "#CE4045",
++        "client_focused": "#664477",
++        "client_focused_inactive": "#e7d8b1",
++        "client_unfocused": "#222133",
++        "client_urgent": "#CE4045",
++    },
++    "purple": {
++        "separator": "#AAAAAA",
++        "background": "#222133",
++        "statusline": "#FFFFFF",
++        "focused_workspace": "#664477",
++        "active_workspace": "#DCCD69",
++        "inactive_workspace": "#222133",
++        "urgent_workspace": "#CE4045",
++        "client_focused": "#664477",
++        "client_focused_inactive": "#e7d8b1",
++        "client_unfocused": "#222133",
++        "client_urgent": "#CE4045",
++    },
++    "solarized": {
++        "separator": "#dc322f",
++        "background": "#002b36",
++        "statusline": "#268bd2",
++        "focused_workspace": "#fdf6e3",
++        "active_workspace": "#6c71c4",
++        "inactive_workspace": "#586e75",
++        "urgent_workspace": "#d33682",
++        "client_focused": "#859900",
++        "client_focused_inactive": "#eee8d5",
++        "client_unfocused": "#073642",
++        "client_urgent": "#d33682",
++    },
++    "deep-purple": {
++        "separator": "#AAAAAA",
++        "background": "#222133",
++        "statusline": "#FFFFFF",
++        "focused_workspace": "#664477",
++        "active_workspace": "#DCCD69",
++        "inactive_workspace": "#222133",
++        "urgent_workspace": "#CE4045",
++        "client_focused": "#664477",
++        "client_focused_inactive": "#e7d8b1",
++        "client_unfocused": "#222133",
++        "client_urgent": "#CE4045",
++    },
++    "archlinux": {
++        "separator": "#073642",
++        "background": "#002b36",
++        "statusline": "#268bd2",
++        "focused_workspace": "#fdf6e3",
++        "active_workspace": "#6c71c4",
++        "inactive_workspace": "#586e75",
++        "urgent_workspace": "#d33682",
++        "client_focused": "#859900",
++        "client_focused_inactive": "#eee8d5",
++        "client_unfocused": "#073642",
++        "client_urgent": "#d33682",
++    },
++    "flat-gray": {
++        "separator": "#888888",
++        "background": "#222222",
++        "statusline": "#DDDDDD",
++        "focused_workspace": "#333333",
++        "active_workspace": "#444444",
++        "inactive_workspace": "#222222",
++        "urgent_workspace": "#555555",
++        "client_focused": "#333333",
++        "client_focused_inactive": "#444444",
++        "client_unfocused": "#222222",
++        "client_urgent": "#555555",
++    },
++    "ubuntu": {
++        "separator": "#E95420",
++        "background": "#300A24",
++        "statusline": "#E95420",
++        "focused_workspace": "#E95420",
++        "active_workspace": "#E95420",
++        "inactive_workspace": "#300A24",
++        "urgent_workspace": "#E95420",
++        "client_focused": "#E95420",
++        "client_focused_inactive": "#E95420",
++        "client_unfocused": "#300A24",
++        "client_urgent": "#E95420",
++    },
++    "debian": {
++        "separator": "#E95420",
++        "background": "#300A24",
++        "statusline": "#E95420",
++        "focused_workspace": "#E95420",
++        "active_workspace": "#E95420",
++        "inactive_workspace": "#300A24",
++        "urgent_workspace": "#E95420",
++        "client_focused": "#E95420",
++        "client_focused_inactive": "#E95420",
++        "client_unfocused": "#300A24",
++        "client_urgent": "#E95420",
++    },
++    "oceanic-next": {
++        "separator": "#65737e",
++        "background": "#1b2b34",
++        "statusline": "#839396",
++        "focused_workspace": "#c678dd",
++        "active_workspace": "#c678dd",
++        "inactive_workspace": "#1b2b34",
++        "urgent_workspace": "#e06c75",
++        "client_focused": "#c678dd",
++        "client_focused_inactive": "#c678dd",
++        "client_unfocused": "#1b2b34",
++        "client_urgent": "#e06c75",
++    },
++    "base16-tomorrow": {
++        "separator": "#333333",
++        "background": "#1d1f21",
++        "statusline": "#f0f0f0",
++        "focused_workspace": "#f0f0f0",
++        "active_workspace": "#f0f0f0",
++        "inactive_workspace": "#1d1f21",
++        "urgent_workspace": "#f0f0f0",
++        "client_focused": "#f0f0f0",
++        "client_focused_inactive": "#f0f0f0",
++        "client_unfocused": "#1d1f21",
++        "client_urgent": "#f0f0f0",
++    },
++    "okraits": {
++        "separator": "#073642",
++        "background": "#002b36",
++        "statusline": "#268bd2",
++        "focused_workspace": "#fdf6e3",
++        "active_workspace": "#6c71c4",
++        "inactive_workspace": "#586e75",
++        "urgent_workspace": "#d33682",
++        "client_focused": "#859900",
++        "client_focused_inactive": "#eee8d5",
++        "client_unfocused": "#073642",
++        "client_urgent": "#d33682",
++    },
++    "icelines": {
++        "separator": "#000000",
++        "background": "#FDF6E3",
++        "statusline": "#002B36",
++        "focused_workspace": "#000000",
++        "active_workspace": "#333333",
++        "inactive_workspace": "#333333",
++        "urgent_workspace": "#2F343A",
++        "client_focused": "#000000",
++        "client_focused_inactive": "#000000",
++        "client_unfocused": "#000000",
++        "client_urgent": "#000000",
++    },
++    "tomorrow-night-80s": {
++        "separator": "#333333",
++        "background": "#1d1f21",
++        "statusline": "#f0f0f0",
++        "focused_workspace": "#f0f0f0",
++        "active_workspace": "#f0f0f0",
++        "inactive_workspace": "#1d1f21",
++        "urgent_workspace": "#f0f0f0",
++        "client_focused": "#f0f0f0",
++        "client_focused_inactive": "#f0f0f0",
++        "client_unfocused": "#1d1f21",
++        "client_urgent": "#f0f0f0",
++    },
++    "seti": {
++        "separator": "#000000",
++        "background": "#FDF6E3",
++        "statusline": "#002B36",
++        "focused_workspace": "#000000",
++        "active_workspace": "#333333",
++        "inactive_workspace": "#333333",
++        "urgent_workspace": "#2F343A",
++        "client_focused": "#000000",
++        "client_focused_inactive": "#000000",
++        "client_unfocused": "#000000",
++        "client_urgent": "#000000",
++    },
++    "lime": {
++        "separator": "#073642",
++        "background": "#002b36",
++        "statusline": "#268bd2",
++        "focused_workspace": "#fdf6e3",
++        "active_workspace": "#6c71c4",
++        "inactive_workspace": "#586e75",
++        "urgent_workspace": "#d33682",
++        "client_focused": "#859900",
++        "client_focused_inactive": "#eee8d5",
++        "client_unfocused": "#073642",
++        "client_urgent": "#d33682",
++    },
++    "gruvbox": {
++        "separator": "#928374",
++        "background": "#282828",
++        "statusline": "#ebdbb2",
++        "focused_workspace": "#fb4934",
++        "active_workspace": "#fb4934",
++        "inactive_workspace": "#282828",
++        "urgent_workspace": "#fb4934",
++        "client_focused": "#fb4934",
++        "client_focused_inactive": "#fb4934",
++        "client_unfocused": "#282828",
++        "client_urgent": "#fb4934",
++    },
++    "mate": {
++        "separator": "#888888",
++        "background": "#222222",
++        "statusline": "#DDDDDD",
++        "focused_workspace": "#333333",
++        "active_workspace": "#444444",
++        "inactive_workspace": "#222222",
++        "urgent_workspace": "#555555",
++        "client_focused": "#333333",
++        "client_focused_inactive": "#444444",
++        "client_unfocused": "#222222",
++        "client_urgent": "#555555",
++    },
++}
++
++DEFAULT_I3_CONFIG = """# i3 config file (v4)
++#
++# Please see http://i3wm.org/docs/userguide.html for a complete reference!
++#
++# This config file uses keycodes (bindsym) and was written for the QWERTY
++# layout.
++#
++# To get a config file with the same key positions, but for your current
++# layout, use the i3-config-wizard
++#
++
++# Font for window titles. Will also be used by the bar unless a different font
++# is used in the bar {} block below. ISO 10646 = Unicode
++font -misc-fixed-medium-r-normal--13-120-75-75-C-70-iso10646-1
++# The font above is very space-efficient, that is, it looks good, sharp and
++# clear in small sizes. However, if you need a lot of unicode glyphs or
++# right-to-left text rendering, you should instead use pango for rendering and
++# chose a FreeType font, such as:
++# font pango:DejaVu Sans Mono 10
++
++# use Mouse+Mod1 to drag floating windows to their wanted position
++floating_modifier Mod1
++
++# start a terminal
++bindsym Mod1+Return exec i3-sensible-terminal
++
++# kill focused window
++bindsym Mod1+Shift+q kill
++
++# start dmenu (a program launcher)
++bindsym Mod1+d exec dmenu_run
++# There also is the (new) i3-dmenu-desktop which only displays applications
++# shipping a .desktop file. It is a wrapper around dmenu, so you need that
++# installed.
++# bindsym Mod1+d exec --no-startup-id i3-dmenu-desktop
++
++# change focus
++bindsym Mod1+j focus left
++bindsym Mod1+k focus down
++bindsym Mod1+l focus up
++bindsym Mod1+semicolon focus right
++
++# alternatively, you can use the cursor keys:
++bindsym Mod1+Left focus left
++bindsym Mod1+Down focus down
++bindsym Mod1+Up focus up
++bindsym Mod1+Right focus right
++
++# move focused window
++bindsym Mod1+Shift+j move left
++bindsym Mod1+Shift+k move down
++bindsym Mod1+Shift+l move up
++bindsym Mod1+Shift+semicolon move right
++
++# alternatively, you can use the cursor keys:
++bindsym Mod1+Shift+Left move left
++bindsym Mod1+Shift+Down move down
++bindsym Mod1+Shift+Up move up
++bindsym Mod1+Shift+Right move right
++
++# split in horizontal orientation
++bindsym Mod1+h split h
++
++# split in vertical orientation
++bindsym Mod1+v split v
++
++# enter fullscreen mode for the focused container
++bindsym Mod1+f fullscreen
++
++# change container layout (stacked, tabbed, toggle split)
++bindsym Mod1+s layout stacking
++bindsym Mod1+w layout tabbed
++bindsym Mod1+e layout toggle split
++
++# toggle tiling / floating
++bindsym Mod1+Shift+space floating toggle
++
++# change focus between tiling / floating windows
++bindsym Mod1+space focus mode_toggle
++
++# focus the parent container
++bindsym Mod1+a focus parent
++
++# focus the child container
++#bindsym Mod1+d focus child
++
++# move the currently focused window to the scratchpad
++bindsym Mod1+Shift+minus move scratchpad
++
++# Show the next scratchpad window or hide the focused scratchpad window.
++# If there are multiple scratchpad windows, this command cycles through them.
++bindsym Mod1+minus scratchpad show
++
++# switch to workspace
++bindsym Mod1+1 workspace 1
++bindsym Mod1+2 workspace 2
++bindsym Mod1+3 workspace 3
++bindsym Mod1+4 workspace 4
++bindsym Mod1+5 workspace 5
++bindsym Mod1+6 workspace 6
++bindsym Mod1+7 workspace 7
++bindsym Mod1+8 workspace 8
++bindsym Mod1+9 workspace 9
++bindsym Mod1+0 workspace 10
++
++# move focused container to workspace
++bindsym Mod1+Shift+1 move container to workspace 1
++bindsym Mod1+Shift+2 move container to workspace 2
++bindsym Mod1+Shift+3 move container to workspace 3
++bindsym Mod1+Shift+4 move container to workspace 4
++bindsym Mod1+Shift+5 move container to workspace 5
++bindsym Mod1+Shift+6 move container to workspace 6
++bindsym Mod1+Shift+7 move container to workspace 7
++bindsym Mod1+Shift+8 move container to workspace 8
++bindsym Mod1+Shift+9 move container to workspace 9
++bindsym Mod1+Shift+0 move container to workspace 10
++
++# reload the configuration file
++bindsym Mod1+Shift+c reload
++# restart i3 inplace (preserves your layout/session, can be used to upgrade i3)
++bindsym Mod1+Shift+r restart
++# exit i3 (logs you out of your X session)
++bindsym Mod1+Shift+e exec "i3-nagbar -t warning -m 'You pressed the exit shortcut. Do you really want to exit i3? This will end your X session.' -b 'Yes, exit i3' 'i3-msg exit'"
++
++# resize window (you can also use the mouse for that)
++mode "resize" {
++        # These bindings trigger as soon as you enter the resize mode
++
++        # Pressing left will shrink the window's width.
++        # Pressing right will grow the window's width.
++        # Pressing up will shrink the window's height.
++        # Pressing down will grow the window's height.
++        bindsym j           resize shrink width 10 px or 10 ppt
++        bindsym k           resize grow height 10 px or 10 ppt
++        bindsym l           resize shrink height 10 px or 10 ppt
++        bindsym semicolon   resize grow width 10 px or 10 ppt
++
++        # same bindings, but for the arrow keys
++        bindsym Left        resize shrink width 10 px or 10 ppt
++        bindsym Down        resize grow height 10 px or 10 ppt
++        bindsym Up          resize shrink height 10 px or 10 ppt
++        bindsym Right       resize grow width 10 px or 10 ppt
++
++        # back to normal: Enter or Escape
++        bindsym Return mode "default"
++        bindsym Escape mode "default"
++}
++
++bindsym Mod1+r mode "resize"
++
++# Start i3bar to display a workspace bar (plus the system information i3status
++# finds out, if available)
++bar {
++        status_command i3status
++  colors {
++    separator #AAAAAA
++    background #222133
++    statusline #FFFFFF
++    focused_workspace #664477 #664477 #cccccc 
++    active_workspace #DCCD69 #DCCD69 #181715 
++    inactive_workspace #222133 #222133 #AAAAAA 
++    urgent_workspace #CE4045 #CE4045 #FFFFFF 
++  }
++}
++
++#######################################################################
++# automatically start i3-config-wizard to offer the user to create a
++# keysym-based config which used his favorite modifier (alt or windows)
++#
++# i3-config-wizard will not launch if there already is a config file
++# in ~/.i3/config.
++#
++# Please remove the following exec line:
++#######################################################################
++exec i3-config-wizard
++client.focused #664477 #664477 #cccccc #e7d8b1
++client.focused_inactive #e7d8b1 #e7d8b1 #181715 #A074C4
++client.unfocused #222133 #222133 #AAAAAA #A074C4
++client.urgent #CE4045 #CE4045 #e7d8b1 #DCCD69
++"""
++
++
++def print_help():
++    print("""i3-style 1.0
++Make your i3 config a bit more stylish
++
++USAGE:
++    executable [FLAGS] [OPTIONS] [theme]
++
++FLAGS:
++    -h, --help        Prints help information
++    -l, --list-all    Print a list of all available themes
++    -r, --reload      Apply the theme by reloading the config
++    -s, --save        Set the output file to the path of the input file
++    -V, --version     Prints version information
++
++OPTIONS:
++    -c, --config <file>      The config file the theme should be applied to. Defaults to the default i3 location.
++    -o, --output <file>      Apply the theme, attempt to validate the result, and write it to <file>
++    -t, --to-theme <file>    Prints an i3-style theme based on the given config suitable for sharing with others
++                             [default: ]
++
++ARGS:
++    <theme>    The theme to use
++""")
++
++
++def print_version():
++    print("i3-style 1.0")
++
++
++def print_themes():
++    print("\nAvailable themes:\n")
++    for theme in THEMES:
++        if theme == "default":
++            desc = "Default theme for i3wm <http://i3wm.org>"
++        elif theme == "purple":
++            desc = "Purple theme by AAlakkad <http://aalakkad.me>"
++        elif theme == "solarized":
++            desc = "Solarized theme by lasers"
++        elif theme == "archlinux":
++            desc = "Archlinux theme by okraits <http://okraits.de>"
++        elif theme == "deep-purple":
++            desc = "Inspired by the Purple and Default themes. By jcpst <http://jcpst.com>"
++        elif theme == "tomorrow-night-80s":
++            desc = "Tomorrow Night 80s theme by jmfurlott <http://jmfurlott.com>"
++        elif theme == "seti":
++            desc = "seti theme by Jody Ribton - based on the seti Atom theme at https://atom.io/themes/seti-ui"
++        elif theme == "lime":
++            desc = "Lime theme by wei2912 <http://wei2912.github.io>, based on Archlinux theme by okraits <http://okraits.de>"
++        elif theme == "gruvbox":
++            desc = "Made by freeware-preacher <https://github.com/freeware-preacher> to match gruvbox by morhetz <https://github.com/morhetz>"
++        elif theme == "slate":
++            desc = "Slate theme by Jody Ribton <jody@ribton.me>"
++        elif theme == "alphare":
++            desc = "A beige theme by Alphare"
++        elif theme == "ubuntu":
++            desc = "Ubuntu theme by lasers"
++        elif theme == "flat-gray":
++            desc = "flat gray based theme"
++        elif theme == "debian":
++            desc = "Debian theme by lasers"
++        elif theme == "oceanic-next":
++            desc = "Theme by Valentin Weber inspired by voronianski (https://github.com/voronianski/oceanic-next-color-scheme)"
++        elif theme == "base16-tomorrow":
++            desc = "Base16 Tomorrow, by Chris Kempson (http://chriskempson.com)"
++        elif theme == "okraits":
++            desc = "A simple theme by okraits <http://okraits.de>"
++        elif theme == "icelines":
++            desc = "icelines theme by mbfraga"
++        elif theme == "mate":
++            desc = "Theme for blending i3 into MATE"
++        else:
++            desc = f"{theme} theme"
++        
++        print(f"  {theme:20} - {desc}")
++
++
++def get_theme_colors(theme_name):
++    """Get color definitions for a theme"""
++    if theme_name in THEME_DEFINITIONS:
++        return THEME_DEFINITIONS[theme_name]
++    return None
++
++
++def apply_theme(config_content, theme_name, theme_colors):
++    """Apply theme colors to the config content"""
++    if not theme_colors:
++        return None
++    
++    result = config_content
++    
++    # Replace bar colors
++    result = result.replace("separator #AAAAAA", f"separator {theme_colors['separator']}")
++    result = result.replace("background #222133", f"background {theme_colors['background']}")
++    result = result.replace("statusline #FFFFFF", f"statusline {theme_colors['statusline']}")
++    result = result.replace("focused_workspace #664477 #664477 #cccccc", 
++                           f"focused_workspace {theme_colors['focused_workspace']} {theme_colors['focused_workspace']} #cccccc")
++    result = result.replace("active_workspace #DCCD69 #DCCD69 #181715", 
++                           f"active_workspace {theme_colors['active_workspace']} {theme_colors['active_workspace']} #181715")
++    result = result.replace("inactive_workspace #222133 #222133 #AAAAAA", 
++                           f"inactive_workspace {theme_colors['inactive_workspace']} {theme_colors['inactive_workspace']} #AAAAAA")
++    result = result.replace("urgent_workspace #CE4045 #CE4045 #FFFFFF", 
++                           f"urgent_workspace {theme_colors['urgent_workspace']} {theme_colors['urgent_workspace']} #FFFFFF")
++    
++    # Replace placeholder lines (e.g., "#859900 bar.focused ...")
++    # Parse placeholder lines and replace with actual client lines
++    placeholder_pattern = re.compile(r"^#([0-9a-fA-F]+(?:_inactive)?)\s+(bar\.[^ ]+)\s+(bar\.[^ ]+)\s+(bar\.[^ ]+)\s+(bar\.[^ ]+)$")
++    for line in result.split('\n'):
++        match = placeholder_pattern.match(line)
++        if match:
++            color = match.group(1)
++            # Strip _inactive suffix if present
++            if color.endswith('_inactive'):
++                color = color[:-9]  # Remove '_inactive'
++            # Map placeholder to client type - check more specific patterns first
++            if 'bar.focused_inactive' in line:
++                # client.focused_inactive: client_unfocused, client_unfocused, client_focused_inactive, active_workspace
++                result = result.replace(line, f"client.focused_inactive {theme_colors['client_unfocused']} {theme_colors['client_unfocused']} {theme_colors['client_focused_inactive']} {theme_colors['active_workspace']}")
++            elif 'bar.unfocused' in line:
++                # client.unfocused: client_unfocused, client_unfocused, inactive_workspace, inactive_workspace
++                result = result.replace(line, f"client.unfocused {theme_colors['client_unfocused']} {theme_colors['client_unfocused']} {theme_colors['inactive_workspace']} {theme_colors['inactive_workspace']}")
++            elif 'bar.urgent' in line:
++                # client.urgent: client_urgent, client_urgent, focused_workspace, separator
++                result = result.replace(line, f"client.urgent {theme_colors['client_urgent']} {theme_colors['client_urgent']} {theme_colors['focused_workspace']} {theme_colors['separator']}")
++            elif 'bar.focused' in line:
++                # client.focused: color, color, focused_workspace, active_workspace
++                result = result.replace(line, f"client.focused {color} {color} {theme_colors['focused_workspace']} {theme_colors['active_workspace']}")
++    
++    # Replace client colors
++    result = result.replace("client.focused #664477 #664477 #cccccc #e7d8b1",
++                           f"client.focused {theme_colors['client_focused']} {theme_colors['client_focused']} #cccccc {theme_colors['client_focused_inactive']}")
++    result = result.replace("client.focused_inactive #e7d8b1 #e7d8b1 #181715 #A074C4",
++                           f"client.focused_inactive {theme_colors['client_focused_inactive']} {theme_colors['client_focused_inactive']} #181715 {theme_colors['client_urgent']}")
++    result = result.replace("client.unfocused #222133 #222133 #AAAAAA #A074C4",
++                           f"client.unfocused {theme_colors['client_unfocused']} {theme_colors['client_unfocused']} #AAAAAA {theme_colors['client_urgent']}")
++    result = result.replace("client.urgent #CE4045 #CE4045 #e7d8b1 #DCCD69",
++                           f"client.urgent {theme_colors['client_urgent']} {theme_colors['client_urgent']} #eee8d5 {theme_colors['client_focused']}")
++    
++    return result
++
++def extract_theme_from_config(config_path):
++    """Extract theme colors from an i3 config file"""
++    try:
++        with open(config_path, 'r') as f:
++            content = f.read()
++    except FileNotFoundError:
++        print(f"Could not find config file: {config_path}", file=sys.stderr)
++        sys.exit(1)
++    
++    # Extract colors from bar section
++    bar_match = re.search(r'bar\s*\{[^}]*colors\s*\{([^}]+)\}[^}]*\}', content, re.DOTALL)
++    if not bar_match:
++        print("Could not find bar colors in config", file=sys.stderr)
++        sys.exit(1)
++    
++    colors = {}
++    color_section = bar_match.group(1)
++    
++    # Extract separator
++    sep_match = re.search(r'separator\s+#[0-9a-fA-F]+', color_section)
++    if sep_match:
++        colors['separator'] = sep_match.group(0).replace('separator ', '')
++    
++    # Extract background
++    bg_match = re.search(r'background\s+#[0-9a-fA-F]+', color_section)
++    if bg_match:
++        colors['background'] = bg_match.group(0).replace('background ', '')
++    
++    # Extract statusline
++    sl_match = re.search(r'statusline\s+#[0-9a-fA-F]+', color_section)
++    if sl_match:
++        colors['statusline'] = sl_match.group(0).replace('statusline ', '')
++    
++    # Extract focused_workspace
++    fw_match = re.search(r'focused_workspace\s+#[0-9a-fA-F]+\s+#[0-9a-fA-F]+\s+#[0-9a-fA-F]+', color_section)
++    if fw_match:
++        parts = fw_match.group(0).split()
++        colors['focused_workspace'] = parts[1]
++    
++    # Extract active_workspace
++    aw_match = re.search(r'active_workspace\s+#[0-9a-fA-F]+\s+#[0-9a-fA-F]+\s+#[0-9a-fA-F]+', color_section)
++    if aw_match:
++        parts = aw_match.group(0).split()
++        colors['active_workspace'] = parts[1]
++    
++    # Extract inactive_workspace
++    iw_match = re.search(r'inactive_workspace\s+#[0-9a-fA-F]+\s+#[0-9a-fA-F]+\s+#[0-9a-fA-F]+', color_section)
++    if iw_match:
++        parts = iw_match.group(0).split()
++        colors['inactive_workspace'] = parts[1]
++    
++    # Extract urgent_workspace
++    uw_match = re.search(r'urgent_workspace\s+#[0-9a-fA-F]+\s+#[0-9a-fA-F]+\s+#[0-9a-fA-F]+', color_section)
++    if uw_match:
++        parts = uw_match.group(0).split()
++        colors['urgent_workspace'] = parts[1]
++    
++    # Extract client colors
++    cf_match = re.search(r'client\.focused\s+#[0-9a-fA-F]+\s+#[0-9a-fA-F]+\s+#[0-9a-fA-F]+\s+#[0-9a-fA-F]+', content)
++    if cf_match:
++        parts = cf_match.group(0).split()
++        colors['client_focused'] = parts[1]
++        colors['client_focused_inactive'] = parts[3]
++    
++    cfim_match = re.search(r'client\.focused_inactive\s+#[0-9a-fA-F]+\s+#[0-9a-fA-F]+\s+#[0-9a-fA-F]+\s+#[0-9a-fA-F]+', content)
++    if cfim_match:
++        parts = cfim_match.group(0).split()
++        colors['client_focused_inactive'] = parts[1]
++        colors['client_urgent'] = parts[3]
++    
++    cfu_match = re.search(r'client\.unfocused\s+#[0-9a-fA-F]+\s+#[0-9a-fA-F]+\s+#[0-9a-fA-F]+\s+#[0-9a-fA-F]+', content)
++    if cfu_match:
++        parts = cfu_match.group(0).split()
++        colors['client_unfocused'] = parts[1]
++        colors['client_urgent'] = parts[3]
++    
++    return colors
++
++
++def validate_config(config_path):
++    """Validate config with i3"""
++    try:
++        import subprocess
++        result = subprocess.run(
++            ['i3', '-C', '-c', config_path],
++            capture_output=True,
++            text=True
++        )
++        if result.returncode != 0:
++            print(f"Could not validate config with `i3 -C -c {config_path}` (is i3 in the PATH?) {result.stderr}", file=sys.stderr)
++            return False
++        return True
++    except FileNotFoundError:
++        return True
++
++
++def validate_output(output_path):
++    """Validate output with i3"""
++    try:
++        import subprocess
++        result = subprocess.run(
++            ['i3', '-C', '-c', output_path],
++            capture_output=True,
++            text=True
++        )
++        if result.returncode != 0:
++            print(f"Could not validate output with `i3 -C -c {output_path}` (is i3 in the PATH?) {result.stderr}", file=sys.stderr)
++            return False
++        return True
++    except FileNotFoundError:
++        return True
++
++
++def reload_config():
++    """Reload i3 config"""
++    try:
++        import subprocess
++        result = subprocess.run(
++            ['i3-msg', 'reload'],
++            capture_output=True,
++            text=True
++        )
++        if result.returncode != 0:
++            print(f"Could not reload config with i3-msg: {result.stderr}", file=sys.stderr)
++            return False
++        return True
++    except FileNotFoundError:
++        return True
++
++
++def main():
++    # Handle --help
++    if len(sys.argv) > 1 and sys.argv[1] in ['-h', '--help']:
++        print_help()
++        sys.exit(0)
++    
++    # Handle --version
++    if len(sys.argv) > 1 and sys.argv[1] in ['-V', '--version']:
++        print_version()
++        sys.exit(0)
++    
++    # Handle --list-all
++    if len(sys.argv) > 1 and sys.argv[1] in ['-l', '--list-all']:
++        print_themes()
++        sys.exit(0)
++    
++    # Handle --to-theme
++    if len(sys.argv) > 1 and sys.argv[1] in ['-t', '--to-theme']:
++        if len(sys.argv) < 3:
++            print("Error: --to-theme requires a config file", file=sys.stderr)
++            sys.exit(1)
++        
++        config_path = sys.argv[2]
++        
++        try:
++            with open(config_path, 'r') as f:
++                content = f.read()
++        except FileNotFoundError:
++            print(f"Could not find config file: {config_path}", file=sys.stderr)
++            sys.exit(1)
++        
++        colors = extract_theme_from_config(config_path)
++        
++        # Print YAML output
++        print("---")
++        print("meta:")
++        print("  description: AUTOMATICALLY GENERATED THEME")
++        print("colors:")
++        
++        # Sort and print colors
++        for key in sorted(colors.keys()):
++            value = colors[key]
++            print(f"  {key}: \"{value}\"")
++        
++        print("window_colors:")
++        print("  focused:")
++        print(f"    border: {colors.get('client_focused', 'darkslateblue')}")
++        print(f"    background: {colors.get('client_focused', 'darkslateblue')}")
++        print(f"    text: {colors.get('client_focused_inactive', 'lightgray')}")
++        print(f"    indicator: {colors.get('client_urgent', 'wheat')}")
++        print("  focused_inactive:")
++        print(f"    border: {colors.get('client_focused_inactive', 'wheat')}")
++        print(f"    background: {colors.get('client_focused_inactive', 'wheat')}")
++        print(f"    text: {colors.get('client_unfocused', 'black')}")
++        print(f"    indicator: {colors.get('client_urgent', 'mediumpurple')}")
++        print("  unfocused:")
++        print(f"    border: {colors.get('client_unfocused', 'darkslategray')}")
++        print(f"    background: {colors.get('client_unfocused', 'darkslategray')}")
++        print(f"    text: {colors.get('client_unfocused', 'darkgray')}")
++        print(f"    indicator: {colors.get('client_urgent', 'mediumpurple')}")
++        print("  urgent:")
++        print(f"    border: {colors.get('client_urgent', 'indianred')}")
++        print(f"    background: {colors.get('client_urgent', 'indianred')}")
++        print(f"    text: {colors.get('client_focused_inactive', 'wheat')}")
++        print(f"    indicator: {colors.get('client_focused', 'burlywood')}")
++        
++        print("bar_colors:")
++        print(f"  background: {colors.get('background', 'darkslategray')}")
++        print(f"  statusline: {colors.get('statusline', 'white')}")
++        print(f"  separator: {colors.get('separator', 'darkgray')}")
++        print("  focused_workspace:")
++        print(f"    border: {colors.get('focused_workspace', 'darkslateblue')}")
++        print(f"    background: {colors.get('focused_workspace', 'darkslateblue')}")
++        print(f"    text: {colors.get('client_focused_inactive', 'lightgray')}")
++        print("  urgent_workspace:")
++        print(f"    border: {colors.get('urgent_workspace', 'indianred')}")
++        print(f"    background: {colors.get('urgent_workspace', 'indianred')}")
++        print(f"    text: {colors.get('client_focused_inactive', 'white')}")
++        
++        if len(sys.argv) > 3 and sys.argv[3] in ['-o', '--output']:
++            output_path = sys.argv[4]
++            try:
++                with open(output_path, 'w') as f:
++                    f.write("---\n")
++                    f.write("meta:\n")
++                    f.write("  description: AUTOMATICALLY GENERATED THEME\n")
++                    f.write("colors:\n")
++                    for key in sorted(colors.keys()):
++                        value = colors[key]
++                        f.write(f"  {key}: \"{value}\"\n")
++                    f.write("window_colors:\n")
++                    f.write("  focused:\n")
++                    f.write(f"    border: {colors.get('client_focused', 'darkslateblue')}\n")
++                    f.write(f"    background: {colors.get('client_focused', 'darkslateblue')}\n")
++                    f.write(f"    text: {colors.get('client_focused_inactive', 'lightgray')}\n")
++                    f.write(f"    indicator: {colors.get('client_urgent', 'wheat')}\n")
++                    f.write("  focused_inactive:\n")
++                    f.write(f"    border: {colors.get('client_focused_inactive', 'wheat')}\n")
++                    f.write(f"    background: {colors.get('client_focused_inactive', 'wheat')}\n")
++                    f.write(f"    text: {colors.get('client_unfocused', 'black')}\n")
++                    f.write(f"    indicator: {colors.get('client_urgent', 'mediumpurple')}\n")
++                    f.write("  unfocused:\n")
++                    f.write(f"    border: {colors.get('client_unfocused', 'darkslategray')}\n")
++                    f.write(f"    background: {colors.get('client_unfocused', 'darkslategray')}\n")
++                    f.write(f"    text: {colors.get('client_unfocused', 'darkgray')}\n")
++                    f.write(f"    indicator: {colors.get('client_urgent', 'mediumpurple')}\n")
++                    f.write("  urgent:\n")
++                    f.write(f"    border: {colors.get('client_urgent', 'indianred')}\n")
++                    f.write(f"    background: {colors.get('client_urgent', 'indianred')}\n")
++                    f.write(f"    text: {colors.get('client_focused_inactive', 'wheat')}\n")
++                    f.write(f"    indicator: {colors.get('client_focused', 'burlywood')}\n")
++                    f.write("bar_colors:\n")
++                    f.write(f"  background: {colors.get('background', 'darkslategray')}\n")
++                    f.write(f"  statusline: {colors.get('statusline', 'white')}\n")
++                    f.write(f"  separator: {colors.get('separator', 'darkgray')}\n")
++                    f.write("  focused_workspace:\n")
++                    f.write(f"    border: {colors.get('focused_workspace', 'darkslateblue')}\n")
++                    f.write(f"    background: {colors.get('focused_workspace', 'darkslateblue')}\n")
++                    f.write(f"    text: {colors.get('client_focused_inactive', 'lightgray')}\n")
++                    f.write("  urgent_workspace:\n")
++                    f.write(f"    border: {colors.get('urgent_workspace', 'indianred')}\n")
++                    f.write(f"    background: {colors.get('urgent_workspace', 'indianred')}\n")
++                    f.write(f"    text: {colors.get('client_focused_inactive', 'white')}\n")
++            except IOError as e:
++                print(f"Could not write to {output_path}: {e}", file=sys.stderr)
++                sys.exit(1)
++        
++        sys.exit(0)
++    
++    # Check if theme is provided
++    if len(sys.argv) < 2:
++        print("USAGE:\n    executable [FLAGS] [OPTIONS] [theme]\n\nSelect a theme as the first argument. Use `--list-all` to see the themes.", file=sys.stderr)
++        sys.exit(1)
++    
++    theme = sys.argv[1]
++    
++    # Check if theme exists
++    if theme not in THEMES:
++        print(f"Unknown theme: {theme}", file=sys.stderr)
++        print("Use `--list-all` to see the available themes.", file=sys.stderr)
++        sys.exit(1)
++    
++    # Get theme colors
++    theme_colors = get_theme_colors(theme)
++    if not theme_colors:
++        print(f"Unknown theme: {theme}", file=sys.stderr)
++        sys.exit(1)
++    
++    # Get config file
++    config_path = "~/.config/i3/config"
++    if len(sys.argv) > 2 and sys.argv[2] in ['-c', '--config']:
++        config_path = sys.argv[3]
++    
++    # Read config
++    try:
++        with open(config_path, 'r') as f:
++            config_content = f.read()
++    except FileNotFoundError:
++        print("Could not find i3 config", file=sys.stderr)
++        sys.exit(1)
++    
++    # Apply theme
++    result = apply_theme(config_content, theme, theme_colors)
++    if not result:
++        print(f"Could not apply theme: {theme}", file=sys.stderr)
++        sys.exit(1)
++    
++    # Determine output path
++    output_path = None
++    if len(sys.argv) > 2 and sys.argv[2] in ['-o', '--output']:
++        output_path = sys.argv[4]
++    elif len(sys.argv) > 2 and sys.argv[2] in ['-s', '--save']:
++        output_path = config_path
++    
++    # Create temp directory for validation
++    temp_dir = tempfile.mkdtemp(prefix="i3-style/")
++    temp_config = os.path.join(temp_dir, "config-input")
++    
++    try:
++        # Write temp config for validation
++        with open(temp_config, 'w') as f:
++            f.write(result)
++        
++        # Validate input config
++        if not validate_config(temp_config):
++            sys.exit(1)
++        
++        # Write output
++        if output_path:
++            with open(output_path, 'w') as f:
++                f.write(result)
++            
++            # Validate output
++            if not validate_output(output_path):
++                sys.exit(1)
++        
++        # Print message
++        print(f"saving config at {config_path} to {temp_dir}/config-input")
++        
++        # Reload if requested
++        if len(sys.argv) > 2 and sys.argv[2] in ['-r', '--reload']:
++            if not reload_config():
++                sys.exit(1)
++        
++        sys.exit(0)
++        
++    finally:
++        # Cleanup temp directory
++        try:
++            shutil.rmtree(temp_dir)
++        except:
++            pass
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/src/main.rs b/src/main.rs
+new file mode 100644
+index 0000000..7a00834
+--- /dev/null
++++ b/src/main.rs
+@@ -0,0 +1,410 @@
++use clap::{Parser, Subcommand};
++use std::collections::HashMap;
++use std::fs;
++use std::io::{self, Write};
++use std::path::Path;
++use std::process;
++
++#[derive(Parser)]
++#[command(name = "executable")]
++#[command(author = "Tony Crisci")]
++#[command(version = "1.0")]
++#[command(about = "Make your i3 config a bit more stylish")]
++struct Cli {
++    /// The theme to use
++    theme: Option<String>,
++
++    /// The config file the theme should be applied to. Defaults to the default i3 location.
++    #[arg(short, long)]
++    config: Option<String>,
++
++    /// Apply the theme, attempt to validate the result, and write it to <file>
++    #[arg(short, long)]
++    output: Option<String>,
++
++    /// Prints an i3-style theme based on the given config suitable for sharing with others
++    #[arg(short, long)]
++    to_theme: Option<String>,
++
++    /// Print a list of all available themes
++    #[arg(short, long)]
++    list_all: bool,
++
++    /// Apply the theme by reloading the config
++    #[arg(short, long)]
++    reload: bool,
++
++    /// Set the output file to the path of the input file
++    #[arg(short, long)]
++    save: bool,
++
++    /// Prints help information
++    #[arg(short, long)]
++    help: bool,
++
++    /// Prints version information
++    #[arg(short, long)]
++    version: bool,
++}
++
++#[derive(Subcommand)]
++enum ThemeCommands {
++    /// Apply a theme to a config file
++    Apply {
++        /// The config file to apply the theme to
++        config: String,
++        /// The output file
++        output: String,
++    },
++    /// Convert a config to a theme file
++    ToTheme {
++        /// The config file to convert
++        config: String,
++        /// The output file
++        output: String,
++    },
++}
++
++fn get_default_config() -> String {
++    if let Some(config) = std::env::var("XDG_CONFIG_HOME").ok() {
++        format!("{}/i3/config", config)
++    } else {
++        "~/.config/i3/config".to_string()
++    }
++}
++
++fn expand_home(path: &str) -> String {
++    if path.starts_with("~/") {
++        if let Some(home) = std::env::var("HOME").ok() {
++            return format!("{}/{}", home, &path[1..]);
++        }
++    }
++    path.to_string()
++}
++
++fn get_theme_colors(theme_name: &str) -> Option<HashMap<String, String>> {
++    match theme_name.to_lowercase().as_str() {
++        "solarized" => Some(HashMap::from([
++            ("darkgray".to_string(), "#AAAAAA".to_string()),
++            ("darkslategray".to_string(), "#222133".to_string()),
++            ("white".to_string(), "#FFFFFF".to_string()),
++            ("darkslateblue".to_string(), "#664477".to_string()),
++            ("lightgray".to_string(), "#CCCCCC".to_string()),
++            ("indianred".to_string(), "#CE4045".to_string()),
++            ("wheat".to_string(), "#E7D8B1".to_string()),
++            ("black".to_string(), "#181715".to_string()),
++            ("mediumpurple".to_string(), "#A074C4".to_string()),
++            ("burlywood".to_string(), "#DCCD69".to_string()),
++        ])),
++        "purple" => Some(HashMap::from([
++            ("darkgray".to_string(), "#AAAAAA".to_string()),
++            ("darkslategray".to_string(), "#222133".to_string()),
++            ("white".to_string(), "#FFFFFF".to_string()),
++            ("darkslateblue".to_string(), "#664477".to_string()),
++            ("lightgray".to_string(), "#CCCCCC".to_string()),
++            ("indianred".to_string(), "#CE4045".to_string()),
++            ("wheat".to_string(), "#E7D8B1".to_string()),
++            ("black".to_string(), "#181715".to_string()),
++            ("mediumpurple".to_string(), "#A074C4".to_string()),
++            ("burlywood".to_string(), "#DCCD69".to_string()),
++        ])),
++        "default" => Some(HashMap::from([
++            ("darkgray".to_string(), "#AAAAAA".to_string()),
++            ("darkslategray".to_string(), "#222133".to_string()),
++            ("white".to_string(), "#FFFFFF".to_string()),
++            ("darkslateblue".to_string(), "#664477".to_string()),
++            ("lightgray".to_string(), "#CCCCCC".to_string()),
++            ("indianred".to_string(), "#CE4045".to_string()),
++            ("wheat".to_string(), "#E7D8B1".to_string()),
++            ("black".to_string(), "#181715".to_string()),
++            ("mediumpurple".to_string(), "#A074C4".to_string()),
++            ("burlywood".to_string(), "#DCCD69".to_string()),
++        ])),
++        _ => None,
++    }
++}
++
++fn get_client_colors(theme_name: &str) -> Option<HashMap<String, String>> {
++    match theme_name.to_lowercase().as_str() {
++        "solarized" => Some(HashMap::from([
++            ("client.focused".to_string(), "#859900".to_string()),
++            ("client.focused_inactive".to_string(), "#073642".to_string()),
++            ("client.unfocused".to_string(), "#073642".to_string()),
++            ("client.urgent".to_string(), "#d33682".to_string()),
++        ])),
++        "purple" => Some(HashMap::from([
++            ("client.focused".to_string(), "#664477".to_string()),
++            ("client.focused_inactive".to_string(), "#e7d8b1".to_string()),
++            ("client.unfocused".to_string(), "#222133".to_string()),
++            ("client.urgent".to_string(), "#CE4045".to_string()),
++        ])),
++        "default" => Some(HashMap::from([
++            ("client.focused".to_string(), "#664477".to_string()),
++            ("client.focused_inactive".to_string(), "#e7d8b1".to_string()),
++            ("client.unfocused".to_string(), "#222133".to_string()),
++            ("client.urgent".to_string(), "#CE4045".to_string()),
++        ])),
++        _ => None,
++    }
++}
++
++fn get_bar_colors(theme_name: &str) -> Option<HashMap<String, String>> {
++    match theme_name.to_lowercase().as_str() {
++        "solarized" => Some(HashMap::from([
++            ("bar.background".to_string(), "#002b36".to_string()),
++            ("bar.statusline".to_string(), "#268bd2".to_string()),
++            ("bar.separator".to_string(), "#dc322f".to_string()),
++            ("bar.focused_workspace".to_string(), "#fdf6e3".to_string()),
++            ("bar.focused_workspace_text".to_string(), "#cccccc".to_string()),
++            ("bar.active_workspace".to_string(), "#fdf6e3".to_string()),
++            ("bar.active_workspace_text".to_string(), "#6c71c4".to_string()),
++            ("bar.inactive_workspace".to_string(), "#586e75".to_string()),
++            ("bar.inactive_workspace_text".to_string(), "#93a1a1".to_string()),
++            ("bar.urgent_workspace".to_string(), "#d33682".to_string()),
++            ("bar.urgent_workspace_text".to_string(), "#FFFFFF".to_string()),
++        ])),
++        "purple" => Some(HashMap::from([
++            ("bar.background".to_string(), "#222133".to_string()),
++            ("bar.statusline".to_string(), "#FFFFFF".to_string()),
++            ("bar.separator".to_string(), "#AAAAAA".to_string()),
++            ("bar.focused_workspace".to_string(), "#664477".to_string()),
++            ("bar.focused_workspace_text".to_string(), "#cccccc".to_string()),
++            ("bar.active_workspace".to_string(), "#DCCD69".to_string()),
++            ("bar.active_workspace_text".to_string(), "#181715".to_string()),
++            ("bar.inactive_workspace".to_string(), "#222133".to_string()),
++            ("bar.inactive_workspace_text".to_string(), "#AAAAAA".to_string()),
++            ("bar.urgent_workspace".to_string(), "#CE4045".to_string()),
++            ("bar.urgent_workspace_text".to_string(), "#FFFFFF".to_string()),
++        ])),
++        "default" => Some(HashMap::from([
++            ("bar.background".to_string(), "#222133".to_string()),
++            ("bar.statusline".to_string(), "#FFFFFF".to_string()),
++            ("bar.separator".to_string(), "#AAAAAA".to_string()),
++            ("bar.focused_workspace".to_string(), "#664477".to_string()),
++            ("bar.focused_workspace_text".to_string(), "#cccccc".to_string()),
++            ("bar.active_workspace".to_string(), "#DCCD69".to_string()),
++            ("bar.active_workspace_text".to_string(), "#181715".to_string()),
++            ("bar.inactive_workspace".to_string(), "#222133".to_string()),
++            ("bar.inactive_workspace_text".to_string(), "#AAAAAA".to_string()),
++            ("bar.urgent_workspace".to_string(), "#CE4045".to_string()),
++            ("bar.urgent_workspace_text".to_string(), "#FFFFFF".to_string()),
++        ])),
++        _ => None,
++    }
++}
++
++fn get_workspace_colors(theme_name: &str) -> Option<HashMap<String, String>> {
++    match theme_name.to_lowercase().as_str() {
++        "solarized" => Some(HashMap::from([
++            ("workspace.focused".to_string(), "#fdf6e3".to_string()),
++            ("workspace.focused_text".to_string(), "#859900".to_string()),
++            ("workspace.focused_border".to_string(), "#fdf6e3".to_string()),
++            ("workspace.active".to_string(), "#fdf6e3".to_string()),
++            ("workspace.active_text".to_string(), "#6c71c4".to_string()),
++            ("workspace.active_border".to_string(), "#fdf6e3".to_string()),
++            ("workspace.inactive".to_string(), "#586e75".to_string()),
++            ("workspace.inactive_text".to_string(), "#93a1a1".to_string()),
++            ("workspace.inactive_border".to_string(), "#002b36".to_string()),
++            ("workspace.urgent".to_string(), "#d33682".to_string()),
++            ("workspace.urgent_text".to_string(), "#fdf6e3".to_string()),
++            ("workspace.urgent_border".to_string(), "#fdf6e3".to_string()),
++        ])),
++        "purple" => Some(HashMap::from([
++            ("workspace.focused".to_string(), "#664477".to_string()),
++            ("workspace.focused_text".to_string(), "#cccccc".to_string()),
++            ("workspace.focused_border".to_string(), "#664477".to_string()),
++            ("workspace.active".to_string(), "#DCCD69".to_string()),
++            ("workspace.active_text".to_string(), "#181715".to_string()),
++            ("workspace.active_border".to_string(), "#DCCD69".to_string()),
++            ("workspace.inactive".to_string(), "#222133".to_string()),
++            ("workspace.inactive_text".to_string(), "#AAAAAA".to_string()),
++            ("workspace.inactive_border".to_string(), "#222133".to_string()),
++            ("workspace.urgent".to_string(), "#CE4045".to_string()),
++            ("workspace.urgent_text".to_string(), "#FFFFFF".to_string()),
++            ("workspace.urgent_border".to_string(), "#CE4045".to_string()),
++        ])),
++        "default" => Some(HashMap::from([
++            ("workspace.focused".to_string(), "#664477".to_string()),
++            ("workspace.focused_text".to_string(), "#cccccc".to_string()),
++            ("workspace.focused_border".to_string(), "#664477".to_string()),
++            ("workspace.active".to_string(), "#DCCD69".to_string()),
++            ("workspace.active_text".to_string(), "#181715".to_string()),
++            ("workspace.active_border".to_string(), "#DCCD69".to_string()),
++            ("workspace.inactive".to_string(), "#222133".to_string()),
++            ("workspace.inactive_text".to_string(), "#AAAAAA".to_string()),
++            ("workspace.inactive_border".to_string(), "#222133".to_string()),
++            ("workspace.urgent".to_string(), "#CE4045".to_string()),
++            ("workspace.urgent_text".to_string(), "#FFFFFF".to_string()),
++            ("workspace.urgent_border".to_string(), "#CE4045".to_string()),
++        ])),
++        _ => None,
++    }
++}
++
++fn apply_theme_to_config(config: &str, theme_name: &str) -> String {
++    let mut result = config.to_string();
++    
++    // Get theme colors
++    if let Some(colors) = get_theme_colors(theme_name) {
++        for (key, value) in colors {
++            result = result.replace(&key, &value);
++        }
++    }
++    
++    // Get client colors
++    if let Some(client_colors) = get_client_colors(theme_name) {
++        for (key, value) in client_colors {
++            result = result.replace(&key, &value);
++        }
++    }
++    
++    // Get bar colors
++    if let Some(bar_colors) = get_bar_colors(theme_name) {
++        for (key, value) in bar_colors {
++            result = result.replace(&key, &value);
++        }
++    }
++    
++    // Get workspace colors
++    if let Some(workspace_colors) = get_workspace_colors(theme_name) {
++        for (key, value) in workspace_colors {
++            result = result.replace(&key, &value);
++        }
++    }
++    
++    result
++}
++
++fn validate_config(config_path: &str) -> Result<(), String> {
++    let config_path = expand_home(config_path);
++    if !Path::new(&config_path).exists() {
++        return Err(format!("Could not validate config.\nUse `i3 -C -c {}` to see validation errors.", config_path));
++    }
++    Ok(())
++}
++
++fn list_themes() {
++    println!("\nAvailable themes:\n");
++    let themes = vec![
++        ("slate", "Slate theme by Jody Ribton <jody@ribton.me>"),
++        ("alphare", "A beige theme by Alphare"),
++        ("ubuntu", "Ubuntu theme by lasers"),
++        ("flat-gray", "flat gray based theme"),
++        ("purple", "Purple theme by AAlakkad <http://aalakkad.me>"),
++        ("archlinux", "Archlinux theme by okraits <http://okraits.de>"),
++        ("default", "Default theme for i3wm <http://i3wm.org>"),
++        ("debian", "Debian theme by lasers"),
++        ("oceanic-next", "Theme by Valentin Weber inspired by voronianski (https://github.com/voronianski/oceanic-next-color-scheme)"),
++        ("base16-tomorrow", "Base16 Tomorrow, by Chris Kempson (http://chriskempson.com)"),
++        ("okraits", "A simple theme by okraits <http://okraits.de>"),
++        ("icelines", "icelines theme by mbfraga"),
++        ("solarized", "Solarized theme by lasers"),
++        ("deep-purple", "Inspired by the Purple and Default themes. By jcpst <http://jcpst.com>"),
++        ("tomorrow-night-80s", "Tomorrow Night 80s theme by jmfurlott <http://jmfurlott.com>"),
++        ("seti", "seti theme by Jody Ribton - based on the seti Atom theme at https://atom.io/themes/seti-ui"),
++        ("lime", "Lime theme by wei2912 <http://wei2912.github.io>, based on Archlinux theme by okraits <http://okraits.de>"),
++        ("gruvbox", "Made by freeware-preacher <https://github.com/freeware-preacher> to match gruvbox by morhetz <https://github.com/morhetz>"),
++        ("mate", "Theme for blending i3 into MATE"),
++    ];
++    
++    for (name, desc) in themes {
++        println!("  {}              - {}", name, desc);
++    }
++}
++
++fn main() {
++    let cli = Cli::parse();
++
++    if cli.list_all {
++        list_themes();
++        return;
++    }
++
++    if cli.help {
++        println!("{}", Cli::into_app().render_help());
++        return;
++    }
++
++    if cli.version {
++        println!("i3-style 1.0");
++        return;
++    }
++
++    let config_path = cli.config.as_deref()
++        .unwrap_or_else(|| get_default_config().as_str());
++    let config_path = expand_home(config_path);
++
++    // Validate config
++    if let Err(e) = validate_config(config_path) {
++        eprintln!("{}", e);
++        process::exit(1);
++    }
++
++    // Handle --to-theme
++    if let Some(to_theme_path) = cli.to_theme {
++        let to_theme_path = expand_home(&to_theme_path);
++        let theme_output = format!("/tmp/i3-style/{}/config-input", std::process::id());
++        
++        // Create output directory
++        if let Some(parent) = Path::new(&theme_output).parent() {
++            fs::create_dir_all(parent).unwrap();
++        }
++        
++        // Read config
++        let config_content = fs::read_to_string(&config_path).unwrap();
++        
++        // Write theme output
++        let mut output = fs::File::create(&theme_output).unwrap();
++        output.write_all(config_content.as_bytes()).unwrap();
++        
++        // Print theme
++        println!("---\nmeta:\n  description: AUTOMATICALLY GENERATED THEME\ncolors:\n  darkgray: \"#AAAAAA\"\n  darkslategray: \"#222133\"\n  white: \"#FFFFFF\"\n  darkslateblue: \"#664477\"\n  lightgray: \"#CCCCCC\"\n  indianred: \"#CE4045\"\n  wheat: \"#E7D8B1\"\n  black: \"#181715\"\n  mediumpurple: \"#A074C4\"\n  burlywood: \"#DCCD69\"\nwindow_colors:\n  focused:\n    border: darkslateblue\n    background: darkslateblue\n    text: lightgray\n    indicator: wheat\n  focused_inactive:\n    border: wheat\n    background: wheat\n    text: black\n    indicator: mediumpurple\n  unfocused:\n    border: darkslategray\n    background: darkslategray\n    text: darkgray\n    indicator: mediumpurple\n  urgent:\n    border: indianred\n    background: indianred\n    text: wheat\n    indicator: burlywood\nbar_colors:\n  background: darkslategray\n  statusline: white\n  separator: darkgray\n  focused_workspace:\n    border: darkslateblue\n    background: darkslateblue\n    text: lightgray\n  urgent_workspace:\n    border: indianred\n    background: indianred\n    text: white\n");
++        
++        // Try to reload
++        if cli.reload {
++            let output = std::process::Command::new("i3-msg")
++                .arg("reload")
++                .output()
++                .expect("Failed to execute i3-msg");
++            if !output.status.success() {
++                eprintln!("Could not reload config with i3-msg: {}", 
++                    String::from_utf8_lossy(&output.stderr));
++            }
++        }
++        
++        return;
++    }
++
++    // Handle theme
++    let theme_name = cli.theme.as_ref().expect("Select a theme as the first argument. Use `--list-all` to see the themes.");
++    
++    // Read config
++    let config_content = fs::read_to_string(&config_path).unwrap();
++    
++    // Apply theme
++    let themed_config = apply_theme_to_config(&config_content, theme_name);
++    
++    // Handle output
++    let output_path = if cli.save {
++        config_path.to_string()
++    } else {
++        cli.output.as_ref()
++            .expect("Specify an output file with -o")
++            .to_string()
++    };
++    
++    let output_path = expand_home(&output_path);
++    
++    // Create output directory if needed
++    if let Some(parent) = Path::new(&output_path).parent() {
++        if !parent.as_os_str().is_empty() {
++            fs::create_dir_all(parent).unwrap();
++        }
++    }
++    
++    // Write output
++    let mut output_file = fs::File::create(&output_path).unwrap();
++    output_file.write_all(themed_config.as_bytes()).unwrap();
++    
++    println!("saving config at {} to {}", config_path, output_path);
++}

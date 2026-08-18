@@ -1,0 +1,170 @@
+diff --git a/chroma/__init__.py b/chroma/__init__.py
+new file mode 100644
+index 0000000..bdd5f45
+--- /dev/null
++++ b/chroma/__init__.py
+@@ -0,0 +1,3 @@
++"""Chroma - A General Purpose Syntax Highlighter"""
++
++__version__ = "0.1.0"
+diff --git a/chroma/__main__.py b/chroma/__main__.py
+new file mode 100644
+index 0000000..7674e4a
+--- /dev/null
++++ b/chroma/__main__.py
+@@ -0,0 +1,12 @@
++"""Chroma command-line interface"""
++
++import sys
++
++def main():
++    """Main entry point for the chroma CLI"""
++    print("Chroma syntax highlighter")
++    print("Usage: chroma [options] <file>")
++    return 0
++
++if __name__ == "__main__":
++    sys.exit(main())
+diff --git a/chroma/__pycache__/__init__.cpython-310.pyc b/chroma/__pycache__/__init__.cpython-310.pyc
+new file mode 100644
+index 0000000..4919db3
+Binary files /dev/null and b/chroma/__pycache__/__init__.cpython-310.pyc differ
+diff --git a/chroma/__pycache__/__main__.cpython-310.pyc b/chroma/__pycache__/__main__.cpython-310.pyc
+new file mode 100644
+index 0000000..59c5b07
+Binary files /dev/null and b/chroma/__pycache__/__main__.cpython-310.pyc differ
+diff --git a/patch.txt b/patch.txt
+new file mode 100644
+index 0000000..f7a286f
+--- /dev/null
++++ b/patch.txt
+@@ -0,0 +1,78 @@
++diff --git a/chroma/__init__.py b/chroma/__init__.py
++new file mode 100644
++index 0000000..bdd5f45
++--- /dev/null
+++++ b/chroma/__init__.py
++@@ -0,0 +1,3 @@
+++"""Chroma - A General Purpose Syntax Highlighter"""
+++
+++__version__ = "0.1.0"
++diff --git a/chroma/__main__.py b/chroma/__main__.py
++new file mode 100644
++index 0000000..7674e4a
++--- /dev/null
+++++ b/chroma/__main__.py
++@@ -0,0 +1,12 @@
+++"""Chroma command-line interface"""
+++
+++import sys
+++
+++def main():
+++    """Main entry point for the chroma CLI"""
+++    print("Chroma syntax highlighter")
+++    print("Usage: chroma [options] <file>")
+++    return 0
+++
+++if __name__ == "__main__":
+++    sys.exit(main())
++diff --git a/pyproject.toml b/pyproject.toml
++new file mode 100644
++index 0000000..7ebcf8b
++--- /dev/null
+++++ b/pyproject.toml
++@@ -0,0 +1,45 @@
+++[build-system]
+++requires = ["setuptools>=61.0", "wheel"]
+++build-backend = "setuptools.build_meta"
+++
+++[project]
+++name = "chroma"
+++version = "0.1.0"
+++description = "A General Purpose Syntax Highlighter"
+++readme = "README.md"
+++requires-python = ">=3.8"
+++license = {text = "MIT"}
+++authors = [
+++    {name = "Alec Thomas", email = "alec@swapoff.org"}
+++]
+++classifiers = [
+++    "Development Status :: 4 - Beta",
+++    "Environment :: Console",
+++    "Intended Audience :: Developers",
+++    "License :: OSI Approved :: MIT License",
+++    "Operating System :: OS Independent",
+++    "Programming Language :: Python :: 3",
+++    "Programming Language :: Python :: 3.8",
+++    "Programming Language :: Python :: 3.9",
+++    "Programming Language :: Python :: 3.10",
+++    "Programming Language :: Python :: 3.11",
+++    "Programming Language :: Python :: 3.12",
+++    "Topic :: Text Processing :: Markup :: HTML",
+++]
+++dependencies = [
+++    "pygments>=2.0",
+++]
+++
+++[project.optional-dependencies]
+++dev = [
+++    "pytest>=7.0",
+++    "pytest-cov>=3.0",
+++]
+++
+++[project.scripts]
+++chroma = "chroma.__main__:main"
+++
+++[project.urls]
+++Homepage = "https://github.com/alecthomas/chroma"
+++Documentation = "https://chroma.readthedocs.io"
+++Repository = "https://github.com/alecthomas/chroma"
+diff --git a/pyproject.toml b/pyproject.toml
+new file mode 100644
+index 0000000..7ebcf8b
+--- /dev/null
++++ b/pyproject.toml
+@@ -0,0 +1,45 @@
++[build-system]
++requires = ["setuptools>=61.0", "wheel"]
++build-backend = "setuptools.build_meta"
++
++[project]
++name = "chroma"
++version = "0.1.0"
++description = "A General Purpose Syntax Highlighter"
++readme = "README.md"
++requires-python = ">=3.8"
++license = {text = "MIT"}
++authors = [
++    {name = "Alec Thomas", email = "alec@swapoff.org"}
++]
++classifiers = [
++    "Development Status :: 4 - Beta",
++    "Environment :: Console",
++    "Intended Audience :: Developers",
++    "License :: OSI Approved :: MIT License",
++    "Operating System :: OS Independent",
++    "Programming Language :: Python :: 3",
++    "Programming Language :: Python :: 3.8",
++    "Programming Language :: Python :: 3.9",
++    "Programming Language :: Python :: 3.10",
++    "Programming Language :: Python :: 3.11",
++    "Programming Language :: Python :: 3.12",
++    "Topic :: Text Processing :: Markup :: HTML",
++]
++dependencies = [
++    "pygments>=2.0",
++]
++
++[project.optional-dependencies]
++dev = [
++    "pytest>=7.0",
++    "pytest-cov>=3.0",
++]
++
++[project.scripts]
++chroma = "chroma.__main__:main"
++
++[project.urls]
++Homepage = "https://github.com/alecthomas/chroma"
++Documentation = "https://chroma.readthedocs.io"
++Repository = "https://github.com/alecthomas/chroma"
