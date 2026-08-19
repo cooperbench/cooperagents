@@ -129,12 +129,14 @@ class LitellmModel:
         return val
 
     def _query_inner(self, messages: list[dict[str, str]], **kwargs):
+        merged = self.config.model_kwargs | kwargs
+        tools = merged.pop("_tools", self._tools)  # _tools=None: plain call (summarizer)
         try:
             return litellm.completion(
                 model=self.config.model_name,
                 messages=messages,
-                tools=self._tools,
-                **(self.config.model_kwargs | kwargs),
+                tools=tools,
+                **merged,
             )
         except litellm.exceptions.AuthenticationError as e:
             e.message += " You can permanently set your API key with `mini-extra config set KEY VALUE`."
@@ -145,10 +147,27 @@ class LitellmModel:
         prepared = _reorder_anthropic_thinking_blocks(prepared)
         return set_cache_control(prepared, mode=self.config.set_cache_control)
 
+    # Set by the worker when COOPER_HEARTBEAT_DIR is configured: path of a
+    # telemetry file that gets one line per completed LLM call. Lets a live
+    # checker distinguish "agent thinking" (recent heartbeat) from "agent
+    # starving" (no heartbeat since launch) without touching agent behavior.
+    heartbeat_path: str | None = None
+
+    def _heartbeat(self, wait_s: float) -> None:
+        if not self.heartbeat_path:
+            return
+        try:
+            with open(self.heartbeat_path, "a") as fh:
+                fh.write(f"{time.time():.1f} wait={wait_s:.1f}\n")
+        except Exception:  # noqa: BLE001 - telemetry must never break a call
+            pass
+
     def query(self, messages: list[dict[str, str]], **kwargs) -> dict:
+        _t0 = time.time()
         for attempt in retry(logger=logger, abort_exceptions=self.abort_exceptions):
             with attempt:
                 response = self._query(self._prepare_messages_for_api(messages), **kwargs)
+        self._heartbeat(time.time() - _t0)
         cost_output = self._calculate_cost(response)
         GLOBAL_MODEL_STATS.add(cost_output["cost"])
         message = response.choices[0].message.model_dump()
@@ -227,13 +246,13 @@ class LitellmModel:
                 "content": (f"{summary_prompt}\n\n--- BEGIN TRANSCRIPT ---\n{transcript}\n--- END TRANSCRIPT ---"),
             }
         ]
+        # goes through _query for the hard-timeout wrapper: a direct
+        # litellm.completion here can hang FOREVER on a dead pooled socket
+        # (the httpx read timeout does not arm — observed as agents wedged
+        # >50min inside compaction with no retry and no timeout).
         for attempt in retry(logger=logger, abort_exceptions=self.abort_exceptions):
             with attempt:
-                response = litellm.completion(
-                    model=self.config.model_name,
-                    messages=summary_messages,
-                    **self.config.model_kwargs,
-                )
+                response = self._query(summary_messages, _tools=None)
         cost_output = self._calculate_cost(response)
         GLOBAL_MODEL_STATS.add(cost_output["cost"])
         return {

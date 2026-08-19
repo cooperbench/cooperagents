@@ -1,0 +1,478 @@
+diff --git a/probe/c.json b/probe/c.json
+new file mode 100644
+index 0000000..f55b8a8
+--- /dev/null
++++ b/probe/c.json
+@@ -0,0 +1 @@
++{"args": ["/workspace/executable", "/tmp/t1"], "cwd": "/tmp/t1", "inputs": [[2.5, "q"]], "size": [80, 24], "total": 4.0, "out": "/tmp/oA.bin", "raw": "/tmp/oA.raw"}
+diff --git a/probe/c1.json b/probe/c1.json
+new file mode 100644
+index 0000000..afd3861
+--- /dev/null
++++ b/probe/c1.json
+@@ -0,0 +1 @@
++{"args": ["/workspace/executable", "/tmp/t1"], "cwd": "/tmp/t1", "inputs": [[3.0, "\u0003"]], "size": [80, 24], "total": 4.5, "out": "/tmp/o1.bin"}
+diff --git a/probe/c2.json b/probe/c2.json
+new file mode 100644
+index 0000000..d7565b7
+--- /dev/null
++++ b/probe/c2.json
+@@ -0,0 +1 @@
++{"args": ["/workspace/executable", "/tmp/t1"], "cwd": "/tmp/t1", "inputs": [[3.0, "\u0003"]], "size": [80, 24], "total": 4.5, "out": "/tmp/o2.bin", "env": {"TERM": "xterm-256color", "COLORTERM": "truecolor"}}
+diff --git a/probe/c3.json b/probe/c3.json
+new file mode 100644
+index 0000000..914b75f
+--- /dev/null
++++ b/probe/c3.json
+@@ -0,0 +1 @@
++{"args": ["/workspace/executable", "/tmp/t1"], "cwd": "/tmp/t1", "inputs": [[1.0, "q"]], "size": [80, 24], "total": 4.5, "out": "/tmp/o3.bin", "env": {"TERM": "xterm-256color"}}
+diff --git a/probe/c4.json b/probe/c4.json
+new file mode 100644
+index 0000000..b684b62
+--- /dev/null
++++ b/probe/c4.json
+@@ -0,0 +1 @@
++{"args": ["/workspace/executable", "/tmp/t1"], "cwd": "/tmp/t1", "inputs": [[1.5, "q"]], "size": [80, 24], "total": 3.5, "out": "/tmp/o4.bin", "env": {"TERM": "dumb"}}
+diff --git a/probe/c5.json b/probe/c5.json
+new file mode 100644
+index 0000000..c4bbf5a
+--- /dev/null
++++ b/probe/c5.json
+@@ -0,0 +1 @@
++{"args": ["/workspace/executable", "/tmp/t1"], "cwd": "/tmp/t1", "inputs": [[1.5, "q"]], "size": [80, 24], "total": 3.5, "out": "/tmp/o5.bin", "env": {"TERM": "vt100"}}
+diff --git a/probe/c6.json b/probe/c6.json
+new file mode 100644
+index 0000000..a8c22fc
+--- /dev/null
++++ b/probe/c6.json
+@@ -0,0 +1 @@
++{"args": ["python3", "/workspace/probe/ttyread.py"], "cwd": "/tmp/t1", "inputs": [[0.5, "PING_FROM_MASTER"]], "size": [80, 24], "total": 3.0, "out": "/tmp/o6.bin", "autoresp": false}
+diff --git a/probe/c7.json b/probe/c7.json
+new file mode 100644
+index 0000000..07f3593
+--- /dev/null
++++ b/probe/c7.json
+@@ -0,0 +1 @@
++{"args": ["/workspace/executable", "/tmp/t1"], "cwd": "/tmp/t1", "inputs": [[0.2, "\u001b]11;rgb:1e1e1e/1e1e1e\u001b\\"], [0.5, "\u001b[1;1R"], [1.5, "q"]], "size": [80, 24], "total": 3.5, "out": "/tmp/o7.bin", "autoresp": false, "env": {"TERM": "xterm-256color"}}
+diff --git a/probe/matrix.py b/probe/matrix.py
+new file mode 100644
+index 0000000..ba9e375
+--- /dev/null
++++ b/probe/matrix.py
+@@ -0,0 +1,53 @@
++import os, pty, time, select, fcntl, termios, struct, signal, sys
++def run_variant(name, osc_delay, dsr_delay, term='xterm-256color', key=b'q', key_t=1.2):
++    pid, fd = pty.fork()
++    if pid == 0:
++        os.chdir('/tmp/t1')
++        if term: os.environ['TERM']=term
++        else: os.environ.pop('TERM', None)
++        os.execv('/workspace/executable', ['/workspace/executable', '/tmp/t1'])
++    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', 24, 80, 0, 0))
++    start = time.time(); data=b''; code=None
++    done1 = done2 = False; sent_key = False
++    while True:
++        t = time.time() - start
++        if t > 2.5:
++            try: os.kill(pid,9)
++            except: pass
++            code=-9; break
++        r,_,_ = select.select([fd], [], [], 0.05)
++        if fd in r:
++            try: chunk = os.read(fd, 65536)
++            except OSError: chunk=b''
++            if not chunk: break
++            data += chunk
++        if osc_delay is not None and not done1 and t >= osc_delay:
++            os.write(fd, b'\x1b]11;rgb:1e1e1e/1e1e1e\x1b\\'); done1=True
++        if dsr_delay is not None and not done2 and t >= dsr_delay:
++            os.write(fd, b'\x1b[1;1R'); done2=True
++        if not sent_key and t >= key_t:
++            os.write(fd, key); sent_key=True
++        p, st = os.waitpid(pid, os.WNOHANG)
++        if p == pid:
++            code = os.WEXITED and os.WEXITSTATUS(st) if os.WIFEXITED(st) else -os.WTERMSIG(st)
++            while True:
++                r,_,_ = select.select([fd], [], [], 0.15)
++                if fd in r:
++                    try:
++                        c2 = os.read(fd, 65536)
++                        if not c2: break
++                        data += c2
++                    except OSError: break
++                else: break
++            break
++    try: os.close(fd)
++    except: pass
++    print(f"{name}: bytes={len(data)} exit={code}")
++    return data
++
++run_variant("osc@0.2 dsr@0.5", 0.2, 0.5)
++run_variant("osc@0.5 dsr@0.2 (swapped)", 0.5, 0.2)
++run_variant("osc only", 0.2, None)
++run_variant("dsr only", None, 0.2)
++run_variant("none", None, None)
++run_variant("both@0.2", 0.2, 0.2)
+diff --git a/probe/pty_run.py b/probe/pty_run.py
+new file mode 100644
+index 0000000..0281668
+--- /dev/null
++++ b/probe/pty_run.py
+@@ -0,0 +1,83 @@
++#!/usr/bin/env python3
++import os, pty, sys, time, select, fcntl, termios, struct, signal
++
++def run(args, inputs, size=(80,24), cwd=None, env=None, total=4.0, out='/tmp/out.bin', autoresp=True):
++    pid, fd = pty.fork()
++    if pid == 0:
++        if cwd: os.chdir(cwd)
++        e = dict(os.environ)
++        if env: e.update(env)
++        os.execvpe(args[0], args, e)
++    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', size[1], size[0], 0, 0))
++    data = b''
++    buf = b''
++    start = time.time()
++    input_idx = 0
++    code = None
++    def now(): return round(time.time()-start, 2)
++    log = lambda *a: print(*a, file=sys.stderr)
++    while True:
++        if time.time() - start > total:
++            try: os.kill(pid, signal.SIGKILL)
++            except ProcessLookupError: pass
++            code = -9
++            log("TIMEOUT")
++            break
++        r, _, _ = select.select([fd], [], [], 0.05)
++        if fd in r:
++            try:
++                chunk = os.read(fd, 65536)
++                if not chunk:
++                    log("EOF at", now())
++                    break
++                data += chunk; buf += chunk
++                if autoresp:
++                    changed = True
++                    while changed:
++                        changed = False
++                        if b'\x1b]11;?' in buf:
++                            i = buf.find(b'\x1b]11;?')
++                            j = buf.find(b'\x1b\\', i)
++                            if j != -1:
++                                os.write(fd, b'\x1b]11;rgb:1e1e1e/1e1e1e\x1b\\')
++                                buf = buf[:i] + buf[j+3:]; changed = True; continue
++                        if b'\x1b[6n' in buf:
++                            i = buf.find(b'\x1b[6n')
++                            os.write(fd, b'\x1b[1;1R')
++                            buf = buf[:i]; changed = True
++            except OSError:
++                log("EIO at", now())
++                break
++        while input_idx < len(inputs) and time.time() - start >= inputs[input_idx][0]:
++            log("send", now(), repr(inputs[input_idx][1][:40]))
++            os.write(fd, inputs[input_idx][1]); input_idx += 1
++        p, st = os.waitpid(pid, os.WNOHANG)
++        if p == pid:
++            if os.WIFEXITED(st): code = os.WEXITSTATUS(st)
++            elif os.WIFSIGNALED(st): code = -os.WTERMSIG(st)
++            else: code = None
++            log("child exited at", now(), "code", code)
++            while True:
++                r, _, _ = select.select([fd], [], [], 0.1)
++                if fd in r:
++                    try:
++                        chunk = os.read(fd, 65536)
++                        if not chunk: break
++                        data += chunk
++                    except OSError: break
++                else: break
++            break
++    try: os.close(fd)
++    except OSError: pass
++    open(out,'wb').write(data)
++    log("bytes:", len(data))
++    return data, code
++
++if __name__ == '__main__':
++    import json
++    cfg = json.load(open(sys.argv[1]))
++    data, code = run(cfg['args'], [(i[0], i[1].encode('utf-8')) for i in cfg.get('inputs',[])],
++                     size=tuple(cfg.get('size',(80,24))), cwd=cfg.get('cwd'), env=cfg.get('env'),
++                     total=cfg.get('total',4.0), out=cfg.get('out','/tmp/out.bin'),
++                     autoresp=cfg.get('autoresp', True))
++    print(f"FINAL EXIT: {code}", file=sys.stderr)
+diff --git a/probe/run.py b/probe/run.py
+new file mode 100644
+index 0000000..f3fef65
+--- /dev/null
++++ b/probe/run.py
+@@ -0,0 +1,94 @@
++#!/usr/bin/env python3
++"""Probe runner v2: PTY + VT emulation + query responses + scripted keys."""
++import os, pty, sys, time, select, fcntl, termios, struct, signal, json
++sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
++from vt import VT
++
++def run(args, inputs, size=(80,24), cwd=None, env=None, total=4.0, out='/tmp/out.bin',
++        osc=None, dsr='\x1b[1;1R', dsr_at=0.5, osc_at=0.2, show=True, label=''):
++    """osc/dsr: response string to send (None = don't send); *_at: absolute time to send."""
++    pid, fd = pty.fork()
++    if pid == 0:
++        try:
++            if cwd: os.chdir(cwd)
++            e = dict(os.environ)
++            if env:
++                for k, v in env.items():
++                    if v is None: del e[k]
++                    else: e[k] = v
++            os.execvpe(args[0], args, e)
++        except Exception as ex:
++            os.write(2, str(ex).encode()); os._exit(127)
++    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', size[1], size[0], 0, 0))
++    vt = VT(size[0], size[1])
++    data = b''; start = time.time(); iidx = 0; code = None
++    sent1 = sent2 = False
++    def now(): return round(time.time()-start, 2)
++    def log(*a): print(*a, file=sys.stderr)
++    if label: log(f"== {label}")
++    while True:
++        if time.time() - start > total:
++            try: os.kill(pid, signal.SIGKILL)
++            except ProcessLookupError: pass
++            code = -9; log("TIMEOUT"); break
++        r, _, _ = select.select([fd], [], [], 0.05)
++        if fd in r:
++            try:
++                chunk = os.read(fd, 65536)
++            except OSError:
++                chunk = b''
++            if not chunk:
++                log("EOF", now()); break
++            data += chunk
++            vt.feed(chunk)
++        t = time.time() - start
++        if osc is not None and not sent1 and t >= osc_at:
++            os.write(fd, osc.encode()); sent1 = True; log("resp OSC", now())
++        if dsr is not None and not sent2 and t >= dsr_at:
++            os.write(fd, dsr.encode()); sent2 = True; log("resp DSR", now())
++        while iidx < len(inputs) and t >= inputs[iidx][0]:
++            s = inputs[iidx][1]
++            log("send", now(), repr(s))
++            os.write(fd, s if isinstance(s, bytes) else s.encode())
++            iidx += 1
++        p, st = os.waitpid(pid, os.WNOHANG)
++        if p == pid:
++            if os.WIFEXITED(st): code = os.WEXITSTATUS(st)
++            elif os.WIFSIGNALED(st): code = -os.WTERMSIG(st)
++            log("child exit", now(), code)
++            while True:
++                r, _, _ = select.select([fd], [], [], 0.15)
++                if fd in r:
++                    try:
++                        chunk = os.read(fd, 65536)
++                        if not chunk: break
++                        data += chunk; vt.feed(chunk)
++                    except OSError: break
++                else: break
++            break
++    if code is None:
++        try:
++            p, st = os.waitpid(pid, 0)
++            code = os.WEXITSTATUS(st) if os.WIFEXITED(st) else -os.WTERMSIG(st)
++            log("reaped", code)
++        except ChildProcessError:
++            pass
++    try: os.close(fd)
++    except OSError: pass
++    if out: open(out,'wb').write(data)
++    log("bytes", len(data), "EXIT", code)
++    if show:
++        snap = vt.snapshot()
++        for i, ln in enumerate(snap['lines']):
++            print(f"{i:2d} {ln}")
++    return data, code, vt
++
++if __name__ == '__main__':
++    cfg = json.load(open(sys.argv[1]))
++    run(cfg['args'], [(i[0], i[1]) for i in cfg.get('inputs',[])],
++        size=tuple(cfg.get('size',(80,24))), cwd=cfg.get('cwd'), env=cfg.get('env'),
++        total=cfg.get('total',4.0), out=cfg.get('out'),
++        osc=cfg.get('osc', '\x1b]11;rgb:1e1e1e/1e1e1e\x1b\\'),
++        dsr=cfg.get('dsr', '\x1b[1;1R'),
++        dsr_at=cfg.get('dsr_at', 0.5), osc_at=cfg.get('osc_at', 0.2),
++        show=cfg.get('show', True), label=cfg.get('label',''))
+diff --git a/probe/ttyread.py b/probe/ttyread.py
+new file mode 100644
+index 0000000..4d1b49a
+--- /dev/null
++++ b/probe/ttyread.py
+@@ -0,0 +1,18 @@
++import os, sys, select, termios, tty, fcntl, struct, time
++fd = os.open('/dev/tty', os.O_RDWR)
++old = termios.tcgetattr(fd)
++tty.setraw(fd)
++os.write(fd, b'HELLO_PROBE')
++buf = b''
++end = time.time() + 2.0
++while time.time() < end:
++    r,_,_ = select.select([fd],[],[],0.2)
++    if r:
++        try:
++            d = os.read(fd, 4096)
++        except OSError:
++            break
++        if not d: break
++        buf += d
++termios.tcsetattr(fd, termios.TCSADRAIN, old)
++sys.stderr.write('GOT: %r\n' % buf)
+diff --git a/probe/vt.py b/probe/vt.py
+new file mode 100644
+index 0000000..ff150b9
+--- /dev/null
++++ b/probe/vt.py
+@@ -0,0 +1,144 @@
++#!/usr/bin/env python3
++"""Minimal VT emulator for capturing walk's frames."""
++import re, sys, json
++
++class VT:
++    def __init__(self, cols=80, rows=24):
++        self.cols, self.rows = cols, rows
++        self.grid = [[' ']*cols for _ in range(rows)]
++        self.styles = [[None]*cols for _ in range(rows)]
++        self.x = 0; self.y = 0
++        self.sgr = {}
++        self.events = []
++        self.hidden_cursor = False
++        self.mode = {}
++    def putc(self, ch):
++        if ch == '\r': self.x = 0; return
++        if ch == '\n':
++            self.y = min(self.y+1, self.rows-1)
++            return
++        if ch == '\b': self.x = max(0, self.x-1); return
++        if ch == '\t':
++            self.x = min(((self.x//8)+1)*8, self.cols-1); return
++        if ch == '\a': return
++        if self.x >= self.cols:
++            # autowrap
++            self.x = 0
++            self.y = min(self.y+1, self.rows-1)
++        self.grid[self.y][self.x] = ch
++        self.styles[self.y][self.x] = dict(self.sgr)
++        self.x += 1
++    def el(self, a):
++        if a == 0:
++            for i in range(self.x, self.cols):
++                self.grid[self.y][i]=' '; self.styles[self.y][i]=None
++        elif a == 1:
++            for i in range(0, self.x+1):
++                self.grid[self.y][i]=' '; self.styles[self.y][i]=None
++        elif a == 2:
++            for i in range(0, self.cols):
++                self.grid[self.y][i]=' '; self.styles[self.y][i]=None
++    def ed(self, a):
++        if a == 0:
++            for i in range(self.x, self.cols):
++                self.grid[self.y][i]=' '; self.styles[self.y][i]=None
++            for ry in range(self.y+1, self.rows):
++                for i in range(self.cols):
++                    self.grid[ry][i]=' '; self.styles[ry][i]=None
++        elif a == 1:
++            for ry in range(0, self.y):
++                for i in range(self.cols):
++                    self.grid[ry][i]=' '; self.styles[ry][i]=None
++            for i in range(0, self.x+1):
++                self.grid[self.y][i]=' '; self.styles[self.y][i]=None
++        elif a == 2:
++            for ry in range(self.rows):
++                for i in range(self.cols):
++                    self.grid[ry][i]=' '; self.styles[ry][i]=None
++    def feed(self, data):
++        i = 0; n = len(data)
++        while i < n:
++            b = data[i]
++            if b == 0x1b:
++                if i+1 < n and data[i+1:i+2] == b'[':
++                    m = re.match(rb'\[([;\?]*[\d;?]*)([@-~])', data[i+1:i+60])
++                    if m:
++                        params, fin = m.group(1).decode('ascii','replace'), m.group(2).decode('ascii')
++                        i += 1 + m.end()
++                        self.csi(params, fin)
++                        continue
++                elif i+1 < n and data[i+1:i+2] == b']':
++                    m = re.match(rb'\](.*?)(\x1b\\|\x07)', data[i+1:i+200], re.S)
++                    if m:
++                        self.events.append(('OSC', m.group(1).decode('utf-8','replace')))
++                        i += 1 + m.end()
++                        continue
++                    else:
++                        i = n; break
++                else:
++                    self.events.append(('ESC', data[i+1:i+2].decode('latin1')))
++                    i += 2
++                    continue
++            elif b == 0x07:
++                i += 1; continue
++            else:
++                ch = data[i:i+1].decode('utf-8', 'replace')
++                self.putc(ch)
++                i += 1
++    def csi(self, p, fin):
++        if fin == 'm':
++            ps = p.split(';') if p else ['0']
++            it = iter(range(len(ps)))
++            cur = 0
++            for k in ps:
++                v = int(k) if k else 0
++                if v == 0: self.sgr = {}
++                elif v == 1: self.sgr['bold'] = 1
++                elif v == 4: self.sgr['under'] = 1
++                elif v in (2,3,7,9): self.sgr[v] = 1
++                elif v in (22,24,27): self.sgr.pop({22:'bold',24:'under',27:'7'}[v], None)
++                elif 30 <= v <= 37: self.sgr['fg'] = v-30
++                elif 40 <= v <= 47: self.sgr['bg'] = v-40
++                elif v == 38 or v == 48:
++                    rest = ps[k+1:] if False else None
++                    # need context of ps; handle below
++                num = int(k) if k else 0
++                if num == 38:
++                    if ps.index(k)+2 < len(ps):
++                        m, a = int(ps[ps.index(k)+1]), int(ps[ps.index(k)+2])
++                        self.sgr['fg'] = f"255:{a}" if m==2 else f"256:{a}"
++                if num == 48:
++                    if ps.index(k)+2 < len(ps):
++                        m, a = int(ps[ps.index(k)+1]), int(ps[ps.index(k)+2])
++                        self.sgr['bg'] = f"255:{a}" if m==2 else f"256:{a}"
++        elif fin == 'H' or fin == 'f':
++            r, c = (p.split(';') + ['1','1'])[:2]
++            self.y = max(0, int(r)-1); self.x = max(0, int(c)-1)
++        elif fin == 'A': self.y = max(0, self.y - (int(p) if p else 1))
++        elif fin == 'B': self.y = min(self.rows-1, self.y + (int(p) if p else 1))
++        elif fin == 'C': self.x = min(self.cols-1, self.x + (int(p) if p else 1))
++        elif fin == 'D': self.x = max(0, self.x - (int(p) if p else 1))
++        elif fin == 'G': self.x = max(0, min(self.cols-1, int(p)-1 if p else 1))
++        elif fin == 'd': self.y = max(0, min(self.rows-1, int(p)-1 if p else 1))
++        elif fin == 'J': self.ed(int(p) if p else 0)
++        elif fin == 'K': self.el(int(p) if p else 0)
++        elif fin == 'h':
++            for q in (p[1:].split(';') if p.startswith('?') else p.split(';')):
++                if q: self.mode[(p.startswith('?'), int(q))] = 1
++            if (True, 25) in self.mode: self.hidden_cursor = True
++        elif fin == 'l':
++            for q in (p[1:].split(';') if p.startswith('?') else p.split(';')):
++                if q: self.mode[(p.startswith('?'), int(q))] = 0
++            if (True, 25) in self.mode and not self.mode[(True,25)]: self.hidden_cursor = False
++        elif fin == 'r': pass
++        else:
++            self.events.append(('CSI', p, fin))
++    def lines(self):
++        return [''.join(r).rstrip() for r in self.grid]
++    def snapshot(self):
++        out = []
++        for ry in range(self.rows):
++            line = ''.join(self.grid[ry])
++            out.append(line.rstrip())
++        return {'lines': out, 'cursor': (self.x, self.y), 'hidden': self.hidden_cursor,
++                'events': list(self.events)}

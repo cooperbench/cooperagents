@@ -1,0 +1,282 @@
+diff --git a/probe1.out b/probe1.out
+new file mode 100644
+index 0000000..30ec91f
+--- /dev/null
++++ b/probe1.out
+@@ -0,0 +1,37 @@
++=== 1. no args (done: shows USAGE + hint, exit 1)
++=== 2. unknown long flag --foo (done: clap error, exit 1)
++=== 3. unknown short flag -z (done: clap error, exit 1)
++=== 4. nonexistent theme name
++Could not find i3 config
++EXIT: 1
++=== 5. -o without theme
++USAGE:
++    executable [FLAGS] [OPTIONS] [theme]
++
++Select a theme as the first argument. Use `--list-all` to see the themes.
++EXIT: 1
++=== 6. -c missing file
++Could not validate config with `i3 -C -c /nonexistent/config` (is i3 in the PATH?) No such file or directory (os error 2)
++EXIT: 1
++=== 7. option without value
++error: The argument '--output <file>' requires a value but none was supplied
++
++USAGE:
++    executable --output <file> --to-theme <file>
++
++For more information try --help
++EXIT: 1
++=== 8. -t without value
++Could not find i3 config
++EXIT: 1
++=== 9. two positional args
++error: Found argument 'purple' which wasn't expected, or isn't valid in this context
++
++USAGE:
++    executable [FLAGS] [OPTIONS] [theme]
++
++For more information try --help
++EXIT: 1
++=== 10. -s flag alone
++Could not find i3 config
++EXIT: 1
+diff --git a/scratch/fakebin/i3 b/scratch/fakebin/i3
+new file mode 100755
+index 0000000..76d5f07
+--- /dev/null
++++ b/scratch/fakebin/i3
+@@ -0,0 +1,4 @@
++#!/bin/bash
++echo "i3 CALL: $@" >> /workspace/scratch/i3_calls.log
++[ -n "" ] && echo "" >&2
++exit 0
+diff --git a/scratch/fakebin/i3-msg b/scratch/fakebin/i3-msg
+new file mode 100755
+index 0000000..2c0dd50
+--- /dev/null
++++ b/scratch/fakebin/i3-msg
+@@ -0,0 +1,4 @@
++#!/bin/bash
++echo "i3-msg CALL: $@" >> /workspace/scratch/i3_calls.log
++[ -n "" ] && echo "" >&2
++exit 0
+diff --git a/scratch/fakebin/i3b b/scratch/fakebin/i3b
+new file mode 100644
+index 0000000..750172a
+--- /dev/null
++++ b/scratch/fakebin/i3b
+@@ -0,0 +1,4 @@
++#!/bin/bash
++echo "I3 CALL: $@" >> /workspace/scratch/i3_calls.log
++echo "Error: unknown command" >&2
++exit 1
+diff --git a/scratch/i3_calls.log b/scratch/i3_calls.log
+new file mode 100644
+index 0000000..e6817c7
+--- /dev/null
++++ b/scratch/i3_calls.log
+@@ -0,0 +1,2 @@
++i3 CALL: -C -c myconf
++i3-msg CALL: reload
+diff --git a/scratch/mkt.sh b/scratch/mkt.sh
+new file mode 100755
+index 0000000..3375dcd
+--- /dev/null
++++ b/scratch/mkt.sh
+@@ -0,0 +1,9 @@
++#!/bin/bash
++# $1 = script name, $2 = exit code, $3 = stderr text
++cat > fakebin/$1 <<EOF
++#!/bin/bash
++echo "$1 CALL: \$@" >> /workspace/scratch/i3_calls.log
++[ -n "$3" ] && echo "$3" >&2
++exit $2
++EOF
++chmod +x fakebin/$1
+diff --git a/scratch/myconf b/scratch/myconf
+new file mode 100644
+index 0000000..0048ff9
+--- /dev/null
++++ b/scratch/myconf
+@@ -0,0 +1,20 @@
++# test templating with a minimal config
++font pango:Fira Mono 8
++
++bindsym Right focus right
++
++bar {
++  colors {
++    separator #dc322f
++    background #002b36
++    statusline #268bd2
++    focused_workspace #fdf6e3 #859900 #fdf6e3 #dddddd
++    active_workspace #fdf6e3 #6c71c4 #fdf6e3 #dddddd
++    inactive_workspace #586e75 #93a1a1 #002b36 #ddd
++    urgent_workspace #d33682 #d33682 #fdf6e3 #eeeeee
++  }
++}
++client.focused #859900 #859900 #fdf6e3 #6c71c4
++client.focused_inactive #073642 #073642 #eee8d5 #6c71c4
++client.unfocused #073642 #073642 #93a1a1 #586e75
++client.urgent #d33682 #d33682 #fdf6e3 #dc322f
+diff --git a/scratch/myconf2 b/scratch/myconf2
+new file mode 100644
+index 0000000..797c614
+--- /dev/null
++++ b/scratch/myconf2
+@@ -0,0 +1,20 @@
++# test templating with a minimal config
++font pango:Fira Mono 8
++
++bindsym Right focus right
++
++bar {
++  colors {
++    separator #dc322f
++    background #002b36
++    statusline #268bd2
++    focused_workspace #fdf6e3 #859900 #fdf6e3 #fdf6e3
++    active_workspace #fdf6e3 #6c71c4 #fdf6e3 #fdf6e3
++    inactive_workspace #586e75 #93a1a1 #002b36 #002b36
++    urgent_workspace #d33682 #d33682 #fdf6e3 #fdf6e3
++  }
++}
++client.focused #859900 #859900 #fdf6e3 #6c71c4
++client.focused_inactive #073642 #073642 #eee8d5 #6c71c4
++client.unfocused #073642 #073642 #93a1a1 #586e75
++client.urgent #d33682 #d33682 #fdf6e3 #dc322f
+diff --git a/scratch/oF.txt b/scratch/oF.txt
+new file mode 100644
+index 0000000..797c614
+--- /dev/null
++++ b/scratch/oF.txt
+@@ -0,0 +1,20 @@
++# test templating with a minimal config
++font pango:Fira Mono 8
++
++bindsym Right focus right
++
++bar {
++  colors {
++    separator #dc322f
++    background #002b36
++    statusline #268bd2
++    focused_workspace #fdf6e3 #859900 #fdf6e3 #fdf6e3
++    active_workspace #fdf6e3 #6c71c4 #fdf6e3 #fdf6e3
++    inactive_workspace #586e75 #93a1a1 #002b36 #002b36
++    urgent_workspace #d33682 #d33682 #fdf6e3 #fdf6e3
++  }
++}
++client.focused #859900 #859900 #fdf6e3 #6c71c4
++client.focused_inactive #073642 #073642 #eee8d5 #6c71c4
++client.unfocused #073642 #073642 #93a1a1 #586e75
++client.urgent #d33682 #d33682 #fdf6e3 #dc322f
+diff --git a/scratch/oI.txt b/scratch/oI.txt
+new file mode 100644
+index 0000000..797c614
+--- /dev/null
++++ b/scratch/oI.txt
+@@ -0,0 +1,20 @@
++# test templating with a minimal config
++font pango:Fira Mono 8
++
++bindsym Right focus right
++
++bar {
++  colors {
++    separator #dc322f
++    background #002b36
++    statusline #268bd2
++    focused_workspace #fdf6e3 #859900 #fdf6e3 #fdf6e3
++    active_workspace #fdf6e3 #6c71c4 #fdf6e3 #fdf6e3
++    inactive_workspace #586e75 #93a1a1 #002b36 #002b36
++    urgent_workspace #d33682 #d33682 #fdf6e3 #fdf6e3
++  }
++}
++client.focused #859900 #859900 #fdf6e3 #6c71c4
++client.focused_inactive #073642 #073642 #eee8d5 #6c71c4
++client.unfocused #073642 #073642 #93a1a1 #586e75
++client.urgent #d33682 #d33682 #fdf6e3 #dc322f
+diff --git a/scratch/out.txt b/scratch/out.txt
+new file mode 100644
+index 0000000..0048ff9
+--- /dev/null
++++ b/scratch/out.txt
+@@ -0,0 +1,20 @@
++# test templating with a minimal config
++font pango:Fira Mono 8
++
++bindsym Right focus right
++
++bar {
++  colors {
++    separator #dc322f
++    background #002b36
++    statusline #268bd2
++    focused_workspace #fdf6e3 #859900 #fdf6e3 #dddddd
++    active_workspace #fdf6e3 #6c71c4 #fdf6e3 #dddddd
++    inactive_workspace #586e75 #93a1a1 #002b36 #ddd
++    urgent_workspace #d33682 #d33682 #fdf6e3 #eeeeee
++  }
++}
++client.focused #859900 #859900 #fdf6e3 #6c71c4
++client.focused_inactive #073642 #073642 #eee8d5 #6c71c4
++client.unfocused #073642 #073642 #93a1a1 #586e75
++client.urgent #d33682 #d33682 #fdf6e3 #dc322f
+diff --git a/scratch/out2.txt b/scratch/out2.txt
+new file mode 100644
+index 0000000..797c614
+--- /dev/null
++++ b/scratch/out2.txt
+@@ -0,0 +1,20 @@
++# test templating with a minimal config
++font pango:Fira Mono 8
++
++bindsym Right focus right
++
++bar {
++  colors {
++    separator #dc322f
++    background #002b36
++    statusline #268bd2
++    focused_workspace #fdf6e3 #859900 #fdf6e3 #fdf6e3
++    active_workspace #fdf6e3 #6c71c4 #fdf6e3 #fdf6e3
++    inactive_workspace #586e75 #93a1a1 #002b36 #002b36
++    urgent_workspace #d33682 #d33682 #fdf6e3 #fdf6e3
++  }
++}
++client.focused #859900 #859900 #fdf6e3 #6c71c4
++client.focused_inactive #073642 #073642 #eee8d5 #6c71c4
++client.unfocused #073642 #073642 #93a1a1 #586e75
++client.urgent #d33682 #d33682 #fdf6e3 #dc322f
+diff --git a/scratch/probe1.sh b/scratch/probe1.sh
+new file mode 100644
+index 0000000..5211014
+--- /dev/null
++++ b/scratch/probe1.sh
+@@ -0,0 +1,24 @@
++#!/bin/bash
++# Batch probe of CLI behaviors
++cd /workspace
++E=./executable
++{
++echo "=== 1. no args (done: shows USAGE + hint, exit 1)"
++echo "=== 2. unknown long flag --foo (done: clap error, exit 1)"
++echo "=== 3. unknown short flag -z (done: clap error, exit 1)"
++echo "=== 4. nonexistent theme name"
++$E nonexistent-theme; echo "EXIT: $?"
++echo "=== 5. -o without theme"
++$E -o /tmp/o1; echo "EXIT: $?"; ls -la /tmp/o1 2>/dev/null
++echo "=== 6. -c missing file"
++$E -c /nonexistent/config solarized -o /tmp/o2; echo "EXIT: $?"
++echo "=== 7. option without value"
++$E -o 2>&1; echo "EXIT: $?"
++echo "=== 8. -t without value"
++$E -t 2>&1; echo "EXIT: $?"
++echo "=== 9. two positional args"
++$E solarized purple; echo "EXIT: $?"
++echo "=== 10. -s flag alone"
++$E -s solarized; echo "EXIT: $?"
++} > probe1.out 2>&1
++echo done

@@ -981,7 +981,8 @@ class UnifiedHarness:
                             "your contract to teammates who build on your work; keep it small and fast."
                         )
                 pre_healthy = _tree_health(env) if spec.do_no_harm else True
-                seeds[a.agent_id] = run_on_shared(env, a.agent_id, a.role, task, a.feature_id)
+                seeds[a.agent_id] = run_on_shared(env, a.agent_id, a.role, task, a.feature_id,
+                                                  time_limit_s=spec.agent_time_limit)
                 diff = strip_test_sections(env.git_diff())
                 if spec.do_no_harm and pre_healthy and not _tree_health(env):
                     # Q1 do-no-harm gate: the agent broke a previously-healthy

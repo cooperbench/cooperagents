@@ -1275,3 +1275,86 @@ Loop finding upheld on clean memory: cmatrix-fin3 agent1 looped 1000
 steps (96% dup) with CLEAN summaries — pollution was not the sole loop
 cause; the duplicate-command guard is the next mechanism, measured
 against this baseline.
+
+--- 2026-08-18: OOD batches in flight (t4 scaling + Qwen3.8-27B t3) ---
+T4 (team-size 4, fin stack, 9B): 8/10 DONE; partial means over 6 evaluated
+cells: t4 30.7 vs t3 28.3 vs solo 22.2 (same-6 subsets). Pattern: t4 lowers
+easy-task scores (cmatrix 69.2 vs 72.0), raises hard/high-variance ones
+(zipfinder 44.1 vs 21.6, srgn 28.0 vs 11.1). Final table pending fx/walk/
+tuijournal/shellharden evals + resource validation.
+Q27T3 (Qwen3.8-27B GKE endpoint, t3 fin stack, 10 tasks): wave 1 initially
+burned in Azure-401 retry loops. ROOT CAUSE: litellm autoloads ./.env
+(python-dotenv, no-override mode) from the job CWD; repo .env holds the Azure
+GPT-5.5 profile. .env.qwen was immune because it exports explicit EMPTY
+AZURE_OPENAI_BASE_URL/API_KEY (an existing var, even empty, blocks the
+dotenv fill; empty is falsy in build_model precedence). .env.qwen38 lacked
+those lines -> dotenv injected Azure base+key -> Azure-first precedence won.
+FIX: defensive empties added to .env.qwen38 (synced to 11 nodes, verified:
+build_model resolves api_base=http://34.63.139.125:8000/v1); poisoned cells
+killed, artifacts cleared, redispatched. Lesson: any new env profile MUST
+carry explicit empty overrides for every credential family it does not use.
+
+--- 2026-08-19: starvation program — root causes and the standing fix stack ---
+Four distinct mechanisms produced "agent starved" (first LLM call delayed
+>300s, or mid-run call gaps >> generation time) during the 27B batch:
+ 1. Launch-surge admission: 30 agents dispatched at once into 1-4 cold pods.
+ 2. Client timeout below generation time (180s vs multi-minute thinking) —
+    timeout-retry storms that kept the server busy with doomed work.
+ 3. Connection-pool death: autoscaler pod scale-downs AND cloud-LB idle NAT
+    drops (~10 min) silently kill pooled keep-alive sockets; the next call
+    hangs (httpx read timeout does not arm) until the 600s hard cap.
+    The compaction/summarize path bypassed the hard cap entirely -> agents
+    wedged forever mid-run, blocking whole cells at thread-join.
+ 4. Throughput collapse: >~12 concurrent heavy streams (30k prompts, 32k
+    thinking generations) per 3 replicas push per-stream speed so low that
+    every call exceeds the client timeout. Short-prompt load tests do not
+    predict this; measured: cells at 20+ streams got 4 calls/agent/hour.
+Standing fixes (all deployed, fleet-wide):
+ - starvation_test.py: preflight burst/TTFT/fairness gate at batch concurrency.
+ - starvation_demo.py: reproducible mock-server scenarios of modes 1/2 + remedies.
+ - COOPER_LLM_TIMEOUT_S (540s) sized to endpoint speed; hard cap 600s above it.
+ - summarize_context routed through the hard-timeout wrapper (was unbounded).
+ - COOPER_CONN_CLOSE=1: one connection per request; immune to pool death.
+ - Replicas pinned (no autoscaler flapping) for batch windows.
+ - Heartbeat telemetry (per-call lines + end markers) + live_starvation_check
+   (STARVING/STALE/FINISHED) -> starvation_guard auto-kills starving cells and
+   requeues them; q27_r4_controller enforces a 3-cell concurrency cap.
+Validation of the fix = new runs (r4 wave, t2 stragglers) completing with
+clean first-call latencies and passing the resource validator.
+
+--- 2026-08-19: TEAM-SIZE SCALING SERIES COMPLETE (9B, fixed 10 tasks, fin stack) ---
+All 40 cells resource-validated (heartbeat-evidence validator where needed).
+| task | solo | t2 | t3 | t4 |          MEANS: solo 13.3 -> t2 23.7 -> t3 28.3 -> t4 30.0
+| cmatrix     72.0  92.1  90.0  69.2 |  Monotonic with diminishing returns
+| tuijournal   0.0  31.8  48.9  48.0 |  (+10.4, +4.6, +1.7 per added agent).
+| walk         0.0   0.0  43.6  46.2 |  No size wins a plurality of tasks:
+| zoxide      14.0   8.5  30.2  21.5 |  t2 dominates selection-sufficient tasks
+| zipfinder    0.0  62.0  21.6  44.1 |  (cmatrix 92.1, zipfinder 62.0), t3 the
+| fx           0.0  18.8  20.6  21.8 |  coordination middle (tuijournal, zoxide),
+| i3style     36.7   0.0  17.1  21.6 |  t4 the hard tail (srgn 28.0, walk 46.2).
+| srgn        10.5  24.2  11.1  28.0 |  chroma/shellharden hard zeros everywhere;
+| chroma       0.0   0.0   0.0   0.0 |  i3style-t2 and shellharden-t4 are valid
+| shellharden  0.0   0.0   0.0   0.0 |  runs whose EVAL hangs (scored failing).
+
+--- 2026-08-19: 27B OOD TABLE COMPLETE (Qwen3.8-27B thinking, t3 fin stack) ---
+All 10 cells resource-valid (r4 wave, 3-cell cap, 4 replicas, conn-close,
+540s client timeout, bounded summarize, heartbeat-evidence validation):
+i3style 31, srgn 1, all others 0 -> mean 3.2 (9B t3 = 28.3 on same tasks).
+FAILURE ANALYSIS (trajectories): serving clean (first calls +2-20s), zero
+format errors, competent single tool calls (one agent built a pty TUI test
+harness). The binding constraint is thinking-mode call economics: 10k-226k
+chars of reasoning per step -> 1-5 min/step -> 33-67 steps per agent-hour
+(9B: hundreds). No agent ever reached a submit attempt (all status=limit),
+so the completion gate never fired; wall-clock expiry force-merged unbuilt
+partial edits -> compile_failed on 6/7 team cells. i3style (small config-DSL
+edits, ~40 steps sufficient) scored 31 > 9B-t3's 17.1: where the step budget
+fits, 27B capability exceeds 9B. CONCLUSION: the harness's time economics
+(3600s wall, submission-triggered gates, fast-call repair) do not transfer
+to slow thinking-mode endpoints; a fair 27B evaluation needs ~5x wall clock
+(thinking-off would sacrifice the model's capability; rejected).
+Solo smoke (cmatrix): serving perfect, ~25-56 calls/hr, no submission in
+2.5h; exposed+fixed a latent bug: the solo/basic harness path never passed
+agent_time_limit (harness.py run_on_shared call site) -> solo runs had NO
+wall deadline (masked on fast 9B).
+Pending: B200 endpoint upgrade (user), then re-baseline (preflight +
+cadence) and re-run under matched budgets.

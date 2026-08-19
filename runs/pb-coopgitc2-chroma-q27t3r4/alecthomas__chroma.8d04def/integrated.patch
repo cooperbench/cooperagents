@@ -1,0 +1,7577 @@
+diff --git a/specdata/help.txt b/specdata/help.txt
+new file mode 100644
+index 0000000..7b71e45
+--- /dev/null
++++ b/specdata/help.txt
+@@ -0,0 +1,50 @@
++Usage: executable [<files> ...] [flags]
++
++Chroma is a general purpose syntax highlighting library and corresponding
++command, for Go.
++
++Arguments:
++  [<files> ...]    Files to highlight.
++
++Flags:
++  -h, --help               Show context-sensitive help.
++      --version            Show version.
++      --list               List lexers, styles and formatters.
++      --unbuffered         Do not buffer output.
++      --trace              Trace lexer states as they are traversed.
++      --check              Do not format, check for tokenisation errors instead.
++      --filename=STRING    Filename to use for selecting a lexer when reading
++                           from stdin.
++      --fail               Exit silently with status 1 if no specific lexer was
++                           found.
++
++Select lexer and style:
++  -l, --lexer="autodetect"    Lexer to use when formatting or path to an XML
++                              file to load.
++  -s, --style="swapoff"       Style to use for formatting or path to an XML file
++                              to load.
++
++Output format:
++  -f, --formatter="terminal"    Formatter to use.
++      --json                    Convenience flag to use JSON formatter.
++      --html                    Convenience flag to use HTML formatter.
++      --svg                     Convenience flag to use SVG formatter.
++
++HTML formatter options:
++  --html-prefix=PREFIX             HTML CSS class prefix.
++  --html-styles                    Output HTML CSS styles.
++  --html-all-styles                Output all HTML CSS styles, including
++                                   redundant ones.
++  --html-only                      Output HTML fragment.
++  --html-inline-styles             Output HTML with inline styles (no classes).
++  --html-tab-width=8               Set the HTML tab width.
++  --html-lines                     Include line numbers in output.
++  --html-lines-table               Split line numbers and code in a HTML table
++  --html-lines-style=STRING        Style for line numbers.
++  --html-highlight=N[:M][,...]     Highlight these lines.
++  --html-highlight-style=STRING    Style used for highlighting lines.
++  --html-base-line=1               Base line number.
++  --html-prevent-surrounding-pre
++                                   Prevent the surrounding pre tag.
++  --html-linkable-lines            Make the line numbers linkable and be a link
++                                   to themselves.
+diff --git a/specdata/list.txt b/specdata/list.txt
+new file mode 100644
+index 0000000..513565d
+--- /dev/null
++++ b/specdata/list.txt
+@@ -0,0 +1,1090 @@
++lexers:
++  ABAP
++    aliases: abap
++    filenames: *.abap *.ABAP
++    mimetypes: text/x-abap
++  ABNF
++    aliases: abnf
++    filenames: *.abnf
++    mimetypes: text/x-abnf
++  ActionScript
++    aliases: as actionscript
++    filenames: *.as
++    mimetypes: application/x-actionscript text/x-actionscript text/actionscript
++  ActionScript 3
++    aliases: as3 actionscript3
++    filenames: *.as
++    mimetypes: application/x-actionscript3 text/x-actionscript3 text/actionscript3
++  Ada
++    aliases: ada ada95 ada2005
++    filenames: *.adb *.ads *.ada
++    mimetypes: text/x-ada
++  Agda
++    aliases: agda
++    filenames: *.agda
++    mimetypes: text/x-agda
++  AL
++    aliases: al
++    filenames: *.al *.dal
++    mimetypes: text/x-al
++  Alloy
++    aliases: alloy
++    filenames: *.als
++    mimetypes: text/x-alloy
++  AMPL
++    aliases: ampl
++    filenames: *.mod *.run
++    mimetypes: text/x-ampl
++  Angular2
++    aliases: ng2
++  ANTLR
++    aliases: antlr
++  ApacheConf
++    aliases: apacheconf aconf apache
++    filenames: .htaccess apache.conf apache2.conf
++    mimetypes: text/x-apacheconf
++  APL
++    aliases: apl
++    filenames: *.apl
++  AppleScript
++    aliases: applescript
++    filenames: *.applescript
++  ArangoDB AQL
++    aliases: aql
++    filenames: *.aql
++    mimetypes: text/x-aql
++  Arduino
++    aliases: arduino
++    filenames: *.ino
++    mimetypes: text/x-arduino
++  ArmAsm
++    aliases: armasm
++    filenames: *.s *.S
++    mimetypes: text/x-armasm text/x-asm
++  ATL
++    aliases: atl
++    filenames: *.atl
++    mimetypes: text/x-atl
++  AutoHotkey
++    aliases: autohotkey ahk
++    filenames: *.ahk *.ahkl
++    mimetypes: text/x-autohotkey
++  AutoIt
++    aliases: autoit
++    filenames: *.au3
++    mimetypes: text/x-autoit
++  Awk
++    aliases: awk gawk mawk nawk
++    filenames: *.awk
++    mimetypes: application/x-awk
++  Ballerina
++    aliases: ballerina
++    filenames: *.bal
++    mimetypes: text/x-ballerina
++  Bash
++    aliases: bash sh ksh zsh shell
++    filenames: *.sh *.ksh *.bash *.ebuild *.eclass .env .env.* *.env *.exheres-0 *.exlib *.zsh *.zshrc .bashrc bashrc .bash_* bash_* zshrc .zshrc APKBUILD PKGBUILD
++    mimetypes: application/x-sh application/x-shellscript
++  Bash Session
++    aliases: bash-session console shell-session
++    filenames: *.sh-session
++    mimetypes: text/x-sh
++  Batchfile
++    aliases: bat batch dosbatch winbatch
++    filenames: *.bat *.cmd
++    mimetypes: application/x-dos-batch
++  Beef
++    aliases: beef
++    filenames: *.bf
++    mimetypes: text/x-beef
++  BibTeX
++    aliases: bib bibtex
++    filenames: *.bib
++    mimetypes: text/x-bibtex
++  Bicep
++    aliases: bicep
++    filenames: *.bicep
++  BlitzBasic
++    aliases: blitzbasic b3d bplus
++    filenames: *.bb *.decls
++    mimetypes: text/x-bb
++  BNF
++    aliases: bnf
++    filenames: *.bnf
++    mimetypes: text/x-bnf
++  BQN
++    aliases: bqn
++    filenames: *.bqn
++  Brainfuck
++    aliases: brainfuck bf
++    filenames: *.bf *.b
++    mimetypes: application/x-brainfuck
++  C
++    aliases: c
++    filenames: *.c *.h *.idc *.x[bp]m
++    mimetypes: text/x-chdr text/x-csrc image/x-xbitmap image/x-xpixmap
++  C#
++    aliases: csharp c#
++    filenames: *.cs
++    mimetypes: text/x-csharp
++  C++
++    aliases: cpp c++
++    filenames: *.cpp *.hpp *.c++ *.h++ *.cc *.hh *.cxx *.hxx *.C *.H *.cp *.CPP *.tpp
++    mimetypes: text/x-c++hdr text/x-c++src
++  C3
++    aliases: c3
++    filenames: *.c3 *.c3i *.c3t
++  Caddyfile
++    aliases: caddyfile caddy
++    filenames: Caddyfile*
++  Caddyfile Directives
++    aliases: caddyfile-directives caddyfile-d caddy-d
++  Cap'n Proto
++    aliases: capnp
++    filenames: *.capnp
++  Cassandra CQL
++    aliases: cassandra cql
++    filenames: *.cql
++    mimetypes: text/x-cql
++  Ceylon
++    aliases: ceylon
++    filenames: *.ceylon
++    mimetypes: text/x-ceylon
++  CFEngine3
++    aliases: cfengine3 cf3
++    filenames: *.cf
++  cfstatement
++    aliases: cfs
++  ChaiScript
++    aliases: chai chaiscript
++    filenames: *.chai
++    mimetypes: text/x-chaiscript application/x-chaiscript
++  Chapel
++    aliases: chapel chpl
++    filenames: *.chpl
++  Cheetah
++    aliases: cheetah spitfire
++    filenames: *.tmpl *.spt
++    mimetypes: application/x-cheetah application/x-spitfire
++  Clojure
++    aliases: clojure clj edn
++    filenames: *.clj *.edn
++    mimetypes: text/x-clojure application/x-clojure application/edn
++  CMake
++    aliases: cmake
++    filenames: *.cmake CMakeLists.txt
++    mimetypes: text/x-cmake
++  COBOL
++    aliases: cobol
++    filenames: *.cob *.COB *.cpy *.CPY
++    mimetypes: text/x-cobol
++  CoffeeScript
++    aliases: coffee-script coffeescript coffee
++    filenames: *.coffee
++    mimetypes: text/coffeescript
++  Common Lisp
++    aliases: common-lisp cl lisp
++    filenames: *.cl *.lisp
++    mimetypes: text/x-common-lisp
++  Coq
++    aliases: coq
++    filenames: *.v
++    mimetypes: text/x-coq
++  Core
++    aliases: core
++    filenames: *.core
++    mimetypes: text/x-core
++  Crystal
++    aliases: cr crystal
++    filenames: *.cr
++    mimetypes: text/x-crystal
++  CSS
++    aliases: css
++    filenames: *.css
++    mimetypes: text/css
++  CSV
++    aliases: csv
++    filenames: *.csv
++    mimetypes: text/csv
++  CUE
++    aliases: cue
++    filenames: *.cue
++    mimetypes: text/x-cue
++  Cython
++    aliases: cython pyx pyrex
++    filenames: *.pyx *.pxd *.pxi
++    mimetypes: text/x-cython application/x-cython
++  D
++    aliases: d
++    filenames: *.d *.di
++    mimetypes: text/x-d
++  Dart
++    aliases: dart
++    filenames: *.dart
++    mimetypes: text/x-dart
++  Dax
++    aliases: dax
++    filenames: *.dax
++  Desktop file
++    aliases: desktop desktop_entry
++    filenames: *.desktop
++    mimetypes: application/x-desktop
++  Devicetree
++    aliases: devicetree dts
++    filenames: *.dts *.dtsi
++    mimetypes: text/x-devicetree
++  Diff
++    aliases: diff udiff
++    filenames: *.diff *.patch
++    mimetypes: text/x-diff text/x-patch
++  Django/Jinja
++    aliases: django jinja
++    mimetypes: application/x-django-templating application/x-jinja
++  dns
++    aliases: zone bind
++    filenames: *.zone
++    mimetypes: text/dns
++  Docker
++    aliases: docker dockerfile containerfile
++    filenames: Dockerfile Dockerfile.* *.Dockerfile *.docker Containerfile Containerfile.* *.Containerfile
++    mimetypes: text/x-dockerfile-config
++  DTD
++    aliases: dtd
++    filenames: *.dtd
++    mimetypes: application/xml-dtd
++  Dylan
++    aliases: dylan
++    filenames: *.dylan *.dyl *.intr
++    mimetypes: text/x-dylan
++  EBNF
++    aliases: ebnf
++    filenames: *.ebnf
++    mimetypes: text/x-ebnf
++  Elixir
++    aliases: elixir ex exs
++    filenames: *.ex *.eex *.exs
++    mimetypes: text/x-elixir
++  Elm
++    aliases: elm
++    filenames: *.elm
++    mimetypes: text/x-elm
++  EmacsLisp
++    aliases: emacs elisp emacs-lisp
++    filenames: *.el
++    mimetypes: text/x-elisp application/x-elisp
++  ERB
++    aliases: erb html+erb html+ruby rhtml
++    filenames: *.erb *.html.erb *.xml.erb *.rhtml
++    mimetypes: application/x-ruby-templating
++  Erlang
++    aliases: erlang
++    filenames: *.erl *.hrl *.es *.escript
++    mimetypes: text/x-erlang
++  Factor
++    aliases: factor
++    filenames: *.factor
++    mimetypes: text/x-factor
++  Fennel
++    aliases: fennel fnl
++    filenames: *.fennel
++    mimetypes: text/x-fennel application/x-fennel
++  Fish
++    aliases: fish fishshell
++    filenames: *.fish *.load
++    mimetypes: application/x-fish
++  Forth
++    aliases: forth
++    filenames: *.frt *.fth *.fs
++    mimetypes: application/x-forth
++  Fortran
++    aliases: fortran f90
++    filenames: *.f03 *.f90 *.f95 *.F03 *.F90 *.F95
++    mimetypes: text/x-fortran
++  FortranFixed
++    aliases: fortranfixed
++    filenames: *.f *.F
++    mimetypes: text/x-fortran
++  FSharp
++    aliases: fsharp
++    filenames: *.fs *.fsi
++    mimetypes: text/x-fsharp
++  GAS
++    aliases: gas asm
++    filenames: *.s *.S
++    mimetypes: text/x-gas
++  GDScript
++    aliases: gdscript gd
++    filenames: *.gd
++    mimetypes: text/x-gdscript application/x-gdscript
++  GDScript3
++    aliases: gdscript3 gd3
++    filenames: *.gd
++    mimetypes: text/x-gdscript application/x-gdscript
++  Gemtext
++    aliases: gemtext gmi gmni gemini
++    filenames: *.gmi *.gmni *.gemini
++    mimetypes: text/gemini
++  Genshi
++    aliases: genshi kid xml+genshi xml+kid
++    filenames: *.kid
++    mimetypes: application/x-genshi application/x-kid
++  Genshi HTML
++    aliases: html+genshi html+kid
++    mimetypes: text/html+genshi
++  Genshi Text
++    aliases: genshitext
++    mimetypes: application/x-genshi-text text/x-genshi
++  Gettext
++    aliases: pot po
++    filenames: *.pot *.po
++    mimetypes: application/x-gettext text/x-gettext text/gettext
++  Gherkin
++    aliases: cucumber Cucumber gherkin Gherkin
++    filenames: *.feature *.FEATURE
++    mimetypes: text/x-gherkin
++  Gleam
++    aliases: gleam
++    filenames: *.gleam
++    mimetypes: text/x-gleam
++  GLSL
++    aliases: glsl
++    filenames: *.vert *.frag *.geo
++    mimetypes: text/x-glslsrc
++  Gnuplot
++    aliases: gnuplot
++    filenames: *.plot *.plt
++    mimetypes: text/x-gnuplot
++  Go
++    aliases: go golang
++    filenames: *.go
++    mimetypes: text/x-gosrc
++  Go HTML Template
++    aliases: go-html-template
++  Go Template
++    aliases: go-template
++    filenames: *.gotmpl *.go.tmpl
++  Go Text Template
++    aliases: go-text-template
++  GraphQL
++    aliases: graphql graphqls gql
++    filenames: *.graphql *.graphqls
++  Groff
++    aliases: groff nroff man
++    filenames: *.[1-9] *.1p *.3pm *.man
++    mimetypes: application/x-troff text/troff
++  Groovy
++    aliases: groovy
++    filenames: *.groovy *.gradle
++    mimetypes: text/x-groovy
++  Handlebars
++    aliases: handlebars hbs
++    filenames: *.handlebars *.hbs
++  Hare
++    aliases: hare
++    filenames: *.ha
++    mimetypes: text/x-hare
++  Haskell
++    aliases: haskell hs
++    filenames: *.hs
++    mimetypes: text/x-haskell
++  Haxe
++    aliases: hx haxe hxsl
++    filenames: *.hx *.hxsl
++    mimetypes: text/haxe text/x-haxe text/x-hx
++  HCL
++    aliases: hcl
++    filenames: *.hcl
++    mimetypes: application/x-hcl
++  Hexdump
++    aliases: hexdump
++  HLB
++    aliases: hlb
++    filenames: *.hlb
++  HLSL
++    aliases: hlsl
++    filenames: *.hlsl *.hlsli *.cginc *.fx *.fxh
++    mimetypes: text/x-hlsl
++  HolyC
++    aliases: holyc
++    filenames: *.HC *.hc *.HH *.hh *.hc.z *.HC.Z
++    mimetypes: text/x-chdr text/x-csrc image/x-xbitmap image/x-xpixmap
++  HTML
++    aliases: html
++    filenames: *.html *.htm *.xhtml *.xslt
++    mimetypes: text/html application/xhtml+xml
++  HTTP
++    aliases: http
++  Hy
++    aliases: hylang
++    filenames: *.hy
++    mimetypes: text/x-hy application/x-hy
++  Idris
++    aliases: idris idr
++    filenames: *.idr
++    mimetypes: text/x-idris
++  Igor
++    aliases: igor igorpro
++    filenames: *.ipf
++    mimetypes: text/ipf
++  INI
++    aliases: ini cfg dosini
++    filenames: *.ini *.cfg *.inf *.service *.socket *.container *.network *.build *.pod *.kube *.volume *.image .gitconfig .editorconfig pylintrc .pylintrc
++    mimetypes: text/x-ini text/inf
++  Io
++    aliases: io
++    filenames: *.io
++    mimetypes: text/x-iosrc
++  ISCdhcpd
++    aliases: iscdhcpd
++    filenames: dhcpd.conf
++  J
++    aliases: j
++    filenames: *.ijs
++    mimetypes: text/x-j
++  Janet
++    aliases: janet
++    filenames: *.janet *.jdn
++    mimetypes: text/x-janet application/x-janet
++  Java
++    aliases: java
++    filenames: *.java
++    mimetypes: text/x-java
++  JavaScript
++    aliases: js javascript
++    filenames: *.js *.jsm *.mjs *.cjs
++    mimetypes: application/javascript application/x-javascript text/x-javascript text/javascript
++  JSON
++    aliases: json
++    filenames: *.json *.jsonc *.json5 *.avsc .luaurc
++    mimetypes: application/json
++  JSONata
++    aliases: jsonata
++    filenames: *.jsonata
++  Jsonnet
++    aliases: jsonnet
++    filenames: *.jsonnet *.libsonnet
++  Julia
++    aliases: julia jl
++    filenames: *.jl
++    mimetypes: text/x-julia application/x-julia
++  Jungle
++    aliases: jungle
++    filenames: *.jungle
++    mimetypes: text/x-jungle
++  Kakoune
++    aliases: kak kakoune kakrc kakscript
++    filenames: *.kak kakrc
++    mimetypes: application/x-sh application/x-shellscript text/x-shellscript
++  KDL
++    aliases: kdl
++    filenames: *.kdl
++  Kotlin
++    aliases: kotlin
++    filenames: *.kt *.kts
++    mimetypes: text/x-kotlin
++  Lean4
++    aliases: lean4 lean
++    filenames: *.lean
++    mimetypes: text/x-lean4 text/x-lean
++  Lighttpd configuration file
++    aliases: lighty lighttpd
++    mimetypes: text/x-lighttpd-conf
++  LLVM
++    aliases: llvm
++    filenames: *.ll
++    mimetypes: text/x-llvm
++  lox
++    filenames: *.lox
++  Lua
++    aliases: lua
++    filenames: *.lua *.wlua
++    mimetypes: text/x-lua application/x-lua
++  Luau
++    aliases: luau
++    filenames: *.luau
++  Makefile
++    aliases: make makefile mf bsdmake
++    filenames: *.mak *.mk Makefile makefile Makefile.* GNUmakefile BSDmakefile Justfile justfile .justfile
++    mimetypes: text/x-makefile
++  Mako
++    aliases: mako
++    filenames: *.mao
++    mimetypes: application/x-mako
++  markdown
++    aliases: md mkd
++    filenames: *.md *.mkd *.markdown
++    mimetypes: text/x-markdown
++  Markless
++    aliases: mess
++    filenames: *.mess *.markless
++    mimetypes: text/x-markless
++  Mason
++    aliases: mason
++    filenames: *.m *.mhtml *.mc *.mi autohandler dhandler
++    mimetypes: application/x-mason
++  Materialize SQL dialect
++    aliases: materialize mzsql
++    mimetypes: text/x-materializesql
++  Mathematica
++    aliases: mathematica mma nb
++    filenames: *.cdf *.m *.ma *.mt *.mx *.nb *.nbp *.wl
++    mimetypes: application/mathematica application/vnd.wolfram.mathematica application/vnd.wolfram.mathematica.package application/vnd.wolfram.cdf
++  Matlab
++    aliases: matlab
++    filenames: *.m
++    mimetypes: text/matlab
++  MCFunction
++    aliases: mcfunction mcf
++    filenames: *.mcfunction
++    mimetypes: text/mcfunction
++  Meson
++    aliases: meson meson.build
++    filenames: meson.build meson.options meson_options.txt
++    mimetypes: text/x-meson
++  Metal
++    aliases: metal
++    filenames: *.metal
++    mimetypes: text/x-metal
++  microcad
++    aliases: µcad
++    filenames: *.µcad *.ucad *.mcad
++    mimetypes: text/microcad
++  MiniZinc
++    aliases: minizinc MZN mzn
++    filenames: *.mzn *.dzn *.fzn
++    mimetypes: text/minizinc
++  MLIR
++    aliases: mlir
++    filenames: *.mlir
++    mimetypes: text/x-mlir
++  Modelica
++    aliases: modelica
++    filenames: *.mo
++    mimetypes: text/x-modelica
++  Modula-2
++    aliases: modula2 m2
++    filenames: *.def *.mod
++    mimetypes: text/x-modula2
++  Mojo
++    aliases: mojo 🔥
++    filenames: *.mojo *.🔥
++    mimetypes: text/x-mojo application/x-mojo
++  MonkeyC
++    aliases: monkeyc
++    filenames: *.mc
++    mimetypes: text/x-monkeyc
++  MoonBit
++    aliases: moonbit mbt
++    filenames: *.mbt
++  MoonScript
++    aliases: moonscript moon
++    filenames: *.moon
++    mimetypes: text/x-moonscript application/x-moonscript
++  MorrowindScript
++    aliases: morrowind mwscript
++  Myghty
++    aliases: myghty
++    filenames: *.myt autodelegate
++    mimetypes: application/x-myghty
++  MySQL
++    aliases: mysql mariadb
++    filenames: *.sql
++    mimetypes: text/x-mysql text/x-mariadb
++  NASM
++    aliases: nasm
++    filenames: *.asm *.ASM *.nasm
++    mimetypes: text/x-nasm
++  Natural
++    aliases: natural
++    filenames: *.NSN *.NSP *.NSS *.NSH *.NSG *.NSL *.NSA *.NSM *.NSC *.NS7
++    mimetypes: text/x-natural
++  NDISASM
++    aliases: ndisasm
++    mimetypes: text/x-disasm
++  Newspeak
++    aliases: newspeak
++    filenames: *.ns2
++    mimetypes: text/x-newspeak
++  Nginx configuration file
++    aliases: nginx
++    filenames: nginx.conf
++    mimetypes: text/x-nginx-conf
++  Nim
++    aliases: nim nimrod
++    filenames: *.nim *.nimrod
++    mimetypes: text/x-nim
++  Nix
++    aliases: nixos nix
++    filenames: *.nix
++    mimetypes: text/x-nix
++  NSIS
++    aliases: nsis nsi nsh
++    filenames: *.nsi *.nsh
++    mimetypes: text/x-nsis
++  Nu
++    aliases: nu
++    filenames: *.nu
++    mimetypes: text/plain
++  Objective-C
++    aliases: objective-c objectivec obj-c objc
++    filenames: *.m *.h
++    mimetypes: text/x-objective-c
++  ObjectPascal
++    aliases: objectpascal
++    filenames: *.pas *.pp *.inc *.dpr *.dpk *.lpr *.lpk
++    mimetypes: text/x-pascal
++  OCaml
++    aliases: ocaml
++    filenames: *.ml *.mli *.mll *.mly
++    mimetypes: text/x-ocaml
++  Octave
++    aliases: octave
++    filenames: *.m
++    mimetypes: text/octave
++  Odin
++    aliases: odin
++    filenames: *.odin
++    mimetypes: text/odin
++  OnesEnterprise
++    aliases: ones onesenterprise 1S 1S:Enterprise
++    filenames: *.EPF *.epf *.ERF *.erf
++    mimetypes: application/octet-stream
++  OpenEdge ABL
++    aliases: openedge abl progress openedgeabl
++    filenames: *.p *.cls *.w *.i
++    mimetypes: text/x-openedge application/x-openedge
++  OpenSCAD
++    aliases: openscad
++    filenames: *.scad
++    mimetypes: text/x-scad
++  Org Mode
++    aliases: org orgmode
++    filenames: *.org
++    mimetypes: text/org
++  PacmanConf
++    aliases: pacmanconf
++    filenames: pacman.conf
++  Perl
++    aliases: perl pl
++    filenames: *.pl *.pm *.t
++    mimetypes: text/x-perl application/x-perl
++  PHP
++    aliases: php php3 php4 php5
++    filenames: *.php *.php[345] *.inc
++    mimetypes: text/x-php
++  PHTML
++    aliases: phtml
++    filenames: *.phtml *.php *.php[345] *.inc
++    mimetypes: application/x-php application/x-httpd-php application/x-httpd-php3 application/x-httpd-php4 application/x-httpd-php5 text/x-php
++  Pig
++    aliases: pig
++    filenames: *.pig
++    mimetypes: text/x-pig
++  PkgConfig
++    aliases: pkgconfig
++    filenames: *.pc
++  PL/pgSQL
++    aliases: plpgsql
++    mimetypes: text/x-plpgsql
++  plaintext
++    aliases: text plain no-highlight
++    filenames: *.txt
++    mimetypes: text/plain
++  Plutus Core
++    aliases: plutus-core plc
++    filenames: *.plc
++    mimetypes: text/x-plutus-core application/x-plutus-core
++  Pony
++    aliases: pony
++    filenames: *.pony
++  PostgreSQL SQL dialect
++    aliases: postgresql postgres
++    mimetypes: text/x-postgresql
++  PostScript
++    aliases: postscript postscr
++    filenames: *.ps *.eps
++    mimetypes: application/postscript
++  POVRay
++    aliases: pov
++    filenames: *.pov *.inc
++    mimetypes: text/x-povray
++  PowerQuery
++    aliases: powerquery pq
++    filenames: *.pq
++    mimetypes: text/x-powerquery
++  PowerShell
++    aliases: powershell posh ps1 psm1 psd1 pwsh
++    filenames: *.ps1 *.psm1 *.psd1
++    mimetypes: text/x-powershell
++  Prolog
++    aliases: prolog
++    filenames: *.ecl *.prolog *.pro *.pl
++    mimetypes: text/x-prolog
++  Promela
++    aliases: promela
++    filenames: *.pml *.prom *.prm *.promela *.pr *.pm
++    mimetypes: text/x-promela
++  PromQL
++    aliases: promql
++    filenames: *.promql
++  properties
++    aliases: java-properties
++    filenames: *.properties
++    mimetypes: text/x-java-properties
++  Protocol Buffer
++    aliases: protobuf proto
++    filenames: *.proto
++  Protocol Buffer Text Format
++    aliases: txtpb
++    filenames: *.txtpb *.textproto *.textpb *.pbtxt
++    mimetypes: application/x-protobuf-text
++  PRQL
++    aliases: prql
++    filenames: *.prql
++    mimetypes: application/prql
++  PSL
++    aliases: psl
++    filenames: *.psl *.BATCH *.TRIG *.PROC
++    mimetypes: text/x-psl
++  Puppet
++    aliases: puppet
++    filenames: *.pp
++  Python
++    aliases: python py sage python3 py3 starlark
++    filenames: *.py *.pyi *.pyw *.jy *.sage *.sc SConstruct SConscript *.bzl BUCK BUILD BUILD.bazel WORKSPACE WORKSPACE.bzlmod WORKSPACE.bazel MODULE.bazel REPO.bazel *.star *.tac
++    mimetypes: text/x-python application/x-python text/x-python3 application/x-python3
++  Python 2
++    aliases: python2 py2
++    mimetypes: text/x-python2 application/x-python2
++  QBasic
++    aliases: qbasic basic
++    filenames: *.BAS *.bas
++    mimetypes: text/basic
++  QML
++    aliases: qml qbs
++    filenames: *.qml *.qbs
++    mimetypes: application/x-qml application/x-qt.qbs+qml
++  R
++    aliases: splus s r
++    filenames: *.S *.R *.r .Rhistory .Rprofile .Renviron
++    mimetypes: text/S-plus text/S text/x-r-source text/x-r text/x-R text/x-r-history text/x-r-profile
++  Racket
++    aliases: racket rkt
++    filenames: *.rkt *.rktd *.rktl
++    mimetypes: text/x-racket application/x-racket
++  Ragel
++    aliases: ragel
++  Raku
++    aliases: perl6 pl6 raku
++    filenames: *.pl *.pm *.nqp *.p6 *.6pl *.p6l *.pl6 *.6pm *.p6m *.pm6 *.t *.raku *.rakumod *.rakutest *.rakudoc
++    mimetypes: text/x-perl6 application/x-perl6 text/x-raku application/x-raku
++  react
++    aliases: jsx react
++    filenames: *.jsx *.react
++    mimetypes: text/jsx text/typescript-jsx
++  ReasonML
++    aliases: reason reasonml
++    filenames: *.re *.rei
++    mimetypes: text/x-reasonml
++  reg
++    aliases: registry
++    filenames: *.reg
++    mimetypes: text/x-windows-registry
++  Rego
++    aliases: rego
++    filenames: *.rego
++  reStructuredText
++    aliases: rst rest restructuredtext
++    filenames: *.rst *.rest
++    mimetypes: text/x-rst text/prs.fallenstein.rst
++  Rexx
++    aliases: rexx arexx
++    filenames: *.rexx *.rex *.rx *.arexx
++    mimetypes: text/x-rexx
++  RGBDS Assembly
++    aliases: rgbasm
++    filenames: *.asm
++  Ring
++    aliases: ring
++    filenames: *.ring *.rh *.rform
++    mimetypes: text/x-ring
++  RPGLE
++    aliases: SQLRPGLE RPG IV
++    filenames: *.RPGLE *.rpgle *.SQLRPGLE *.sqlrpgle
++    mimetypes: text/x-rpgle text/x-sqlrpgle
++  RPMSpec
++    aliases: spec
++    filenames: *.spec
++    mimetypes: text/x-rpm-spec
++  Ruby
++    aliases: rb ruby duby
++    filenames: *.rb *.rbw Rakefile *.rake *.gemspec *.rbx *.duby Gemfile Vagrantfile
++    mimetypes: text/x-ruby application/x-ruby
++  Rust
++    aliases: rust rs
++    filenames: *.rs *.rs.in
++    mimetypes: text/rust text/x-rust
++  SAS
++    aliases: sas
++    filenames: *.SAS *.sas
++    mimetypes: text/x-sas text/sas application/x-sas
++  Sass
++    aliases: sass
++    filenames: *.sass
++    mimetypes: text/x-sass
++  Scala
++    aliases: scala
++    filenames: *.scala
++    mimetypes: text/x-scala
++  scdoc
++    aliases: scdoc
++    filenames: *.scd *.scdoc
++  Scheme
++    aliases: scheme scm
++    filenames: *.scm *.ss
++    mimetypes: text/x-scheme application/x-scheme
++  Scilab
++    aliases: scilab
++    filenames: *.sci *.sce *.tst
++    mimetypes: text/scilab
++  SCSS
++    aliases: scss
++    filenames: *.scss
++    mimetypes: text/x-scss
++  Sed
++    aliases: sed gsed ssed
++    filenames: *.sed *.[gs]sed
++    mimetypes: text/x-sed
++  Sieve
++    aliases: sieve
++    filenames: *.siv *.sieve
++  Smali
++    aliases: smali
++    filenames: *.smali
++    mimetypes: text/smali
++  Smalltalk
++    aliases: smalltalk squeak st
++    filenames: *.st
++    mimetypes: text/x-smalltalk
++  Smarty
++    aliases: smarty
++    filenames: *.tpl
++    mimetypes: application/x-smarty
++  SNBT
++    aliases: snbt
++    filenames: *.snbt
++    mimetypes: text/snbt
++  Snobol
++    aliases: snobol
++    filenames: *.snobol
++    mimetypes: text/x-snobol
++  Solidity
++    aliases: sol solidity
++    filenames: *.sol
++  SourcePawn
++    aliases: sp
++    filenames: *.sp *.inc
++    mimetypes: text/x-sourcepawn
++  Spade
++    aliases: spade
++    filenames: *.spade
++    mimetypes: text/spade text/x-spade
++  SPARQL
++    aliases: sparql
++    filenames: *.rq *.sparql
++    mimetypes: application/sparql-query
++  SQL
++    aliases: sql
++    filenames: *.sql
++    mimetypes: text/x-sql
++  SquidConf
++    aliases: squidconf squid.conf squid
++    filenames: squid.conf
++    mimetypes: text/x-squidconf
++  Standard ML
++    aliases: sml
++    filenames: *.sml *.sig *.fun
++    mimetypes: text/x-standardml application/x-standardml
++  stas
++    filenames: *.stas
++  Stylus
++    aliases: stylus
++    filenames: *.styl
++    mimetypes: text/x-styl
++  Svelte
++    aliases: svelte
++    filenames: *.svelte
++    mimetypes: application/x-svelte
++  Swift
++    aliases: swift
++    filenames: *.swift
++    mimetypes: text/x-swift
++  SYSTEMD
++    aliases: systemd
++    filenames: *.automount *.device *.dnssd *.link *.mount *.netdev *.network *.path *.scope *.service *.slice *.socket *.swap *.target *.timer
++    mimetypes: text/plain
++  systemverilog
++    aliases: systemverilog sv
++    filenames: *.sv *.svh
++    mimetypes: text/x-systemverilog
++  TableGen
++    aliases: tablegen
++    filenames: *.td
++    mimetypes: text/x-tablegen
++  Tal
++    aliases: tal uxntal
++    filenames: *.tal
++    mimetypes: text/x-uxntal
++  TASM
++    aliases: tasm
++    filenames: *.asm *.ASM *.tasm
++    mimetypes: text/x-tasm
++  Tcl
++    aliases: tcl
++    filenames: *.tcl *.rvt
++    mimetypes: text/x-tcl text/x-script.tcl application/x-tcl
++  Tcsh
++    aliases: tcsh csh
++    filenames: *.tcsh *.csh
++    mimetypes: application/x-csh
++  Termcap
++    aliases: termcap
++    filenames: termcap termcap.src
++  Terminfo
++    aliases: terminfo
++    filenames: terminfo terminfo.src
++  Terraform
++    aliases: terraform tf hcl
++    filenames: *.tf *.hcl
++    mimetypes: application/x-tf application/x-terraform
++  TeX
++    aliases: tex latex
++    filenames: *.tex *.aux *.toc
++    mimetypes: text/x-tex text/x-latex
++  Thrift
++    aliases: thrift
++    filenames: *.thrift
++    mimetypes: application/x-thrift
++  TOML
++    aliases: toml
++    filenames: *.toml Pipfile poetry.lock uv.lock
++    mimetypes: text/x-toml
++  TradingView
++    aliases: tradingview tv
++    filenames: *.tv
++    mimetypes: text/x-tradingview
++  Transact-SQL
++    aliases: tsql t-sql
++    mimetypes: text/x-tsql
++  Turing
++    aliases: turing
++    filenames: *.turing *.tu
++    mimetypes: text/x-turing
++  Turtle
++    aliases: turtle
++    filenames: *.ttl
++    mimetypes: text/turtle application/x-turtle
++  Twig
++    aliases: twig
++    filenames: *.twig
++    mimetypes: application/x-twig
++  TypeScript
++    aliases: ts tsx typescript
++    filenames: *.ts *.tsx *.mts *.cts
++    mimetypes: text/x-typescript
++  TypoScript
++    aliases: typoscript
++    filenames: *.ts
++    mimetypes: text/x-typoscript
++  TypoScriptCssData
++    aliases: typoscriptcssdata
++  TypoScriptHtmlData
++    aliases: typoscripthtmldata
++  Typst
++    aliases: typst
++    filenames: *.typ
++    mimetypes: text/x-typst
++  ucode
++    filenames: *.uc
++    mimetypes: application/x.ucode text/x.ucode
++  V
++    aliases: v vlang
++    filenames: *.v *.vv v.mod
++    mimetypes: text/x-v
++  V shell
++    aliases: vsh vshell
++    filenames: *.vsh
++    mimetypes: text/x-vsh
++  Vala
++    aliases: vala vapi
++    filenames: *.vala *.vapi
++    mimetypes: text/x-vala
++  VB.net
++    aliases: vb.net vbnet
++    filenames: *.vb *.bas
++    mimetypes: text/x-vbnet text/x-vba
++  verilog
++    aliases: verilog v
++    filenames: *.v
++    mimetypes: text/x-verilog
++  VHDL
++    aliases: vhdl
++    filenames: *.vhdl *.vhd
++    mimetypes: text/x-vhdl
++  VHS
++    aliases: vhs tape cassette
++    filenames: *.tape
++  VimL
++    aliases: vim
++    filenames: *.vim .vimrc .exrc .gvimrc _vimrc _exrc _gvimrc vimrc gvimrc
++    mimetypes: text/x-vim
++  vue
++    aliases: vue vuejs
++    filenames: *.vue
++    mimetypes: text/x-vue application/x-vue
++  WDTE
++    filenames: *.wdte
++  WebAssembly Text Format
++    aliases: wast wat
++    filenames: *.wat *.wast
++  WebGPU Shading Language
++    aliases: wgsl
++    filenames: *.wgsl
++    mimetypes: text/wgsl
++  WebVTT
++    aliases: vtt
++    filenames: *.vtt
++    mimetypes: text/vtt
++  Whiley
++    aliases: whiley
++    filenames: *.whiley
++    mimetypes: text/x-whiley
++  XML
++    aliases: xml
++    filenames: *.xml *.xsl *.rss *.xslt *.xsd *.wsdl *.wsf *.svg *.qrc *.csproj *.vcxproj *.fsproj
++    mimetypes: text/xml application/xml image/svg+xml application/rss+xml application/atom+xml
++  Xorg
++    aliases: xorg.conf
++    filenames: xorg.conf
++  YAML
++    aliases: yaml
++    filenames: *.yaml *.yml
++    mimetypes: text/x-yaml
++  YANG
++    aliases: yang
++    filenames: *.yang
++    mimetypes: application/yang
++  Z80 Assembly
++    aliases: z80
++    filenames: *.z80 *.asm
++  Zed
++    aliases: zed
++    filenames: *.zed
++    mimetypes: text/zed
++  Zig
++    aliases: zig
++    filenames: *.zig *.zon
++    mimetypes: text/zig
++
++styles: abap algol algol_nu arduino ashen aura-theme-dark aura-theme-dark-soft autumn average base16-snazzy borland bw catppuccin-frappe catppuccin-latte catppuccin-macchiato catppuccin-mocha colorful darcula doom-one doom-one2 dracula emacs evergarden friendly fruity github github-dark gruvbox gruvbox-light hr_high_contrast hrdark igor kanagawa-dragon kanagawa-lotus kanagawa-wave lovelace manni modus-operandi modus-vivendi monokai monokailight murphy native nord nordic onedark onesenterprise paraiso-dark paraiso-light pastie perldoc pygments rainbow_dash rose-pine rose-pine-dawn rose-pine-moon rpgle rrt solarized-dark solarized-dark256 solarized-light swapoff tango tokyonight-day tokyonight-moon tokyonight-night tokyonight-storm trac vim vs vulcan witchhazel xcode xcode-dark
++formatters: html json noop svg terminal terminal16 terminal16m terminal256 terminal8 tokens
+diff --git a/specdata/stylelist.txt b/specdata/stylelist.txt
+new file mode 100644
+index 0000000..899f521
+--- /dev/null
++++ b/specdata/stylelist.txt
+@@ -0,0 +1,6412 @@
++lexers:
++
++
++ABAP
++
++
++
++
++aliases:
++abap
++
++
++
++
++filenames:
++*.abap
++*.ABAP
++
++
++
++
++mimetypes:
++text/x-abap
++
++
++ABNF
++
++
++
++
++aliases:
++abnf
++
++
++
++
++filenames:
++*.abnf
++
++
++
++
++mimetypes:
++text/x-abnf
++
++
++ActionScript
++
++
++
++
++aliases:
++as
++actionscript
++
++
++
++
++filenames:
++*.as
++
++
++
++
++mimetypes:
++application/x-actionscript
++text/x-actionscript
++text/actionscript
++
++
++ActionScript
++3
++
++
++
++
++aliases:
++as3
++actionscript3
++
++
++
++
++filenames:
++*.as
++
++
++
++
++mimetypes:
++application/x-actionscript3
++text/x-actionscript3
++text/actionscript3
++
++
++Ada
++
++
++
++
++aliases:
++ada
++ada95
++ada2005
++
++
++
++
++filenames:
++*.adb
++*.ads
++*.ada
++
++
++
++
++mimetypes:
++text/x-ada
++
++
++Agda
++
++
++
++
++aliases:
++agda
++
++
++
++
++filenames:
++*.agda
++
++
++
++
++mimetypes:
++text/x-agda
++
++
++AL
++
++
++
++
++aliases:
++al
++
++
++
++
++filenames:
++*.al
++*.dal
++
++
++
++
++mimetypes:
++text/x-al
++
++
++Alloy
++
++
++
++
++aliases:
++alloy
++
++
++
++
++filenames:
++*.als
++
++
++
++
++mimetypes:
++text/x-alloy
++
++
++AMPL
++
++
++
++
++aliases:
++ampl
++
++
++
++
++filenames:
++*.mod
++*.run
++
++
++
++
++mimetypes:
++text/x-ampl
++
++
++Angular2
++
++
++
++
++aliases:
++ng2
++
++
++ANTLR
++
++
++
++
++aliases:
++antlr
++
++
++ApacheConf
++
++
++
++
++aliases:
++apacheconf
++aconf
++apache
++
++
++
++
++filenames:
++.htaccess
++apache.conf
++apache2.conf
++
++
++
++
++mimetypes:
++text/x-apacheconf
++
++
++APL
++
++
++
++
++aliases:
++apl
++
++
++
++
++filenames:
++*.apl
++
++
++AppleScript
++
++
++
++
++aliases:
++applescript
++
++
++
++
++filenames:
++*.applescript
++
++
++ArangoDB
++AQL
++
++
++
++
++aliases:
++aql
++
++
++
++
++filenames:
++*.aql
++
++
++
++
++mimetypes:
++text/x-aql
++
++
++Arduino
++
++
++
++
++aliases:
++arduino
++
++
++
++
++filenames:
++*.ino
++
++
++
++
++mimetypes:
++text/x-arduino
++
++
++ArmAsm
++
++
++
++
++aliases:
++armasm
++
++
++
++
++filenames:
++*.s
++*.S
++
++
++
++
++mimetypes:
++text/x-armasm
++text/x-asm
++
++
++ATL
++
++
++
++
++aliases:
++atl
++
++
++
++
++filenames:
++*.atl
++
++
++
++
++mimetypes:
++text/x-atl
++
++
++AutoHotkey
++
++
++
++
++aliases:
++autohotkey
++ahk
++
++
++
++
++filenames:
++*.ahk
++*.ahkl
++
++
++
++
++mimetypes:
++text/x-autohotkey
++
++
++AutoIt
++
++
++
++
++aliases:
++autoit
++
++
++
++
++filenames:
++*.au3
++
++
++
++
++mimetypes:
++text/x-autoit
++
++
++Awk
++
++
++
++
++aliases:
++awk
++gawk
++mawk
++nawk
++
++
++
++
++filenames:
++*.awk
++
++
++
++
++mimetypes:
++application/x-awk
++
++
++Ballerina
++
++
++
++
++aliases:
++ballerina
++
++
++
++
++filenames:
++*.bal
++
++
++
++
++mimetypes:
++text/x-ballerina
++
++
++Bash
++
++
++
++
++aliases:
++bash
++sh
++ksh
++zsh
++shell
++
++
++
++
++filenames:
++*.sh
++*.ksh
++*.bash
++*.ebuild
++*.eclass
++.env
++.env.*
++*.env
++*.exheres-0
++*.exlib
++*.zsh
++*.zshrc
++.bashrc
++bashrc
++.bash_*
++bash_*
++zshrc
++.zshrc
++APKBUILD
++PKGBUILD
++
++
++
++
++mimetypes:
++application/x-sh
++application/x-shellscript
++
++
++Bash
++Session
++
++
++
++
++aliases:
++bash-session
++console
++shell-session
++
++
++
++
++filenames:
++*.sh-session
++
++
++
++
++mimetypes:
++text/x-sh
++
++
++Batchfile
++
++
++
++
++aliases:
++bat
++batch
++dosbatch
++winbatch
++
++
++
++
++filenames:
++*.bat
++*.cmd
++
++
++
++
++mimetypes:
++application/x-dos-batch
++
++
++Beef
++
++
++
++
++aliases:
++beef
++
++
++
++
++filenames:
++*.bf
++
++
++
++
++mimetypes:
++text/x-beef
++
++
++BibTeX
++
++
++
++
++aliases:
++bib
++bibtex
++
++
++
++
++filenames:
++*.bib
++
++
++
++
++mimetypes:
++text/x-bibtex
++
++
++Bicep
++
++
++
++
++aliases:
++bicep
++
++
++
++
++filenames:
++*.bicep
++
++
++BlitzBasic
++
++
++
++
++aliases:
++blitzbasic
++b3d
++bplus
++
++
++
++
++filenames:
++*.bb
++*.decls
++
++
++
++
++mimetypes:
++text/x-bb
++
++
++BNF
++
++
++
++
++aliases:
++bnf
++
++
++
++
++filenames:
++*.bnf
++
++
++
++
++mimetypes:
++text/x-bnf
++
++
++BQN
++
++
++
++
++aliases:
++bqn
++
++
++
++
++filenames:
++*.bqn
++
++
++Brainfuck
++
++
++
++
++aliases:
++brainfuck
++bf
++
++
++
++
++filenames:
++*.bf
++*.b
++
++
++
++
++mimetypes:
++application/x-brainfuck
++
++
++C
++
++
++
++
++aliases:
++c
++
++
++
++
++filenames:
++*.c
++*.h
++*.idc
++*.x[bp]m
++
++
++
++
++mimetypes:
++text/x-chdr
++text/x-csrc
++image/x-xbitmap
++image/x-xpixmap
++
++
++C#
++
++
++
++
++aliases:
++csharp
++c#
++
++
++
++
++filenames:
++*.cs
++
++
++
++
++mimetypes:
++text/x-csharp
++
++
++C++
++
++
++
++
++aliases:
++cpp
++c++
++
++
++
++
++filenames:
++*.cpp
++*.hpp
++*.c++
++*.h++
++*.cc
++*.hh
++*.cxx
++*.hxx
++*.C
++*.H
++*.cp
++*.CPP
++*.tpp
++
++
++
++
++mimetypes:
++text/x-c++hdr
++text/x-c++src
++
++
++C3
++
++
++
++
++aliases:
++c3
++
++
++
++
++filenames:
++*.c3
++*.c3i
++*.c3t
++
++
++Caddyfile
++
++
++
++
++aliases:
++caddyfile
++caddy
++
++
++
++
++filenames:
++Caddyfile*
++
++
++Caddyfile
++Directives
++
++
++
++
++aliases:
++caddyfile-directives
++caddyfile-d
++caddy-d
++
++
++Cap'n
++Proto
++
++
++
++
++aliases:
++capnp
++
++
++
++
++filenames:
++*.capnp
++
++
++Cassandra
++CQL
++
++
++
++
++aliases:
++cassandra
++cql
++
++
++
++
++filenames:
++*.cql
++
++
++
++
++mimetypes:
++text/x-cql
++
++
++Ceylon
++
++
++
++
++aliases:
++ceylon
++
++
++
++
++filenames:
++*.ceylon
++
++
++
++
++mimetypes:
++text/x-ceylon
++
++
++CFEngine3
++
++
++
++
++aliases:
++cfengine3
++cf3
++
++
++
++
++filenames:
++*.cf
++
++
++cfstatement
++
++
++
++
++aliases:
++cfs
++
++
++ChaiScript
++
++
++
++
++aliases:
++chai
++chaiscript
++
++
++
++
++filenames:
++*.chai
++
++
++
++
++mimetypes:
++text/x-chaiscript
++application/x-chaiscript
++
++
++Chapel
++
++
++
++
++aliases:
++chapel
++chpl
++
++
++
++
++filenames:
++*.chpl
++
++
++Cheetah
++
++
++
++
++aliases:
++cheetah
++spitfire
++
++
++
++
++filenames:
++*.tmpl
++*.spt
++
++
++
++
++mimetypes:
++application/x-cheetah
++application/x-spitfire
++
++
++Clojure
++
++
++
++
++aliases:
++clojure
++clj
++edn
++
++
++
++
++filenames:
++*.clj
++*.edn
++
++
++
++
++mimetypes:
++text/x-clojure
++application/x-clojure
++application/edn
++
++
++CMake
++
++
++
++
++aliases:
++cmake
++
++
++
++
++filenames:
++*.cmake
++CMakeLists.txt
++
++
++
++
++mimetypes:
++text/x-cmake
++
++
++COBOL
++
++
++
++
++aliases:
++cobol
++
++
++
++
++filenames:
++*.cob
++*.COB
++*.cpy
++*.CPY
++
++
++
++
++mimetypes:
++text/x-cobol
++
++
++CoffeeScript
++
++
++
++
++aliases:
++coffee-script
++coffeescript
++coffee
++
++
++
++
++filenames:
++*.coffee
++
++
++
++
++mimetypes:
++text/coffeescript
++
++
++Common
++Lisp
++
++
++
++
++aliases:
++common-lisp
++cl
++lisp
++
++
++
++
++filenames:
++*.cl
++*.lisp
++
++
++
++
++mimetypes:
++text/x-common-lisp
++
++
++Coq
++
++
++
++
++aliases:
++coq
++
++
++
++
++filenames:
++*.v
++
++
++
++
++mimetypes:
++text/x-coq
++
++
++Core
++
++
++
++
++aliases:
++core
++
++
++
++
++filenames:
++*.core
++
++
++
++
++mimetypes:
++text/x-core
++
++
++Crystal
++
++
++
++
++aliases:
++cr
++crystal
++
++
++
++
++filenames:
++*.cr
++
++
++
++
++mimetypes:
++text/x-crystal
++
++
++CSS
++
++
++
++
++aliases:
++css
++
++
++
++
++filenames:
++*.css
++
++
++
++
++mimetypes:
++text/css
++
++
++CSV
++
++
++
++
++aliases:
++csv
++
++
++
++
++filenames:
++*.csv
++
++
++
++
++mimetypes:
++text/csv
++
++
++CUE
++
++
++
++
++aliases:
++cue
++
++
++
++
++filenames:
++*.cue
++
++
++
++
++mimetypes:
++text/x-cue
++
++
++Cython
++
++
++
++
++aliases:
++cython
++pyx
++pyrex
++
++
++
++
++filenames:
++*.pyx
++*.pxd
++*.pxi
++
++
++
++
++mimetypes:
++text/x-cython
++application/x-cython
++
++
++D
++
++
++
++
++aliases:
++d
++
++
++
++
++filenames:
++*.d
++*.di
++
++
++
++
++mimetypes:
++text/x-d
++
++
++Dart
++
++
++
++
++aliases:
++dart
++
++
++
++
++filenames:
++*.dart
++
++
++
++
++mimetypes:
++text/x-dart
++
++
++Dax
++
++
++
++
++aliases:
++dax
++
++
++
++
++filenames:
++*.dax
++
++
++Desktop
++file
++
++
++
++
++aliases:
++desktop
++desktop_entry
++
++
++
++
++filenames:
++*.desktop
++
++
++
++
++mimetypes:
++application/x-desktop
++
++
++Devicetree
++
++
++
++
++aliases:
++devicetree
++dts
++
++
++
++
++filenames:
++*.dts
++*.dtsi
++
++
++
++
++mimetypes:
++text/x-devicetree
++
++
++Diff
++
++
++
++
++aliases:
++diff
++udiff
++
++
++
++
++filenames:
++*.diff
++*.patch
++
++
++
++
++mimetypes:
++text/x-diff
++text/x-patch
++
++
++Django/Jinja
++
++
++
++
++aliases:
++django
++jinja
++
++
++
++
++mimetypes:
++application/x-django-templating
++application/x-jinja
++
++
++dns
++
++
++
++
++aliases:
++zone
++bind
++
++
++
++
++filenames:
++*.zone
++
++
++
++
++mimetypes:
++text/dns
++
++
++Docker
++
++
++
++
++aliases:
++docker
++dockerfile
++containerfile
++
++
++
++
++filenames:
++Dockerfile
++Dockerfile.*
++*.Dockerfile
++*.docker
++Containerfile
++Containerfile.*
++*.Containerfile
++
++
++
++
++mimetypes:
++text/x-dockerfile-config
++
++
++DTD
++
++
++
++
++aliases:
++dtd
++
++
++
++
++filenames:
++*.dtd
++
++
++
++
++mimetypes:
++application/xml-dtd
++
++
++Dylan
++
++
++
++
++aliases:
++dylan
++
++
++
++
++filenames:
++*.dylan
++*.dyl
++*.intr
++
++
++
++
++mimetypes:
++text/x-dylan
++
++
++EBNF
++
++
++
++
++aliases:
++ebnf
++
++
++
++
++filenames:
++*.ebnf
++
++
++
++
++mimetypes:
++text/x-ebnf
++
++
++Elixir
++
++
++
++
++aliases:
++elixir
++ex
++exs
++
++
++
++
++filenames:
++*.ex
++*.eex
++*.exs
++
++
++
++
++mimetypes:
++text/x-elixir
++
++
++Elm
++
++
++
++
++aliases:
++elm
++
++
++
++
++filenames:
++*.elm
++
++
++
++
++mimetypes:
++text/x-elm
++
++
++EmacsLisp
++
++
++
++
++aliases:
++emacs
++elisp
++emacs-lisp
++
++
++
++
++filenames:
++*.el
++
++
++
++
++mimetypes:
++text/x-elisp
++application/x-elisp
++
++
++ERB
++
++
++
++
++aliases:
++erb
++html+erb
++html+ruby
++rhtml
++
++
++
++
++filenames:
++*.erb
++*.html.erb
++*.xml.erb
++*.rhtml
++
++
++
++
++mimetypes:
++application/x-ruby-templating
++
++
++Erlang
++
++
++
++
++aliases:
++erlang
++
++
++
++
++filenames:
++*.erl
++*.hrl
++*.es
++*.escript
++
++
++
++
++mimetypes:
++text/x-erlang
++
++
++Factor
++
++
++
++
++aliases:
++factor
++
++
++
++
++filenames:
++*.factor
++
++
++
++
++mimetypes:
++text/x-factor
++
++
++Fennel
++
++
++
++
++aliases:
++fennel
++fnl
++
++
++
++
++filenames:
++*.fennel
++
++
++
++
++mimetypes:
++text/x-fennel
++application/x-fennel
++
++
++Fish
++
++
++
++
++aliases:
++fish
++fishshell
++
++
++
++
++filenames:
++*.fish
++*.load
++
++
++
++
++mimetypes:
++application/x-fish
++
++
++Forth
++
++
++
++
++aliases:
++forth
++
++
++
++
++filenames:
++*.frt
++*.fth
++*.fs
++
++
++
++
++mimetypes:
++application/x-forth
++
++
++Fortran
++
++
++
++
++aliases:
++fortran
++f90
++
++
++
++
++filenames:
++*.f03
++*.f90
++*.f95
++*.F03
++*.F90
++*.F95
++
++
++
++
++mimetypes:
++text/x-fortran
++
++
++FortranFixed
++
++
++
++
++aliases:
++fortranfixed
++
++
++
++
++filenames:
++*.f
++*.F
++
++
++
++
++mimetypes:
++text/x-fortran
++
++
++FSharp
++
++
++
++
++aliases:
++fsharp
++
++
++
++
++filenames:
++*.fs
++*.fsi
++
++
++
++
++mimetypes:
++text/x-fsharp
++
++
++GAS
++
++
++
++
++aliases:
++gas
++asm
++
++
++
++
++filenames:
++*.s
++*.S
++
++
++
++
++mimetypes:
++text/x-gas
++
++
++GDScript
++
++
++
++
++aliases:
++gdscript
++gd
++
++
++
++
++filenames:
++*.gd
++
++
++
++
++mimetypes:
++text/x-gdscript
++application/x-gdscript
++
++
++GDScript3
++
++
++
++
++aliases:
++gdscript3
++gd3
++
++
++
++
++filenames:
++*.gd
++
++
++
++
++mimetypes:
++text/x-gdscript
++application/x-gdscript
++
++
++Gemtext
++
++
++
++
++aliases:
++gemtext
++gmi
++gmni
++gemini
++
++
++
++
++filenames:
++*.gmi
++*.gmni
++*.gemini
++
++
++
++
++mimetypes:
++text/gemini
++
++
++Genshi
++
++
++
++
++aliases:
++genshi
++kid
++xml+genshi
++xml+kid
++
++
++
++
++filenames:
++*.kid
++
++
++
++
++mimetypes:
++application/x-genshi
++application/x-kid
++
++
++Genshi
++HTML
++
++
++
++
++aliases:
++html+genshi
++html+kid
++
++
++
++
++mimetypes:
++text/html+genshi
++
++
++Genshi
++Text
++
++
++
++
++aliases:
++genshitext
++
++
++
++
++mimetypes:
++application/x-genshi-text
++text/x-genshi
++
++
++Gettext
++
++
++
++
++aliases:
++pot
++po
++
++
++
++
++filenames:
++*.pot
++*.po
++
++
++
++
++mimetypes:
++application/x-gettext
++text/x-gettext
++text/gettext
++
++
++Gherkin
++
++
++
++
++aliases:
++cucumber
++Cucumber
++gherkin
++Gherkin
++
++
++
++
++filenames:
++*.feature
++*.FEATURE
++
++
++
++
++mimetypes:
++text/x-gherkin
++
++
++Gleam
++
++
++
++
++aliases:
++gleam
++
++
++
++
++filenames:
++*.gleam
++
++
++
++
++mimetypes:
++text/x-gleam
++
++
++GLSL
++
++
++
++
++aliases:
++glsl
++
++
++
++
++filenames:
++*.vert
++*.frag
++*.geo
++
++
++
++
++mimetypes:
++text/x-glslsrc
++
++
++Gnuplot
++
++
++
++
++aliases:
++gnuplot
++
++
++
++
++filenames:
++*.plot
++*.plt
++
++
++
++
++mimetypes:
++text/x-gnuplot
++
++
++Go
++
++
++
++
++aliases:
++go
++golang
++
++
++
++
++filenames:
++*.go
++
++
++
++
++mimetypes:
++text/x-gosrc
++
++
++Go
++HTML
++Template
++
++
++
++
++aliases:
++go-html-template
++
++
++Go
++Template
++
++
++
++
++aliases:
++go-template
++
++
++
++
++filenames:
++*.gotmpl
++*.go.tmpl
++
++
++Go
++Text
++Template
++
++
++
++
++aliases:
++go-text-template
++
++
++GraphQL
++
++
++
++
++aliases:
++graphql
++graphqls
++gql
++
++
++
++
++filenames:
++*.graphql
++*.graphqls
++
++
++Groff
++
++
++
++
++aliases:
++groff
++nroff
++man
++
++
++
++
++filenames:
++*.[1-9]
++*.1p
++*.3pm
++*.man
++
++
++
++
++mimetypes:
++application/x-troff
++text/troff
++
++
++Groovy
++
++
++
++
++aliases:
++groovy
++
++
++
++
++filenames:
++*.groovy
++*.gradle
++
++
++
++
++mimetypes:
++text/x-groovy
++
++
++Handlebars
++
++
++
++
++aliases:
++handlebars
++hbs
++
++
++
++
++filenames:
++*.handlebars
++*.hbs
++
++
++Hare
++
++
++
++
++aliases:
++hare
++
++
++
++
++filenames:
++*.ha
++
++
++
++
++mimetypes:
++text/x-hare
++
++
++Haskell
++
++
++
++
++aliases:
++haskell
++hs
++
++
++
++
++filenames:
++*.hs
++
++
++
++
++mimetypes:
++text/x-haskell
++
++
++Haxe
++
++
++
++
++aliases:
++hx
++haxe
++hxsl
++
++
++
++
++filenames:
++*.hx
++*.hxsl
++
++
++
++
++mimetypes:
++text/haxe
++text/x-haxe
++text/x-hx
++
++
++HCL
++
++
++
++
++aliases:
++hcl
++
++
++
++
++filenames:
++*.hcl
++
++
++
++
++mimetypes:
++application/x-hcl
++
++
++Hexdump
++
++
++
++
++aliases:
++hexdump
++
++
++HLB
++
++
++
++
++aliases:
++hlb
++
++
++
++
++filenames:
++*.hlb
++
++
++HLSL
++
++
++
++
++aliases:
++hlsl
++
++
++
++
++filenames:
++*.hlsl
++*.hlsli
++*.cginc
++*.fx
++*.fxh
++
++
++
++
++mimetypes:
++text/x-hlsl
++
++
++HolyC
++
++
++
++
++aliases:
++holyc
++
++
++
++
++filenames:
++*.HC
++*.hc
++*.HH
++*.hh
++*.hc.z
++*.HC.Z
++
++
++
++
++mimetypes:
++text/x-chdr
++text/x-csrc
++image/x-xbitmap
++image/x-xpixmap
++
++
++HTML
++
++
++
++
++aliases:
++html
++
++
++
++
++filenames:
++*.html
++*.htm
++*.xhtml
++*.xslt
++
++
++
++
++mimetypes:
++text/html
++application/xhtml+xml
++
++
++HTTP
++
++
++
++
++aliases:
++http
++
++
++Hy
++
++
++
++
++aliases:
++hylang
++
++
++
++
++filenames:
++*.hy
++
++
++
++
++mimetypes:
++text/x-hy
++application/x-hy
++
++
++Idris
++
++
++
++
++aliases:
++idris
++idr
++
++
++
++
++filenames:
++*.idr
++
++
++
++
++mimetypes:
++text/x-idris
++
++
++Igor
++
++
++
++
++aliases:
++igor
++igorpro
++
++
++
++
++filenames:
++*.ipf
++
++
++
++
++mimetypes:
++text/ipf
++
++
++INI
++
++
++
++
++aliases:
++ini
++cfg
++dosini
++
++
++
++
++filenames:
++*.ini
++*.cfg
++*.inf
++*.service
++*.socket
++*.container
++*.network
++*.build
++*.pod
++*.kube
++*.volume
++*.image
++.gitconfig
++.editorconfig
++pylintrc
++.pylintrc
++
++
++
++
++mimetypes:
++text/x-ini
++text/inf
++
++
++Io
++
++
++
++
++aliases:
++io
++
++
++
++
++filenames:
++*.io
++
++
++
++
++mimetypes:
++text/x-iosrc
++
++
++ISCdhcpd
++
++
++
++
++aliases:
++iscdhcpd
++
++
++
++
++filenames:
++dhcpd.conf
++
++
++J
++
++
++
++
++aliases:
++j
++
++
++
++
++filenames:
++*.ijs
++
++
++
++
++mimetypes:
++text/x-j
++
++
++Janet
++
++
++
++
++aliases:
++janet
++
++
++
++
++filenames:
++*.janet
++*.jdn
++
++
++
++
++mimetypes:
++text/x-janet
++application/x-janet
++
++
++Java
++
++
++
++
++aliases:
++java
++
++
++
++
++filenames:
++*.java
++
++
++
++
++mimetypes:
++text/x-java
++
++
++JavaScript
++
++
++
++
++aliases:
++js
++javascript
++
++
++
++
++filenames:
++*.js
++*.jsm
++*.mjs
++*.cjs
++
++
++
++
++mimetypes:
++application/javascript
++application/x-javascript
++text/x-javascript
++text/javascript
++
++
++JSON
++
++
++
++
++aliases:
++json
++
++
++
++
++filenames:
++*.json
++*.jsonc
++*.json5
++*.avsc
++.luaurc
++
++
++
++
++mimetypes:
++application/json
++
++
++JSONata
++
++
++
++
++aliases:
++jsonata
++
++
++
++
++filenames:
++*.jsonata
++
++
++Jsonnet
++
++
++
++
++aliases:
++jsonnet
++
++
++
++
++filenames:
++*.jsonnet
++*.libsonnet
++
++
++Julia
++
++
++
++
++aliases:
++julia
++jl
++
++
++
++
++filenames:
++*.jl
++
++
++
++
++mimetypes:
++text/x-julia
++application/x-julia
++
++
++Jungle
++
++
++
++
++aliases:
++jungle
++
++
++
++
++filenames:
++*.jungle
++
++
++
++
++mimetypes:
++text/x-jungle
++
++
++Kakoune
++
++
++
++
++aliases:
++kak
++kakoune
++kakrc
++kakscript
++
++
++
++
++filenames:
++*.kak
++kakrc
++
++
++
++
++mimetypes:
++application/x-sh
++application/x-shellscript
++text/x-shellscript
++
++
++KDL
++
++
++
++
++aliases:
++kdl
++
++
++
++
++filenames:
++*.kdl
++
++
++Kotlin
++
++
++
++
++aliases:
++kotlin
++
++
++
++
++filenames:
++*.kt
++*.kts
++
++
++
++
++mimetypes:
++text/x-kotlin
++
++
++Lean4
++
++
++
++
++aliases:
++lean4
++lean
++
++
++
++
++filenames:
++*.lean
++
++
++
++
++mimetypes:
++text/x-lean4
++text/x-lean
++
++
++Lighttpd
++configuration
++file
++
++
++
++
++aliases:
++lighty
++lighttpd
++
++
++
++
++mimetypes:
++text/x-lighttpd-conf
++
++
++LLVM
++
++
++
++
++aliases:
++llvm
++
++
++
++
++filenames:
++*.ll
++
++
++
++
++mimetypes:
++text/x-llvm
++
++
++lox
++
++
++
++
++filenames:
++*.lox
++
++
++Lua
++
++
++
++
++aliases:
++lua
++
++
++
++
++filenames:
++*.lua
++*.wlua
++
++
++
++
++mimetypes:
++text/x-lua
++application/x-lua
++
++
++Luau
++
++
++
++
++aliases:
++luau
++
++
++
++
++filenames:
++*.luau
++
++
++Makefile
++
++
++
++
++aliases:
++make
++makefile
++mf
++bsdmake
++
++
++
++
++filenames:
++*.mak
++*.mk
++Makefile
++makefile
++Makefile.*
++GNUmakefile
++BSDmakefile
++Justfile
++justfile
++.justfile
++
++
++
++
++mimetypes:
++text/x-makefile
++
++
++Mako
++
++
++
++
++aliases:
++mako
++
++
++
++
++filenames:
++*.mao
++
++
++
++
++mimetypes:
++application/x-mako
++
++
++markdown
++
++
++
++
++aliases:
++md
++mkd
++
++
++
++
++filenames:
++*.md
++*.mkd
++*.markdown
++
++
++
++
++mimetypes:
++text/x-markdown
++
++
++Markless
++
++
++
++
++aliases:
++mess
++
++
++
++
++filenames:
++*.mess
++*.markless
++
++
++
++
++mimetypes:
++text/x-markless
++
++
++Mason
++
++
++
++
++aliases:
++mason
++
++
++
++
++filenames:
++*.m
++*.mhtml
++*.mc
++*.mi
++autohandler
++dhandler
++
++
++
++
++mimetypes:
++application/x-mason
++
++
++Materialize
++SQL
++dialect
++
++
++
++
++aliases:
++materialize
++mzsql
++
++
++
++
++mimetypes:
++text/x-materializesql
++
++
++Mathematica
++
++
++
++
++aliases:
++mathematica
++mma
++nb
++
++
++
++
++filenames:
++*.cdf
++*.m
++*.ma
++*.mt
++*.mx
++*.nb
++*.nbp
++*.wl
++
++
++
++
++mimetypes:
++application/mathematica
++application/vnd.wolfram.mathematica
++application/vnd.wolfram.mathematica.package
++application/vnd.wolfram.cdf
++
++
++Matlab
++
++
++
++
++aliases:
++matlab
++
++
++
++
++filenames:
++*.m
++
++
++
++
++mimetypes:
++text/matlab
++
++
++MCFunction
++
++
++
++
++aliases:
++mcfunction
++mcf
++
++
++
++
++filenames:
++*.mcfunction
++
++
++
++
++mimetypes:
++text/mcfunction
++
++
++Meson
++
++
++
++
++aliases:
++meson
++meson.build
++
++
++
++
++filenames:
++meson.build
++meson.options
++meson_options.txt
++
++
++
++
++mimetypes:
++text/x-meson
++
++
++Metal
++
++
++
++
++aliases:
++metal
++
++
++
++
++filenames:
++*.metal
++
++
++
++
++mimetypes:
++text/x-metal
++
++
++microcad
++
++
++
++
++aliases:
++µcad
++
++
++
++
++filenames:
++*.µcad
++*.ucad
++*.mcad
++
++
++
++
++mimetypes:
++text/microcad
++
++
++MiniZinc
++
++
++
++
++aliases:
++minizinc
++MZN
++mzn
++
++
++
++
++filenames:
++*.mzn
++*.dzn
++*.fzn
++
++
++
++
++mimetypes:
++text/minizinc
++
++
++MLIR
++
++
++
++
++aliases:
++mlir
++
++
++
++
++filenames:
++*.mlir
++
++
++
++
++mimetypes:
++text/x-mlir
++
++
++Modelica
++
++
++
++
++aliases:
++modelica
++
++
++
++
++filenames:
++*.mo
++
++
++
++
++mimetypes:
++text/x-modelica
++
++
++Modula-2
++
++
++
++
++aliases:
++modula2
++m2
++
++
++
++
++filenames:
++*.def
++*.mod
++
++
++
++
++mimetypes:
++text/x-modula2
++
++
++Mojo
++
++
++
++
++aliases:
++mojo
++🔥
++
++
++
++
++filenames:
++*.mojo
++*.🔥
++
++
++
++
++mimetypes:
++text/x-mojo
++application/x-mojo
++
++
++MonkeyC
++
++
++
++
++aliases:
++monkeyc
++
++
++
++
++filenames:
++*.mc
++
++
++
++
++mimetypes:
++text/x-monkeyc
++
++
++MoonBit
++
++
++
++
++aliases:
++moonbit
++mbt
++
++
++
++
++filenames:
++*.mbt
++
++
++MoonScript
++
++
++
++
++aliases:
++moonscript
++moon
++
++
++
++
++filenames:
++*.moon
++
++
++
++
++mimetypes:
++text/x-moonscript
++application/x-moonscript
++
++
++MorrowindScript
++
++
++
++
++aliases:
++morrowind
++mwscript
++
++
++Myghty
++
++
++
++
++aliases:
++myghty
++
++
++
++
++filenames:
++*.myt
++autodelegate
++
++
++
++
++mimetypes:
++application/x-myghty
++
++
++MySQL
++
++
++
++
++aliases:
++mysql
++mariadb
++
++
++
++
++filenames:
++*.sql
++
++
++
++
++mimetypes:
++text/x-mysql
++text/x-mariadb
++
++
++NASM
++
++
++
++
++aliases:
++nasm
++
++
++
++
++filenames:
++*.asm
++*.ASM
++*.nasm
++
++
++
++
++mimetypes:
++text/x-nasm
++
++
++Natural
++
++
++
++
++aliases:
++natural
++
++
++
++
++filenames:
++*.NSN
++*.NSP
++*.NSS
++*.NSH
++*.NSG
++*.NSL
++*.NSA
++*.NSM
++*.NSC
++*.NS7
++
++
++
++
++mimetypes:
++text/x-natural
++
++
++NDISASM
++
++
++
++
++aliases:
++ndisasm
++
++
++
++
++mimetypes:
++text/x-disasm
++
++
++Newspeak
++
++
++
++
++aliases:
++newspeak
++
++
++
++
++filenames:
++*.ns2
++
++
++
++
++mimetypes:
++text/x-newspeak
++
++
++Nginx
++configuration
++file
++
++
++
++
++aliases:
++nginx
++
++
++
++
++filenames:
++nginx.conf
++
++
++
++
++mimetypes:
++text/x-nginx-conf
++
++
++Nim
++
++
++
++
++aliases:
++nim
++nimrod
++
++
++
++
++filenames:
++*.nim
++*.nimrod
++
++
++
++
++mimetypes:
++text/x-nim
++
++
++Nix
++
++
++
++
++aliases:
++nixos
++nix
++
++
++
++
++filenames:
++*.nix
++
++
++
++
++mimetypes:
++text/x-nix
++
++
++NSIS
++
++
++
++
++aliases:
++nsis
++nsi
++nsh
++
++
++
++
++filenames:
++*.nsi
++*.nsh
++
++
++
++
++mimetypes:
++text/x-nsis
++
++
++Nu
++
++
++
++
++aliases:
++nu
++
++
++
++
++filenames:
++*.nu
++
++
++
++
++mimetypes:
++text/plain
++
++
++Objective-C
++
++
++
++
++aliases:
++objective-c
++objectivec
++obj-c
++objc
++
++
++
++
++filenames:
++*.m
++*.h
++
++
++
++
++mimetypes:
++text/x-objective-c
++
++
++ObjectPascal
++
++
++
++
++aliases:
++objectpascal
++
++
++
++
++filenames:
++*.pas
++*.pp
++*.inc
++*.dpr
++*.dpk
++*.lpr
++*.lpk
++
++
++
++
++mimetypes:
++text/x-pascal
++
++
++OCaml
++
++
++
++
++aliases:
++ocaml
++
++
++
++
++filenames:
++*.ml
++*.mli
++*.mll
++*.mly
++
++
++
++
++mimetypes:
++text/x-ocaml
++
++
++Octave
++
++
++
++
++aliases:
++octave
++
++
++
++
++filenames:
++*.m
++
++
++
++
++mimetypes:
++text/octave
++
++
++Odin
++
++
++
++
++aliases:
++odin
++
++
++
++
++filenames:
++*.odin
++
++
++
++
++mimetypes:
++text/odin
++
++
++OnesEnterprise
++
++
++
++
++aliases:
++ones
++onesenterprise
++1S
++1S:Enterprise
++
++
++
++
++filenames:
++*.EPF
++*.epf
++*.ERF
++*.erf
++
++
++
++
++mimetypes:
++application/octet-stream
++
++
++OpenEdge
++ABL
++
++
++
++
++aliases:
++openedge
++abl
++progress
++openedgeabl
++
++
++
++
++filenames:
++*.p
++*.cls
++*.w
++*.i
++
++
++
++
++mimetypes:
++text/x-openedge
++application/x-openedge
++
++
++OpenSCAD
++
++
++
++
++aliases:
++openscad
++
++
++
++
++filenames:
++*.scad
++
++
++
++
++mimetypes:
++text/x-scad
++
++
++Org
++Mode
++
++
++
++
++aliases:
++org
++orgmode
++
++
++
++
++filenames:
++*.org
++
++
++
++
++mimetypes:
++text/org
++
++
++PacmanConf
++
++
++
++
++aliases:
++pacmanconf
++
++
++
++
++filenames:
++pacman.conf
++
++
++Perl
++
++
++
++
++aliases:
++perl
++pl
++
++
++
++
++filenames:
++*.pl
++*.pm
++*.t
++
++
++
++
++mimetypes:
++text/x-perl
++application/x-perl
++
++
++PHP
++
++
++
++
++aliases:
++php
++php3
++php4
++php5
++
++
++
++
++filenames:
++*.php
++*.php[345]
++*.inc
++
++
++
++
++mimetypes:
++text/x-php
++
++
++PHTML
++
++
++
++
++aliases:
++phtml
++
++
++
++
++filenames:
++*.phtml
++*.php
++*.php[345]
++*.inc
++
++
++
++
++mimetypes:
++application/x-php
++application/x-httpd-php
++application/x-httpd-php3
++application/x-httpd-php4
++application/x-httpd-php5
++text/x-php
++
++
++Pig
++
++
++
++
++aliases:
++pig
++
++
++
++
++filenames:
++*.pig
++
++
++
++
++mimetypes:
++text/x-pig
++
++
++PkgConfig
++
++
++
++
++aliases:
++pkgconfig
++
++
++
++
++filenames:
++*.pc
++
++
++PL/pgSQL
++
++
++
++
++aliases:
++plpgsql
++
++
++
++
++mimetypes:
++text/x-plpgsql
++
++
++plaintext
++
++
++
++
++aliases:
++text
++plain
++no-highlight
++
++
++
++
++filenames:
++*.txt
++
++
++
++
++mimetypes:
++text/plain
++
++
++Plutus
++Core
++
++
++
++
++aliases:
++plutus-core
++plc
++
++
++
++
++filenames:
++*.plc
++
++
++
++
++mimetypes:
++text/x-plutus-core
++application/x-plutus-core
++
++
++Pony
++
++
++
++
++aliases:
++pony
++
++
++
++
++filenames:
++*.pony
++
++
++PostgreSQL
++SQL
++dialect
++
++
++
++
++aliases:
++postgresql
++postgres
++
++
++
++
++mimetypes:
++text/x-postgresql
++
++
++PostScript
++
++
++
++
++aliases:
++postscript
++postscr
++
++
++
++
++filenames:
++*.ps
++*.eps
++
++
++
++
++mimetypes:
++application/postscript
++
++
++POVRay
++
++
++
++
++aliases:
++pov
++
++
++
++
++filenames:
++*.pov
++*.inc
++
++
++
++
++mimetypes:
++text/x-povray
++
++
++PowerQuery
++
++
++
++
++aliases:
++powerquery
++pq
++
++
++
++
++filenames:
++*.pq
++
++
++
++
++mimetypes:
++text/x-powerquery
++
++
++PowerShell
++
++
++
++
++aliases:
++powershell
++posh
++ps1
++psm1
++psd1
++pwsh
++
++
++
++
++filenames:
++*.ps1
++*.psm1
++*.psd1
++
++
++
++
++mimetypes:
++text/x-powershell
++
++
++Prolog
++
++
++
++
++aliases:
++prolog
++
++
++
++
++filenames:
++*.ecl
++*.prolog
++*.pro
++*.pl
++
++
++
++
++mimetypes:
++text/x-prolog
++
++
++Promela
++
++
++
++
++aliases:
++promela
++
++
++
++
++filenames:
++*.pml
++*.prom
++*.prm
++*.promela
++*.pr
++*.pm
++
++
++
++
++mimetypes:
++text/x-promela
++
++
++PromQL
++
++
++
++
++aliases:
++promql
++
++
++
++
++filenames:
++*.promql
++
++
++properties
++
++
++
++
++aliases:
++java-properties
++
++
++
++
++filenames:
++*.properties
++
++
++
++
++mimetypes:
++text/x-java-properties
++
++
++Protocol
++Buffer
++
++
++
++
++aliases:
++protobuf
++proto
++
++
++
++
++filenames:
++*.proto
++
++
++Protocol
++Buffer
++Text
++Format
++
++
++
++
++aliases:
++txtpb
++
++
++
++
++filenames:
++*.txtpb
++*.textproto
++*.textpb
++*.pbtxt
++
++
++
++
++mimetypes:
++application/x-protobuf-text
++
++
++PRQL
++
++
++
++
++aliases:
++prql
++
++
++
++
++filenames:
++*.prql
++
++
++
++
++mimetypes:
++application/prql
++
++
++PSL
++
++
++
++
++aliases:
++psl
++
++
++
++
++filenames:
++*.psl
++*.BATCH
++*.TRIG
++*.PROC
++
++
++
++
++mimetypes:
++text/x-psl
++
++
++Puppet
++
++
++
++
++aliases:
++puppet
++
++
++
++
++filenames:
++*.pp
++
++
++Python
++
++
++
++
++aliases:
++python
++py
++sage
++python3
++py3
++starlark
++
++
++
++
++filenames:
++*.py
++*.pyi
++*.pyw
++*.jy
++*.sage
++*.sc
++SConstruct
++SConscript
++*.bzl
++BUCK
++BUILD
++BUILD.bazel
++WORKSPACE
++WORKSPACE.bzlmod
++WORKSPACE.bazel
++MODULE.bazel
++REPO.bazel
++*.star
++*.tac
++
++
++
++
++mimetypes:
++text/x-python
++application/x-python
++text/x-python3
++application/x-python3
++
++
++Python
++2
++
++
++
++
++aliases:
++python2
++py2
++
++
++
++
++mimetypes:
++text/x-python2
++application/x-python2
++
++
++QBasic
++
++
++
++
++aliases:
++qbasic
++basic
++
++
++
++
++filenames:
++*.BAS
++*.bas
++
++
++
++
++mimetypes:
++text/basic
++
++
++QML
++
++
++
++
++aliases:
++qml
++qbs
++
++
++
++
++filenames:
++*.qml
++*.qbs
++
++
++
++
++mimetypes:
++application/x-qml
++application/x-qt.qbs+qml
++
++
++R
++
++
++
++
++aliases:
++splus
++s
++r
++
++
++
++
++filenames:
++*.S
++*.R
++*.r
++.Rhistory
++.Rprofile
++.Renviron
++
++
++
++
++mimetypes:
++text/S-plus
++text/S
++text/x-r-source
++text/x-r
++text/x-R
++text/x-r-history
++text/x-r-profile
++
++
++Racket
++
++
++
++
++aliases:
++racket
++rkt
++
++
++
++
++filenames:
++*.rkt
++*.rktd
++*.rktl
++
++
++
++
++mimetypes:
++text/x-racket
++application/x-racket
++
++
++Ragel
++
++
++
++
++aliases:
++ragel
++
++
++Raku
++
++
++
++
++aliases:
++perl6
++pl6
++raku
++
++
++
++
++filenames:
++*.pl
++*.pm
++*.nqp
++*.p6
++*.6pl
++*.p6l
++*.pl6
++*.6pm
++*.p6m
++*.pm6
++*.t
++*.raku
++*.rakumod
++*.rakutest
++*.rakudoc
++
++
++
++
++mimetypes:
++text/x-perl6
++application/x-perl6
++text/x-raku
++application/x-raku
++
++
++react
++
++
++
++
++aliases:
++jsx
++react
++
++
++
++
++filenames:
++*.jsx
++*.react
++
++
++
++
++mimetypes:
++text/jsx
++text/typescript-jsx
++
++
++ReasonML
++
++
++
++
++aliases:
++reason
++reasonml
++
++
++
++
++filenames:
++*.re
++*.rei
++
++
++
++
++mimetypes:
++text/x-reasonml
++
++
++reg
++
++
++
++
++aliases:
++registry
++
++
++
++
++filenames:
++*.reg
++
++
++
++
++mimetypes:
++text/x-windows-registry
++
++
++Rego
++
++
++
++
++aliases:
++rego
++
++
++
++
++filenames:
++*.rego
++
++
++reStructuredText
++
++
++
++
++aliases:
++rst
++rest
++restructuredtext
++
++
++
++
++filenames:
++*.rst
++*.rest
++
++
++
++
++mimetypes:
++text/x-rst
++text/prs.fallenstein.rst
++
++
++Rexx
++
++
++
++
++aliases:
++rexx
++arexx
++
++
++
++
++filenames:
++*.rexx
++*.rex
++*.rx
++*.arexx
++
++
++
++
++mimetypes:
++text/x-rexx
++
++
++RGBDS
++Assembly
++
++
++
++
++aliases:
++rgbasm
++
++
++
++
++filenames:
++*.asm
++
++
++Ring
++
++
++
++
++aliases:
++ring
++
++
++
++
++filenames:
++*.ring
++*.rh
++*.rform
++
++
++
++
++mimetypes:
++text/x-ring
++
++
++RPGLE
++
++
++
++
++aliases:
++SQLRPGLE
++RPG
++IV
++
++
++
++
++filenames:
++*.RPGLE
++*.rpgle
++*.SQLRPGLE
++*.sqlrpgle
++
++
++
++
++mimetypes:
++text/x-rpgle
++text/x-sqlrpgle
++
++
++RPMSpec
++
++
++
++
++aliases:
++spec
++
++
++
++
++filenames:
++*.spec
++
++
++
++
++mimetypes:
++text/x-rpm-spec
++
++
++Ruby
++
++
++
++
++aliases:
++rb
++ruby
++duby
++
++
++
++
++filenames:
++*.rb
++*.rbw
++Rakefile
++*.rake
++*.gemspec
++*.rbx
++*.duby
++Gemfile
++Vagrantfile
++
++
++
++
++mimetypes:
++text/x-ruby
++application/x-ruby
++
++
++Rust
++
++
++
++
++aliases:
++rust
++rs
++
++
++
++
++filenames:
++*.rs
++*.rs.in
++
++
++
++
++mimetypes:
++text/rust
++text/x-rust
++
++
++SAS
++
++
++
++
++aliases:
++sas
++
++
++
++
++filenames:
++*.SAS
++*.sas
++
++
++
++
++mimetypes:
++text/x-sas
++text/sas
++application/x-sas
++
++
++Sass
++
++
++
++
++aliases:
++sass
++
++
++
++
++filenames:
++*.sass
++
++
++
++
++mimetypes:
++text/x-sass
++
++
++Scala
++
++
++
++
++aliases:
++scala
++
++
++
++
++filenames:
++*.scala
++
++
++
++
++mimetypes:
++text/x-scala
++
++
++scdoc
++
++
++
++
++aliases:
++scdoc
++
++
++
++
++filenames:
++*.scd
++*.scdoc
++
++
++Scheme
++
++
++
++
++aliases:
++scheme
++scm
++
++
++
++
++filenames:
++*.scm
++*.ss
++
++
++
++
++mimetypes:
++text/x-scheme
++application/x-scheme
++
++
++Scilab
++
++
++
++
++aliases:
++scilab
++
++
++
++
++filenames:
++*.sci
++*.sce
++*.tst
++
++
++
++
++mimetypes:
++text/scilab
++
++
++SCSS
++
++
++
++
++aliases:
++scss
++
++
++
++
++filenames:
++*.scss
++
++
++
++
++mimetypes:
++text/x-scss
++
++
++Sed
++
++
++
++
++aliases:
++sed
++gsed
++ssed
++
++
++
++
++filenames:
++*.sed
++*.[gs]sed
++
++
++
++
++mimetypes:
++text/x-sed
++
++
++Sieve
++
++
++
++
++aliases:
++sieve
++
++
++
++
++filenames:
++*.siv
++*.sieve
++
++
++Smali
++
++
++
++
++aliases:
++smali
++
++
++
++
++filenames:
++*.smali
++
++
++
++
++mimetypes:
++text/smali
++
++
++Smalltalk
++
++
++
++
++aliases:
++smalltalk
++squeak
++st
++
++
++
++
++filenames:
++*.st
++
++
++
++
++mimetypes:
++text/x-smalltalk
++
++
++Smarty
++
++
++
++
++aliases:
++smarty
++
++
++
++
++filenames:
++*.tpl
++
++
++
++
++mimetypes:
++application/x-smarty
++
++
++SNBT
++
++
++
++
++aliases:
++snbt
++
++
++
++
++filenames:
++*.snbt
++
++
++
++
++mimetypes:
++text/snbt
++
++
++Snobol
++
++
++
++
++aliases:
++snobol
++
++
++
++
++filenames:
++*.snobol
++
++
++
++
++mimetypes:
++text/x-snobol
++
++
++Solidity
++
++
++
++
++aliases:
++sol
++solidity
++
++
++
++
++filenames:
++*.sol
++
++
++SourcePawn
++
++
++
++
++aliases:
++sp
++
++
++
++
++filenames:
++*.sp
++*.inc
++
++
++
++
++mimetypes:
++text/x-sourcepawn
++
++
++Spade
++
++
++
++
++aliases:
++spade
++
++
++
++
++filenames:
++*.spade
++
++
++
++
++mimetypes:
++text/spade
++text/x-spade
++
++
++SPARQL
++
++
++
++
++aliases:
++sparql
++
++
++
++
++filenames:
++*.rq
++*.sparql
++
++
++
++
++mimetypes:
++application/sparql-query
++
++
++SQL
++
++
++
++
++aliases:
++sql
++
++
++
++
++filenames:
++*.sql
++
++
++
++
++mimetypes:
++text/x-sql
++
++
++SquidConf
++
++
++
++
++aliases:
++squidconf
++squid.conf
++squid
++
++
++
++
++filenames:
++squid.conf
++
++
++
++
++mimetypes:
++text/x-squidconf
++
++
++Standard
++ML
++
++
++
++
++aliases:
++sml
++
++
++
++
++filenames:
++*.sml
++*.sig
++*.fun
++
++
++
++
++mimetypes:
++text/x-standardml
++application/x-standardml
++
++
++stas
++
++
++
++
++filenames:
++*.stas
++
++
++Stylus
++
++
++
++
++aliases:
++stylus
++
++
++
++
++filenames:
++*.styl
++
++
++
++
++mimetypes:
++text/x-styl
++
++
++Svelte
++
++
++
++
++aliases:
++svelte
++
++
++
++
++filenames:
++*.svelte
++
++
++
++
++mimetypes:
++application/x-svelte
++
++
++Swift
++
++
++
++
++aliases:
++swift
++
++
++
++
++filenames:
++*.swift
++
++
++
++
++mimetypes:
++text/x-swift
++
++
++SYSTEMD
++
++
++
++
++aliases:
++systemd
++
++
++
++
++filenames:
++*.automount
++*.device
++*.dnssd
++*.link
++*.mount
++*.netdev
++*.network
++*.path
++*.scope
++*.service
++*.slice
++*.socket
++*.swap
++*.target
++*.timer
++
++
++
++
++mimetypes:
++text/plain
++
++
++systemverilog
++
++
++
++
++aliases:
++systemverilog
++sv
++
++
++
++
++filenames:
++*.sv
++*.svh
++
++
++
++
++mimetypes:
++text/x-systemverilog
++
++
++TableGen
++
++
++
++
++aliases:
++tablegen
++
++
++
++
++filenames:
++*.td
++
++
++
++
++mimetypes:
++text/x-tablegen
++
++
++Tal
++
++
++
++
++aliases:
++tal
++uxntal
++
++
++
++
++filenames:
++*.tal
++
++
++
++
++mimetypes:
++text/x-uxntal
++
++
++TASM
++
++
++
++
++aliases:
++tasm
++
++
++
++
++filenames:
++*.asm
++*.ASM
++*.tasm
++
++
++
++
++mimetypes:
++text/x-tasm
++
++
++Tcl
++
++
++
++
++aliases:
++tcl
++
++
++
++
++filenames:
++*.tcl
++*.rvt
++
++
++
++
++mimetypes:
++text/x-tcl
++text/x-script.tcl
++application/x-tcl
++
++
++Tcsh
++
++
++
++
++aliases:
++tcsh
++csh
++
++
++
++
++filenames:
++*.tcsh
++*.csh
++
++
++
++
++mimetypes:
++application/x-csh
++
++
++Termcap
++
++
++
++
++aliases:
++termcap
++
++
++
++
++filenames:
++termcap
++termcap.src
++
++
++Terminfo
++
++
++
++
++aliases:
++terminfo
++
++
++
++
++filenames:
++terminfo
++terminfo.src
++
++
++Terraform
++
++
++
++
++aliases:
++terraform
++tf
++hcl
++
++
++
++
++filenames:
++*.tf
++*.hcl
++
++
++
++
++mimetypes:
++application/x-tf
++application/x-terraform
++
++
++TeX
++
++
++
++
++aliases:
++tex
++latex
++
++
++
++
++filenames:
++*.tex
++*.aux
++*.toc
++
++
++
++
++mimetypes:
++text/x-tex
++text/x-latex
++
++
++Thrift
++
++
++
++
++aliases:
++thrift
++
++
++
++
++filenames:
++*.thrift
++
++
++
++
++mimetypes:
++application/x-thrift
++
++
++TOML
++
++
++
++
++aliases:
++toml
++
++
++
++
++filenames:
++*.toml
++Pipfile
++poetry.lock
++uv.lock
++
++
++
++
++mimetypes:
++text/x-toml
++
++
++TradingView
++
++
++
++
++aliases:
++tradingview
++tv
++
++
++
++
++filenames:
++*.tv
++
++
++
++
++mimetypes:
++text/x-tradingview
++
++
++Transact-SQL
++
++
++
++
++aliases:
++tsql
++t-sql
++
++
++
++
++mimetypes:
++text/x-tsql
++
++
++Turing
++
++
++
++
++aliases:
++turing
++
++
++
++
++filenames:
++*.turing
++*.tu
++
++
++
++
++mimetypes:
++text/x-turing
++
++
++Turtle
++
++
++
++
++aliases:
++turtle
++
++
++
++
++filenames:
++*.ttl
++
++
++
++
++mimetypes:
++text/turtle
++application/x-turtle
++
++
++Twig
++
++
++
++
++aliases:
++twig
++
++
++
++
++filenames:
++*.twig
++
++
++
++
++mimetypes:
++application/x-twig
++
++
++TypeScript
++
++
++
++
++aliases:
++ts
++tsx
++typescript
++
++
++
++
++filenames:
++*.ts
++*.tsx
++*.mts
++*.cts
++
++
++
++
++mimetypes:
++text/x-typescript
++
++
++TypoScript
++
++
++
++
++aliases:
++typoscript
++
++
++
++
++filenames:
++*.ts
++
++
++
++
++mimetypes:
++text/x-typoscript
++
++
++TypoScriptCssData
++
++
++
++
++aliases:
++typoscriptcssdata
++
++
++TypoScriptHtmlData
++
++
++
++
++aliases:
++typoscripthtmldata
++
++
++Typst
++
++
++
++
++aliases:
++typst
++
++
++
++
++filenames:
++*.typ
++
++
++
++
++mimetypes:
++text/x-typst
++
++
++ucode
++
++
++
++
++filenames:
++*.uc
++
++
++
++
++mimetypes:
++application/x.ucode
++text/x.ucode
++
++
++V
++
++
++
++
++aliases:
++v
++vlang
++
++
++
++
++filenames:
++*.v
++*.vv
++v.mod
++
++
++
++
++mimetypes:
++text/x-v
++
++
++V
++shell
++
++
++
++
++aliases:
++vsh
++vshell
++
++
++
++
++filenames:
++*.vsh
++
++
++
++
++mimetypes:
++text/x-vsh
++
++
++Vala
++
++
++
++
++aliases:
++vala
++vapi
++
++
++
++
++filenames:
++*.vala
++*.vapi
++
++
++
++
++mimetypes:
++text/x-vala
++
++
++VB.net
++
++
++
++
++aliases:
++vb.net
++vbnet
++
++
++
++
++filenames:
++*.vb
++*.bas
++
++
++
++
++mimetypes:
++text/x-vbnet
++text/x-vba
++
++
++verilog
++
++
++
++
++aliases:
++verilog
++v
++
++
++
++
++filenames:
++*.v
++
++
++
++
++mimetypes:
++text/x-verilog
++
++
++VHDL
++
++
++
++
++aliases:
++vhdl
++
++
++
++
++filenames:
++*.vhdl
++*.vhd
++
++
++
++
++mimetypes:
++text/x-vhdl
++
++
++VHS
++
++
++
++
++aliases:
++vhs
++tape
++cassette
++
++
++
++
++filenames:
++*.tape
++
++
++VimL
++
++
++
++
++aliases:
++vim
++
++
++
++
++filenames:
++*.vim
++.vimrc
++.exrc
++.gvimrc
++_vimrc
++_exrc
++_gvimrc
++vimrc
++gvimrc
++
++
++
++
++mimetypes:
++text/x-vim
++
++
++vue
++
++
++
++
++aliases:
++vue
++vuejs
++
++
++
++
++filenames:
++*.vue
++
++
++
++
++mimetypes:
++text/x-vue
++application/x-vue
++
++
++WDTE
++
++
++
++
++filenames:
++*.wdte
++
++
++WebAssembly
++Text
++Format
++
++
++
++
++aliases:
++wast
++wat
++
++
++
++
++filenames:
++*.wat
++*.wast
++
++
++WebGPU
++Shading
++Language
++
++
++
++
++aliases:
++wgsl
++
++
++
++
++filenames:
++*.wgsl
++
++
++
++
++mimetypes:
++text/wgsl
++
++
++WebVTT
++
++
++
++
++aliases:
++vtt
++
++
++
++
++filenames:
++*.vtt
++
++
++
++
++mimetypes:
++text/vtt
++
++
++Whiley
++
++
++
++
++aliases:
++whiley
++
++
++
++
++filenames:
++*.whiley
++
++
++
++
++mimetypes:
++text/x-whiley
++
++
++XML
++
++
++
++
++aliases:
++xml
++
++
++
++
++filenames:
++*.xml
++*.xsl
++*.rss
++*.xslt
++*.xsd
++*.wsdl
++*.wsf
++*.svg
++*.qrc
++*.csproj
++*.vcxproj
++*.fsproj
++
++
++
++
++mimetypes:
++text/xml
++application/xml
++image/svg+xml
++application/rss+xml
++application/atom+xml
++
++
++Xorg
++
++
++
++
++aliases:
++xorg.conf
++
++
++
++
++filenames:
++xorg.conf
++
++
++YAML
++
++
++
++
++aliases:
++yaml
++
++
++
++
++filenames:
++*.yaml
++*.yml
++
++
++
++
++mimetypes:
++text/x-yaml
++
++
++YANG
++
++
++
++
++aliases:
++yang
++
++
++
++
++filenames:
++*.yang
++
++
++
++
++mimetypes:
++application/yang
++
++
++Z80
++Assembly
++
++
++
++
++aliases:
++z80
++
++
++
++
++filenames:
++*.z80
++*.asm
++
++
++Zed
++
++
++
++
++aliases:
++zed
++
++
++
++
++filenames:
++*.zed
++
++
++
++
++mimetypes:
++text/zed
++
++
++Zig
++
++
++
++
++aliases:
++zig
++
++
++
++
++filenames:
++*.zig
++*.zon
++
++
++
++
++mimetypes:
++text/zig
++
++abap
++algol
++algol_nu
++arduino
++ashen
++aura-theme-dark
++aura-theme-dark-soft
++autumn
++average
++base16-snazzy
++borland
++bw
++catppuccin-frappe
++catppuccin-latte
++catppuccin-macchiato
++catppuccin-mocha
++colorful
++darcula
++doom-one
++doom-one2
++dracula
++emacs
++evergarden
++friendly
++fruity
++github
++github-dark
++gruvbox
++gruvbox-light
++hr_high_contrast
++hrdark
++igor
++kanagawa-dragon
++kanagawa-lotus
++kanagawa-wave
++lovelace
++manni
++modus-operandi
++modus-vivendi
++monokai
++monokailight
++murphy
++native
++nord
++nordic
++onedark
++onesenterprise
++paraiso-dark
++paraiso-light
++pastie
++perldoc
++pygments
++rainbow_dash
++rose-pine
++rose-pine-dawn
++rose-pine-moon
++rpgle
++rrt
++solarized-dark
++solarized-dark256
++solarized-light
++swapoff
++tango
++tokyonight-day
++tokyonight-moon
++tokyonight-night
++tokyonight-storm
++trac
++vim
++vs
++vulcan
++witchhazel
++xcode
++xcode-dark
++formatters:
++html
++json
++noop
++svg
++terminal
++terminal16
++terminal16m
++terminal256
++terminal8
++tokens
+diff --git a/specdata/t.py b/specdata/t.py
+new file mode 100644
+index 0000000..7d4290a
+--- /dev/null
++++ b/specdata/t.py
+@@ -0,0 +1 @@
++x = 1

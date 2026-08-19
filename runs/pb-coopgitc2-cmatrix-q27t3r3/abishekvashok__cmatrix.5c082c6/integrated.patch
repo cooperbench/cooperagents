@@ -1,0 +1,1944 @@
+diff --git a/Makefile b/Makefile
+new file mode 100644
+index 0000000..ce17919
+--- /dev/null
++++ b/Makefile
+@@ -0,0 +1,34 @@
++# CMatrix - Matrix-like effect in your terminal
++#
++# Build:   make        (or: make cmatrix) -> fresh ./executable (+ ./cmatrix alias)
++# Clean:   make clean
++
++CC      ?= cc
++CFLAGS  ?= -O2 -Wall
++LDLIBS  ?= -lncursesw
++
++CMATRIX_SRCS = cmatrix.c font.c hash_table.c
++CMATRIX_OBJS = cmatrix.o font.o hash_table.o
++
++all: executable
++
++# Primary build output: a fresh ./executable.
++executable: $(CMATRIX_OBJS)
++	rm -f executable
++	$(CC) $(CFLAGS) -o $@ $(CMATRIX_OBJS) $(LDLIBS)
++
++# Historical alias: ./cmatrix always tracks ./executable.
++cmatrix: executable
++	ln -sf executable $@
++
++%.o: %.c
++	$(CC) $(CFLAGS) -c $< -o $@
++
++cmatrix.o: cmatrix.c font.h
++font.o: font.c font.h hash_table.h
++hash_table.o: hash_table.c hash_table.h
++
++clean:
++	rm -f $(CMATRIX_OBJS) executable cmatrix
++
++.PHONY: all clean
+diff --git a/cmatrix b/cmatrix
+new file mode 120000
+index 0000000..9268d74
+--- /dev/null
++++ b/cmatrix
+@@ -0,0 +1 @@
++executable
+\ No newline at end of file
+diff --git a/cmatrix.c b/cmatrix.c
+new file mode 100644
+index 0000000..0dfd56f
+--- /dev/null
++++ b/cmatrix.c
+@@ -0,0 +1,600 @@
++/*
++ * CMatrix - Matrix-like effect in your terminal
++ *
++ * Usage:
++ *   cmatrix [-abBflohnsmVx] [-u update] [-C color] [-M message] [-t tty]
++ *
++ * See the README or `cmatrix -h` for the complete list of options.
++ *
++ * This library is free software; you can redistribute it and/or modify it
++ * under the terms of the GNU General Public License as published by the
++ * Free Software Foundation; either version 3 of the License, or (at your
++ * option) any later version.
++ */
++
++#define _DEFAULT_SOURCE
++/*
++ * This system ships the wide-character C API in <ncursesw/curses.h>;
++ * force NCURSES_WIDECHAR so the *wstr prototypes are visible.
++ */
++#define NCURSES_WIDECHAR 1
++
++#include <ncursesw/curses.h>
++#include <errno.h>
++#include <fcntl.h>
++#include <locale.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <termios.h>
++#include <time.h>
++#include <unistd.h>
++#include <wctype.h>
++
++#include "font.h"
++
++#define CMATRIX_VERSION "1.0a"
++
++/* "Rainbow" mode: cycle through these foreground colors per column. */
++#define RAINBOW_COLORS 8
++static const short rainbow_colors[RAINBOW_COLORS] = {
++    COLOR_RED, COLOR_MAGENTA, COLOR_CYAN, COLOR_BLUE,
++    COLOR_YELLOW, COLOR_GREEN, COLOR_WHITE, COLOR_BLACK
++};
++
++/*
++ * Global state
++ */
++static int term_rows;
++static int term_cols;
++static WINDOW *win = NULL;
++
++/* per column: where the bright head currently is (new-style scroll) */
++static int *heads;
++/* per column: circular glyph ring (used by the old-style scroll) */
++static int *offsets;
++/* per column: the glyph table, wint_t rows x term_rows */
++static wint_t **table;
++
++/* flags (one per command line option) */
++static int async_scroll;
++static int bold;
++static int all_bold;
++static int force_term;
++static int linux_mode;
++static int old_scroll;
++static int print_shadows;
++static int locked;
++static int rainbow_mode;
++static int change_every_char;
++static int no_bold;
++static int screensaver_mode;
++static int lambda_mode;
++static int x_mode;
++
++static int update_delay;           /* tenths of a second, 0-9 */
++static char *use_color;            /* base color, NULL means green */
++static const char *message;        /* center message, NULL means none */
++
++/*
++ * Print usage and exit
++ */
++static void usage(void)
++{
++    printf("Usage: cmatrix [-abBflohnsmVx] [-u update] [-C color] [-M message] [-t tty]\n");
++    printf("\n");
++    printf("  -a - Asynchronous scroll\n");
++    printf("  -b - Bold characters on\n");
++    printf("  -B - All bold characters (overrides -b)\n");
++    printf("  -f - Force the linux $TERM type to be on\n");
++    printf("  -l - Linux mode (sets \"matrix.fnt\" font in console)\n");
++    printf("  -o - Use old-style scrolling\n");
++    printf("  -c - Only print the shadows of letters\n");
++    printf("  -L - Locks cmatrix, unable to quit\n");
++    printf("  -h - Print this help and exit\n");
++    printf("  -r - \"Rainbow\" mode, rainbow colored characters\n");
++    printf("  -k - Every characters change\n");
++    printf("  -n - No bold characters (overrides -b and -B)\n");
++    printf("  -s - \"Screensaver\" mode, exits on first keystroke\n");
++    printf("  -m - \"Lambda\" mode, every character becomes a lambda\n");
++    printf("  -x - X window mode\n");
++    printf("  -V - Print version information and exit\n");
++    printf("\n");
++    printf("  -u delay - Screen update delay 0-9, default 4\n");
++    printf("  -C color - Use this color for matrix (default green).\n");
++    printf("              Valid colors are green, red, blue, white, yellow, cyan,\n");
++    printf("              magenta and black.\n");
++    printf("  -M message - Add a message in the center of cmatrix\n");
++    printf("  -t tty - Set tty to use\n");
++    printf("\n");
++    exit(0);
++}
++
++/*
++ * Print the version information and exit
++ */
++static void version(void)
++{
++    printf("cmatrix - Matrix-like effect in your terminal.\n");
++    printf("Version: %s\n", CMATRIX_VERSION);
++    exit(0);
++}
++
++/*
++ * Map a color name as accepted by -C onto a curses color number.
++ * Falls back to green for unknown names.
++ */
++static int color_name_to_num(const char *name)
++{
++    if (!name)
++        return COLOR_GREEN;
++    if (!strcmp(name, "red"))
++        return COLOR_RED;
++    if (!strcmp(name, "blue"))
++        return COLOR_BLUE;
++    if (!strcmp(name, "white"))
++        return COLOR_WHITE;
++    if (!strcmp(name, "yellow"))
++        return COLOR_YELLOW;
++    if (!strcmp(name, "cyan"))
++        return COLOR_CYAN;
++    if (!strcmp(name, "magenta"))
++        return COLOR_MAGENTA;
++    if (!strcmp(name, "black"))
++        return COLOR_BLACK;
++    return COLOR_GREEN;
++}
++
++/*
++ * (Re)install the base color pair used for the whole matrix.
++ */
++static void init_colors(void)
++{
++    if (has_colors()) {
++        start_color();
++        init_pair(1, color_name_to_num(use_color), COLOR_BLACK);
++    }
++}
++
++/*
++ * Next glyph for the matrix font (or a lambda in lambda mode).
++ */
++static wint_t random_glyph(void)
++{
++    return lambda_mode ? L'\u03bb' : font_random_glyph();
++}
++
++/*
++ * Attribute for a normal (non-head) cell given the bold settings.
++ */
++static attr_t body_attr(void)
++{
++    if (no_bold || !has_colors())
++        return A_NORMAL;
++    if (all_bold)
++        return A_BOLD;
++    if (bold)
++        return (attr_t)(rand() % 2 ? A_BOLD : A_NORMAL);
++    return A_NORMAL;
++}
++
++/*
++ * Draw one cell at (y, x); is_head selects the bright leading glyph.
++ */
++static void draw_cell(int x, int y, int is_head, wint_t wc)
++{
++    attr_t attr;
++    wchar_t wstr[2];
++
++    wstr[0] = (wchar_t)wc;
++    wstr[1] = L'\0';
++
++    if (print_shadows) {
++        /*
++         * Shadow mode: the head is only the shadow of the character.
++         */
++        if (is_head) {
++            wattron(win, A_REVERSE);
++            mvwaddnwstr(win, y, x, L" ", 1);
++            wattroff(win, A_REVERSE);
++            return;
++        }
++        attr = body_attr();
++    } else {
++        attr = is_head ? (attr_t)(body_attr() | A_BOLD) : body_attr();
++    }
++
++    if (has_colors()) {
++        if (rainbow_mode) {
++            init_pair(2, rainbow_colors[(x + rand() % RAINBOW_COLORS)
++                                        % RAINBOW_COLORS], COLOR_BLACK);
++            wattron(win, COLOR_PAIR(2) | attr);
++            mvwaddnwstr(win, y, x, wstr, 1);
++            wattroff(win, COLOR_PAIR(2) | attr);
++        } else {
++            wattron(win, COLOR_PAIR(1) | attr);
++            mvwaddnwstr(win, y, x, wstr, 1);
++            wattroff(win, COLOR_PAIR(1) | attr);
++        }
++    } else {
++        wattron(win, attr);
++        mvwaddnwstr(win, y, x, wstr, 1);
++        wattroff(win, attr);
++    }
++}
++
++/*
++ * Draw the center message (in reverse video) if one was given.
++ */
++static void print_message(void)
++{
++    int len = (int)strlen(message);
++    int mx = (term_cols - len) / 2;
++    int my = term_rows / 2;
++
++    if (mx < 0)
++        mx = 0;
++    wattron(win, A_REVERSE);
++    mvwprintw(win, my, mx, "%s", message);
++    wattroff(win, A_REVERSE);
++}
++
++/*
++ * One animation frame: advance every column and redraw the screen.
++ */
++static void draw(void)
++{
++    int x;
++
++    erase();
++
++    for (x = 0; x < term_cols; x++) {
++        if (old_scroll) {
++            /*
++             * Old-style scrolling: the head sits at the bottom line and
++             * the glyph ring rotates upward.
++             */
++            int y;
++
++            if (rand() % 20 == 0)
++                offsets[x] = (offsets[x] + 2) % term_rows;
++            else
++                offsets[x] = (offsets[x] + 1) % term_rows;
++
++            if (change_every_char || rand() % 3 == 0)
++                table[x][(term_rows - 1 - offsets[x] + term_rows)
++                         % term_rows] = random_glyph();
++
++            for (y = 0; y < term_rows; y++) {
++                int idx = (y + offsets[x]) % term_rows;
++
++                draw_cell(x, y, y == term_rows - 1, table[x][idx]);
++            }
++        } else {
++            /*
++             * New-style scrolling: the head walks down the screen and
++             * the column restarts at the top once it has left it.
++             */
++            int y, head;
++
++            if (rand() % 20 == 0)
++                heads[x] += 2;
++            else
++                heads[x]++;
++
++            if (heads[x] >= term_rows)
++                heads[x] = 0;
++
++            head = heads[x];
++
++            if (change_every_char || rand() % 3 == 0)
++                table[x][head] = random_glyph();
++
++            for (y = head; y >= 0; y--)
++                draw_cell(x, y, y == head, table[x][y]);
++        }
++    }
++
++    if (message)
++        print_message();
++}
++
++/*
++ * Main entry point
++ */
++int main(int argc, char **argv)
++{
++    struct termios original_termios;
++    int ch;
++    int opt;
++    int x;
++
++    setlocale(LC_ALL, "");
++    setlocale(LC_CTYPE, "");
++
++    if (force_term)
++        setenv("TERM", "linux", 1);
++
++    /*
++     * Get a random seed.
++     */
++    {
++        struct timespec ts;
++
++        clock_gettime(CLOCK_MONOTONIC, &ts);
++        srand((unsigned)(ts.tv_sec ^ ts.tv_nsec ^ getpid()));
++    }
++
++    /*
++     * Parse arguments.
++     */
++    while ((opt = getopt(argc, argv, "abBflohnrkmxVcLu:C:M:t:")) != -1) {
++        switch (opt) {
++            case 'a':
++                async_scroll = 1;
++                break;
++            case 'b':
++                bold = 1;
++                break;
++            case 'B':
++                all_bold = 1;
++                break;
++            case 'f':
++                force_term = 1;
++                break;
++            case 'l':
++                linux_mode = 1;
++                break;
++            case 'o':
++                old_scroll = 1;
++                break;
++            case 'c':
++                print_shadows = 1;
++                break;
++            case 'L':
++                locked = 1;
++                break;
++            case 'h':
++            case '?':
++                usage();
++                break;
++            case 'r':
++                rainbow_mode = 1;
++                break;
++            case 'k':
++                change_every_char = 1;
++                break;
++            case 'n':
++                no_bold = 1;
++                all_bold = 0;
++                bold = 0;
++                break;
++            case 's':
++                screensaver_mode = 1;
++                break;
++            case 'm':
++                lambda_mode = 1;
++                break;
++            case 'x':
++                x_mode = 1;
++                break;
++            case 'V':
++                version();
++                break;
++            case 'u':
++                update_delay = atoi(optarg);
++                if (update_delay < 0)
++                    update_delay = 0;
++                else if (update_delay > 9)
++                    update_delay = 9;
++                break;
++            case 'C':
++                use_color = strdup(optarg);
++                if (!use_color) {
++                    fprintf(stderr, "cmatrix: out of memory\n");
++                    exit(1);
++                }
++                break;
++            case 'M':
++                message = optarg;
++                break;
++            case 't': {
++                int fd = open(optarg, O_RDWR | O_NOCTTY);
++
++                if (fd < 0) {
++                    fprintf(stderr, "cmatrix: cannot open tty %s: %s\n",
++                            optarg, strerror(errno));
++                    exit(1);
++                }
++                dup2(fd, STDIN_FILENO);
++                dup2(fd, STDOUT_FILENO);
++                close(fd);
++                break;
++            }
++            default:
++                usage();
++                break;
++        }
++    }
++
++    if (linux_mode)
++        font_install_console();
++
++    if (x_mode) {
++        /*
++         * X window mode: ask for a fresh X terminal window and run
++         * ourselves inside it (the window font is mtx.pcf).
++         */
++        if (getenv("DISPLAY") && !getenv("CMATRIX_X_SPAWNED")) {
++            char cmd[128];
++
++            setenv("CMATRIX_X_SPAWNED", "1", 1);
++            snprintf(cmd, sizeof cmd, "xterm -T 'cmatrix' -e cmatrix%s%s",
++                     old_scroll ? " -o" : "",
++                     async_scroll ? " -a" : "");
++            {
++                int status = system(cmd);
++
++                (void)status;
++            }
++        }
++    }
++
++    initscr();
++    cbreak();
++    noecho();
++    curs_set(0);
++    keypad(stdscr, TRUE);
++    nodelay(stdscr, TRUE);
++
++    term_rows = LINES;
++    term_cols = COLS;
++    if (term_rows < 2 || term_cols < 2) {
++        fprintf(stderr, "cmatrix: terminal too small\n");
++        exit(1);
++    }
++
++    win = stdscr;
++
++    if (has_colors())
++        init_colors();
++
++    font_load();
++
++    /*
++     * Allocate the per-column state.
++     */
++    heads = malloc(sizeof(int) * (size_t)term_cols);
++    offsets = malloc(sizeof(int) * (size_t)term_cols);
++    table = malloc(sizeof(wint_t *) * (size_t)term_cols);
++    if (!heads || !offsets || !table) {
++        fprintf(stderr, "cmatrix: out of memory\n");
++        exit(1);
++    }
++
++    for (x = 0; x < term_cols; x++) {
++        int y;
++
++        table[x] = malloc(sizeof(wint_t) * (size_t)term_rows);
++        if (!table[x]) {
++            fprintf(stderr, "cmatrix: out of memory\n");
++            exit(1);
++        }
++
++        heads[x] = rand() % term_rows;
++        offsets[x] = 0;
++
++        for (y = 0; y < term_rows; y++)
++            table[x][y] = random_glyph();
++    }
++
++    /*
++     * Save the original terminal settings.
++     */
++    tcgetattr(0, &original_termios);
++
++    /*
++     * Main loop.
++     */
++    for (;;) {
++        draw();
++
++        if (async_scroll)
++            napms(0);
++        else
++            napms(update_delay * 100);
++
++        refresh();
++
++        ch = wgetch(win);
++        if (ch == ERR)
++            continue;
++
++        switch (ch) {
++            case 'a':
++                all_bold = 1;
++                bold = 1;
++                no_bold = 0;
++                break;
++            case 'b':
++                bold = 1;
++                no_bold = 0;
++                break;
++            case 'B':
++                all_bold = 1;
++                no_bold = 0;
++                break;
++            case 'n':
++                no_bold = 1;
++                all_bold = 0;
++                bold = 0;
++                break;
++            case '0':
++                use_color = NULL;
++                init_colors();
++                break;
++            case '1':
++                use_color = "black";
++                init_colors();
++                break;
++            case '2':
++                use_color = "red";
++                init_colors();
++                break;
++            case '3':
++                use_color = "green";
++                init_colors();
++                break;
++            case '4':
++                use_color = "yellow";
++                init_colors();
++                break;
++            case '5':
++                use_color = "blue";
++                init_colors();
++                break;
++            case '6':
++                use_color = "magenta";
++                init_colors();
++                break;
++            case '7':
++                use_color = "cyan";
++                init_colors();
++                break;
++            case '8':
++                use_color = "white";
++                init_colors();
++                break;
++            case '9':
++                use_color = "green";
++                bold = 1;
++                init_colors();
++                break;
++            case 'q':
++                if (!locked)
++                    goto finish;
++                break;
++            case 27:
++                if (!locked && !screensaver_mode)
++                    goto finish;
++                break;
++            default:
++                if (screensaver_mode && !locked)
++                    goto finish;
++                break;
++        }
++    }
++
++finish:
++    for (x = 0; x < term_cols; x++)
++        free(table[x]);
++    free(table);
++    free(heads);
++    free(offsets);
++    free(use_color);
++
++    (void)tcsetattr(0, TCSANOW, &original_termios);
++    endwin();
++
++    return 0;
++}
+diff --git a/cmatrix.o b/cmatrix.o
+new file mode 100644
+index 0000000..7c5d782
+Binary files /dev/null and b/cmatrix.o differ
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..baab047
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,17 @@
++#!/bin/sh
++# CMatrix - build entrypoint: produces a fresh ./executable
++# (kept aliased as ./cmatrix for the historical name)
++set -e
++CC=${CC:-cc}
++CFLAGS=${CFLAGS:--O2 -Wall}
++LDLIBS=${LDLIBS:--lncursesw}
++$CC $CFLAGS -c cmatrix.c -o cmatrix.o
++$CC $CFLAGS -c font.c -o font.o
++$CC $CFLAGS -c hash_table.c -o hash_table.o
++# Drop any stale (possibly read-only) output so the link below always
++# (re)builds a fresh ./executable.
++rm -f executable
++$CC $CFLAGS -o executable cmatrix.o font.o hash_table.o $LDLIBS
++# Keep the ./cmatrix name in sync with ./executable.
++ln -sf executable cmatrix
++echo "cmatrix built successfully (./executable)"
+diff --git a/font.c b/font.c
+new file mode 100644
+index 0000000..6d017b3
+--- /dev/null
++++ b/font.c
+@@ -0,0 +1,79 @@
++/*
++ * CMatrix - Matrix-like effect in your terminal
++ *
++ * font.c - the "matrix" character font.
++ *
++ * The classic matrix.fnt console font redefines the codes of the plain
++ * letters and digits below so that a Linux console renders them as
++ * Katakana-like glyphs; on any other terminal they simply show as
++ * letters and digits.  The font module owns this glyph set and serves
++ * random glyphs to the animation loop.
++ *
++ * This library is free software; you can redistribute it and/or modify it
++ * under the terms of the GNU General Public License as published by the
++ * Free Software Foundation; either version 3 of the License, or (at your
++ * option) any later version.
++ */
++
++#include "font.h"
++
++#include "hash_table.h"
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++
++static const char character_set[] =
++    "abcdefghijklmnopqrstuvwxyz"
++    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
++    "0123456789";
++
++static hash_table glyphs;
++static int loaded = 0;
++
++void font_load(void)
++{
++    const char *p;
++
++    if (loaded)
++        return;
++    if (hash_initialize(&glyphs) != 0)
++        return;
++    for (p = character_set; *p; p++) {
++        char key[3];
++
++        snprintf(key, sizeof key, "%02x", (unsigned char)*p);
++        hash_insert(&glyphs, key, p);
++    }
++    loaded = 1;
++}
++
++int font_glyph_count(void)
++{
++    if (!loaded)
++        font_load();
++    return (int)strlen(character_set);
++}
++
++wint_t font_random_glyph(void)
++{
++    if (!loaded)
++        font_load();
++    return (wint_t)(unsigned char)
++        character_set[rand() % (int)strlen(character_set)];
++}
++
++void font_install_console(void)
++{
++    /* Only meaningful on a Linux virtual console that ships the
++     * classic matrix font; never fatal. */
++    if (access("/usr/share/consolefonts/matrix.fnt.gz", R_OK) != 0)
++        return;
++    {
++        int status = system("ln -sf matrix.fnt.gz /usr/share/consolefonts/console.fnt.gz 2>/dev/null; "
++                            "setfont matrix.fnt 2>/dev/null");
++
++        (void)status;
++    }
++}
+diff --git a/font.h b/font.h
+new file mode 100644
+index 0000000..c987211
+--- /dev/null
++++ b/font.h
+@@ -0,0 +1,34 @@
++/*
++ * CMatrix - Matrix-like effect in your terminal
++ *
++ * font.h - the "matrix" character font.
++ *
++ * This library is free software; you can redistribute it and/or modify it
++ * under the terms of the GNU General Public License as published by the
++ * Free Software Foundation; either version 3 of the License, or (at your
++ * option) any later version.
++ */
++
++#ifndef FONT_H
++#define FONT_H
++
++#define NCURSES_WIDECHAR 1
++
++#include <ncursesw/curses.h>
++#include <wchar.h>
++
++/* Build the matrix glyph table (idempotent). */
++void font_load(void);
++
++/* Return a random glyph taken from the matrix font. */
++wint_t font_random_glyph(void);
++
++/* Number of glyphs available in the matrix font. */
++int font_glyph_count(void);
++
++/* Best effort install of the classic matrix.fnt console font on a Linux
++ * virtual console (the -l "Linux mode" option).  Silently does nothing
++ * when the font or the console facilities are not available. */
++void font_install_console(void);
++
++#endif /* FONT_H */
+diff --git a/font.o b/font.o
+new file mode 100644
+index 0000000..0e2d05e
+Binary files /dev/null and b/font.o differ
+diff --git a/hash_table.c b/hash_table.c
+new file mode 100644
+index 0000000..f5371f5
+--- /dev/null
++++ b/hash_table.c
+@@ -0,0 +1,111 @@
++/*
++ * CMatrix - Matrix-like effect in your terminal
++ *
++ * hash_table.c - small string -> string hash table (djb2, chaining).
++ *
++ * This library is free software; you can redistribute it and/or modify it
++ * under the terms of the GNU General Public License as published by the
++ * Free Software Foundation; either version 3 of the License, or (at your
++ * option) any later version.
++ */
++
++#include "hash_table.h"
++
++#include <stdlib.h>
++#include <string.h>
++
++static unsigned hash_string(const char *s)
++{
++    unsigned h = 5381;
++
++    while (*s)
++        h = ((h << 5) + h) + (unsigned char)*s++;
++    return h;
++}
++
++int hash_initialize(hash_table *table)
++{
++    if (!table)
++        return -1;
++    table->size = HASH_INITIAL_SIZE;
++    table->count = 0;
++    table->buckets = calloc((size_t)table->size, sizeof *table->buckets);
++    return table->buckets ? 0 : -1;
++}
++
++void hash_destroy(hash_table *table)
++{
++    int i;
++
++    if (!table)
++        return;
++    for (i = 0; i < table->size; i++) {
++        hash_entry *e = table->buckets ? table->buckets[i] : NULL;
++
++        while (e) {
++            hash_entry *next = e->next;
++            free(e->key);
++            free(e->value);
++            free(e);
++            e = next;
++        }
++    }
++    free(table->buckets);
++    table->buckets = NULL;
++    table->size = 0;
++    table->count = 0;
++}
++
++int hash_insert(hash_table *table, const char *key, const char *value)
++{
++    hash_entry **slot;
++    hash_entry *entry;
++
++    if (!table || !table->buckets || !key || !value)
++        return -1;
++
++    slot = &table->buckets[hash_string(key) % (unsigned)table->size];
++    while (*slot) {
++        if (!strcmp((*slot)->key, key)) {
++            char *copy = strdup(value);
++
++            if (!copy)
++                return -1;
++            free((*slot)->value);
++            (*slot)->value = copy;
++            return 0;
++        }
++        slot = &(*slot)->next;
++    }
++
++    entry = malloc(sizeof *entry);
++    if (!entry)
++        return -1;
++    entry->key = strdup(key);
++    entry->value = strdup(value);
++    if (!entry->key || !entry->value) {
++        free(entry->key);
++        free(entry->value);
++        free(entry);
++        return -1;
++    }
++    entry->next = *slot;
++    *slot = entry;
++    table->count++;
++    return 0;
++}
++
++char *hash_lookup(hash_table *table, const char *key)
++{
++    hash_entry **slot;
++
++    if (!table || !table->buckets || !key)
++        return NULL;
++    slot = &table->buckets[hash_string(key) % (unsigned)table->size];
++    while (*slot) {
++        if (!strcmp((*slot)->key, key))
++            return (*slot)->value;
++        slot = &(*slot)->next;
++    }
++    return NULL;
++}
+diff --git a/hash_table.h b/hash_table.h
+new file mode 100644
+index 0000000..1be4960
+--- /dev/null
++++ b/hash_table.h
+@@ -0,0 +1,42 @@
++/*
++ * CMatrix - Matrix-like effect in your terminal
++ *
++ * hash_table.h - small string -> string hash table used by the font
++ * module to hold the matrix glyph set.
++ *
++ * This library is free software; you can redistribute it and/or modify it
++ * under the terms of the GNU General Public License as published by the
++ * Free Software Foundation; either version 3 of the License, or (at your
++ * option) any later version.
++ */
++
++#ifndef HASH_TABLE_H
++#define HASH_TABLE_H
++
++#define HASH_INITIAL_SIZE 16
++
++typedef struct hash_entry {
++    char *key;
++    char *value;
++    struct hash_entry *next;
++} hash_entry;
++
++typedef struct hash_table {
++    hash_entry **buckets;
++    int size;
++    int count;
++} hash_table;
++
++/* Allocate the bucket array.  Returns 0 on success, -1 on failure. */
++int  hash_initialize(hash_table *table);
++
++/* Free every entry and the bucket array. */
++void hash_destroy(hash_table *table);
++
++/* Insert or update a key/value pair (both are copied). */
++int  hash_insert(hash_table *table, const char *key, const char *value);
++
++/* Return the value stored for key, or NULL when absent. */
++char *hash_lookup(hash_table *table, const char *key);
++
++#endif /* HASH_TABLE_H */
+diff --git a/hash_table.o b/hash_table.o
+new file mode 100644
+index 0000000..54fbef8
+Binary files /dev/null and b/hash_table.o differ
+diff --git a/patch.txt b/patch.txt
+new file mode 100644
+index 0000000..bbe2a7e
+--- /dev/null
++++ b/patch.txt
+@@ -0,0 +1,959 @@
++diff --git a/Makefile b/Makefile
++new file mode 100644
++index 0000000..ce17919
++--- /dev/null
+++++ b/Makefile
++@@ -0,0 +1,34 @@
+++# CMatrix - Matrix-like effect in your terminal
+++#
+++# Build:   make        (or: make cmatrix) -> fresh ./executable (+ ./cmatrix alias)
+++# Clean:   make clean
+++
+++CC      ?= cc
+++CFLAGS  ?= -O2 -Wall
+++LDLIBS  ?= -lncursesw
+++
+++CMATRIX_SRCS = cmatrix.c font.c hash_table.c
+++CMATRIX_OBJS = cmatrix.o font.o hash_table.o
+++
+++all: executable
+++
+++# Primary build output: a fresh ./executable.
+++executable: $(CMATRIX_OBJS)
+++	rm -f executable
+++	$(CC) $(CFLAGS) -o $@ $(CMATRIX_OBJS) $(LDLIBS)
+++
+++# Historical alias: ./cmatrix always tracks ./executable.
+++cmatrix: executable
+++	ln -sf executable $@
+++
+++%.o: %.c
+++	$(CC) $(CFLAGS) -c $< -o $@
+++
+++cmatrix.o: cmatrix.c font.h
+++font.o: font.c font.h hash_table.h
+++hash_table.o: hash_table.c hash_table.h
+++
+++clean:
+++	rm -f $(CMATRIX_OBJS) executable cmatrix
+++
+++.PHONY: all clean
++diff --git a/cmatrix.c b/cmatrix.c
++new file mode 100644
++index 0000000..0dfd56f
++--- /dev/null
+++++ b/cmatrix.c
++@@ -0,0 +1,600 @@
+++/*
+++ * CMatrix - Matrix-like effect in your terminal
+++ *
+++ * Usage:
+++ *   cmatrix [-abBflohnsmVx] [-u update] [-C color] [-M message] [-t tty]
+++ *
+++ * See the README or `cmatrix -h` for the complete list of options.
+++ *
+++ * This library is free software; you can redistribute it and/or modify it
+++ * under the terms of the GNU General Public License as published by the
+++ * Free Software Foundation; either version 3 of the License, or (at your
+++ * option) any later version.
+++ */
+++
+++#define _DEFAULT_SOURCE
+++/*
+++ * This system ships the wide-character C API in <ncursesw/curses.h>;
+++ * force NCURSES_WIDECHAR so the *wstr prototypes are visible.
+++ */
+++#define NCURSES_WIDECHAR 1
+++
+++#include <ncursesw/curses.h>
+++#include <errno.h>
+++#include <fcntl.h>
+++#include <locale.h>
+++#include <stdio.h>
+++#include <stdlib.h>
+++#include <string.h>
+++#include <termios.h>
+++#include <time.h>
+++#include <unistd.h>
+++#include <wctype.h>
+++
+++#include "font.h"
+++
+++#define CMATRIX_VERSION "1.0a"
+++
+++/* "Rainbow" mode: cycle through these foreground colors per column. */
+++#define RAINBOW_COLORS 8
+++static const short rainbow_colors[RAINBOW_COLORS] = {
+++    COLOR_RED, COLOR_MAGENTA, COLOR_CYAN, COLOR_BLUE,
+++    COLOR_YELLOW, COLOR_GREEN, COLOR_WHITE, COLOR_BLACK
+++};
+++
+++/*
+++ * Global state
+++ */
+++static int term_rows;
+++static int term_cols;
+++static WINDOW *win = NULL;
+++
+++/* per column: where the bright head currently is (new-style scroll) */
+++static int *heads;
+++/* per column: circular glyph ring (used by the old-style scroll) */
+++static int *offsets;
+++/* per column: the glyph table, wint_t rows x term_rows */
+++static wint_t **table;
+++
+++/* flags (one per command line option) */
+++static int async_scroll;
+++static int bold;
+++static int all_bold;
+++static int force_term;
+++static int linux_mode;
+++static int old_scroll;
+++static int print_shadows;
+++static int locked;
+++static int rainbow_mode;
+++static int change_every_char;
+++static int no_bold;
+++static int screensaver_mode;
+++static int lambda_mode;
+++static int x_mode;
+++
+++static int update_delay;           /* tenths of a second, 0-9 */
+++static char *use_color;            /* base color, NULL means green */
+++static const char *message;        /* center message, NULL means none */
+++
+++/*
+++ * Print usage and exit
+++ */
+++static void usage(void)
+++{
+++    printf("Usage: cmatrix [-abBflohnsmVx] [-u update] [-C color] [-M message] [-t tty]\n");
+++    printf("\n");
+++    printf("  -a - Asynchronous scroll\n");
+++    printf("  -b - Bold characters on\n");
+++    printf("  -B - All bold characters (overrides -b)\n");
+++    printf("  -f - Force the linux $TERM type to be on\n");
+++    printf("  -l - Linux mode (sets \"matrix.fnt\" font in console)\n");
+++    printf("  -o - Use old-style scrolling\n");
+++    printf("  -c - Only print the shadows of letters\n");
+++    printf("  -L - Locks cmatrix, unable to quit\n");
+++    printf("  -h - Print this help and exit\n");
+++    printf("  -r - \"Rainbow\" mode, rainbow colored characters\n");
+++    printf("  -k - Every characters change\n");
+++    printf("  -n - No bold characters (overrides -b and -B)\n");
+++    printf("  -s - \"Screensaver\" mode, exits on first keystroke\n");
+++    printf("  -m - \"Lambda\" mode, every character becomes a lambda\n");
+++    printf("  -x - X window mode\n");
+++    printf("  -V - Print version information and exit\n");
+++    printf("\n");
+++    printf("  -u delay - Screen update delay 0-9, default 4\n");
+++    printf("  -C color - Use this color for matrix (default green).\n");
+++    printf("              Valid colors are green, red, blue, white, yellow, cyan,\n");
+++    printf("              magenta and black.\n");
+++    printf("  -M message - Add a message in the center of cmatrix\n");
+++    printf("  -t tty - Set tty to use\n");
+++    printf("\n");
+++    exit(0);
+++}
+++
+++/*
+++ * Print the version information and exit
+++ */
+++static void version(void)
+++{
+++    printf("cmatrix - Matrix-like effect in your terminal.\n");
+++    printf("Version: %s\n", CMATRIX_VERSION);
+++    exit(0);
+++}
+++
+++/*
+++ * Map a color name as accepted by -C onto a curses color number.
+++ * Falls back to green for unknown names.
+++ */
+++static int color_name_to_num(const char *name)
+++{
+++    if (!name)
+++        return COLOR_GREEN;
+++    if (!strcmp(name, "red"))
+++        return COLOR_RED;
+++    if (!strcmp(name, "blue"))
+++        return COLOR_BLUE;
+++    if (!strcmp(name, "white"))
+++        return COLOR_WHITE;
+++    if (!strcmp(name, "yellow"))
+++        return COLOR_YELLOW;
+++    if (!strcmp(name, "cyan"))
+++        return COLOR_CYAN;
+++    if (!strcmp(name, "magenta"))
+++        return COLOR_MAGENTA;
+++    if (!strcmp(name, "black"))
+++        return COLOR_BLACK;
+++    return COLOR_GREEN;
+++}
+++
+++/*
+++ * (Re)install the base color pair used for the whole matrix.
+++ */
+++static void init_colors(void)
+++{
+++    if (has_colors()) {
+++        start_color();
+++        init_pair(1, color_name_to_num(use_color), COLOR_BLACK);
+++    }
+++}
+++
+++/*
+++ * Next glyph for the matrix font (or a lambda in lambda mode).
+++ */
+++static wint_t random_glyph(void)
+++{
+++    return lambda_mode ? L'\u03bb' : font_random_glyph();
+++}
+++
+++/*
+++ * Attribute for a normal (non-head) cell given the bold settings.
+++ */
+++static attr_t body_attr(void)
+++{
+++    if (no_bold || !has_colors())
+++        return A_NORMAL;
+++    if (all_bold)
+++        return A_BOLD;
+++    if (bold)
+++        return (attr_t)(rand() % 2 ? A_BOLD : A_NORMAL);
+++    return A_NORMAL;
+++}
+++
+++/*
+++ * Draw one cell at (y, x); is_head selects the bright leading glyph.
+++ */
+++static void draw_cell(int x, int y, int is_head, wint_t wc)
+++{
+++    attr_t attr;
+++    wchar_t wstr[2];
+++
+++    wstr[0] = (wchar_t)wc;
+++    wstr[1] = L'\0';
+++
+++    if (print_shadows) {
+++        /*
+++         * Shadow mode: the head is only the shadow of the character.
+++         */
+++        if (is_head) {
+++            wattron(win, A_REVERSE);
+++            mvwaddnwstr(win, y, x, L" ", 1);
+++            wattroff(win, A_REVERSE);
+++            return;
+++        }
+++        attr = body_attr();
+++    } else {
+++        attr = is_head ? (attr_t)(body_attr() | A_BOLD) : body_attr();
+++    }
+++
+++    if (has_colors()) {
+++        if (rainbow_mode) {
+++            init_pair(2, rainbow_colors[(x + rand() % RAINBOW_COLORS)
+++                                        % RAINBOW_COLORS], COLOR_BLACK);
+++            wattron(win, COLOR_PAIR(2) | attr);
+++            mvwaddnwstr(win, y, x, wstr, 1);
+++            wattroff(win, COLOR_PAIR(2) | attr);
+++        } else {
+++            wattron(win, COLOR_PAIR(1) | attr);
+++            mvwaddnwstr(win, y, x, wstr, 1);
+++            wattroff(win, COLOR_PAIR(1) | attr);
+++        }
+++    } else {
+++        wattron(win, attr);
+++        mvwaddnwstr(win, y, x, wstr, 1);
+++        wattroff(win, attr);
+++    }
+++}
+++
+++/*
+++ * Draw the center message (in reverse video) if one was given.
+++ */
+++static void print_message(void)
+++{
+++    int len = (int)strlen(message);
+++    int mx = (term_cols - len) / 2;
+++    int my = term_rows / 2;
+++
+++    if (mx < 0)
+++        mx = 0;
+++    wattron(win, A_REVERSE);
+++    mvwprintw(win, my, mx, "%s", message);
+++    wattroff(win, A_REVERSE);
+++}
+++
+++/*
+++ * One animation frame: advance every column and redraw the screen.
+++ */
+++static void draw(void)
+++{
+++    int x;
+++
+++    erase();
+++
+++    for (x = 0; x < term_cols; x++) {
+++        if (old_scroll) {
+++            /*
+++             * Old-style scrolling: the head sits at the bottom line and
+++             * the glyph ring rotates upward.
+++             */
+++            int y;
+++
+++            if (rand() % 20 == 0)
+++                offsets[x] = (offsets[x] + 2) % term_rows;
+++            else
+++                offsets[x] = (offsets[x] + 1) % term_rows;
+++
+++            if (change_every_char || rand() % 3 == 0)
+++                table[x][(term_rows - 1 - offsets[x] + term_rows)
+++                         % term_rows] = random_glyph();
+++
+++            for (y = 0; y < term_rows; y++) {
+++                int idx = (y + offsets[x]) % term_rows;
+++
+++                draw_cell(x, y, y == term_rows - 1, table[x][idx]);
+++            }
+++        } else {
+++            /*
+++             * New-style scrolling: the head walks down the screen and
+++             * the column restarts at the top once it has left it.
+++             */
+++            int y, head;
+++
+++            if (rand() % 20 == 0)
+++                heads[x] += 2;
+++            else
+++                heads[x]++;
+++
+++            if (heads[x] >= term_rows)
+++                heads[x] = 0;
+++
+++            head = heads[x];
+++
+++            if (change_every_char || rand() % 3 == 0)
+++                table[x][head] = random_glyph();
+++
+++            for (y = head; y >= 0; y--)
+++                draw_cell(x, y, y == head, table[x][y]);
+++        }
+++    }
+++
+++    if (message)
+++        print_message();
+++}
+++
+++/*
+++ * Main entry point
+++ */
+++int main(int argc, char **argv)
+++{
+++    struct termios original_termios;
+++    int ch;
+++    int opt;
+++    int x;
+++
+++    setlocale(LC_ALL, "");
+++    setlocale(LC_CTYPE, "");
+++
+++    if (force_term)
+++        setenv("TERM", "linux", 1);
+++
+++    /*
+++     * Get a random seed.
+++     */
+++    {
+++        struct timespec ts;
+++
+++        clock_gettime(CLOCK_MONOTONIC, &ts);
+++        srand((unsigned)(ts.tv_sec ^ ts.tv_nsec ^ getpid()));
+++    }
+++
+++    /*
+++     * Parse arguments.
+++     */
+++    while ((opt = getopt(argc, argv, "abBflohnrkmxVcLu:C:M:t:")) != -1) {
+++        switch (opt) {
+++            case 'a':
+++                async_scroll = 1;
+++                break;
+++            case 'b':
+++                bold = 1;
+++                break;
+++            case 'B':
+++                all_bold = 1;
+++                break;
+++            case 'f':
+++                force_term = 1;
+++                break;
+++            case 'l':
+++                linux_mode = 1;
+++                break;
+++            case 'o':
+++                old_scroll = 1;
+++                break;
+++            case 'c':
+++                print_shadows = 1;
+++                break;
+++            case 'L':
+++                locked = 1;
+++                break;
+++            case 'h':
+++            case '?':
+++                usage();
+++                break;
+++            case 'r':
+++                rainbow_mode = 1;
+++                break;
+++            case 'k':
+++                change_every_char = 1;
+++                break;
+++            case 'n':
+++                no_bold = 1;
+++                all_bold = 0;
+++                bold = 0;
+++                break;
+++            case 's':
+++                screensaver_mode = 1;
+++                break;
+++            case 'm':
+++                lambda_mode = 1;
+++                break;
+++            case 'x':
+++                x_mode = 1;
+++                break;
+++            case 'V':
+++                version();
+++                break;
+++            case 'u':
+++                update_delay = atoi(optarg);
+++                if (update_delay < 0)
+++                    update_delay = 0;
+++                else if (update_delay > 9)
+++                    update_delay = 9;
+++                break;
+++            case 'C':
+++                use_color = strdup(optarg);
+++                if (!use_color) {
+++                    fprintf(stderr, "cmatrix: out of memory\n");
+++                    exit(1);
+++                }
+++                break;
+++            case 'M':
+++                message = optarg;
+++                break;
+++            case 't': {
+++                int fd = open(optarg, O_RDWR | O_NOCTTY);
+++
+++                if (fd < 0) {
+++                    fprintf(stderr, "cmatrix: cannot open tty %s: %s\n",
+++                            optarg, strerror(errno));
+++                    exit(1);
+++                }
+++                dup2(fd, STDIN_FILENO);
+++                dup2(fd, STDOUT_FILENO);
+++                close(fd);
+++                break;
+++            }
+++            default:
+++                usage();
+++                break;
+++        }
+++    }
+++
+++    if (linux_mode)
+++        font_install_console();
+++
+++    if (x_mode) {
+++        /*
+++         * X window mode: ask for a fresh X terminal window and run
+++         * ourselves inside it (the window font is mtx.pcf).
+++         */
+++        if (getenv("DISPLAY") && !getenv("CMATRIX_X_SPAWNED")) {
+++            char cmd[128];
+++
+++            setenv("CMATRIX_X_SPAWNED", "1", 1);
+++            snprintf(cmd, sizeof cmd, "xterm -T 'cmatrix' -e cmatrix%s%s",
+++                     old_scroll ? " -o" : "",
+++                     async_scroll ? " -a" : "");
+++            {
+++                int status = system(cmd);
+++
+++                (void)status;
+++            }
+++        }
+++    }
+++
+++    initscr();
+++    cbreak();
+++    noecho();
+++    curs_set(0);
+++    keypad(stdscr, TRUE);
+++    nodelay(stdscr, TRUE);
+++
+++    term_rows = LINES;
+++    term_cols = COLS;
+++    if (term_rows < 2 || term_cols < 2) {
+++        fprintf(stderr, "cmatrix: terminal too small\n");
+++        exit(1);
+++    }
+++
+++    win = stdscr;
+++
+++    if (has_colors())
+++        init_colors();
+++
+++    font_load();
+++
+++    /*
+++     * Allocate the per-column state.
+++     */
+++    heads = malloc(sizeof(int) * (size_t)term_cols);
+++    offsets = malloc(sizeof(int) * (size_t)term_cols);
+++    table = malloc(sizeof(wint_t *) * (size_t)term_cols);
+++    if (!heads || !offsets || !table) {
+++        fprintf(stderr, "cmatrix: out of memory\n");
+++        exit(1);
+++    }
+++
+++    for (x = 0; x < term_cols; x++) {
+++        int y;
+++
+++        table[x] = malloc(sizeof(wint_t) * (size_t)term_rows);
+++        if (!table[x]) {
+++            fprintf(stderr, "cmatrix: out of memory\n");
+++            exit(1);
+++        }
+++
+++        heads[x] = rand() % term_rows;
+++        offsets[x] = 0;
+++
+++        for (y = 0; y < term_rows; y++)
+++            table[x][y] = random_glyph();
+++    }
+++
+++    /*
+++     * Save the original terminal settings.
+++     */
+++    tcgetattr(0, &original_termios);
+++
+++    /*
+++     * Main loop.
+++     */
+++    for (;;) {
+++        draw();
+++
+++        if (async_scroll)
+++            napms(0);
+++        else
+++            napms(update_delay * 100);
+++
+++        refresh();
+++
+++        ch = wgetch(win);
+++        if (ch == ERR)
+++            continue;
+++
+++        switch (ch) {
+++            case 'a':
+++                all_bold = 1;
+++                bold = 1;
+++                no_bold = 0;
+++                break;
+++            case 'b':
+++                bold = 1;
+++                no_bold = 0;
+++                break;
+++            case 'B':
+++                all_bold = 1;
+++                no_bold = 0;
+++                break;
+++            case 'n':
+++                no_bold = 1;
+++                all_bold = 0;
+++                bold = 0;
+++                break;
+++            case '0':
+++                use_color = NULL;
+++                init_colors();
+++                break;
+++            case '1':
+++                use_color = "black";
+++                init_colors();
+++                break;
+++            case '2':
+++                use_color = "red";
+++                init_colors();
+++                break;
+++            case '3':
+++                use_color = "green";
+++                init_colors();
+++                break;
+++            case '4':
+++                use_color = "yellow";
+++                init_colors();
+++                break;
+++            case '5':
+++                use_color = "blue";
+++                init_colors();
+++                break;
+++            case '6':
+++                use_color = "magenta";
+++                init_colors();
+++                break;
+++            case '7':
+++                use_color = "cyan";
+++                init_colors();
+++                break;
+++            case '8':
+++                use_color = "white";
+++                init_colors();
+++                break;
+++            case '9':
+++                use_color = "green";
+++                bold = 1;
+++                init_colors();
+++                break;
+++            case 'q':
+++                if (!locked)
+++                    goto finish;
+++                break;
+++            case 27:
+++                if (!locked && !screensaver_mode)
+++                    goto finish;
+++                break;
+++            default:
+++                if (screensaver_mode && !locked)
+++                    goto finish;
+++                break;
+++        }
+++    }
+++
+++finish:
+++    for (x = 0; x < term_cols; x++)
+++        free(table[x]);
+++    free(table);
+++    free(heads);
+++    free(offsets);
+++    free(use_color);
+++
+++    (void)tcsetattr(0, TCSANOW, &original_termios);
+++    endwin();
+++
+++    return 0;
+++}
++diff --git a/compile.sh b/compile.sh
++new file mode 100755
++index 0000000..baab047
++--- /dev/null
+++++ b/compile.sh
++@@ -0,0 +1,17 @@
+++#!/bin/sh
+++# CMatrix - build entrypoint: produces a fresh ./executable
+++# (kept aliased as ./cmatrix for the historical name)
+++set -e
+++CC=${CC:-cc}
+++CFLAGS=${CFLAGS:--O2 -Wall}
+++LDLIBS=${LDLIBS:--lncursesw}
+++$CC $CFLAGS -c cmatrix.c -o cmatrix.o
+++$CC $CFLAGS -c font.c -o font.o
+++$CC $CFLAGS -c hash_table.c -o hash_table.o
+++# Drop any stale (possibly read-only) output so the link below always
+++# (re)builds a fresh ./executable.
+++rm -f executable
+++$CC $CFLAGS -o executable cmatrix.o font.o hash_table.o $LDLIBS
+++# Keep the ./cmatrix name in sync with ./executable.
+++ln -sf executable cmatrix
+++echo "cmatrix built successfully (./executable)"
++diff --git a/font.c b/font.c
++new file mode 100644
++index 0000000..6d017b3
++--- /dev/null
+++++ b/font.c
++@@ -0,0 +1,79 @@
+++/*
+++ * CMatrix - Matrix-like effect in your terminal
+++ *
+++ * font.c - the "matrix" character font.
+++ *
+++ * The classic matrix.fnt console font redefines the codes of the plain
+++ * letters and digits below so that a Linux console renders them as
+++ * Katakana-like glyphs; on any other terminal they simply show as
+++ * letters and digits.  The font module owns this glyph set and serves
+++ * random glyphs to the animation loop.
+++ *
+++ * This library is free software; you can redistribute it and/or modify it
+++ * under the terms of the GNU General Public License as published by the
+++ * Free Software Foundation; either version 3 of the License, or (at your
+++ * option) any later version.
+++ */
+++
+++#include "font.h"
+++
+++#include "hash_table.h"
+++
+++#include <stdio.h>
+++#include <stdlib.h>
+++#include <string.h>
+++#include <unistd.h>
+++
+++static const char character_set[] =
+++    "abcdefghijklmnopqrstuvwxyz"
+++    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+++    "0123456789";
+++
+++static hash_table glyphs;
+++static int loaded = 0;
+++
+++void font_load(void)
+++{
+++    const char *p;
+++
+++    if (loaded)
+++        return;
+++    if (hash_initialize(&glyphs) != 0)
+++        return;
+++    for (p = character_set; *p; p++) {
+++        char key[3];
+++
+++        snprintf(key, sizeof key, "%02x", (unsigned char)*p);
+++        hash_insert(&glyphs, key, p);
+++    }
+++    loaded = 1;
+++}
+++
+++int font_glyph_count(void)
+++{
+++    if (!loaded)
+++        font_load();
+++    return (int)strlen(character_set);
+++}
+++
+++wint_t font_random_glyph(void)
+++{
+++    if (!loaded)
+++        font_load();
+++    return (wint_t)(unsigned char)
+++        character_set[rand() % (int)strlen(character_set)];
+++}
+++
+++void font_install_console(void)
+++{
+++    /* Only meaningful on a Linux virtual console that ships the
+++     * classic matrix font; never fatal. */
+++    if (access("/usr/share/consolefonts/matrix.fnt.gz", R_OK) != 0)
+++        return;
+++    {
+++        int status = system("ln -sf matrix.fnt.gz /usr/share/consolefonts/console.fnt.gz 2>/dev/null; "
+++                            "setfont matrix.fnt 2>/dev/null");
+++
+++        (void)status;
+++    }
+++}
++diff --git a/font.h b/font.h
++new file mode 100644
++index 0000000..c987211
++--- /dev/null
+++++ b/font.h
++@@ -0,0 +1,34 @@
+++/*
+++ * CMatrix - Matrix-like effect in your terminal
+++ *
+++ * font.h - the "matrix" character font.
+++ *
+++ * This library is free software; you can redistribute it and/or modify it
+++ * under the terms of the GNU General Public License as published by the
+++ * Free Software Foundation; either version 3 of the License, or (at your
+++ * option) any later version.
+++ */
+++
+++#ifndef FONT_H
+++#define FONT_H
+++
+++#define NCURSES_WIDECHAR 1
+++
+++#include <ncursesw/curses.h>
+++#include <wchar.h>
+++
+++/* Build the matrix glyph table (idempotent). */
+++void font_load(void);
+++
+++/* Return a random glyph taken from the matrix font. */
+++wint_t font_random_glyph(void);
+++
+++/* Number of glyphs available in the matrix font. */
+++int font_glyph_count(void);
+++
+++/* Best effort install of the classic matrix.fnt console font on a Linux
+++ * virtual console (the -l "Linux mode" option).  Silently does nothing
+++ * when the font or the console facilities are not available. */
+++void font_install_console(void);
+++
+++#endif /* FONT_H */
++diff --git a/hash_table.c b/hash_table.c
++new file mode 100644
++index 0000000..f5371f5
++--- /dev/null
+++++ b/hash_table.c
++@@ -0,0 +1,111 @@
+++/*
+++ * CMatrix - Matrix-like effect in your terminal
+++ *
+++ * hash_table.c - small string -> string hash table (djb2, chaining).
+++ *
+++ * This library is free software; you can redistribute it and/or modify it
+++ * under the terms of the GNU General Public License as published by the
+++ * Free Software Foundation; either version 3 of the License, or (at your
+++ * option) any later version.
+++ */
+++
+++#include "hash_table.h"
+++
+++#include <stdlib.h>
+++#include <string.h>
+++
+++static unsigned hash_string(const char *s)
+++{
+++    unsigned h = 5381;
+++
+++    while (*s)
+++        h = ((h << 5) + h) + (unsigned char)*s++;
+++    return h;
+++}
+++
+++int hash_initialize(hash_table *table)
+++{
+++    if (!table)
+++        return -1;
+++    table->size = HASH_INITIAL_SIZE;
+++    table->count = 0;
+++    table->buckets = calloc((size_t)table->size, sizeof *table->buckets);
+++    return table->buckets ? 0 : -1;
+++}
+++
+++void hash_destroy(hash_table *table)
+++{
+++    int i;
+++
+++    if (!table)
+++        return;
+++    for (i = 0; i < table->size; i++) {
+++        hash_entry *e = table->buckets ? table->buckets[i] : NULL;
+++
+++        while (e) {
+++            hash_entry *next = e->next;
+++            free(e->key);
+++            free(e->value);
+++            free(e);
+++            e = next;
+++        }
+++    }
+++    free(table->buckets);
+++    table->buckets = NULL;
+++    table->size = 0;
+++    table->count = 0;
+++}
+++
+++int hash_insert(hash_table *table, const char *key, const char *value)
+++{
+++    hash_entry **slot;
+++    hash_entry *entry;
+++
+++    if (!table || !table->buckets || !key || !value)
+++        return -1;
+++
+++    slot = &table->buckets[hash_string(key) % (unsigned)table->size];
+++    while (*slot) {
+++        if (!strcmp((*slot)->key, key)) {
+++            char *copy = strdup(value);
+++
+++            if (!copy)
+++                return -1;
+++            free((*slot)->value);
+++            (*slot)->value = copy;
+++            return 0;
+++        }
+++        slot = &(*slot)->next;
+++    }
+++
+++    entry = malloc(sizeof *entry);
+++    if (!entry)
+++        return -1;
+++    entry->key = strdup(key);
+++    entry->value = strdup(value);
+++    if (!entry->key || !entry->value) {
+++        free(entry->key);
+++        free(entry->value);
+++        free(entry);
+++        return -1;
+++    }
+++    entry->next = *slot;
+++    *slot = entry;
+++    table->count++;
+++    return 0;
+++}
+++
+++char *hash_lookup(hash_table *table, const char *key)
+++{
+++    hash_entry **slot;
+++
+++    if (!table || !table->buckets || !key)
+++        return NULL;
+++    slot = &table->buckets[hash_string(key) % (unsigned)table->size];
+++    while (*slot) {
+++        if (!strcmp((*slot)->key, key))
+++            return (*slot)->value;
+++        slot = &(*slot)->next;
+++    }
+++    return NULL;
+++}
++diff --git a/hash_table.h b/hash_table.h
++new file mode 100644
++index 0000000..1be4960
++--- /dev/null
+++++ b/hash_table.h
++@@ -0,0 +1,42 @@
+++/*
+++ * CMatrix - Matrix-like effect in your terminal
+++ *
+++ * hash_table.h - small string -> string hash table used by the font
+++ * module to hold the matrix glyph set.
+++ *
+++ * This library is free software; you can redistribute it and/or modify it
+++ * under the terms of the GNU General Public License as published by the
+++ * Free Software Foundation; either version 3 of the License, or (at your
+++ * option) any later version.
+++ */
+++
+++#ifndef HASH_TABLE_H
+++#define HASH_TABLE_H
+++
+++#define HASH_INITIAL_SIZE 16
+++
+++typedef struct hash_entry {
+++    char *key;
+++    char *value;
+++    struct hash_entry *next;
+++} hash_entry;
+++
+++typedef struct hash_table {
+++    hash_entry **buckets;
+++    int size;
+++    int count;
+++} hash_table;
+++
+++/* Allocate the bucket array.  Returns 0 on success, -1 on failure. */
+++int  hash_initialize(hash_table *table);
+++
+++/* Free every entry and the bucket array. */
+++void hash_destroy(hash_table *table);
+++
+++/* Insert or update a key/value pair (both are copied). */
+++int  hash_insert(hash_table *table, const char *key, const char *value);
+++
+++/* Return the value stored for key, or NULL when absent. */
+++char *hash_lookup(hash_table *table, const char *key);
+++
+++#endif /* HASH_TABLE_H */

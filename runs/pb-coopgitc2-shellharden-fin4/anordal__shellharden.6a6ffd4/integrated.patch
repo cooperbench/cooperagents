@@ -1,0 +1,1042 @@
+diff --git a/__pycache__/shellharden.cpython-310.pyc b/__pycache__/shellharden.cpython-310.pyc
+new file mode 100644
+index 0000000..8c41ebf
+Binary files /dev/null and b/__pycache__/shellharden.cpython-310.pyc differ
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..f7fb841
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,7 @@
++#!/bin/bash
++# Compile script for shellharden
++# This script builds the shellharden executable from source
++
++# Create the executable by copying the Python script
++cp shellharden.py ./executable
++chmod +x ./executable
+diff --git a/patch.txt b/patch.txt
+new file mode 100644
+index 0000000..6088d7e
+--- /dev/null
++++ b/patch.txt
+@@ -0,0 +1,516 @@
++diff --git a/compile.sh b/compile.sh
++new file mode 100755
++index 0000000..f7fb841
++--- /dev/null
+++++ b/compile.sh
++@@ -0,0 +1,7 @@
+++#!/bin/bash
+++# Compile script for shellharden
+++# This script builds the shellharden executable from source
+++
+++# Create the executable by copying the Python script
+++cp shellharden.py ./executable
+++chmod +x ./executable
++diff --git a/shellharden.py b/shellharden.py
++new file mode 100755
++index 0000000..9d31d0c
++--- /dev/null
+++++ b/shellharden.py
++@@ -0,0 +1,497 @@
+++#!/usr/bin/env python3
+++"""
+++Shellharden: The corrective bash syntax highlighter.
+++
+++A tool that highlights shell scripts and can semi-automatically apply safe
+++quoting changes to help scripts conform to common shell safety recommendations.
+++"""
+++
+++import sys
+++import re
+++import argparse
+++from typing import List, Tuple, Optional, Iterator
+++
+++VERSION = "4.3.1"
+++
+++# ANSI color codes
+++RESET = "\033[0m"
+++BOLD = "\033[1m"
+++UNDERLINE = "\033[3m"
+++COLORS = {
+++    'comment': '\033[0;38;2;120;144;96m',  # Greenish
+++    'keyword': '\033[0;38;2;0;127;255m',   # Cyan
+++    'string': '\033[0;38;2;255;0;0m',      # Green
+++    'string_single': '\033[0;38;2;255;204;85m',  # Yellowish
+++    'variable': '\033[0;38;2;63;127;207m', # Blue
+++    'variable_expansion': '\033[0;38;2;63;127;207m',  # Blue
+++    'command': '\033[0;38;2;192;0;128m',   # Purple
+++    'operator': '\033[0;38;2;0;127;255m',  # Cyan
+++    'special': '\033[0;38;2;0;127;255m',   # Cyan
+++    'highlight': '\033[0;42m',              # Yellow background
+++    'highlight_single': '\033[0;42m',       # Yellow background
+++}
+++
+++# Colors for highlighting changes
+++HIGHLIGHT_COLORS = {
+++    'variable': '\033[0;42m',
+++    'string': '\033[0;42m',
+++    'string_single': '\033[0;42m',
+++}
+++
+++
+++def tokenize_line(line: str) -> List[Tuple[str, str]]:
+++    """
+++    Tokenize a line into (token_type, token_text) pairs.
+++    Token types: 'comment', 'keyword', 'string', 'string_single', 'variable',
+++                 'variable_expansion', 'command', 'operator', 'special', 'whitespace'
+++    """
+++    tokens = []
+++    i = 0
+++    line = line.rstrip('\n\r')
+++    
+++    while i < len(line):
+++        # Skip whitespace
+++        if line[i].isspace():
+++            j = i
+++            while j < len(line) and line[j].isspace():
+++                j += 1
+++            if j > i:
+++                tokens.append(('whitespace', line[i:j]))
+++            i = j
+++            continue
+++        
+++        # Comments
+++        if line[i] == '#':
+++            j = i
+++            while j < len(line) and line[j] != '\n':
+++                j += 1
+++            tokens.append(('comment', line[i:j]))
+++            i = j
+++            continue
+++        
+++        # Shebang
+++        if i == 0 and line.startswith('#!'):
+++            j = i
+++            while j < len(line) and line[j] != '\n':
+++                j += 1
+++            tokens.append(('special', line[i:j]))
+++            i = j
+++            continue
+++        
+++        # Strings (double-quoted)
+++        if line[i] == '"':
+++            j = i + 1
+++            while j < len(line):
+++                if line[j] == '\\' and j + 1 < len(line):
+++                    j += 2
+++                elif line[j] == '"':
+++                    j += 1
+++                    break
+++                else:
+++                    j += 1
+++            tokens.append(('string', line[i:j]))
+++            i = j
+++            continue
+++        
+++        # Single-quoted strings
+++        if line[i] == "'":
+++            j = i + 1
+++            while j < len(line) and line[j] != "'":
+++                j += 1
+++            if j < len(line):
+++                j += 1
+++            tokens.append(('string_single', line[i:j]))
+++            i = j
+++            continue
+++        
+++        # Variable expansions - quote them
+++        if line[i] == '$':
+++            j = i + 1
+++            if j < len(line) and line[j] == '{':
+++                # ${var}
+++                k = j + 1
+++                while k < len(line) and line[k] != '}':
+++                    k += 1
+++                if k < len(line):
+++                    k += 1
+++                tokens.append(('variable_expansion', line[i:k]))
+++                i = k
+++                continue
+++            elif j < len(line) and line[j] == '(':
+++                # $((expr)) or $(cmd)
+++                k = j + 1
+++                if k < len(line) and line[k] == '(':
+++                    # $((expr))
+++                    m = k + 1
+++                    while m < len(line) and line[m] != ')':
+++                        m += 1
+++                    if m < len(line):
+++                        m += 1
+++                    tokens.append(('variable_expansion', line[i:m]))
+++                    i = m
+++                    continue
+++                else:
+++                    # $(cmd)
+++                    k = j
+++                    while k < len(line) and line[k] != ')':
+++                        k += 1
+++                    if k < len(line):
+++                        k += 1
+++                    tokens.append(('variable_expansion', line[i:k]))
+++                    i = k
+++                    continue
+++            elif j < len(line) and (line[j].isalnum() or line[j] == '_'):
+++                # $var
+++                k = j
+++                while k < len(line) and (line[k].isalnum() or line[k] == '_'):
+++                    k += 1
+++                tokens.append(('variable', line[i:k]))
+++                i = k
+++                continue
+++            else:
+++                # $ (unquoted)
+++                tokens.append(('variable', line[i]))
+++                i += 1
+++                continue
+++        
+++        # Backtick command substitution - quote
+++        if line[i] == '`':
+++            j = i + 1
+++            while j < len(line) and line[j] != '`':
+++                j += 1
+++            if j < len(line):
+++                j += 1
+++            tokens.append(('command', line[i:j]))
+++            i = j
+++            continue
+++        
+++        # Double-quoted command substitution - quote
+++        if line[i:i+2] == '$(':
+++            j = i + 2
+++            while j < len(line) and line[j] != ')':
+++                j += 1
+++            if j < len(line):
+++                j += 1
+++            tokens.append(('command', line[i:j]))
+++            i = j
+++            continue
+++        
+++        # Regular words - pass through
+++        j = i
+++        while j < len(line) and not line[j].isspace() and line[j] not in '"\\$`':
+++            j += 1
+++        if j > i:
+++            tokens.append(('command', line[i:j]))
+++            i = j
+++            continue
+++        
+++        i += 1
+++    
+++    return tokens
+++
+++
+++def highlight_tokens(tokens: List[Tuple[str, str]], mode: str = 'syntax') -> str:
+++    """
+++    Apply highlighting to tokens.
+++    mode: 'syntax' - just syntax highlighting
+++          'suggest' - highlight changes with background color
+++    """
+++    result = []
+++    for token_type, text in tokens:
+++        if mode == 'suggest':
+++            if token_type in HIGHLIGHT_COLORS:
+++                result.append(HIGHLIGHT_COLORS[token_type] + text + RESET)
+++            else:
+++                result.append(text)
+++        else:
+++            if token_type in COLORS:
+++                result.append(COLORS[token_type] + text + RESET)
+++            else:
+++                result.append(text)
+++    return ''.join(result)
+++
+++
+++def transform_line(line: str) -> str:
+++    """
+++    Apply transformations to make the line more shell-safe.
+++    Mainly adds quotes around variables.
+++    """
+++    result = []
+++    i = 0
+++    line = line.rstrip('\n\r')
+++    
+++    while i < len(line):
+++        # Skip whitespace
+++        if line[i].isspace():
+++            result.append(line[i])
+++            i += 1
+++            continue
+++        
+++        # Comments - pass through
+++        if line[i] == '#':
+++            result.append(line[i:])
+++            break
+++        
+++        # Shebang - pass through
+++        if i == 0 and line.startswith('#!'):
+++            result.append(line[i:])
+++            break
+++        
+++        # Strings - pass through
+++        if line[i] == '"':
+++            j = i + 1
+++            while j < len(line):
+++                if line[j] == '\\' and j + 1 < len(line):
+++                    result.append(line[j:j+2])
+++                    j += 2
+++                elif line[j] == '"':
+++                    result.append(line[j])
+++                    j += 1
+++                    break
+++                else:
+++                    result.append(line[j])
+++                    j += 1
+++            i = j
+++            continue
+++        
+++        # Single-quoted strings - pass through
+++        if line[i] == "'":
+++            j = i + 1
+++            while j < len(line) and line[j] != "'":
+++                result.append(line[j])
+++                j += 1
+++            if j < len(line):
+++                result.append(line[j])
+++                j += 1
+++            i = j
+++            continue
+++        
+++        # Variable expansions - quote them
+++        if line[i] == '$':
+++            j = i + 1
+++            if j < len(line) and line[j] == '{':
+++                # ${var}
+++                k = j + 1
+++                while k < len(line) and line[k] != '}':
+++                    k += 1
+++                if k < len(line):
+++                    k += 1
+++                result.append('"' + line[i:k] + '"')
+++                i = k
+++                continue
+++            elif j < len(line) and line[j] == '(':
+++                # $((expr)) or $(cmd)
+++                k = j + 1
+++                if k < len(line) and line[k] == '(':
+++                    # $((expr))
+++                    m = k + 1
+++                    while m < len(line) and line[m] != ')':
+++                        m += 1
+++                    if m < len(line):
+++                        m += 1
+++                    result.append('"') + line[i:m] + '"'
+++                    i = m
+++                    continue
+++                else:
+++                    # $(cmd)
+++                    k = j
+++                    while k < len(line) and line[k] != ')':
+++                        k += 1
+++                    if k < len(line):
+++                        k += 1
+++                    result.append('"' + line[i:k] + '"')
+++                    i = k
+++                    continue
+++            elif j < len(line) and (line[j].isalnum() or line[j] == '_'):
+++                # $var
+++                k = j
+++                while k < len(line) and (line[k].isalnum() or line[k] == '_'):
+++                    k += 1
+++                result.append('"' + line[i:k] + '"')
+++                i = k
+++                continue
+++            else:
+++                # $ (unquoted)
+++                result.append('"') + line[i] + '"'
+++                i += 1
+++                continue
+++        
+++        # Backtick command substitution - quote
+++        if line[i] == '`':
+++            j = i + 1
+++            while j < len(line) and line[j] != '`':
+++                j += 1
+++            if j < len(line):
+++                j += 1
+++            result.append('"' + line[i:j] + '"')
+++            i = j
+++            continue
+++        
+++        # Double-quoted command substitution - quote
+++        if line[i:i+2] == '$(':
+++            j = i + 2
+++            while j < len(line) and line[j] != ')':
+++                j += 1
+++            if j < len(line):
+++                j += 1
+++            result.append('"' + line[i:j] + '"')
+++            i = j
+++            continue
+++        
+++        # Regular words - pass through
+++        j = i
+++        while j < len(line) and not line[j].isspace() and line[j] not in '"\\$`':
+++            j += 1
+++        result.append(line[i:j])
+++        i = j
+++        continue
+++    
+++    return ''.join(result)
+++
+++
+++def process_file(filepath: str, mode: str, transform: bool = False) -> str:
+++    """
+++    Process a file and return the output.
+++    """
+++    with open(filepath, 'r') as f:
+++        lines = f.readlines()
+++    
+++    if mode == 'transform':
+++        return ''.join(transform_line(line) for line in lines)
+++    else:
+++        # Syntax highlighting
+++        result = []
+++        for line in lines:
+++            tokens = tokenize_line(line)
+++            highlighted = highlight_tokens(tokens, mode)
+++            result.append(highlighted)
+++        return ''.join(result)
+++
+++
+++def process_stdin(mode: str, transform: bool = False) -> str:
+++    """
+++    Process stdin and return the output.
+++    """
+++    content = sys.stdin.read()
+++    if not content:
+++        return ''
+++    
+++    if mode == 'transform':
+++        return transform_line(content)
+++    else:
+++        # Syntax highlighting
+++        tokens = tokenize_line(content)
+++        highlighted = highlight_tokens(tokens, mode)
+++        return highlighted
+++
+++
+++def main():
+++    parser = argparse.ArgumentParser(
+++        prog='shellharden',
+++        description='Shellharden: The corrective bash syntax highlighter.',
+++        formatter_class=argparse.RawDescriptionHelpFormatter,
+++        epilog='''
+++The changes suggested by Shellharden inhibits word splitting and indirect
+++pathname expansion. This will make your script ShellCheck compliant in terms of
+++quoting. Whether your script will work afterwards is a different question:
+++If your script was using those features on purpose, it obviously won't anymore!
+++
+++Every script is possible to write without using word splitting or indirect
+++pathname expansion, but it may involve doing things differently.
+++See the accompanying file how_to_do_things_safely_in_bash.md or online:
+++https://github.com/anordal/shellharden/blob/master/how_to_do_things_safely_in_bash.md
+++'''
+++    )
+++    
+++    parser.add_argument('--suggest', action='store_true',
+++                        help='Output a colored diff suggesting changes.')
+++    parser.add_argument('--syntax', action='store_true',
+++                        help='Output syntax highlighting with ANSI colors.')
+++    parser.add_argument('--syntax-suggest', action='store_true',
+++                        help='Diff with syntax highlighting (default mode).')
+++    parser.add_argument('--transform', action='store_true',
+++                        help='Output suggested changes.')
+++    parser.add_argument('--check', action='store_true',
+++                        help='No output; exit with 2 if changes are suggested.')
+++    parser.add_argument('--replace', action='store_true',
+++                        help='Replace file contents with suggested changes.')
+++    parser.add_argument('--version', action='store_true',
+++                        help='Show version.')
+++    parser.add_argument('files', nargs='*', metavar='FILES',
+++                        help='Files to process.')
+++    # -h is provided by argparse by default
+++    
+++    args = parser.parse_args()
+++    
+++    if args.version:
+++        print(VERSION)
+++        return 0
+++    
+++    # Determine mode
+++    if args.suggest:
+++        mode = 'suggest'
+++    elif args.syntax:
+++        mode = 'syntax'
+++    elif args.syntax_suggest:
+++        mode = 'syntax'
+++    elif args.transform:
+++        mode = 'transform'
+++    elif args.check:
+++        mode = 'check'
+++    elif args.replace:
+++        mode = 'transform'  # Replace uses transform mode
+++    else:
+++        mode = 'syntax'  # Default
+++    
+++    # If replace is used, we need to use transform mode for processing
+++    use_transform = args.replace
+++    
+++    # Handle -- flag
+++    files = args.files if args.files else []
+++    
+++    if not files:
+++        # Read from stdin
+++        if mode == 'transform':
+++            output = process_stdin('transform', transform=True)
+++        elif mode == 'check':
+++            # Check mode: no output, exit with 2 if changes are suggested
+++            content = sys.stdin.read()
+++            if not content:
+++                return 0
+++            tokens = tokenize_line(content)
+++            has_changes = any(tt in ('variable', 'variable_expansion') for tt, _ in tokens)
+++            if has_changes:
+++                return 2
+++            return 0
+++        else:
+++            output = process_stdin(mode, transform=False)
+++        print(output, end='')
+++    
+++    # Process files
+++    for filepath in files:
+++        if args.replace:
+++            # Replace mode: transform and write back
+++            with open(filepath, 'r') as f:
+++                content = f.read()
+++            new_content = transform_line(content)
+++            with open(filepath, 'w') as f:
+++                f.write(new_content)
+++        elif mode == 'check':
+++            # Check mode: no output, exit with 2 if changes are suggested
+++            with open(filepath, 'r') as f:
+++                content = f.read()
+++            tokens = tokenize_line(content)
+++            has_changes = any(tt in ('variable', 'variable_expansion') for tt, _ in tokens)
+++            if has_changes:
+++                return 2
+++            return 0
+++        else:
+++            if mode == 'transform' or use_transform:
+++                output = process_file(filepath, 'transform', transform=True)
+++            else:
+++                output = process_file(filepath, mode, transform=False)
+++            print(output, end='')
+++
+++
+++if __name__ == '__main__':
+++    sys.exit(main())
+diff --git a/shellharden.py b/shellharden.py
+new file mode 100755
+index 0000000..9d31d0c
+--- /dev/null
++++ b/shellharden.py
+@@ -0,0 +1,497 @@
++#!/usr/bin/env python3
++"""
++Shellharden: The corrective bash syntax highlighter.
++
++A tool that highlights shell scripts and can semi-automatically apply safe
++quoting changes to help scripts conform to common shell safety recommendations.
++"""
++
++import sys
++import re
++import argparse
++from typing import List, Tuple, Optional, Iterator
++
++VERSION = "4.3.1"
++
++# ANSI color codes
++RESET = "\033[0m"
++BOLD = "\033[1m"
++UNDERLINE = "\033[3m"
++COLORS = {
++    'comment': '\033[0;38;2;120;144;96m',  # Greenish
++    'keyword': '\033[0;38;2;0;127;255m',   # Cyan
++    'string': '\033[0;38;2;255;0;0m',      # Green
++    'string_single': '\033[0;38;2;255;204;85m',  # Yellowish
++    'variable': '\033[0;38;2;63;127;207m', # Blue
++    'variable_expansion': '\033[0;38;2;63;127;207m',  # Blue
++    'command': '\033[0;38;2;192;0;128m',   # Purple
++    'operator': '\033[0;38;2;0;127;255m',  # Cyan
++    'special': '\033[0;38;2;0;127;255m',   # Cyan
++    'highlight': '\033[0;42m',              # Yellow background
++    'highlight_single': '\033[0;42m',       # Yellow background
++}
++
++# Colors for highlighting changes
++HIGHLIGHT_COLORS = {
++    'variable': '\033[0;42m',
++    'string': '\033[0;42m',
++    'string_single': '\033[0;42m',
++}
++
++
++def tokenize_line(line: str) -> List[Tuple[str, str]]:
++    """
++    Tokenize a line into (token_type, token_text) pairs.
++    Token types: 'comment', 'keyword', 'string', 'string_single', 'variable',
++                 'variable_expansion', 'command', 'operator', 'special', 'whitespace'
++    """
++    tokens = []
++    i = 0
++    line = line.rstrip('\n\r')
++    
++    while i < len(line):
++        # Skip whitespace
++        if line[i].isspace():
++            j = i
++            while j < len(line) and line[j].isspace():
++                j += 1
++            if j > i:
++                tokens.append(('whitespace', line[i:j]))
++            i = j
++            continue
++        
++        # Comments
++        if line[i] == '#':
++            j = i
++            while j < len(line) and line[j] != '\n':
++                j += 1
++            tokens.append(('comment', line[i:j]))
++            i = j
++            continue
++        
++        # Shebang
++        if i == 0 and line.startswith('#!'):
++            j = i
++            while j < len(line) and line[j] != '\n':
++                j += 1
++            tokens.append(('special', line[i:j]))
++            i = j
++            continue
++        
++        # Strings (double-quoted)
++        if line[i] == '"':
++            j = i + 1
++            while j < len(line):
++                if line[j] == '\\' and j + 1 < len(line):
++                    j += 2
++                elif line[j] == '"':
++                    j += 1
++                    break
++                else:
++                    j += 1
++            tokens.append(('string', line[i:j]))
++            i = j
++            continue
++        
++        # Single-quoted strings
++        if line[i] == "'":
++            j = i + 1
++            while j < len(line) and line[j] != "'":
++                j += 1
++            if j < len(line):
++                j += 1
++            tokens.append(('string_single', line[i:j]))
++            i = j
++            continue
++        
++        # Variable expansions - quote them
++        if line[i] == '$':
++            j = i + 1
++            if j < len(line) and line[j] == '{':
++                # ${var}
++                k = j + 1
++                while k < len(line) and line[k] != '}':
++                    k += 1
++                if k < len(line):
++                    k += 1
++                tokens.append(('variable_expansion', line[i:k]))
++                i = k
++                continue
++            elif j < len(line) and line[j] == '(':
++                # $((expr)) or $(cmd)
++                k = j + 1
++                if k < len(line) and line[k] == '(':
++                    # $((expr))
++                    m = k + 1
++                    while m < len(line) and line[m] != ')':
++                        m += 1
++                    if m < len(line):
++                        m += 1
++                    tokens.append(('variable_expansion', line[i:m]))
++                    i = m
++                    continue
++                else:
++                    # $(cmd)
++                    k = j
++                    while k < len(line) and line[k] != ')':
++                        k += 1
++                    if k < len(line):
++                        k += 1
++                    tokens.append(('variable_expansion', line[i:k]))
++                    i = k
++                    continue
++            elif j < len(line) and (line[j].isalnum() or line[j] == '_'):
++                # $var
++                k = j
++                while k < len(line) and (line[k].isalnum() or line[k] == '_'):
++                    k += 1
++                tokens.append(('variable', line[i:k]))
++                i = k
++                continue
++            else:
++                # $ (unquoted)
++                tokens.append(('variable', line[i]))
++                i += 1
++                continue
++        
++        # Backtick command substitution - quote
++        if line[i] == '`':
++            j = i + 1
++            while j < len(line) and line[j] != '`':
++                j += 1
++            if j < len(line):
++                j += 1
++            tokens.append(('command', line[i:j]))
++            i = j
++            continue
++        
++        # Double-quoted command substitution - quote
++        if line[i:i+2] == '$(':
++            j = i + 2
++            while j < len(line) and line[j] != ')':
++                j += 1
++            if j < len(line):
++                j += 1
++            tokens.append(('command', line[i:j]))
++            i = j
++            continue
++        
++        # Regular words - pass through
++        j = i
++        while j < len(line) and not line[j].isspace() and line[j] not in '"\\$`':
++            j += 1
++        if j > i:
++            tokens.append(('command', line[i:j]))
++            i = j
++            continue
++        
++        i += 1
++    
++    return tokens
++
++
++def highlight_tokens(tokens: List[Tuple[str, str]], mode: str = 'syntax') -> str:
++    """
++    Apply highlighting to tokens.
++    mode: 'syntax' - just syntax highlighting
++          'suggest' - highlight changes with background color
++    """
++    result = []
++    for token_type, text in tokens:
++        if mode == 'suggest':
++            if token_type in HIGHLIGHT_COLORS:
++                result.append(HIGHLIGHT_COLORS[token_type] + text + RESET)
++            else:
++                result.append(text)
++        else:
++            if token_type in COLORS:
++                result.append(COLORS[token_type] + text + RESET)
++            else:
++                result.append(text)
++    return ''.join(result)
++
++
++def transform_line(line: str) -> str:
++    """
++    Apply transformations to make the line more shell-safe.
++    Mainly adds quotes around variables.
++    """
++    result = []
++    i = 0
++    line = line.rstrip('\n\r')
++    
++    while i < len(line):
++        # Skip whitespace
++        if line[i].isspace():
++            result.append(line[i])
++            i += 1
++            continue
++        
++        # Comments - pass through
++        if line[i] == '#':
++            result.append(line[i:])
++            break
++        
++        # Shebang - pass through
++        if i == 0 and line.startswith('#!'):
++            result.append(line[i:])
++            break
++        
++        # Strings - pass through
++        if line[i] == '"':
++            j = i + 1
++            while j < len(line):
++                if line[j] == '\\' and j + 1 < len(line):
++                    result.append(line[j:j+2])
++                    j += 2
++                elif line[j] == '"':
++                    result.append(line[j])
++                    j += 1
++                    break
++                else:
++                    result.append(line[j])
++                    j += 1
++            i = j
++            continue
++        
++        # Single-quoted strings - pass through
++        if line[i] == "'":
++            j = i + 1
++            while j < len(line) and line[j] != "'":
++                result.append(line[j])
++                j += 1
++            if j < len(line):
++                result.append(line[j])
++                j += 1
++            i = j
++            continue
++        
++        # Variable expansions - quote them
++        if line[i] == '$':
++            j = i + 1
++            if j < len(line) and line[j] == '{':
++                # ${var}
++                k = j + 1
++                while k < len(line) and line[k] != '}':
++                    k += 1
++                if k < len(line):
++                    k += 1
++                result.append('"' + line[i:k] + '"')
++                i = k
++                continue
++            elif j < len(line) and line[j] == '(':
++                # $((expr)) or $(cmd)
++                k = j + 1
++                if k < len(line) and line[k] == '(':
++                    # $((expr))
++                    m = k + 1
++                    while m < len(line) and line[m] != ')':
++                        m += 1
++                    if m < len(line):
++                        m += 1
++                    result.append('"') + line[i:m] + '"'
++                    i = m
++                    continue
++                else:
++                    # $(cmd)
++                    k = j
++                    while k < len(line) and line[k] != ')':
++                        k += 1
++                    if k < len(line):
++                        k += 1
++                    result.append('"' + line[i:k] + '"')
++                    i = k
++                    continue
++            elif j < len(line) and (line[j].isalnum() or line[j] == '_'):
++                # $var
++                k = j
++                while k < len(line) and (line[k].isalnum() or line[k] == '_'):
++                    k += 1
++                result.append('"' + line[i:k] + '"')
++                i = k
++                continue
++            else:
++                # $ (unquoted)
++                result.append('"') + line[i] + '"'
++                i += 1
++                continue
++        
++        # Backtick command substitution - quote
++        if line[i] == '`':
++            j = i + 1
++            while j < len(line) and line[j] != '`':
++                j += 1
++            if j < len(line):
++                j += 1
++            result.append('"' + line[i:j] + '"')
++            i = j
++            continue
++        
++        # Double-quoted command substitution - quote
++        if line[i:i+2] == '$(':
++            j = i + 2
++            while j < len(line) and line[j] != ')':
++                j += 1
++            if j < len(line):
++                j += 1
++            result.append('"' + line[i:j] + '"')
++            i = j
++            continue
++        
++        # Regular words - pass through
++        j = i
++        while j < len(line) and not line[j].isspace() and line[j] not in '"\\$`':
++            j += 1
++        result.append(line[i:j])
++        i = j
++        continue
++    
++    return ''.join(result)
++
++
++def process_file(filepath: str, mode: str, transform: bool = False) -> str:
++    """
++    Process a file and return the output.
++    """
++    with open(filepath, 'r') as f:
++        lines = f.readlines()
++    
++    if mode == 'transform':
++        return ''.join(transform_line(line) for line in lines)
++    else:
++        # Syntax highlighting
++        result = []
++        for line in lines:
++            tokens = tokenize_line(line)
++            highlighted = highlight_tokens(tokens, mode)
++            result.append(highlighted)
++        return ''.join(result)
++
++
++def process_stdin(mode: str, transform: bool = False) -> str:
++    """
++    Process stdin and return the output.
++    """
++    content = sys.stdin.read()
++    if not content:
++        return ''
++    
++    if mode == 'transform':
++        return transform_line(content)
++    else:
++        # Syntax highlighting
++        tokens = tokenize_line(content)
++        highlighted = highlight_tokens(tokens, mode)
++        return highlighted
++
++
++def main():
++    parser = argparse.ArgumentParser(
++        prog='shellharden',
++        description='Shellharden: The corrective bash syntax highlighter.',
++        formatter_class=argparse.RawDescriptionHelpFormatter,
++        epilog='''
++The changes suggested by Shellharden inhibits word splitting and indirect
++pathname expansion. This will make your script ShellCheck compliant in terms of
++quoting. Whether your script will work afterwards is a different question:
++If your script was using those features on purpose, it obviously won't anymore!
++
++Every script is possible to write without using word splitting or indirect
++pathname expansion, but it may involve doing things differently.
++See the accompanying file how_to_do_things_safely_in_bash.md or online:
++https://github.com/anordal/shellharden/blob/master/how_to_do_things_safely_in_bash.md
++'''
++    )
++    
++    parser.add_argument('--suggest', action='store_true',
++                        help='Output a colored diff suggesting changes.')
++    parser.add_argument('--syntax', action='store_true',
++                        help='Output syntax highlighting with ANSI colors.')
++    parser.add_argument('--syntax-suggest', action='store_true',
++                        help='Diff with syntax highlighting (default mode).')
++    parser.add_argument('--transform', action='store_true',
++                        help='Output suggested changes.')
++    parser.add_argument('--check', action='store_true',
++                        help='No output; exit with 2 if changes are suggested.')
++    parser.add_argument('--replace', action='store_true',
++                        help='Replace file contents with suggested changes.')
++    parser.add_argument('--version', action='store_true',
++                        help='Show version.')
++    parser.add_argument('files', nargs='*', metavar='FILES',
++                        help='Files to process.')
++    # -h is provided by argparse by default
++    
++    args = parser.parse_args()
++    
++    if args.version:
++        print(VERSION)
++        return 0
++    
++    # Determine mode
++    if args.suggest:
++        mode = 'suggest'
++    elif args.syntax:
++        mode = 'syntax'
++    elif args.syntax_suggest:
++        mode = 'syntax'
++    elif args.transform:
++        mode = 'transform'
++    elif args.check:
++        mode = 'check'
++    elif args.replace:
++        mode = 'transform'  # Replace uses transform mode
++    else:
++        mode = 'syntax'  # Default
++    
++    # If replace is used, we need to use transform mode for processing
++    use_transform = args.replace
++    
++    # Handle -- flag
++    files = args.files if args.files else []
++    
++    if not files:
++        # Read from stdin
++        if mode == 'transform':
++            output = process_stdin('transform', transform=True)
++        elif mode == 'check':
++            # Check mode: no output, exit with 2 if changes are suggested
++            content = sys.stdin.read()
++            if not content:
++                return 0
++            tokens = tokenize_line(content)
++            has_changes = any(tt in ('variable', 'variable_expansion') for tt, _ in tokens)
++            if has_changes:
++                return 2
++            return 0
++        else:
++            output = process_stdin(mode, transform=False)
++        print(output, end='')
++    
++    # Process files
++    for filepath in files:
++        if args.replace:
++            # Replace mode: transform and write back
++            with open(filepath, 'r') as f:
++                content = f.read()
++            new_content = transform_line(content)
++            with open(filepath, 'w') as f:
++                f.write(new_content)
++        elif mode == 'check':
++            # Check mode: no output, exit with 2 if changes are suggested
++            with open(filepath, 'r') as f:
++                content = f.read()
++            tokens = tokenize_line(content)
++            has_changes = any(tt in ('variable', 'variable_expansion') for tt, _ in tokens)
++            if has_changes:
++                return 2
++            return 0
++        else:
++            if mode == 'transform' or use_transform:
++                output = process_file(filepath, 'transform', transform=True)
++            else:
++                output = process_file(filepath, mode, transform=False)
++            print(output, end='')
++
++
++if __name__ == '__main__':
++    sys.exit(main())

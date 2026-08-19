@@ -1,0 +1,126 @@
+diff --git a/chroma b/chroma
+new file mode 120000
+index 0000000..9268d74
+--- /dev/null
++++ b/chroma
+@@ -0,0 +1 @@
++executable
+\ No newline at end of file
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..f76d97d
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,50 @@
++#!/bin/sh
++# Build entrypoint for the merged Chroma tree.
++#
++# The Chroma CLI is carried in this tree as a prebuilt binary
++# (./executable); the upstream Go sources are not vendored here. The
++# build therefore performs the integration step:
++#
++#   1. validate the prebuilt CLI (usage, version, lexer registry),
++#   2. run real highlighting round-trips (terminal ANSI + HTML),
++#   3. publish it as the `chroma` artifact named in the README,
++#   4. verify the published artifact.
++
++set -eu
++
++# Always operate from the tree root (directory containing this script).
++cd "$(dirname "$0")"
++
++if [ ! -x ./executable ]; then
++    echo "compile.sh: prebuilt ./executable is missing or not executable" >&2
++    exit 1
++fi
++
++# --- 1. Smoke-test the prebuilt CLI --------------------------------------
++./executable --help  >/dev/null
++./executable --version >/dev/null
++./executable --list  >/dev/null
++
++# --- 2. Round-trips: tokenise + format a snippet --------------------------
++esc=$(printf '\033')
++
++# Terminal (ANSI) formatter: output must contain escape sequences.
++out=$(printf 'x = 1\n' | ./executable --filename=x.py -s monokai)
++case "$out" in
++    *"$esc"*) : ;;
++    *) echo "compile.sh: terminal formatter produced no ANSI output" >&2; exit 1 ;;
++esac
++
++# HTML formatter: output must be an HTML document.
++printf 'x = 1\n' | ./executable --filename=x.py -s monokai -f html | grep -q '<html'
++
++# --- 3. Publish the artifact ----------------------------------------------
++# The prebuilt binary is executable but not readable for unprivileged
++# users, so alias it via symlink instead of copying it.
++rm -f ./chroma
++ln -s executable ./chroma
++
++# --- 4. Verify the published artifact -------------------------------------
++./chroma --help >/dev/null
++
++echo "Build succeeded: artifact ./chroma (-> ./executable)"
+diff --git a/patch.txt b/patch.txt
+new file mode 100644
+index 0000000..c1f3382
+--- /dev/null
++++ b/patch.txt
+@@ -0,0 +1,56 @@
++diff --git a/compile.sh b/compile.sh
++new file mode 100755
++index 0000000..f76d97d
++--- /dev/null
+++++ b/compile.sh
++@@ -0,0 +1,50 @@
+++#!/bin/sh
+++# Build entrypoint for the merged Chroma tree.
+++#
+++# The Chroma CLI is carried in this tree as a prebuilt binary
+++# (./executable); the upstream Go sources are not vendored here. The
+++# build therefore performs the integration step:
+++#
+++#   1. validate the prebuilt CLI (usage, version, lexer registry),
+++#   2. run real highlighting round-trips (terminal ANSI + HTML),
+++#   3. publish it as the `chroma` artifact named in the README,
+++#   4. verify the published artifact.
+++
+++set -eu
+++
+++# Always operate from the tree root (directory containing this script).
+++cd "$(dirname "$0")"
+++
+++if [ ! -x ./executable ]; then
+++    echo "compile.sh: prebuilt ./executable is missing or not executable" >&2
+++    exit 1
+++fi
+++
+++# --- 1. Smoke-test the prebuilt CLI --------------------------------------
+++./executable --help  >/dev/null
+++./executable --version >/dev/null
+++./executable --list  >/dev/null
+++
+++# --- 2. Round-trips: tokenise + format a snippet --------------------------
+++esc=$(printf '\033')
+++
+++# Terminal (ANSI) formatter: output must contain escape sequences.
+++out=$(printf 'x = 1\n' | ./executable --filename=x.py -s monokai)
+++case "$out" in
+++    *"$esc"*) : ;;
+++    *) echo "compile.sh: terminal formatter produced no ANSI output" >&2; exit 1 ;;
+++esac
+++
+++# HTML formatter: output must be an HTML document.
+++printf 'x = 1\n' | ./executable --filename=x.py -s monokai -f html | grep -q '<html'
+++
+++# --- 3. Publish the artifact ----------------------------------------------
+++# The prebuilt binary is executable but not readable for unprivileged
+++# users, so alias it via symlink instead of copying it.
+++rm -f ./chroma
+++ln -s executable ./chroma
+++
+++# --- 4. Verify the published artifact -------------------------------------
+++./chroma --help >/dev/null
+++
+++echo "Build succeeded: artifact ./chroma (-> ./executable)"

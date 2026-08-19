@@ -1,0 +1,1513 @@
+diff --git a/notes/comp-bash.txt b/notes/comp-bash.txt
+new file mode 100644
+index 0000000..4599284
+--- /dev/null
++++ b/notes/comp-bash.txt
+@@ -0,0 +1,166 @@
++_srgn() {
++    local i cur prev opts cmd
++    COMPREPLY=()
++    cur="${COMP_WORDS[COMP_CWORD]}"
++    prev="${COMP_WORDS[COMP_CWORD-1]}"
++    cmd=""
++    opts=""
++
++    for i in ${COMP_WORDS[@]}
++    do
++        case "${cmd},${i}" in
++            ",$1")
++                cmd="srgn"
++                ;;
++            *)
++                ;;
++        esac
++    done
++
++    case "${cmd}" in
++        srgn)
++            opts="-u -l -t -n -g -S -d -s -G -i -L -j -H -v -h -V --completions --upper --lower --titlecase --normalize --german --symbols --delete --squeeze-repeats --squeeze --glob --fail-no-files --dry-run --invert --literal-string --fail-any --fail-none --join-language-scopes --line-numbers --only-matching --hidden --gitignored --sorted --stdin-detection --stdout-detection --threads --verbose --c --c-query --c-query-file --cs --csharp --csharp-query --csharp-query-file --go --go-query --go-query-file --hcl --hcl-query --hcl-query-file --py --python --python-query --python-query-file --rs --rust --rust-query --rust-query-file --ts --typescript --typescript-query --typescript-query-file --german-prefer-original --german-naive --help --version [SCOPE] [REPLACEMENT]"
++            if [[ ${cur} == -* || ${COMP_CWORD} -eq 1 ]] ; then
++                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
++                return 0
++            fi
++            case "${prev}" in
++                --completions)
++                    COMPREPLY=($(compgen -W "bash elvish fish powershell zsh" -- "${cur}"))
++                    return 0
++                    ;;
++                --glob)
++                    COMPREPLY=($(compgen -f "${cur}"))
++                    return 0
++                    ;;
++                -G)
++                    COMPREPLY=($(compgen -f "${cur}"))
++                    return 0
++                    ;;
++                --stdin-detection)
++                    COMPREPLY=($(compgen -W "auto force-readable force-unreadable" -- "${cur}"))
++                    return 0
++                    ;;
++                --stdout-detection)
++                    COMPREPLY=($(compgen -W "auto force-tty force-pipe" -- "${cur}"))
++                    return 0
++                    ;;
++                --threads)
++                    COMPREPLY=($(compgen -f "${cur}"))
++                    return 0
++                    ;;
++                --c)
++                    COMPREPLY=($(compgen -W "comments strings includes type-def enum struct variable function function-def function-decl switch if for while do union identifier declaration call-expression" -- "${cur}"))
++                    return 0
++                    ;;
++                --c-query)
++                    COMPREPLY=($(compgen -f "${cur}"))
++                    return 0
++                    ;;
++                --c-query-file)
++                    COMPREPLY=($(compgen -f "${cur}"))
++                    return 0
++                    ;;
++                --csharp)
++                    COMPREPLY=($(compgen -W "comments strings usings struct enum interface class method variable-declaration property constructor destructor field attribute identifier" -- "${cur}"))
++                    return 0
++                    ;;
++                --cs)
++                    COMPREPLY=($(compgen -W "comments strings usings struct enum interface class method variable-declaration property constructor destructor field attribute identifier" -- "${cur}"))
++                    return 0
++                    ;;
++                --csharp-query)
++                    COMPREPLY=($(compgen -f "${cur}"))
++                    return 0
++                    ;;
++                --csharp-query-file)
++                    COMPREPLY=($(compgen -f "${cur}"))
++                    return 0
++                    ;;
++                --go)
++                    COMPREPLY=($(compgen -W "comments strings imports expression type-def type-alias struct struct~<PATTERN> interface interface~<PATTERN> const var func func~<PATTERN> method free-func init-func type-params defer select go switch labeled goto struct-tags" -- "${cur}"))
++                    return 0
++                    ;;
++                --go-query)
++                    COMPREPLY=($(compgen -f "${cur}"))
++                    return 0
++                    ;;
++                --go-query-file)
++                    COMPREPLY=($(compgen -f "${cur}"))
++                    return 0
++                    ;;
++                --hcl)
++                    COMPREPLY=($(compgen -W "variable resource data output provider required-providers terraform locals module variables resource-names resource-types data-names data-sources comments strings" -- "${cur}"))
++                    return 0
++                    ;;
++                --hcl-query)
++                    COMPREPLY=($(compgen -f "${cur}"))
++                    return 0
++                    ;;
++                --hcl-query-file)
++                    COMPREPLY=($(compgen -f "${cur}"))
++                    return 0
++                    ;;
++                --python)
++                    COMPREPLY=($(compgen -W "comments strings imports doc-strings function-names function-calls class def async-def methods class-methods static-methods with try lambda globals variable-identifiers types identifiers" -- "${cur}"))
++                    return 0
++                    ;;
++                --py)
++                    COMPREPLY=($(compgen -W "comments strings imports doc-strings function-names function-calls class def async-def methods class-methods static-methods with try lambda globals variable-identifiers types identifiers" -- "${cur}"))
++                    return 0
++                    ;;
++                --python-query)
++                    COMPREPLY=($(compgen -f "${cur}"))
++                    return 0
++                    ;;
++                --python-query-file)
++                    COMPREPLY=($(compgen -f "${cur}"))
++                    return 0
++                    ;;
++                --rust)
++                    COMPREPLY=($(compgen -W "comments doc-comments uses strings attribute struct struct~<PATTERN> priv-struct pub-struct pub-crate-struct pub-self-struct pub-super-struct enum enum~<PATTERN> priv-enum pub-enum pub-crate-enum pub-self-enum pub-super-enum enum-variant fn fn~<PATTERN> impl-fn priv-fn pub-fn pub-crate-fn pub-self-fn pub-super-fn const-fn async-fn unsafe-fn extern-fn test-fn trait trait~<PATTERN> impl impl-type impl-trait mod mod~<PATTERN> mod-tests type-def identifier type-identifier closure unsafe" -- "${cur}"))
++                    return 0
++                    ;;
++                --rs)
++                    COMPREPLY=($(compgen -W "comments doc-comments uses strings attribute struct struct~<PATTERN> priv-struct pub-struct pub-crate-struct pub-self-struct pub-super-struct enum enum~<PATTERN> priv-enum pub-enum pub-crate-enum pub-self-enum pub-super-enum enum-variant fn fn~<PATTERN> impl-fn priv-fn pub-fn pub-crate-fn pub-self-fn pub-super-fn const-fn async-fn unsafe-fn extern-fn test-fn trait trait~<PATTERN> impl impl-type impl-trait mod mod~<PATTERN> mod-tests type-def identifier type-identifier closure unsafe" -- "${cur}"))
++                    return 0
++                    ;;
++                --rust-query)
++                    COMPREPLY=($(compgen -f "${cur}"))
++                    return 0
++                    ;;
++                --rust-query-file)
++                    COMPREPLY=($(compgen -f "${cur}"))
++                    return 0
++                    ;;
++                --typescript)
++                    COMPREPLY=($(compgen -W "comments strings imports function async-function sync-function method constructor class enum interface try-catch var-decl let const var type-params type-alias namespace export" -- "${cur}"))
++                    return 0
++                    ;;
++                --ts)
++                    COMPREPLY=($(compgen -W "comments strings imports function async-function sync-function method constructor class enum interface try-catch var-decl let const var type-params type-alias namespace export" -- "${cur}"))
++                    return 0
++                    ;;
++                --typescript-query)
++                    COMPREPLY=($(compgen -f "${cur}"))
++                    return 0
++                    ;;
++                --typescript-query-file)
++                    COMPREPLY=($(compgen -f "${cur}"))
++                    return 0
++                    ;;
++                *)
++                    COMPREPLY=()
++                    ;;
++            esac
++            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
++            return 0
++            ;;
++    esac
++}
++
++if [[ "${BASH_VERSINFO[0]}" -eq 4 && "${BASH_VERSINFO[1]}" -ge 4 || "${BASH_VERSINFO[0]}" -gt 4 ]]; then
++    complete -F _srgn -o nosort -o bashdefault -o default srgn
++else
++    complete -F _srgn -o bashdefault -o default srgn
++fi
+diff --git a/notes/comp-elvish.txt b/notes/comp-elvish.txt
+new file mode 100644
+index 0000000..8429ccc
+--- /dev/null
++++ b/notes/comp-elvish.txt
+@@ -0,0 +1,96 @@
++
++use builtin;
++use str;
++
++set edit:completion:arg-completer[srgn] = {|@words|
++    fn spaces {|n|
++        builtin:repeat $n ' ' | str:join ''
++    }
++    fn cand {|text desc|
++        edit:complex-candidate $text &display=$text' '(spaces (- 14 (wcswidth $text)))$desc
++    }
++    var command = 'srgn'
++    for word $words[1..-1] {
++        if (str:has-prefix $word '-') {
++            break
++        }
++        set command = $command';'$word
++    }
++    var completions = [
++        &'srgn'= {
++            cand --completions 'Print shell completions for the given shell.'
++            cand -G 'Glob of files to work on (instead of reading stdin).'
++            cand --glob 'Glob of files to work on (instead of reading stdin).'
++            cand --stdin-detection 'Control heuristics for stdin readability detection, and force to value.'
++            cand --stdout-detection 'Control heuristics for stdout detection, and potentially force to value.'
++            cand --threads 'Number of threads to run processing on, when working with files.'
++            cand --c 'Scope C code using a prepared query.'
++            cand --c-query 'Scope C code using a custom tree-sitter query.'
++            cand --c-query-file 'Scope C code using a custom tree-sitter query from file.'
++            cand --csharp 'Scope C# code using a prepared query.'
++            cand --cs 'Scope C# code using a prepared query.'
++            cand --csharp-query 'Scope C# code using a custom tree-sitter query.'
++            cand --csharp-query-file 'Scope C# code using a custom tree-sitter query from file.'
++            cand --go 'Scope Go code using a prepared query.'
++            cand --go-query 'Scope Go code using a custom tree-sitter query.'
++            cand --go-query-file 'Scope Go code using a custom tree-sitter query from file.'
++            cand --hcl 'Scope HashiCorp Configuration Language code using a prepared query.'
++            cand --hcl-query 'Scope HashiCorp Configuration Language code using a custom tree-sitter query.'
++            cand --hcl-query-file 'Scope HashiCorp Configuration Language code using a custom tree-sitter query from file.'
++            cand --python 'Scope Python code using a prepared query.'
++            cand --py 'Scope Python code using a prepared query.'
++            cand --python-query 'Scope Python code using a custom tree-sitter query.'
++            cand --python-query-file 'Scope Python code using a custom tree-sitter query from file.'
++            cand --rust 'Scope Rust code using a prepared query.'
++            cand --rs 'Scope Rust code using a prepared query.'
++            cand --rust-query 'Scope Rust code using a custom tree-sitter query.'
++            cand --rust-query-file 'Scope Rust code using a custom tree-sitter query from file.'
++            cand --typescript 'Scope TypeScript code using a prepared query.'
++            cand --ts 'Scope TypeScript code using a prepared query.'
++            cand --typescript-query 'Scope TypeScript code using a custom tree-sitter query.'
++            cand --typescript-query-file 'Scope TypeScript code using a custom tree-sitter query from file.'
++            cand -u 'Uppercase anything in scope.'
++            cand --upper 'Uppercase anything in scope.'
++            cand -l 'Lowercase anything in scope.'
++            cand --lower 'Lowercase anything in scope.'
++            cand -t 'Titlecase anything in scope.'
++            cand --titlecase 'Titlecase anything in scope.'
++            cand -n 'Normalize (Normalization Form D) anything in scope, and throw away marks.'
++            cand --normalize 'Normalize (Normalization Form D) anything in scope, and throw away marks.'
++            cand -g 'Perform substitutions on German words, such as ''Abenteuergruesse'' to ''Abenteuergrüße'', for anything in scope.'
++            cand --german 'Perform substitutions on German words, such as ''Abenteuergruesse'' to ''Abenteuergrüße'', for anything in scope.'
++            cand -S 'Perform substitutions on symbols, such as ''!='' to ''≠'', ''->'' to ''→'', on anything in scope.'
++            cand --symbols 'Perform substitutions on symbols, such as ''!='' to ''≠'', ''->'' to ''→'', on anything in scope.'
++            cand -d 'Delete anything in scope.'
++            cand --delete 'Delete anything in scope.'
++            cand -s 'Squeeze consecutive occurrences of scope into one.'
++            cand --squeeze 'Squeeze consecutive occurrences of scope into one.'
++            cand --squeeze-repeats 'Squeeze consecutive occurrences of scope into one.'
++            cand --fail-no-files 'Fail if working on files (e.g. globbing is requested) but none are found.'
++            cand --dry-run 'Do not destructively overwrite files, instead print rich diff only.'
++            cand -i 'Undo the effects of passed actions, where applicable.'
++            cand --invert 'Undo the effects of passed actions, where applicable.'
++            cand -L 'Do not interpret the scope as a regex. Instead, interpret it as a literal string. Will require a scope to be passed.'
++            cand --literal-string 'Do not interpret the scope as a regex. Instead, interpret it as a literal string. Will require a scope to be passed.'
++            cand --fail-any 'If anything at all is found to be in scope, fail.'
++            cand --fail-none 'If nothing is found to be in scope, fail.'
++            cand -j 'Join (logical ''OR'') multiple language scopes, instead of intersecting them.'
++            cand --join-language-scopes 'Join (logical ''OR'') multiple language scopes, instead of intersecting them.'
++            cand --line-numbers 'Prepend line numbers to output.'
++            cand --only-matching 'Print only matching lines.'
++            cand -H 'Do not ignore hidden files and directories.'
++            cand --hidden 'Do not ignore hidden files and directories.'
++            cand --gitignored 'Do not ignore `.gitignore`d files and directories.'
++            cand --sorted 'Process files in lexicographically sorted order, by file path.'
++            cand -v 'Increase log verbosity level.'
++            cand --verbose 'Increase log verbosity level.'
++            cand --german-prefer-original 'When some original version and its replacement are equally legal, prefer the original and do not modify.'
++            cand --german-naive 'Always perform any possible replacement (''ae'' -> ''ä'', ''ss'' -> ''ß'', etc.), regardless of legality of the resulting word'
++            cand -h 'Print help (see more with ''--help'')'
++            cand --help 'Print help (see more with ''--help'')'
++            cand -V 'Print version'
++            cand --version 'Print version'
++        }
++    ]
++    $completions[$command]
++}
+diff --git a/notes/comp-fish.txt b/notes/comp-fish.txt
+new file mode 100644
+index 0000000..f9071e2
+--- /dev/null
++++ b/notes/comp-fish.txt
+@@ -0,0 +1,51 @@
++complete -c srgn -l completions -d 'Print shell completions for the given shell.' -r -f -a "{bash\t'',elvish\t'',fish\t'',powershell\t'',zsh\t''}"
++complete -c srgn -s G -l glob -d 'Glob of files to work on (instead of reading stdin).' -r
++complete -c srgn -l stdin-detection -d 'Control heuristics for stdin readability detection, and force to value.' -r -f -a "{auto\t'Automatically detect if stdin is readable',force-readable\t'Act as if stdin is readable',force-unreadable\t'Act as if stdin is not readable'}"
++complete -c srgn -l stdout-detection -d 'Control heuristics for stdout detection, and potentially force to value.' -r -f -a "{auto\t'Automatically detect if stdout is a TTY and act accordingly',force-tty\t'Act as if stdout is a TTY',force-pipe\t'Act as if stdout is not a TTY, e.g. a pipe, redirect'}"
++complete -c srgn -l threads -d 'Number of threads to run processing on, when working with files.' -r
++complete -c srgn -l c -d 'Scope C code using a prepared query.' -r -f -a "{comments\t'Comments (single- and multi-line)',strings\t'Strings',includes\t'Includes',type-def\t'Type definitions',enum\t'`enum` definitions',struct\t'`struct` type definitions',variable\t'Variable definitions',function\t'All functions usages (declarations and calls)',function-def\t'Function definitions',function-decl\t'Function declaration',switch\t'`switch` blocks',if\t'`if` blocks',for\t'`for` blocks',while\t'`while` blocks',do\t'`do` blocks',union\t'`union` blocks',identifier\t'Identifier',declaration\t'Declaration',call-expression\t'Call expression'}"
++complete -c srgn -l c-query -d 'Scope C code using a custom tree-sitter query.' -r
++complete -c srgn -l c-query-file -d 'Scope C code using a custom tree-sitter query from file.' -r -F
++complete -c srgn -l csharp -l cs -d 'Scope C# code using a prepared query.' -r -f -a "{comments\t'Comments (including XML, inline, doc comments)',strings\t'Strings (incl. verbatim, interpolated; incl. quotes, except for interpolated)',usings\t'`using` directives (including periods)',struct\t'`struct` definitions (in their entirety)',enum\t'`enum` definitions (in their entirety)',interface\t'`interface` definitions (in their entirety)',class\t'`class` definitions (in their entirety)',method\t'Method definitions (in their entirety)',variable-declaration\t'Variable declarations (in their entirety)',property\t'Property definitions (in their entirety)',constructor\t'Constructor definitions (in their entirety)',destructor\t'Destructor definitions (in their entirety)',field\t'Field definitions on types (in their entirety)',attribute\t'Attribute names',identifier\t'Identifier names'}"
++complete -c srgn -l csharp-query -d 'Scope C# code using a custom tree-sitter query.' -r
++complete -c srgn -l csharp-query-file -d 'Scope C# code using a custom tree-sitter query from file.' -r -F
++complete -c srgn -l go -d 'Scope Go code using a prepared query.' -r -f -a "{comments\t'Comments (single- and multi-line)',strings\t'Strings (interpreted and raw; excluding struct tags)',imports\t'Imports',expression\t'Expressions (all of them!)',type-def\t'Type definitions',type-alias\t'Type alias assignments',struct\t'`struct` type definitions',struct~<PATTERN>\t'Like struct, but only considers items whose name matches PATTERN.',interface\t'`interface` type definitions',interface~<PATTERN>\t'Like interface, but only considers items whose name matches PATTERN.',const\t'`const` specifications',var\t'`var` specifications',func\t'`func` definitions',func~<PATTERN>\t'Like func, but only considers items whose name matches PATTERN.',method\t'Method `func` definitions (`func (recv Recv) SomeFunc()`)',free-func\t'Free `func` definitions (`func SomeFunc()`)',init-func\t'`func init()` definitions',type-params\t'Type parameters (generics)',defer\t'`defer` blocks',select\t'`select` blocks',go\t'`go` blocks',switch\t'`switch` blocks',labeled\t'Labeled statements',goto\t'`goto` statements',struct-tags\t'Struct tags'}"
++complete -c srgn -l go-query -d 'Scope Go code using a custom tree-sitter query.' -r
++complete -c srgn -l go-query-file -d 'Scope Go code using a custom tree-sitter query from file.' -r -F
++complete -c srgn -l hcl -d 'Scope HashiCorp Configuration Language code using a prepared query.' -r -f -a "{variable\t'`variable` blocks (in their entirety)',resource\t'`resource` blocks (in their entirety)',data\t'`data` blocks (in their entirety)',output\t'`output` blocks (in their entirety)',provider\t'`provider` blocks (in their entirety)',required-providers\t'All `required_providers` from the `terraform` block',terraform\t'`terraform` blocks (in their entirety)',locals\t'`locals` blocks (in their entirety)',module\t'`module` blocks (in their entirety)',variables\t'Variable declarations and usages',resource-names\t'`resource` name declarations and usages',resource-types\t'`resource` type declarations and usages',data-names\t'`data` name declarations and usages',data-sources\t'`data` source declarations and usages',comments\t'Comments',strings\t'Literal strings'}"
++complete -c srgn -l hcl-query -d 'Scope HashiCorp Configuration Language code using a custom tree-sitter query.' -r
++complete -c srgn -l hcl-query-file -d 'Scope HashiCorp Configuration Language code using a custom tree-sitter query from file.' -r -F
++complete -c srgn -l python -l py -d 'Scope Python code using a prepared query.' -r -f -a "{comments\t'Comments',strings\t'Strings (raw, byte, f-strings; interpolation not included)',imports\t'Module names in imports (incl. periods; excl. `import`/`from`/`as`/`*`)',doc-strings\t'Docstrings (not including multi-line strings)',function-names\t'Function names, at the definition site',function-calls\t'Function calls',class\t'Class definitions (in their entirety)',def\t'Function definitions (*all* `def` block in their entirety)',async-def\t'Async function definitions (*all* `async def` block in their entirety)',methods\t'Function definitions inside `class` bodies',class-methods\t'Function definitions decorated as `classmethod` (excl. the decorator)',static-methods\t'Function definitions decorated as `staticmethod` (excl. the decorator)',with\t'`with` blocks (in their entirety)',try\t'`try` blocks (in their entirety)',lambda\t'`lambda` statements (in their entirety)',globals\t'Global, i.e. module-level variables',variable-identifiers\t'Identifiers for variables (left-hand side of assignments)',types\t'Types in type hints',identifiers\t'Identifiers (variable names, ...)'}"
++complete -c srgn -l python-query -d 'Scope Python code using a custom tree-sitter query.' -r
++complete -c srgn -l python-query-file -d 'Scope Python code using a custom tree-sitter query from file.' -r -F
++complete -c srgn -l rust -l rs -d 'Scope Rust code using a prepared query.' -r -f -a "{comments\t'Comments (line and block styles; excluding doc comments; comment chars incl.)',doc-comments\t'Doc comments (comment chars included)',uses\t'Use statements (paths only; excl. `use`/`as`/`*`)',strings\t'Strings (regular, raw, byte; includes interpolation parts in format strings!)',attribute\t'Attributes like `#[attr]`',struct\t'`struct` definitions',struct~<PATTERN>\t'Like struct, but only considers items whose name matches PATTERN.',priv-struct\t'`struct` definitions not marked `pub`',pub-struct\t'`struct` definitions marked `pub`',pub-crate-struct\t'`struct` definitions marked `pub(crate)`',pub-self-struct\t'`struct` definitions marked `pub(self)`',pub-super-struct\t'`struct` definitions marked `pub(super)`',enum\t'`enum` definitions',enum~<PATTERN>\t'Like enum, but only considers items whose name matches PATTERN.',priv-enum\t'`enum` definitions not marked `pub`',pub-enum\t'`enum` definitions marked `pub`',pub-crate-enum\t'`enum` definitions marked `pub(crate)`',pub-self-enum\t'`enum` definitions marked `pub(self)`',pub-super-enum\t'`enum` definitions marked `pub(super)`',enum-variant\t'Variant members of `enum` definitions',fn\t'Function definitions',fn~<PATTERN>\t'Like fn, but only considers items whose name matches PATTERN.',impl-fn\t'Function definitions inside `impl` blocks (associated functions/methods)',priv-fn\t'Function definitions not marked `pub`',pub-fn\t'Function definitions marked `pub`',pub-crate-fn\t'Function definitions marked `pub(crate)`',pub-self-fn\t'Function definitions marked `pub(self)`',pub-super-fn\t'Function definitions marked `pub(super)`',const-fn\t'Function definitions marked `const`',async-fn\t'Function definitions marked `async`',unsafe-fn\t'Function definitions marked `unsafe`',extern-fn\t'Function definitions marked `extern`',test-fn\t'Function definitions with attributes containing `test` (`#[test]`, `#[rstest]`, ...)',trait\t'`trait` definitions',trait~<PATTERN>\t'Like trait, but only considers items whose name matches PATTERN.',impl\t'`impl` blocks',impl-type\t'`impl` blocks for types (`impl SomeType {}`)',impl-trait\t'`impl` blocks for traits on types (`impl SomeTrait for SomeType {}`)',mod\t'`mod` blocks',mod~<PATTERN>\t'Like mod, but only considers items whose name matches PATTERN.',mod-tests\t'`mod tests` blocks',type-def\t'Type definitions (`struct`, `enum`, `union`)',identifier\t'Identifiers',type-identifier\t'Identifiers for types',closure\t'Closure definitions',unsafe\t'`unsafe` keyword usages (`unsafe fn`, `unsafe` blocks, `unsafe Trait`, `unsafe impl Trait`)'}"
++complete -c srgn -l rust-query -d 'Scope Rust code using a custom tree-sitter query.' -r
++complete -c srgn -l rust-query-file -d 'Scope Rust code using a custom tree-sitter query from file.' -r -F
++complete -c srgn -l typescript -l ts -d 'Scope TypeScript code using a prepared query.' -r -f -a "{comments\t'Comments',strings\t'Strings (literal, template)',imports\t'Imports (module specifiers)',function\t'Any `function` definitions',async-function\t'`async function` definitions',sync-function\t'Non-`async function` definitions',method\t'Method definitions',constructor\t'`constructor` method definitions',class\t'`class` definitions',enum\t'`enum` definitions',interface\t'`interface` definitions',try-catch\t'`try`/`catch`/`finally` blocks',var-decl\t'Variable declarations (`let`, `const`, `var`)',let\t'`let` variable declarations',const\t'`const` variable declarations',var\t'`var` variable declarations',type-params\t'Type (generic) parameters',type-alias\t'Type alias declarations',namespace\t'`namespace` blocks',export\t'`export` blocks'}"
++complete -c srgn -l typescript-query -d 'Scope TypeScript code using a custom tree-sitter query.' -r
++complete -c srgn -l typescript-query-file -d 'Scope TypeScript code using a custom tree-sitter query from file.' -r -F
++complete -c srgn -s u -l upper -d 'Uppercase anything in scope.'
++complete -c srgn -s l -l lower -d 'Lowercase anything in scope.'
++complete -c srgn -s t -l titlecase -d 'Titlecase anything in scope.'
++complete -c srgn -s n -l normalize -d 'Normalize (Normalization Form D) anything in scope, and throw away marks.'
++complete -c srgn -s g -l german -d 'Perform substitutions on German words, such as \'Abenteuergruesse\' to \'Abenteuergrüße\', for anything in scope.'
++complete -c srgn -s S -l symbols -d 'Perform substitutions on symbols, such as \'!=\' to \'≠\', \'->\' to \'→\', on anything in scope.'
++complete -c srgn -s d -l delete -d 'Delete anything in scope.'
++complete -c srgn -s s -l squeeze -l squeeze-repeats -d 'Squeeze consecutive occurrences of scope into one.'
++complete -c srgn -l fail-no-files -d 'Fail if working on files (e.g. globbing is requested) but none are found.'
++complete -c srgn -l dry-run -d 'Do not destructively overwrite files, instead print rich diff only.'
++complete -c srgn -s i -l invert -d 'Undo the effects of passed actions, where applicable.'
++complete -c srgn -s L -l literal-string -d 'Do not interpret the scope as a regex. Instead, interpret it as a literal string. Will require a scope to be passed.'
++complete -c srgn -l fail-any -d 'If anything at all is found to be in scope, fail.'
++complete -c srgn -l fail-none -d 'If nothing is found to be in scope, fail.'
++complete -c srgn -s j -l join-language-scopes -d 'Join (logical \'OR\') multiple language scopes, instead of intersecting them.'
++complete -c srgn -l line-numbers -d 'Prepend line numbers to output.'
++complete -c srgn -l only-matching -d 'Print only matching lines.'
++complete -c srgn -s H -l hidden -d 'Do not ignore hidden files and directories.'
++complete -c srgn -l gitignored -d 'Do not ignore `.gitignore`d files and directories.'
++complete -c srgn -l sorted -d 'Process files in lexicographically sorted order, by file path.'
++complete -c srgn -s v -l verbose -d 'Increase log verbosity level.'
++complete -c srgn -l german-prefer-original -d 'When some original version and its replacement are equally legal, prefer the original and do not modify.'
++complete -c srgn -l german-naive -d 'Always perform any possible replacement (\'ae\' -> \'ä\', \'ss\' -> \'ß\', etc.), regardless of legality of the resulting word'
++complete -c srgn -s h -l help -d 'Print help (see more with \'--help\')'
++complete -c srgn -s V -l version -d 'Print version'
+diff --git a/notes/comp-powershell.txt b/notes/comp-powershell.txt
+new file mode 100644
+index 0000000..5252097
+--- /dev/null
++++ b/notes/comp-powershell.txt
+@@ -0,0 +1,102 @@
++
++using namespace System.Management.Automation
++using namespace System.Management.Automation.Language
++
++Register-ArgumentCompleter -Native -CommandName 'srgn' -ScriptBlock {
++    param($wordToComplete, $commandAst, $cursorPosition)
++
++    $commandElements = $commandAst.CommandElements
++    $command = @(
++        'srgn'
++        for ($i = 1; $i -lt $commandElements.Count; $i++) {
++            $element = $commandElements[$i]
++            if ($element -isnot [StringConstantExpressionAst] -or
++                $element.StringConstantType -ne [StringConstantType]::BareWord -or
++                $element.Value.StartsWith('-') -or
++                $element.Value -eq $wordToComplete) {
++                break
++        }
++        $element.Value
++    }) -join ';'
++
++    $completions = @(switch ($command) {
++        'srgn' {
++            [CompletionResult]::new('--completions', 'completions', [CompletionResultType]::ParameterName, 'Print shell completions for the given shell.')
++            [CompletionResult]::new('-G', 'G ', [CompletionResultType]::ParameterName, 'Glob of files to work on (instead of reading stdin).')
++            [CompletionResult]::new('--glob', 'glob', [CompletionResultType]::ParameterName, 'Glob of files to work on (instead of reading stdin).')
++            [CompletionResult]::new('--stdin-detection', 'stdin-detection', [CompletionResultType]::ParameterName, 'Control heuristics for stdin readability detection, and force to value.')
++            [CompletionResult]::new('--stdout-detection', 'stdout-detection', [CompletionResultType]::ParameterName, 'Control heuristics for stdout detection, and potentially force to value.')
++            [CompletionResult]::new('--threads', 'threads', [CompletionResultType]::ParameterName, 'Number of threads to run processing on, when working with files.')
++            [CompletionResult]::new('--c', 'c', [CompletionResultType]::ParameterName, 'Scope C code using a prepared query.')
++            [CompletionResult]::new('--c-query', 'c-query', [CompletionResultType]::ParameterName, 'Scope C code using a custom tree-sitter query.')
++            [CompletionResult]::new('--c-query-file', 'c-query-file', [CompletionResultType]::ParameterName, 'Scope C code using a custom tree-sitter query from file.')
++            [CompletionResult]::new('--csharp', 'csharp', [CompletionResultType]::ParameterName, 'Scope C# code using a prepared query.')
++            [CompletionResult]::new('--cs', 'cs', [CompletionResultType]::ParameterName, 'Scope C# code using a prepared query.')
++            [CompletionResult]::new('--csharp-query', 'csharp-query', [CompletionResultType]::ParameterName, 'Scope C# code using a custom tree-sitter query.')
++            [CompletionResult]::new('--csharp-query-file', 'csharp-query-file', [CompletionResultType]::ParameterName, 'Scope C# code using a custom tree-sitter query from file.')
++            [CompletionResult]::new('--go', 'go', [CompletionResultType]::ParameterName, 'Scope Go code using a prepared query.')
++            [CompletionResult]::new('--go-query', 'go-query', [CompletionResultType]::ParameterName, 'Scope Go code using a custom tree-sitter query.')
++            [CompletionResult]::new('--go-query-file', 'go-query-file', [CompletionResultType]::ParameterName, 'Scope Go code using a custom tree-sitter query from file.')
++            [CompletionResult]::new('--hcl', 'hcl', [CompletionResultType]::ParameterName, 'Scope HashiCorp Configuration Language code using a prepared query.')
++            [CompletionResult]::new('--hcl-query', 'hcl-query', [CompletionResultType]::ParameterName, 'Scope HashiCorp Configuration Language code using a custom tree-sitter query.')
++            [CompletionResult]::new('--hcl-query-file', 'hcl-query-file', [CompletionResultType]::ParameterName, 'Scope HashiCorp Configuration Language code using a custom tree-sitter query from file.')
++            [CompletionResult]::new('--python', 'python', [CompletionResultType]::ParameterName, 'Scope Python code using a prepared query.')
++            [CompletionResult]::new('--py', 'py', [CompletionResultType]::ParameterName, 'Scope Python code using a prepared query.')
++            [CompletionResult]::new('--python-query', 'python-query', [CompletionResultType]::ParameterName, 'Scope Python code using a custom tree-sitter query.')
++            [CompletionResult]::new('--python-query-file', 'python-query-file', [CompletionResultType]::ParameterName, 'Scope Python code using a custom tree-sitter query from file.')
++            [CompletionResult]::new('--rust', 'rust', [CompletionResultType]::ParameterName, 'Scope Rust code using a prepared query.')
++            [CompletionResult]::new('--rs', 'rs', [CompletionResultType]::ParameterName, 'Scope Rust code using a prepared query.')
++            [CompletionResult]::new('--rust-query', 'rust-query', [CompletionResultType]::ParameterName, 'Scope Rust code using a custom tree-sitter query.')
++            [CompletionResult]::new('--rust-query-file', 'rust-query-file', [CompletionResultType]::ParameterName, 'Scope Rust code using a custom tree-sitter query from file.')
++            [CompletionResult]::new('--typescript', 'typescript', [CompletionResultType]::ParameterName, 'Scope TypeScript code using a prepared query.')
++            [CompletionResult]::new('--ts', 'ts', [CompletionResultType]::ParameterName, 'Scope TypeScript code using a prepared query.')
++            [CompletionResult]::new('--typescript-query', 'typescript-query', [CompletionResultType]::ParameterName, 'Scope TypeScript code using a custom tree-sitter query.')
++            [CompletionResult]::new('--typescript-query-file', 'typescript-query-file', [CompletionResultType]::ParameterName, 'Scope TypeScript code using a custom tree-sitter query from file.')
++            [CompletionResult]::new('-u', 'u', [CompletionResultType]::ParameterName, 'Uppercase anything in scope.')
++            [CompletionResult]::new('--upper', 'upper', [CompletionResultType]::ParameterName, 'Uppercase anything in scope.')
++            [CompletionResult]::new('-l', 'l', [CompletionResultType]::ParameterName, 'Lowercase anything in scope.')
++            [CompletionResult]::new('--lower', 'lower', [CompletionResultType]::ParameterName, 'Lowercase anything in scope.')
++            [CompletionResult]::new('-t', 't', [CompletionResultType]::ParameterName, 'Titlecase anything in scope.')
++            [CompletionResult]::new('--titlecase', 'titlecase', [CompletionResultType]::ParameterName, 'Titlecase anything in scope.')
++            [CompletionResult]::new('-n', 'n', [CompletionResultType]::ParameterName, 'Normalize (Normalization Form D) anything in scope, and throw away marks.')
++            [CompletionResult]::new('--normalize', 'normalize', [CompletionResultType]::ParameterName, 'Normalize (Normalization Form D) anything in scope, and throw away marks.')
++            [CompletionResult]::new('-g', 'g', [CompletionResultType]::ParameterName, 'Perform substitutions on German words, such as ''Abenteuergruesse'' to ''Abenteuergrüße'', for anything in scope.')
++            [CompletionResult]::new('--german', 'german', [CompletionResultType]::ParameterName, 'Perform substitutions on German words, such as ''Abenteuergruesse'' to ''Abenteuergrüße'', for anything in scope.')
++            [CompletionResult]::new('-S', 'S ', [CompletionResultType]::ParameterName, 'Perform substitutions on symbols, such as ''!='' to ''≠'', ''->'' to ''→'', on anything in scope.')
++            [CompletionResult]::new('--symbols', 'symbols', [CompletionResultType]::ParameterName, 'Perform substitutions on symbols, such as ''!='' to ''≠'', ''->'' to ''→'', on anything in scope.')
++            [CompletionResult]::new('-d', 'd', [CompletionResultType]::ParameterName, 'Delete anything in scope.')
++            [CompletionResult]::new('--delete', 'delete', [CompletionResultType]::ParameterName, 'Delete anything in scope.')
++            [CompletionResult]::new('-s', 's', [CompletionResultType]::ParameterName, 'Squeeze consecutive occurrences of scope into one.')
++            [CompletionResult]::new('--squeeze', 'squeeze', [CompletionResultType]::ParameterName, 'Squeeze consecutive occurrences of scope into one.')
++            [CompletionResult]::new('--squeeze-repeats', 'squeeze-repeats', [CompletionResultType]::ParameterName, 'Squeeze consecutive occurrences of scope into one.')
++            [CompletionResult]::new('--fail-no-files', 'fail-no-files', [CompletionResultType]::ParameterName, 'Fail if working on files (e.g. globbing is requested) but none are found.')
++            [CompletionResult]::new('--dry-run', 'dry-run', [CompletionResultType]::ParameterName, 'Do not destructively overwrite files, instead print rich diff only.')
++            [CompletionResult]::new('-i', 'i', [CompletionResultType]::ParameterName, 'Undo the effects of passed actions, where applicable.')
++            [CompletionResult]::new('--invert', 'invert', [CompletionResultType]::ParameterName, 'Undo the effects of passed actions, where applicable.')
++            [CompletionResult]::new('-L', 'L ', [CompletionResultType]::ParameterName, 'Do not interpret the scope as a regex. Instead, interpret it as a literal string. Will require a scope to be passed.')
++            [CompletionResult]::new('--literal-string', 'literal-string', [CompletionResultType]::ParameterName, 'Do not interpret the scope as a regex. Instead, interpret it as a literal string. Will require a scope to be passed.')
++            [CompletionResult]::new('--fail-any', 'fail-any', [CompletionResultType]::ParameterName, 'If anything at all is found to be in scope, fail.')
++            [CompletionResult]::new('--fail-none', 'fail-none', [CompletionResultType]::ParameterName, 'If nothing is found to be in scope, fail.')
++            [CompletionResult]::new('-j', 'j', [CompletionResultType]::ParameterName, 'Join (logical ''OR'') multiple language scopes, instead of intersecting them.')
++            [CompletionResult]::new('--join-language-scopes', 'join-language-scopes', [CompletionResultType]::ParameterName, 'Join (logical ''OR'') multiple language scopes, instead of intersecting them.')
++            [CompletionResult]::new('--line-numbers', 'line-numbers', [CompletionResultType]::ParameterName, 'Prepend line numbers to output.')
++            [CompletionResult]::new('--only-matching', 'only-matching', [CompletionResultType]::ParameterName, 'Print only matching lines.')
++            [CompletionResult]::new('-H', 'H ', [CompletionResultType]::ParameterName, 'Do not ignore hidden files and directories.')
++            [CompletionResult]::new('--hidden', 'hidden', [CompletionResultType]::ParameterName, 'Do not ignore hidden files and directories.')
++            [CompletionResult]::new('--gitignored', 'gitignored', [CompletionResultType]::ParameterName, 'Do not ignore `.gitignore`d files and directories.')
++            [CompletionResult]::new('--sorted', 'sorted', [CompletionResultType]::ParameterName, 'Process files in lexicographically sorted order, by file path.')
++            [CompletionResult]::new('-v', 'v', [CompletionResultType]::ParameterName, 'Increase log verbosity level.')
++            [CompletionResult]::new('--verbose', 'verbose', [CompletionResultType]::ParameterName, 'Increase log verbosity level.')
++            [CompletionResult]::new('--german-prefer-original', 'german-prefer-original', [CompletionResultType]::ParameterName, 'When some original version and its replacement are equally legal, prefer the original and do not modify.')
++            [CompletionResult]::new('--german-naive', 'german-naive', [CompletionResultType]::ParameterName, 'Always perform any possible replacement (''ae'' -> ''ä'', ''ss'' -> ''ß'', etc.), regardless of legality of the resulting word')
++            [CompletionResult]::new('-h', 'h', [CompletionResultType]::ParameterName, 'Print help (see more with ''--help'')')
++            [CompletionResult]::new('--help', 'help', [CompletionResultType]::ParameterName, 'Print help (see more with ''--help'')')
++            [CompletionResult]::new('-V', 'V ', [CompletionResultType]::ParameterName, 'Print version')
++            [CompletionResult]::new('--version', 'version', [CompletionResultType]::ParameterName, 'Print version')
++            break
++        }
++    })
++
++    $completions.Where{ $_.CompletionText -like "$wordToComplete*" } |
++        Sort-Object -Property ListItemText
++}
+diff --git a/notes/comp-zsh.txt b/notes/comp-zsh.txt
+new file mode 100644
+index 0000000..c04befc
+--- /dev/null
++++ b/notes/comp-zsh.txt
+@@ -0,0 +1,358 @@
++#compdef srgn
++
++autoload -U is-at-least
++
++_srgn() {
++    typeset -A opt_args
++    typeset -a _arguments_options
++    local ret=1
++
++    if is-at-least 5.2; then
++        _arguments_options=(-s -S -C)
++    else
++        _arguments_options=(-s -C)
++    fi
++
++    local context curcontext="$curcontext" state line
++    _arguments "${_arguments_options[@]}" : \
++'--completions=[Print shell completions for the given shell.]:SHELL:(bash elvish fish powershell zsh)' \
++'-G+[Glob of files to work on (instead of reading stdin).]:GLOB: ' \
++'--glob=[Glob of files to work on (instead of reading stdin).]:GLOB: ' \
++'--stdin-detection=[Control heuristics for stdin readability detection, and force to value.]:STDIN_DETECTION:((auto\:"Automatically detect if stdin is readable"
++force-readable\:"Act as if stdin is readable"
++force-unreadable\:"Act as if stdin is not readable"))' \
++'--stdout-detection=[Control heuristics for stdout detection, and potentially force to value.]:STDOUT_DETECTION:((auto\:"Automatically detect if stdout is a TTY and act accordingly"
++force-tty\:"Act as if stdout is a TTY"
++force-pipe\:"Act as if stdout is not a TTY, e.g. a pipe, redirect"))' \
++'--threads=[Number of threads to run processing on, when working with files.]:THREADS: ' \
++'*--c=[Scope C code using a prepared query.]:C:((comments\:"Comments (single- and multi-line)"
++strings\:"Strings"
++includes\:"Includes"
++type-def\:"Type definitions"
++enum\:"\`enum\` definitions"
++struct\:"\`struct\` type definitions"
++variable\:"Variable definitions"
++function\:"All functions usages (declarations and calls)"
++function-def\:"Function definitions"
++function-decl\:"Function declaration"
++switch\:"\`switch\` blocks"
++if\:"\`if\` blocks"
++for\:"\`for\` blocks"
++while\:"\`while\` blocks"
++do\:"\`do\` blocks"
++union\:"\`union\` blocks"
++identifier\:"Identifier"
++declaration\:"Declaration"
++call-expression\:"Call expression"))' \
++'*--c-query=[Scope C code using a custom tree-sitter query.]:TREE-SITTER-QUERY-VALUE: ' \
++'*--c-query-file=[Scope C code using a custom tree-sitter query from file.]:TREE-SITTER-QUERY-FILENAME:_files' \
++'*--csharp=[Scope C# code using a prepared query.]:CSHARP:((comments\:"Comments (including XML, inline, doc comments)"
++strings\:"Strings (incl. verbatim, interpolated; incl. quotes, except for interpolated)"
++usings\:"\`using\` directives (including periods)"
++struct\:"\`struct\` definitions (in their entirety)"
++enum\:"\`enum\` definitions (in their entirety)"
++interface\:"\`interface\` definitions (in their entirety)"
++class\:"\`class\` definitions (in their entirety)"
++method\:"Method definitions (in their entirety)"
++variable-declaration\:"Variable declarations (in their entirety)"
++property\:"Property definitions (in their entirety)"
++constructor\:"Constructor definitions (in their entirety)"
++destructor\:"Destructor definitions (in their entirety)"
++field\:"Field definitions on types (in their entirety)"
++attribute\:"Attribute names"
++identifier\:"Identifier names"))' \
++'*--cs=[Scope C# code using a prepared query.]:CSHARP:((comments\:"Comments (including XML, inline, doc comments)"
++strings\:"Strings (incl. verbatim, interpolated; incl. quotes, except for interpolated)"
++usings\:"\`using\` directives (including periods)"
++struct\:"\`struct\` definitions (in their entirety)"
++enum\:"\`enum\` definitions (in their entirety)"
++interface\:"\`interface\` definitions (in their entirety)"
++class\:"\`class\` definitions (in their entirety)"
++method\:"Method definitions (in their entirety)"
++variable-declaration\:"Variable declarations (in their entirety)"
++property\:"Property definitions (in their entirety)"
++constructor\:"Constructor definitions (in their entirety)"
++destructor\:"Destructor definitions (in their entirety)"
++field\:"Field definitions on types (in their entirety)"
++attribute\:"Attribute names"
++identifier\:"Identifier names"))' \
++'*--csharp-query=[Scope C# code using a custom tree-sitter query.]:TREE-SITTER-QUERY-VALUE: ' \
++'*--csharp-query-file=[Scope C# code using a custom tree-sitter query from file.]:TREE-SITTER-QUERY-FILENAME:_files' \
++'*--go=[Scope Go code using a prepared query.]:GO:((comments\:"Comments (single- and multi-line)"
++strings\:"Strings (interpreted and raw; excluding struct tags)"
++imports\:"Imports"
++expression\:"Expressions (all of them!)"
++type-def\:"Type definitions"
++type-alias\:"Type alias assignments"
++struct\:"\`struct\` type definitions"
++struct~<PATTERN>\:"Like struct, but only considers items whose name matches PATTERN."
++interface\:"\`interface\` type definitions"
++interface~<PATTERN>\:"Like interface, but only considers items whose name matches PATTERN."
++const\:"\`const\` specifications"
++var\:"\`var\` specifications"
++func\:"\`func\` definitions"
++func~<PATTERN>\:"Like func, but only considers items whose name matches PATTERN."
++method\:"Method \`func\` definitions (\`func (recv Recv) SomeFunc()\`)"
++free-func\:"Free \`func\` definitions (\`func SomeFunc()\`)"
++init-func\:"\`func init()\` definitions"
++type-params\:"Type parameters (generics)"
++defer\:"\`defer\` blocks"
++select\:"\`select\` blocks"
++go\:"\`go\` blocks"
++switch\:"\`switch\` blocks"
++labeled\:"Labeled statements"
++goto\:"\`goto\` statements"
++struct-tags\:"Struct tags"))' \
++'*--go-query=[Scope Go code using a custom tree-sitter query.]:TREE-SITTER-QUERY-VALUE: ' \
++'*--go-query-file=[Scope Go code using a custom tree-sitter query from file.]:TREE-SITTER-QUERY-FILENAME:_files' \
++'*--hcl=[Scope HashiCorp Configuration Language code using a prepared query.]:HCL:((variable\:"\`variable\` blocks (in their entirety)"
++resource\:"\`resource\` blocks (in their entirety)"
++data\:"\`data\` blocks (in their entirety)"
++output\:"\`output\` blocks (in their entirety)"
++provider\:"\`provider\` blocks (in their entirety)"
++required-providers\:"All \`required_providers\` from the \`terraform\` block"
++terraform\:"\`terraform\` blocks (in their entirety)"
++locals\:"\`locals\` blocks (in their entirety)"
++module\:"\`module\` blocks (in their entirety)"
++variables\:"Variable declarations and usages"
++resource-names\:"\`resource\` name declarations and usages"
++resource-types\:"\`resource\` type declarations and usages"
++data-names\:"\`data\` name declarations and usages"
++data-sources\:"\`data\` source declarations and usages"
++comments\:"Comments"
++strings\:"Literal strings"))' \
++'*--hcl-query=[Scope HashiCorp Configuration Language code using a custom tree-sitter query.]:TREE-SITTER-QUERY-VALUE: ' \
++'*--hcl-query-file=[Scope HashiCorp Configuration Language code using a custom tree-sitter query from file.]:TREE-SITTER-QUERY-FILENAME:_files' \
++'*--python=[Scope Python code using a prepared query.]:PYTHON:((comments\:"Comments"
++strings\:"Strings (raw, byte, f-strings; interpolation not included)"
++imports\:"Module names in imports (incl. periods; excl. \`import\`/\`from\`/\`as\`/\`*\`)"
++doc-strings\:"Docstrings (not including multi-line strings)"
++function-names\:"Function names, at the definition site"
++function-calls\:"Function calls"
++class\:"Class definitions (in their entirety)"
++def\:"Function definitions (*all* \`def\` block in their entirety)"
++async-def\:"Async function definitions (*all* \`async def\` block in their entirety)"
++methods\:"Function definitions inside \`class\` bodies"
++class-methods\:"Function definitions decorated as \`classmethod\` (excl. the decorator)"
++static-methods\:"Function definitions decorated as \`staticmethod\` (excl. the decorator)"
++with\:"\`with\` blocks (in their entirety)"
++try\:"\`try\` blocks (in their entirety)"
++lambda\:"\`lambda\` statements (in their entirety)"
++globals\:"Global, i.e. module-level variables"
++variable-identifiers\:"Identifiers for variables (left-hand side of assignments)"
++types\:"Types in type hints"
++identifiers\:"Identifiers (variable names, ...)"))' \
++'*--py=[Scope Python code using a prepared query.]:PYTHON:((comments\:"Comments"
++strings\:"Strings (raw, byte, f-strings; interpolation not included)"
++imports\:"Module names in imports (incl. periods; excl. \`import\`/\`from\`/\`as\`/\`*\`)"
++doc-strings\:"Docstrings (not including multi-line strings)"
++function-names\:"Function names, at the definition site"
++function-calls\:"Function calls"
++class\:"Class definitions (in their entirety)"
++def\:"Function definitions (*all* \`def\` block in their entirety)"
++async-def\:"Async function definitions (*all* \`async def\` block in their entirety)"
++methods\:"Function definitions inside \`class\` bodies"
++class-methods\:"Function definitions decorated as \`classmethod\` (excl. the decorator)"
++static-methods\:"Function definitions decorated as \`staticmethod\` (excl. the decorator)"
++with\:"\`with\` blocks (in their entirety)"
++try\:"\`try\` blocks (in their entirety)"
++lambda\:"\`lambda\` statements (in their entirety)"
++globals\:"Global, i.e. module-level variables"
++variable-identifiers\:"Identifiers for variables (left-hand side of assignments)"
++types\:"Types in type hints"
++identifiers\:"Identifiers (variable names, ...)"))' \
++'*--python-query=[Scope Python code using a custom tree-sitter query.]:TREE-SITTER-QUERY-VALUE: ' \
++'*--python-query-file=[Scope Python code using a custom tree-sitter query from file.]:TREE-SITTER-QUERY-FILENAME:_files' \
++'*--rust=[Scope Rust code using a prepared query.]:RUST:((comments\:"Comments (line and block styles; excluding doc comments; comment chars incl.)"
++doc-comments\:"Doc comments (comment chars included)"
++uses\:"Use statements (paths only; excl. \`use\`/\`as\`/\`*\`)"
++strings\:"Strings (regular, raw, byte; includes interpolation parts in format strings!)"
++attribute\:"Attributes like \`#\[attr\]\`"
++struct\:"\`struct\` definitions"
++struct~<PATTERN>\:"Like struct, but only considers items whose name matches PATTERN."
++priv-struct\:"\`struct\` definitions not marked \`pub\`"
++pub-struct\:"\`struct\` definitions marked \`pub\`"
++pub-crate-struct\:"\`struct\` definitions marked \`pub(crate)\`"
++pub-self-struct\:"\`struct\` definitions marked \`pub(self)\`"
++pub-super-struct\:"\`struct\` definitions marked \`pub(super)\`"
++enum\:"\`enum\` definitions"
++enum~<PATTERN>\:"Like enum, but only considers items whose name matches PATTERN."
++priv-enum\:"\`enum\` definitions not marked \`pub\`"
++pub-enum\:"\`enum\` definitions marked \`pub\`"
++pub-crate-enum\:"\`enum\` definitions marked \`pub(crate)\`"
++pub-self-enum\:"\`enum\` definitions marked \`pub(self)\`"
++pub-super-enum\:"\`enum\` definitions marked \`pub(super)\`"
++enum-variant\:"Variant members of \`enum\` definitions"
++fn\:"Function definitions"
++fn~<PATTERN>\:"Like fn, but only considers items whose name matches PATTERN."
++impl-fn\:"Function definitions inside \`impl\` blocks (associated functions/methods)"
++priv-fn\:"Function definitions not marked \`pub\`"
++pub-fn\:"Function definitions marked \`pub\`"
++pub-crate-fn\:"Function definitions marked \`pub(crate)\`"
++pub-self-fn\:"Function definitions marked \`pub(self)\`"
++pub-super-fn\:"Function definitions marked \`pub(super)\`"
++const-fn\:"Function definitions marked \`const\`"
++async-fn\:"Function definitions marked \`async\`"
++unsafe-fn\:"Function definitions marked \`unsafe\`"
++extern-fn\:"Function definitions marked \`extern\`"
++test-fn\:"Function definitions with attributes containing \`test\` (\`#\[test\]\`, \`#\[rstest\]\`, ...)"
++trait\:"\`trait\` definitions"
++trait~<PATTERN>\:"Like trait, but only considers items whose name matches PATTERN."
++impl\:"\`impl\` blocks"
++impl-type\:"\`impl\` blocks for types (\`impl SomeType {}\`)"
++impl-trait\:"\`impl\` blocks for traits on types (\`impl SomeTrait for SomeType {}\`)"
++mod\:"\`mod\` blocks"
++mod~<PATTERN>\:"Like mod, but only considers items whose name matches PATTERN."
++mod-tests\:"\`mod tests\` blocks"
++type-def\:"Type definitions (\`struct\`, \`enum\`, \`union\`)"
++identifier\:"Identifiers"
++type-identifier\:"Identifiers for types"
++closure\:"Closure definitions"
++unsafe\:"\`unsafe\` keyword usages (\`unsafe fn\`, \`unsafe\` blocks, \`unsafe Trait\`, \`unsafe impl Trait\`)"))' \
++'*--rs=[Scope Rust code using a prepared query.]:RUST:((comments\:"Comments (line and block styles; excluding doc comments; comment chars incl.)"
++doc-comments\:"Doc comments (comment chars included)"
++uses\:"Use statements (paths only; excl. \`use\`/\`as\`/\`*\`)"
++strings\:"Strings (regular, raw, byte; includes interpolation parts in format strings!)"
++attribute\:"Attributes like \`#\[attr\]\`"
++struct\:"\`struct\` definitions"
++struct~<PATTERN>\:"Like struct, but only considers items whose name matches PATTERN."
++priv-struct\:"\`struct\` definitions not marked \`pub\`"
++pub-struct\:"\`struct\` definitions marked \`pub\`"
++pub-crate-struct\:"\`struct\` definitions marked \`pub(crate)\`"
++pub-self-struct\:"\`struct\` definitions marked \`pub(self)\`"
++pub-super-struct\:"\`struct\` definitions marked \`pub(super)\`"
++enum\:"\`enum\` definitions"
++enum~<PATTERN>\:"Like enum, but only considers items whose name matches PATTERN."
++priv-enum\:"\`enum\` definitions not marked \`pub\`"
++pub-enum\:"\`enum\` definitions marked \`pub\`"
++pub-crate-enum\:"\`enum\` definitions marked \`pub(crate)\`"
++pub-self-enum\:"\`enum\` definitions marked \`pub(self)\`"
++pub-super-enum\:"\`enum\` definitions marked \`pub(super)\`"
++enum-variant\:"Variant members of \`enum\` definitions"
++fn\:"Function definitions"
++fn~<PATTERN>\:"Like fn, but only considers items whose name matches PATTERN."
++impl-fn\:"Function definitions inside \`impl\` blocks (associated functions/methods)"
++priv-fn\:"Function definitions not marked \`pub\`"
++pub-fn\:"Function definitions marked \`pub\`"
++pub-crate-fn\:"Function definitions marked \`pub(crate)\`"
++pub-self-fn\:"Function definitions marked \`pub(self)\`"
++pub-super-fn\:"Function definitions marked \`pub(super)\`"
++const-fn\:"Function definitions marked \`const\`"
++async-fn\:"Function definitions marked \`async\`"
++unsafe-fn\:"Function definitions marked \`unsafe\`"
++extern-fn\:"Function definitions marked \`extern\`"
++test-fn\:"Function definitions with attributes containing \`test\` (\`#\[test\]\`, \`#\[rstest\]\`, ...)"
++trait\:"\`trait\` definitions"
++trait~<PATTERN>\:"Like trait, but only considers items whose name matches PATTERN."
++impl\:"\`impl\` blocks"
++impl-type\:"\`impl\` blocks for types (\`impl SomeType {}\`)"
++impl-trait\:"\`impl\` blocks for traits on types (\`impl SomeTrait for SomeType {}\`)"
++mod\:"\`mod\` blocks"
++mod~<PATTERN>\:"Like mod, but only considers items whose name matches PATTERN."
++mod-tests\:"\`mod tests\` blocks"
++type-def\:"Type definitions (\`struct\`, \`enum\`, \`union\`)"
++identifier\:"Identifiers"
++type-identifier\:"Identifiers for types"
++closure\:"Closure definitions"
++unsafe\:"\`unsafe\` keyword usages (\`unsafe fn\`, \`unsafe\` blocks, \`unsafe Trait\`, \`unsafe impl Trait\`)"))' \
++'*--rust-query=[Scope Rust code using a custom tree-sitter query.]:TREE-SITTER-QUERY-VALUE: ' \
++'*--rust-query-file=[Scope Rust code using a custom tree-sitter query from file.]:TREE-SITTER-QUERY-FILENAME:_files' \
++'*--typescript=[Scope TypeScript code using a prepared query.]:TYPESCRIPT:((comments\:"Comments"
++strings\:"Strings (literal, template)"
++imports\:"Imports (module specifiers)"
++function\:"Any \`function\` definitions"
++async-function\:"\`async function\` definitions"
++sync-function\:"Non-\`async function\` definitions"
++method\:"Method definitions"
++constructor\:"\`constructor\` method definitions"
++class\:"\`class\` definitions"
++enum\:"\`enum\` definitions"
++interface\:"\`interface\` definitions"
++try-catch\:"\`try\`/\`catch\`/\`finally\` blocks"
++var-decl\:"Variable declarations (\`let\`, \`const\`, \`var\`)"
++let\:"\`let\` variable declarations"
++const\:"\`const\` variable declarations"
++var\:"\`var\` variable declarations"
++type-params\:"Type (generic) parameters"
++type-alias\:"Type alias declarations"
++namespace\:"\`namespace\` blocks"
++export\:"\`export\` blocks"))' \
++'*--ts=[Scope TypeScript code using a prepared query.]:TYPESCRIPT:((comments\:"Comments"
++strings\:"Strings (literal, template)"
++imports\:"Imports (module specifiers)"
++function\:"Any \`function\` definitions"
++async-function\:"\`async function\` definitions"
++sync-function\:"Non-\`async function\` definitions"
++method\:"Method definitions"
++constructor\:"\`constructor\` method definitions"
++class\:"\`class\` definitions"
++enum\:"\`enum\` definitions"
++interface\:"\`interface\` definitions"
++try-catch\:"\`try\`/\`catch\`/\`finally\` blocks"
++var-decl\:"Variable declarations (\`let\`, \`const\`, \`var\`)"
++let\:"\`let\` variable declarations"
++const\:"\`const\` variable declarations"
++var\:"\`var\` variable declarations"
++type-params\:"Type (generic) parameters"
++type-alias\:"Type alias declarations"
++namespace\:"\`namespace\` blocks"
++export\:"\`export\` blocks"))' \
++'*--typescript-query=[Scope TypeScript code using a custom tree-sitter query.]:TREE-SITTER-QUERY-VALUE: ' \
++'*--typescript-query-file=[Scope TypeScript code using a custom tree-sitter query from file.]:TREE-SITTER-QUERY-FILENAME:_files' \
++'-u[Uppercase anything in scope.]' \
++'--upper[Uppercase anything in scope.]' \
++'-l[Lowercase anything in scope.]' \
++'--lower[Lowercase anything in scope.]' \
++'-t[Titlecase anything in scope.]' \
++'--titlecase[Titlecase anything in scope.]' \
++'-n[Normalize (Normalization Form D) anything in scope, and throw away marks.]' \
++'--normalize[Normalize (Normalization Form D) anything in scope, and throw away marks.]' \
++'-g[Perform substitutions on German words, such as '\''Abenteuergruesse'\'' to '\''Abenteuergrüße'\'', for anything in scope.]' \
++'--german[Perform substitutions on German words, such as '\''Abenteuergruesse'\'' to '\''Abenteuergrüße'\'', for anything in scope.]' \
++'-S[Perform substitutions on symbols, such as '\''!='\'' to '\''≠'\'', '\''->'\'' to '\''→'\'', on anything in scope.]' \
++'--symbols[Perform substitutions on symbols, such as '\''!='\'' to '\''≠'\'', '\''->'\'' to '\''→'\'', on anything in scope.]' \
++'(-u --upper -l --lower -t --titlecase -n --normalize -g --german -S --symbols)-d[Delete anything in scope.]' \
++'(-u --upper -l --lower -t --titlecase -n --normalize -g --german -S --symbols)--delete[Delete anything in scope.]' \
++'-s[Squeeze consecutive occurrences of scope into one.]' \
++'--squeeze[Squeeze consecutive occurrences of scope into one.]' \
++'--squeeze-repeats[Squeeze consecutive occurrences of scope into one.]' \
++'--fail-no-files[Fail if working on files (e.g. globbing is requested) but none are found.]' \
++'--dry-run[Do not destructively overwrite files, instead print rich diff only.]' \
++'-i[Undo the effects of passed actions, where applicable.]' \
++'--invert[Undo the effects of passed actions, where applicable.]' \
++'-L[Do not interpret the scope as a regex. Instead, interpret it as a literal string. Will require a scope to be passed.]' \
++'--literal-string[Do not interpret the scope as a regex. Instead, interpret it as a literal string. Will require a scope to be passed.]' \
++'--fail-any[If anything at all is found to be in scope, fail.]' \
++'--fail-none[If nothing is found to be in scope, fail.]' \
++'-j[Join (logical '\''OR'\'') multiple language scopes, instead of intersecting them.]' \
++'--join-language-scopes[Join (logical '\''OR'\'') multiple language scopes, instead of intersecting them.]' \
++'--line-numbers[Prepend line numbers to output.]' \
++'--only-matching[Print only matching lines.]' \
++'-H[Do not ignore hidden files and directories.]' \
++'--hidden[Do not ignore hidden files and directories.]' \
++'--gitignored[Do not ignore \`.gitignore\`d files and directories.]' \
++'--sorted[Process files in lexicographically sorted order, by file path.]' \
++'*-v[Increase log verbosity level.]' \
++'*--verbose[Increase log verbosity level.]' \
++'--german-prefer-original[When some original version and its replacement are equally legal, prefer the original and do not modify.]' \
++'--german-naive[Always perform any possible replacement ('\''ae'\'' -> '\''ä'\'', '\''ss'\'' -> '\''ß'\'', etc.), regardless of legality of the resulting word]' \
++'-h[Print help (see more with '\''--help'\'')]' \
++'--help[Print help (see more with '\''--help'\'')]' \
++'-V[Print version]' \
++'--version[Print version]' \
++'::scope -- Scope to apply to, as a regular expression pattern.:' \
++'::replace -- Replace anything in scope with this value.:' \
++&& ret=0
++}
++
++(( $+functions[_srgn_commands] )) ||
++_srgn_commands() {
++    local commands; commands=()
++    _describe -t commands 'srgn commands' commands "$@"
++}
++
++if [ "$funcstack[1]" = "_srgn" ]; then
++    _srgn "$@"
++else
++    compdef _srgn srgn
++fi
+diff --git a/notes/help-long.txt b/notes/help-long.txt
+new file mode 100644
+index 0000000..bfc35d8
+--- /dev/null
++++ b/notes/help-long.txt
+@@ -0,0 +1,546 @@
++A grep-like tool which understands source code syntax and allows for manipulation in
++addition to search
++
++Usage: executable [OPTIONS] [SCOPE] [-- <REPLACEMENT>]
++
++Arguments:
++  [SCOPE]
++          Scope to apply to, as a regular expression pattern.
++          
++          If string literal mode is requested, will be interpreted as a literal
++          string.
++          
++          Actions will apply their transformations within this scope only.
++          
++          The default is the global scope, matching the entire input. Where that
++          default is meaningless or dangerous (e.g., deletion), this argument is
++          required.
++          
++          [default: .*]
++
++Options:
++      --completions <SHELL>
++          Print shell completions for the given shell.
++          
++          [possible values: bash, elvish, fish, powershell, zsh]
++
++  -h, --help
++          Print help (see a summary with '-h')
++
++  -V, --version
++          Print version
++
++Composable Actions:
++  -u, --upper
++          Uppercase anything in scope.
++          
++          [env: UPPER=]
++
++  -l, --lower
++          Lowercase anything in scope.
++          
++          [env: LOWER=]
++
++  -t, --titlecase
++          Titlecase anything in scope.
++          
++          [env: TITLECASE=]
++
++  -n, --normalize
++          Normalize (Normalization Form D) anything in scope, and throw away marks.
++          
++          [env: NORMALIZE=]
++
++  -g, --german
++          Perform substitutions on German words, such as 'Abenteuergruesse' to
++          'Abenteuergrüße', for anything in scope.
++          
++          ASCII spellings for Umlauts (ae, oe, ue) and Eszett (ss) are replaced by
++          their respective native Unicode (ä, ö, ü, ß).
++          
++          Arbitrary compound words are supported.
++          
++          Words legally containing alternative spellings are not modified.
++          
++          Words require correct spelling to be detected.
++
++  -S, --symbols
++          Perform substitutions on symbols, such as '!=' to '≠', '->' to '→', on
++          anything in scope.
++          
++          Helps translate 'ASCII art' into native Unicode representations.
++
++  [REPLACEMENT]
++          Replace anything in scope with this value.
++          
++          Variables are supported: if a regex pattern was used for scoping and
++          captured content in named or numbered capture groups, access these in the
++          replacement value using `$1` etc. for numbered, `$NAME` etc. for named
++          capture groups.
++          
++          This action is specially treated as a positional argument for ergonomics and
++          compatibility with `tr`.
++          
++          If given, will run before any other action.
++          
++          [env: REPLACE=]
++
++Standalone Actions (only usable alone):
++  -d, --delete
++          Delete anything in scope.
++          
++          Cannot be used with any other action: there is no point in deleting and
++          performing any other processing. Sibling actions would either receive empty
++          input or have their work wiped.
++
++  -s, --squeeze
++          Squeeze consecutive occurrences of scope into one.
++          
++          [env: SQUEEZE=]
++          [aliases: squeeze-repeats]
++
++Options (global):
++  -G, --glob <GLOB>
++          Glob of files to work on (instead of reading stdin).
++          
++          If actions are applied, they overwrite files in-place.
++          
++          For supported glob syntax, see:
++          <https://docs.rs/glob/0.3.1/glob/struct.Pattern.html>
++          
++          Names of processed files are written to stdout.
++
++      --fail-no-files
++          Fail if working on files (e.g. globbing is requested) but none are found.
++          
++          Processing no files is not an error condition in itself, but might be an
++          unexpected outcome in some contexts. This flag makes the condition explicit.
++
++      --dry-run
++          Do not destructively overwrite files, instead print rich diff only.
++          
++          The diff details the names of files which would be modified, alongside all
++          changes inside those files which would be performed outside of dry running.
++          It is similar to git diff with word diffing enabled.
++
++  -i, --invert
++          Undo the effects of passed actions, where applicable.
++          
++          Requires a 1:1 mapping between replacements and original, which is currently
++          available only for:
++          
++          - symbols: '≠' <-> '!=' etc.
++          
++          Other actions:
++          
++          - german: inverting e.g. 'Ä' is ambiguous (can be 'Ae' or 'AE')
++          
++          - upper, lower, deletion, squeeze: inversion is impossible as information is
++            lost
++          
++          These may still be passed, but will be ignored for inversion and applied
++          normally.
++          
++          [env: INVERT=]
++
++  -L, --literal-string
++          Do not interpret the scope as a regex. Instead, interpret it as a literal
++          string. Will require a scope to be passed.
++          
++          [env: LITERAL_STRING=]
++
++      --fail-any
++          If anything at all is found to be in scope, fail.
++          
++          The default is to continue processing normally.
++
++      --fail-none
++          If nothing is found to be in scope, fail.
++          
++          The default is to return the input unchanged (without failure).
++
++  -j, --join-language-scopes
++          Join (logical 'OR') multiple language scopes, instead of intersecting them.
++          
++          The default when multiple language scopes are given is to intersect their
++          scopes, left to right. For example, `--go func --go strings` will first
++          scope down to `func` bodies, then look for strings only within those. This
++          flag instead joins (in the set logic sense) all scopes. The example would
++          then scope any `func` bodies, and any strings, anywhere. Language scopers
++          can then also be given in any order.
++          
++          No effect if only a single language scope is given. Also does not affect
++          non-language scopers (regex pattern etc.), which always intersect.
++
++  -H, --hidden
++          Do not ignore hidden files and directories.
++
++      --gitignored
++          Do not ignore `.gitignore`d files and directories.
++
++      --sorted
++          Process files in lexicographically sorted order, by file path.
++          
++          In search mode, this emits results in sorted order. Otherwise, it processes
++          files in sorted order.
++          
++          Sorted processing disables parallel processing.
++
++      --stdin-detection <STDIN_DETECTION>
++          Control heuristics for stdin readability detection, and force to value.
++          
++          [default: auto]
++
++          Possible values:
++          - auto:             Automatically detect if stdin is readable
++          - force-readable:   Act as if stdin is readable
++          - force-unreadable: Act as if stdin is not readable
++
++      --stdout-detection <STDOUT_DETECTION>
++          Control heuristics for stdout detection, and potentially force to value.
++          
++          [default: auto]
++
++          Possible values:
++          - auto:       Automatically detect if stdout is a TTY and act accordingly
++          - force-tty:  Act as if stdout is a TTY
++          - force-pipe: Act as if stdout is not a TTY, e.g. a pipe, redirect
++
++      --threads <THREADS>
++          Number of threads to run processing on, when working with files.
++          
++          If not specified, will default to available parallelism. Set to 1 for
++          sequential, deterministic (but not sorted) output.
++
++  -v, --verbose...
++          Increase log verbosity level.
++          
++          The base log level to use is read from the `RUST_LOG` environment variable
++          (if unspecified, defaults to 'error'), and increased according to the number
++          of times this flag is given, maxing out at 'trace' verbosity.
++
++Language scopes:
++      --c <C>
++          Scope C code using a prepared query.
++          
++          [env: C=]
++
++          Possible values:
++          - comments:        Comments (single- and multi-line)
++          - strings:         Strings
++          - includes:        Includes
++          - type-def:        Type definitions
++          - enum:            `enum` definitions
++          - struct:          `struct` type definitions
++          - variable:        Variable definitions
++          - function:        All functions usages (declarations and calls)
++          - function-def:    Function definitions
++          - function-decl:   Function declaration
++          - switch:          `switch` blocks
++          - if:              `if` blocks
++          - for:             `for` blocks
++          - while:           `while` blocks
++          - do:              `do` blocks
++          - union:           `union` blocks
++          - identifier:      Identifier
++          - declaration:     Declaration
++          - call-expression: Call expression
++
++      --c-query <TREE-SITTER-QUERY-VALUE>
++          Scope C code using a custom tree-sitter query.
++          
++          [env: C_QUERY=]
++
++      --c-query-file <TREE-SITTER-QUERY-FILENAME>
++          Scope C code using a custom tree-sitter query from file.
++          
++          [env: C_QUERY_FILE=]
++
++      --csharp <CSHARP>
++          Scope C# code using a prepared query.
++          
++          [env: CSHARP=]
++          [aliases: cs]
++
++          Possible values:
++          - comments:             Comments (including XML, inline, doc comments)
++          - strings:              Strings (incl. verbatim, interpolated; incl. quotes,
++            except for interpolated)
++          - usings:               `using` directives (including periods)
++          - struct:               `struct` definitions (in their entirety)
++          - enum:                 `enum` definitions (in their entirety)
++          - interface:            `interface` definitions (in their entirety)
++          - class:                `class` definitions (in their entirety)
++          - method:               Method definitions (in their entirety)
++          - variable-declaration: Variable declarations (in their entirety)
++          - property:             Property definitions (in their entirety)
++          - constructor:          Constructor definitions (in their entirety)
++          - destructor:           Destructor definitions (in their entirety)
++          - field:                Field definitions on types (in their entirety)
++          - attribute:            Attribute names
++          - identifier:           Identifier names
++
++      --csharp-query <TREE-SITTER-QUERY-VALUE>
++          Scope C# code using a custom tree-sitter query.
++          
++          [env: CSHARP_QUERY=]
++
++      --csharp-query-file <TREE-SITTER-QUERY-FILENAME>
++          Scope C# code using a custom tree-sitter query from file.
++          
++          [env: CSHARP_QUERY_FILE=]
++
++      --go <GO>
++          Scope Go code using a prepared query.
++          
++          [env: GO=]
++
++          Possible values:
++          - comments:            Comments (single- and multi-line)
++          - strings:             Strings (interpreted and raw; excluding struct tags)
++          - imports:             Imports
++          - expression:          Expressions (all of them!)
++          - type-def:            Type definitions
++          - type-alias:          Type alias assignments
++          - struct:              `struct` type definitions
++          - struct~<PATTERN>:    Like struct, but only considers items whose name matches
++            PATTERN.
++          - interface:           `interface` type definitions
++          - interface~<PATTERN>: Like interface, but only considers items whose name
++            matches PATTERN.
++          - const:               `const` specifications
++          - var:                 `var` specifications
++          - func:                `func` definitions
++          - func~<PATTERN>:      Like func, but only considers items whose name matches
++            PATTERN.
++          - method:              Method `func` definitions (`func (recv Recv) SomeFunc()`)
++          - free-func:           Free `func` definitions (`func SomeFunc()`)
++          - init-func:           `func init()` definitions
++          - type-params:         Type parameters (generics)
++          - defer:               `defer` blocks
++          - select:              `select` blocks
++          - go:                  `go` blocks
++          - switch:              `switch` blocks
++          - labeled:             Labeled statements
++          - goto:                `goto` statements
++          - struct-tags:         Struct tags
++
++      --go-query <TREE-SITTER-QUERY-VALUE>
++          Scope Go code using a custom tree-sitter query.
++          
++          [env: GO_QUERY=]
++
++      --go-query-file <TREE-SITTER-QUERY-FILENAME>
++          Scope Go code using a custom tree-sitter query from file.
++          
++          [env: GO_QUERY_FILE=]
++
++      --hcl <HCL>
++          Scope HashiCorp Configuration Language code using a prepared query.
++          
++          [env: HCL=]
++
++          Possible values:
++          - variable:           `variable` blocks (in their entirety)
++          - resource:           `resource` blocks (in their entirety)
++          - data:               `data` blocks (in their entirety)
++          - output:             `output` blocks (in their entirety)
++          - provider:           `provider` blocks (in their entirety)
++          - required-providers: All `required_providers` from the `terraform` block
++          - terraform:          `terraform` blocks (in their entirety)
++          - locals:             `locals` blocks (in their entirety)
++          - module:             `module` blocks (in their entirety)
++          - variables:          Variable declarations and usages
++          - resource-names:     `resource` name declarations and usages
++          - resource-types:     `resource` type declarations and usages
++          - data-names:         `data` name declarations and usages
++          - data-sources:       `data` source declarations and usages
++          - comments:           Comments
++          - strings:            Literal strings
++
++      --hcl-query <TREE-SITTER-QUERY-VALUE>
++          Scope HashiCorp Configuration Language code using a custom tree-sitter query.
++          
++          [env: HCL_QUERY=]
++
++      --hcl-query-file <TREE-SITTER-QUERY-FILENAME>
++          Scope HashiCorp Configuration Language code using a custom tree-sitter query
++          from file.
++          
++          [env: HCL_QUERY_FILE=]
++
++      --python <PYTHON>
++          Scope Python code using a prepared query.
++          
++          [env: PYTHON=]
++          [aliases: py]
++
++          Possible values:
++          - comments:             Comments
++          - strings:              Strings (raw, byte, f-strings; interpolation not
++            included)
++          - imports:              Module names in imports (incl. periods; excl.
++            `import`/`from`/`as`/`*`)
++          - doc-strings:          Docstrings (not including multi-line strings)
++          - function-names:       Function names, at the definition site
++          - function-calls:       Function calls
++          - class:                Class definitions (in their entirety)
++          - def:                  Function definitions (*all* `def` block in their
++            entirety)
++          - async-def:            Async function definitions (*all* `async def` block in
++            their entirety)
++          - methods:              Function definitions inside `class` bodies
++          - class-methods:        Function definitions decorated as `classmethod` (excl.
++            the decorator)
++          - static-methods:       Function definitions decorated as `staticmethod` (excl.
++            the decorator)
++          - with:                 `with` blocks (in their entirety)
++          - try:                  `try` blocks (in their entirety)
++          - lambda:               `lambda` statements (in their entirety)
++          - globals:              Global, i.e. module-level variables
++          - variable-identifiers: Identifiers for variables (left-hand side of
++            assignments)
++          - types:                Types in type hints
++          - identifiers:          Identifiers (variable names, ...)
++
++      --python-query <TREE-SITTER-QUERY-VALUE>
++          Scope Python code using a custom tree-sitter query.
++          
++          [env: PYTHON_QUERY=]
++
++      --python-query-file <TREE-SITTER-QUERY-FILENAME>
++          Scope Python code using a custom tree-sitter query from file.
++          
++          [env: PYTHON_QUERY_FILE=]
++
++      --rust <RUST>
++          Scope Rust code using a prepared query.
++          
++          [env: RUST=]
++          [aliases: rs]
++
++          Possible values:
++          - comments:         Comments (line and block styles; excluding doc comments;
++            comment chars incl.)
++          - doc-comments:     Doc comments (comment chars included)
++          - uses:             Use statements (paths only; excl. `use`/`as`/`*`)
++          - strings:          Strings (regular, raw, byte; includes interpolation parts in
++            format strings!)
++          - attribute:        Attributes like `#[attr]`
++          - struct:           `struct` definitions
++          - struct~<PATTERN>: Like struct, but only considers items whose name matches
++            PATTERN.
++          - priv-struct:      `struct` definitions not marked `pub`
++          - pub-struct:       `struct` definitions marked `pub`
++          - pub-crate-struct: `struct` definitions marked `pub(crate)`
++          - pub-self-struct:  `struct` definitions marked `pub(self)`
++          - pub-super-struct: `struct` definitions marked `pub(super)`
++          - enum:             `enum` definitions
++          - enum~<PATTERN>:   Like enum, but only considers items whose name matches
++            PATTERN.
++          - priv-enum:        `enum` definitions not marked `pub`
++          - pub-enum:         `enum` definitions marked `pub`
++          - pub-crate-enum:   `enum` definitions marked `pub(crate)`
++          - pub-self-enum:    `enum` definitions marked `pub(self)`
++          - pub-super-enum:   `enum` definitions marked `pub(super)`
++          - enum-variant:     Variant members of `enum` definitions
++          - fn:               Function definitions
++          - fn~<PATTERN>:     Like fn, but only considers items whose name matches
++            PATTERN.
++          - impl-fn:          Function definitions inside `impl` blocks (associated
++            functions/methods)
++          - priv-fn:          Function definitions not marked `pub`
++          - pub-fn:           Function definitions marked `pub`
++          - pub-crate-fn:     Function definitions marked `pub(crate)`
++          - pub-self-fn:      Function definitions marked `pub(self)`
++          - pub-super-fn:     Function definitions marked `pub(super)`
++          - const-fn:         Function definitions marked `const`
++          - async-fn:         Function definitions marked `async`
++          - unsafe-fn:        Function definitions marked `unsafe`
++          - extern-fn:        Function definitions marked `extern`
++          - test-fn:          Function definitions with attributes containing `test`
++            (`#[test]`, `#[rstest]`, ...)
++          - trait:            `trait` definitions
++          - trait~<PATTERN>:  Like trait, but only considers items whose name matches
++            PATTERN.
++          - impl:             `impl` blocks
++          - impl-type:        `impl` blocks for types (`impl SomeType {}`)
++          - impl-trait:       `impl` blocks for traits on types (`impl SomeTrait for
++            SomeType {}`)
++          - mod:              `mod` blocks
++          - mod~<PATTERN>:    Like mod, but only considers items whose name matches
++            PATTERN.
++          - mod-tests:        `mod tests` blocks
++          - type-def:         Type definitions (`struct`, `enum`, `union`)
++          - identifier:       Identifiers
++          - type-identifier:  Identifiers for types
++          - closure:          Closure definitions
++          - unsafe:           `unsafe` keyword usages (`unsafe fn`, `unsafe` blocks,
++            `unsafe Trait`, `unsafe impl Trait`)
++
++      --rust-query <TREE-SITTER-QUERY-VALUE>
++          Scope Rust code using a custom tree-sitter query.
++          
++          [env: RUST_QUERY=]
++
++      --rust-query-file <TREE-SITTER-QUERY-FILENAME>
++          Scope Rust code using a custom tree-sitter query from file.
++          
++          [env: RUST_QUERY_FILE=]
++
++      --typescript <TYPESCRIPT>
++          Scope TypeScript code using a prepared query.
++          
++          [env: TYPESCRIPT=]
++          [aliases: ts]
++
++          Possible values:
++          - comments:       Comments
++          - strings:        Strings (literal, template)
++          - imports:        Imports (module specifiers)
++          - function:       Any `function` definitions
++          - async-function: `async function` definitions
++          - sync-function:  Non-`async function` definitions
++          - method:         Method definitions
++          - constructor:    `constructor` method definitions
++          - class:          `class` definitions
++          - enum:           `enum` definitions
++          - interface:      `interface` definitions
++          - try-catch:      `try`/`catch`/`finally` blocks
++          - var-decl:       Variable declarations (`let`, `const`, `var`)
++          - let:            `let` variable declarations
++          - const:          `const` variable declarations
++          - var:            `var` variable declarations
++          - type-params:    Type (generic) parameters
++          - type-alias:     Type alias declarations
++          - namespace:      `namespace` blocks
++          - export:         `export` blocks
++
++      --typescript-query <TREE-SITTER-QUERY-VALUE>
++          Scope TypeScript code using a custom tree-sitter query.
++          
++          [env: TYPESCRIPT_QUERY=]
++
++      --typescript-query-file <TREE-SITTER-QUERY-FILENAME>
++          Scope TypeScript code using a custom tree-sitter query from file.
++          
++          [env: TYPESCRIPT_QUERY_FILE=]
++
++Options (german):
++      --german-prefer-original
++          When some original version and its replacement are equally legal, prefer the
++          original and do not modify.
++          
++          For example, "Busse" (original) and "Buße" (replacement) are equally legal
++          words: by default, the tool would prefer the latter.
++          
++          [env: GERMAN_PREFER_ORIGINAL=]
++
++      --german-naive
++          Always perform any possible replacement ('ae' -> 'ä', 'ss' -> 'ß', etc.),
++          regardless of legality of the resulting word
++          
++          Useful for names, which are otherwise not modifiable as they do not occur in
++          dictionaries. Called 'naive' as this does not perform legal checks.
++          
++          [env: GERMAN_NAIVE=]
+diff --git a/notes/help-short.txt b/notes/help-short.txt
+new file mode 100644
+index 0000000..c42b87b
+--- /dev/null
++++ b/notes/help-short.txt
+@@ -0,0 +1,152 @@
++A grep-like tool which understands source code syntax and allows for manipulation in
++addition to search
++
++Usage: executable [OPTIONS] [SCOPE] [-- <REPLACEMENT>]
++
++Arguments:
++  [SCOPE]  Scope to apply to, as a regular expression pattern. [default: .*]
++
++Options:
++      --completions <SHELL>  Print shell completions for the given shell. [possible
++                             values: bash, elvish, fish, powershell, zsh]
++  -h, --help                 Print help (see more with '--help')
++  -V, --version              Print version
++
++Composable Actions:
++  -u, --upper        Uppercase anything in scope. [env: UPPER=]
++  -l, --lower        Lowercase anything in scope. [env: LOWER=]
++  -t, --titlecase    Titlecase anything in scope. [env: TITLECASE=]
++  -n, --normalize    Normalize (Normalization Form D) anything in scope, and throw away
++                     marks. [env: NORMALIZE=]
++  -g, --german       Perform substitutions on German words, such as 'Abenteuergruesse' to
++                     'Abenteuergrüße', for anything in scope.
++  -S, --symbols      Perform substitutions on symbols, such as '!=' to '≠', '->' to '→',
++                     on
++                     anything in scope.
++  [REPLACEMENT]  Replace anything in scope with this value. [env: REPLACE=]
++
++Standalone Actions (only usable alone):
++  -d, --delete   Delete anything in scope.
++  -s, --squeeze  Squeeze consecutive occurrences of scope into one. [env: SQUEEZE=]
++                 [aliases: squeeze-repeats]
++
++Options (global):
++  -G, --glob <GLOB>
++          Glob of files to work on (instead of reading stdin).
++      --fail-no-files
++          Fail if working on files (e.g. globbing is requested) but none are found.
++      --dry-run
++          Do not destructively overwrite files, instead print rich diff only.
++  -i, --invert
++          Undo the effects of passed actions, where applicable. [env: INVERT=]
++  -L, --literal-string
++          Do not interpret the scope as a regex. Instead, interpret it as a literal
++          string. Will require a scope to be passed. [env: LITERAL_STRING=]
++      --fail-any
++          If anything at all is found to be in scope, fail.
++      --fail-none
++          If nothing is found to be in scope, fail.
++  -j, --join-language-scopes
++          Join (logical 'OR') multiple language scopes, instead of intersecting them.
++  -H, --hidden
++          Do not ignore hidden files and directories.
++      --gitignored
++          Do not ignore `.gitignore`d files and directories.
++      --sorted
++          Process files in lexicographically sorted order, by file path.
++      --stdin-detection <STDIN_DETECTION>
++          Control heuristics for stdin readability detection, and force to value.
++          [default: auto] [possible values: auto, force-readable, force-unreadable]
++      --stdout-detection <STDOUT_DETECTION>
++          Control heuristics for stdout detection, and potentially force to value.
++          [default: auto] [possible values: auto, force-tty, force-pipe]
++      --threads <THREADS>
++          Number of threads to run processing on, when working with files.
++  -v, --verbose...
++          Increase log verbosity level.
++
++Language scopes:
++      --c <C>
++          Scope C code using a prepared query. [env: C=] [possible values: comments,
++          strings, includes, type-def, enum, struct, variable, function, function-def,
++          function-decl, switch, if, for, while, do, union, identifier, declaration,
++          call-expression]
++      --c-query <TREE-SITTER-QUERY-VALUE>
++          Scope C code using a custom tree-sitter query. [env: C_QUERY=]
++      --c-query-file <TREE-SITTER-QUERY-FILENAME>
++          Scope C code using a custom tree-sitter query from file. [env: C_QUERY_FILE=]
++      --csharp <CSHARP>
++          Scope C# code using a prepared query. [env: CSHARP=] [aliases: cs] [possible
++          values: comments, strings, usings, struct, enum, interface, class, method,
++          variable-declaration, property, constructor, destructor, field, attribute,
++          identifier]
++      --csharp-query <TREE-SITTER-QUERY-VALUE>
++          Scope C# code using a custom tree-sitter query. [env: CSHARP_QUERY=]
++      --csharp-query-file <TREE-SITTER-QUERY-FILENAME>
++          Scope C# code using a custom tree-sitter query from file. [env:
++          CSHARP_QUERY_FILE=]
++      --go <GO>
++          Scope Go code using a prepared query. [env: GO=] [possible values: comments,
++          strings, imports, expression, type-def, type-alias, struct, struct~<PATTERN>,
++          interface, interface~<PATTERN>, const, var, func, func~<PATTERN>, method,
++          free-func, init-func, type-params, defer, select, go, switch, labeled, goto,
++          struct-tags]
++      --go-query <TREE-SITTER-QUERY-VALUE>
++          Scope Go code using a custom tree-sitter query. [env: GO_QUERY=]
++      --go-query-file <TREE-SITTER-QUERY-FILENAME>
++          Scope Go code using a custom tree-sitter query from file. [env: GO_QUERY_FILE=]
++      --hcl <HCL>
++          Scope HashiCorp Configuration Language code using a prepared query. [env: HCL=]
++          [possible values: variable, resource, data, output, provider,
++          required-providers, terraform, locals, module, variables, resource-names,
++          resource-types, data-names, data-sources, comments, strings]
++      --hcl-query <TREE-SITTER-QUERY-VALUE>
++          Scope HashiCorp Configuration Language code using a custom tree-sitter query.
++          [env: HCL_QUERY=]
++      --hcl-query-file <TREE-SITTER-QUERY-FILENAME>
++          Scope HashiCorp Configuration Language code using a custom tree-sitter query
++          from file. [env: HCL_QUERY_FILE=]
++      --python <PYTHON>
++          Scope Python code using a prepared query. [env: PYTHON=] [aliases: py] [possible
++          values: comments, strings, imports, doc-strings, function-names, function-calls,
++          class, def, async-def, methods, class-methods, static-methods, with, try,
++          lambda, globals, variable-identifiers, types, identifiers]
++      --python-query <TREE-SITTER-QUERY-VALUE>
++          Scope Python code using a custom tree-sitter query. [env: PYTHON_QUERY=]
++      --python-query-file <TREE-SITTER-QUERY-FILENAME>
++          Scope Python code using a custom tree-sitter query from file. [env:
++          PYTHON_QUERY_FILE=]
++      --rust <RUST>
++          Scope Rust code using a prepared query. [env: RUST=] [aliases: rs] [possible
++          values: comments, doc-comments, uses, strings, attribute, struct,
++          struct~<PATTERN>, priv-struct, pub-struct, pub-crate-struct, pub-self-struct,
++          pub-super-struct, enum, enum~<PATTERN>, priv-enum, pub-enum, pub-crate-enum,
++          pub-self-enum, pub-super-enum, enum-variant, fn, fn~<PATTERN>, impl-fn, priv-fn,
++          pub-fn, pub-crate-fn, pub-self-fn, pub-super-fn, const-fn, async-fn, unsafe-fn,
++          extern-fn, test-fn, trait, trait~<PATTERN>, impl, impl-type, impl-trait, mod,
++          mod~<PATTERN>, mod-tests, type-def, identifier, type-identifier, closure,
++          unsafe]
++      --rust-query <TREE-SITTER-QUERY-VALUE>
++          Scope Rust code using a custom tree-sitter query. [env: RUST_QUERY=]
++      --rust-query-file <TREE-SITTER-QUERY-FILENAME>
++          Scope Rust code using a custom tree-sitter query from file. [env:
++          RUST_QUERY_FILE=]
++      --typescript <TYPESCRIPT>
++          Scope TypeScript code using a prepared query. [env: TYPESCRIPT=] [aliases: ts]
++          [possible values: comments, strings, imports, function, async-function,
++          sync-function, method, constructor, class, enum, interface, try-catch, var-decl,
++          let, const, var, type-params, type-alias, namespace, export]
++      --typescript-query <TREE-SITTER-QUERY-VALUE>
++          Scope TypeScript code using a custom tree-sitter query. [env: TYPESCRIPT_QUERY=]
++      --typescript-query-file <TREE-SITTER-QUERY-FILENAME>
++          Scope TypeScript code using a custom tree-sitter query from file. [env:
++          TYPESCRIPT_QUERY_FILE=]
++
++Options (german):
++      --german-prefer-original  When some original version and its replacement are equally
++                                legal, prefer the
++                                original and do not modify. [env: GERMAN_PREFER_ORIGINAL=]
++      --german-naive            Always perform any possible replacement ('ae' -> 'ä', 'ss'
++                                -> 'ß', etc.),
++                                regardless of legality of the resulting word [env:
++                                GERMAN_NAIVE=]

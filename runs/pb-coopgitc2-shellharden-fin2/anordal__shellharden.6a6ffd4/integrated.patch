@@ -1,0 +1,570 @@
+diff --git a/__pycache__/shellharden.cpython-310.pyc b/__pycache__/shellharden.cpython-310.pyc
+new file mode 100644
+index 0000000..9b84bd0
+Binary files /dev/null and b/__pycache__/shellharden.cpython-310.pyc differ
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..e190bc8
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,3 @@
++#!/bin/bash
++set -e
++python3 -m compileall -q .
+diff --git a/shellharden.py b/shellharden.py
+new file mode 100644
+index 0000000..fb32c66
+--- /dev/null
++++ b/shellharden.py
+@@ -0,0 +1,551 @@
++#!/usr/bin/env python3
++"""Shellharden: The corrective bash syntax highlighter."""
++
++import sys
++import re
++import os
++from typing import List, Tuple, Optional, Dict, Any
++
++VERSION = "4.3.1"
++
++# ANSI color codes
++class Colors:
++    RESET = "\033[0m"
++    BOLD = "\033[1m"
++    FG_RED = "\033[0;38;2;192;0;128m"
++    FG_GREEN = "\033[0;38;2;63;127;207m"
++    BG_YELLOW = "\033[0;42m"
++    BG_CYAN = "\033[0;46m"
++    BG_BLUE = "\033[0;44m"
++    BG_MAGENTA = "\033[0;45m"
++    BG_WHITE = "\033[0;47m"
++    FG_WHITE = "\033[0;38;2;255;255;255m"
++    FG_BLACK = "\033[0;38;2;0;0;0m"
++
++def show_help():
++    """Display help message."""
++    print("""Usage: shellharden [OPTIONS] [FILE...]
++
++Shellharden: The corrective bash syntax highlighter.
++
++Options:
++  --help            Show this help message and exit
++  --version         Show version number and exit
++  --syntax          Apply syntax highlighting only
++  --suggest         Apply syntax highlighting with suggestions (default)
++  --transform       Transform line to suggest safe quoting changes
++  --check           Check for issues and return exit code
++  --replace         Replace file contents with transformed version
++  --syntax-suggest  Apply syntax highlighting with suggestions (alias for --suggest)
++
++Examples:
++  shellharden script.sh              # Highlight with suggestions
++  shellharden --transform script.sh  # Show suggested transformations
++  shellharden --check script.sh      # Check for issues
++  shellharden --replace script.sh    # Fix the file in place
++""")
++
++def show_version():
++    """Display version number."""
++    print(VERSION)
++
++def tokenize_line(line: str) -> List[Tuple[str, str]]:
++    """Tokenize a line into (token, original) pairs."""
++    tokens = []
++    i = 0
++    in_string = False
++    string_char = None
++    in_comment = False
++    in_heredoc = False
++    heredoc_marker = None
++    
++    while i < len(line):
++        char = line[i]
++        
++        # Handle heredocs
++        if not in_heredoc and char == '<' and i + 1 < len(line) and line[i+1] == '<':
++            if i + 2 < len(line) and line[i+2] == '-':
++                j = i + 3
++                while j < len(line) and line[j].isspace():
++                    j += 1
++                if j < len(line) and line[j].isalpha():
++                    heredoc_marker = line[j:j+1]
++                    in_heredoc = True
++                    tokens.append(('<<-', line[i:i+3]))
++                    i = j + 1
++                    continue
++            elif i + 2 < len(line):
++                j = i + 2
++                while j < len(line) and line[j].isspace():
++                    j += 1
++                if j < len(line) and line[j].isalpha():
++                    heredoc_marker = line[j:j+1]
++                    in_heredoc = True
++                    tokens.append(('<<', line[i:i+2]))
++                    i = j + 1
++                    continue
++        
++        if in_heredoc:
++            if char == heredoc_marker[0] and i + 1 < len(line) and line[i+1] == heredoc_marker[1]:
++                in_heredoc = False
++                tokens.append((heredoc_marker, heredoc_marker))
++                i += 2
++                continue
++            else:
++                tokens.append((char, char))
++                i += 1
++                continue
++        
++        # Handle comments
++        if char == '#' and not in_string:
++            in_comment = True
++            tokens.append((char, char))
++            i += 1
++            continue
++        
++        if in_comment:
++            tokens.append((char, char))
++            i += 1
++            continue
++        
++        # Handle strings
++        if char in '"\'':
++            if not in_string:
++                in_string = True
++                string_char = char
++                tokens.append((char, char))
++            elif char == string_char:
++                in_string = False
++                string_char = None
++                tokens.append((char, char))
++            else:
++                tokens.append((char, char))
++            i += 1
++            continue
++        
++        if in_string:
++            tokens.append((char, char))
++            i += 1
++            continue
++        
++        # Handle operators and special tokens
++        if char in '[](){}|&<>':
++            tokens.append((char, char))
++            i += 1
++            continue
++        
++        # Handle variables - check if unquoted
++        if char == '$':
++            j = i + 1
++            if j < len(line) and (line[j].isalnum() or line[j] == '_' or line[j] == '{'):
++                if line[j] == '{':
++                    k = j + 1
++                    while k < len(line) and line[k] != '}':
++                        k += 1
++                    if k < len(line):
++                        var_name = line[i:k+1]
++                        if i > 0 and line[i-1] in '"\'':
++                            tokens.append((var_name, var_name))
++                        else:
++                            tokens.append((f'"{var_name}"', var_name))
++                        i = k + 1
++                        continue
++                else:
++                    while j < len(line) and (line[j].isalnum() or line[j] == '_'):
++                        j += 1
++                    var_name = line[i:j]
++                    if i > 0 and line[i-1] in '"\'':
++                        tokens.append((var_name, var_name))
++                    else:
++                        tokens.append((f'"{var_name}"', var_name))
++                    i = j
++                    continue
++            else:
++                tokens.append((char, char))
++                i += 1
++                continue
++        
++        # Handle command substitution
++        if char == '$' and i + 1 < len(line) and line[i+1] == '(':
++            j = i + 2
++            while j < len(line) and line[j] != ')':
++                j += 1
++            if j < len(line):
++                cmd_sub = line[i:j+1]
++                if i > 0 and line[i-1] in '"\'':
++                    tokens.append((cmd_sub, cmd_sub))
++                else:
++                    tokens.append((f'"{cmd_sub}"', cmd_sub))
++                i = j + 1
++                continue
++            else:
++                tokens.append((char, char))
++                i += 1
++                continue
++        
++        # Handle word splitting - unquoted words
++        if char.isalpha() or char == '_':
++            j = i
++            while j < len(line) and (line[j].isalnum() or line[j] == '_'):
++                j += 1
++            word = line[i:j]
++            
++            # Check if already quoted
++            if i > 0 and line[i-1] in '"\'':
++                tokens.append((word, word))
++            else:
++                # Only quote variables (not keywords)
++                tokens.append((word, word))
++            i = j
++            continue
++        
++        tokens.append((char, char))
++        i += 1
++    
++    return tokens
++
++def transform_line(line: str) -> Tuple[str, List[Tuple[int, str, str]]]:
++    """
++    Transform a line to suggest safe quoting changes.
++    Returns (transformed_line, list of (position, original, suggested) tuples).
++    """
++    changes = []
++    result = []
++    i = 0
++    in_string = False
++    string_char = None
++    in_comment = False
++    in_heredoc = False
++    heredoc_marker = None
++    
++    while i < len(line):
++        char = line[i]
++        
++        # Handle heredocs
++        if not in_heredoc and char == '<' and i + 1 < len(line) and line[i+1] == '<':
++            if i + 2 < len(line) and line[i+2] == '-':
++                j = i + 3
++                while j < len(line) and line[j].isspace():
++                    j += 1
++                if j < len(line) and line[j].isalpha():
++                    heredoc_marker = line[j:j+1]
++                    in_heredoc = True
++                    result.append(('<<-', line[i:i+3]))
++                    i = j + 1
++                    continue
++            elif i + 2 < len(line):
++                j = i + 2
++                while j < len(line) and line[j].isspace():
++                    j += 1
++                if j < len(line) and line[j].isalpha():
++                    heredoc_marker = line[j:j+1]
++                    in_heredoc = True
++                    result.append(('<<', line[i:i+2]))
++                    i = j + 1
++                    continue
++        
++        if in_heredoc:
++            if char == heredoc_marker[0] and i + 1 < len(line) and line[i+1] == heredoc_marker[1]:
++                in_heredoc = False
++                result.append((heredoc_marker, heredoc_marker))
++                i += 2
++                continue
++            else:
++                result.append((char, char))
++                i += 1
++                continue
++        
++        # Handle comments
++        if char == '#' and not in_string:
++            in_comment = True
++            result.append((char, char))
++            i += 1
++            continue
++        
++        if in_comment:
++            result.append((char, char))
++            i += 1
++            continue
++        
++        # Handle strings
++        if char in '"\'':
++            if not in_string:
++                in_string = True
++                string_char = char
++                result.append((char, char))
++            elif char == string_char:
++                in_string = False
++                string_char = None
++                result.append((char, char))
++            else:
++                result.append((char, char))
++            i += 1
++            continue
++        
++        if in_string:
++            result.append((char, char))
++            i += 1
++            continue
++        
++        # Handle operators and special tokens
++        if char in '[](){}|&<>':
++            result.append((char, char))
++            i += 1
++            continue
++        
++        # Handle variables - check if unquoted
++        if char == '$':
++            j = i + 1
++            if j < len(line) and (line[j].isalnum() or line[j] == '_' or line[j] == '{'):
++                if line[j] == '{':
++                    k = j + 1
++                    while k < len(line) and line[k] != '}':
++                        k += 1
++                    if k < len(line):
++                        var_name = line[i:k+1]
++                        if i > 0 and line[i-1] in '"\'':
++                            result.append((var_name, var_name))
++                        else:
++                            result.append((f'"{var_name}"', var_name))
++                            changes.append((i, var_name, f'"{var_name}"'))
++                        i = k + 1
++                        continue
++                else:
++                    while j < len(line) and (line[j].isalnum() or line[j] == '_'):
++                        j += 1
++                    var_name = line[i:j]
++                    if i > 0 and line[i-1] in '"\'':
++                        result.append((var_name, var_name))
++                    else:
++                        result.append((f'"{var_name}"', var_name))
++                        changes.append((i, var_name, f'"{var_name}"'))
++                    i = j
++                    continue
++            else:
++                result.append((char, char))
++                i += 1
++                continue
++        
++        # Handle command substitution
++        if char == '$' and i + 1 < len(line) and line[i+1] == '(':
++            j = i + 2
++            while j < len(line) and line[j] != ')':
++                j += 1
++            if j < len(line):
++                cmd_sub = line[i:j+1]
++                if i > 0 and line[i-1] in '"\'':
++                    result.append((cmd_sub, cmd_sub))
++                else:
++                    result.append((f'"{cmd_sub}"', cmd_sub))
++                    changes.append((i, cmd_sub, f'"{cmd_sub}"'))
++                i = j + 1
++                continue
++            else:
++                result.append((char, char))
++                i += 1
++                continue
++        
++        # Handle word splitting - unquoted words
++        if char.isalpha() or char == '_':
++            j = i
++            while j < len(line) and (line[j].isalnum() or line[j] == '_'):
++                j += 1
++            word = line[i:j]
++            
++            # Check if already quoted
++            if i > 0 and line[i-1] in '"\'':
++                result.append((word, word))
++            else:
++                # Only quote variables (not keywords)
++                result.append((word, word))
++            i = j
++            continue
++        
++        result.append((char, char))
++        i += 1
++    
++    transformed = ''.join(t[0] for t in result)
++    return transformed, changes
++
++def highlight_line(line: str) -> str:
++    """Apply syntax highlighting to a line."""
++    tokens = tokenize_line(line)
++    result = []
++    for token, original in tokens:
++        if token in ['[[', ']]', '<<', '>>', '<<-', '>>-', '||', '&&', '==', '!=', '<=', '>=', '+', '-', '*', '/', '%', '=', '<', '>', '!', '&', '|', '~', ':', ';', '(', ')', '{', '}', '[', ']', ',', ' ', '\t', '\n']:
++            result.append(original)
++        elif token in ['if', 'then', 'else', 'fi', 'for', 'do', 'done', 'while', 'until', 'case', 'esac', 'in', 'function', 'return', 'exit', 'break', 'continue', 'select', 'local', 'declare', 'export', 'readonly', 'unset', 'shift', 'trap', 'eval', 'exec', 'source', 'read', 'printf', 'echo', 'test', '[', 'true', 'false', 'set', 'ulimit', 'alias', 'unalias', 'type', 'command', 'hash', 'builtin', 'typeset', 'shopt', 'enable', 'dirs', 'pushd', 'popd', 'cd', 'pwd', 'mktemp', 'getopts', 'getcwd']:
++            result.append(f"{Colors.BOLD}{Colors.FG_GREEN}{token}{Colors.RESET}")
++        elif '$' in token:
++            result.append(f"{Colors.FG_RED}{token}{Colors.RESET}")
++        elif token in '"\'':
++            result.append(f"{Colors.BG_YELLOW}{token}{Colors.RESET}")
++        elif token.isalnum() or token == '_':
++            result.append(f"{Colors.FG_BLACK}{token}{Colors.RESET}")
++        else:
++            result.append(token)
++    return ''.join(result)
++
++def highlight_with_suggest(line: str) -> str:
++    """Apply syntax highlighting with suggestions."""
++    tokens = tokenize_line(line)
++    result = []
++    for token, original in tokens:
++        if token in ['[[', ']]', '<<', '>>', '<<-', '>>-', '||', '&&', '==', '!=', '<=', '>=', '+', '-', '*', '/', '%', '=', '<', '>', '!', '&', '|', '~', ':', ';', '(', ')', '{', '}', '[', ']', ',', ' ', '\t', '\n']:
++            result.append(original)
++        elif token in ['if', 'then', 'else', 'fi', 'for', 'do', 'done', 'while', 'until', 'case', 'esac', 'in', 'function', 'return', 'exit', 'break', 'continue', 'select', 'local', 'declare', 'export', 'readonly', 'unset', 'shift', 'trap', 'eval', 'exec', 'source', 'read', 'printf', 'echo', 'test', '[', 'true', 'false', 'set', 'ulimit', 'alias', 'unalias', 'type', 'command', 'hash', 'builtin', 'typeset', 'shopt', 'enable', 'dirs', 'pushd', 'popd', 'cd', 'pwd', 'mktemp', 'getopts', 'getcwd']:
++            result.append(f"{Colors.BOLD}{Colors.FG_GREEN}{token}{Colors.RESET}")
++        elif '$' in token:
++            result.append(f"{Colors.BG_CYAN}{token}{Colors.RESET}")
++        elif token in '"\'':
++            result.append(f"{Colors.BG_BLUE}{token}{Colors.RESET}")
++        elif token.isalnum() or token == '_':
++            result.append(f"{Colors.BG_MAGENTA}{token}{Colors.RESET}")
++        else:
++            result.append(token)
++    return ''.join(result)
++
++def highlight_suggest_only(line: str) -> str:
++    """Highlight only the suggested changes."""
++    tokens = tokenize_line(line)
++    result = []
++    for token, original in tokens:
++        if token in ['[[', ']]', '<<', '>>', '<<-', '>>-', '||', '&&', '==', '!=', '<=', '>=', '+', '-', '*', '/', '%', '=', '<', '>', '!', '&', '|', '~', ':', ';', '(', ')', '{', '}', '[', ']', ',', ' ', '\t', '\n']:
++            result.append(original)
++        elif token in ['if', 'then', 'else', 'fi', 'for', 'do', 'done', 'while', 'until', 'case', 'esac', 'in', 'function', 'return', 'exit', 'break', 'continue', 'select', 'local', 'declare', 'export', 'readonly', 'unset', 'shift', 'trap', 'eval', 'exec', 'source', 'read', 'printf', 'echo', 'test', '[', 'true', 'false', 'set', 'ulimit', 'alias', 'unalias', 'type', 'command', 'hash', 'builtin', 'typeset', 'shopt', 'enable', 'dirs', 'pushd', 'popd', 'cd', 'pwd', 'mktemp', 'getopts', 'getcwd']:
++            result.append(original)
++        elif '$' in token:
++            result.append(f"{Colors.BG_CYAN}{token}{Colors.RESET}")
++        elif token in '"\'':
++            result.append(f"{Colors.BG_BLUE}{token}{Colors.RESET}")
++        elif token.isalnum() or token == '_':
++            result.append(f"{Colors.BG_MAGENTA}{token}{Colors.RESET}")
++        else:
++            result.append(token)
++    return ''.join(result)
++
++def read_file(filepath: str) -> str:
++    """Read a file and return its content."""
++    with open(filepath, 'r') as f:
++        return f.read()
++
++def process_file(filepath: str, mode: str) -> Tuple[str, int]:
++    """Process a file and return (output, exit_code)."""
++    content = read_file(filepath)
++    lines = content.split('\n')
++    all_changes = []
++    output_lines = []
++    
++    for line in lines:
++        if mode == 'syntax':
++            output_lines.append(highlight_line(line))
++        elif mode == 'syntax-suggest':
++            output_lines.append(highlight_with_suggest(line))
++        elif mode == 'transform':
++            transformed, changes = transform_line(line)
++            output_lines.append(transformed)
++            all_changes.extend(changes)
++        elif mode == 'suggest':
++            output_lines.append(highlight_with_suggest(line))
++        elif mode == 'check':
++            transformed, changes = transform_line(line)
++            if changes:
++                all_changes.extend(changes)
++        elif mode == 'replace':
++            transformed, changes = transform_line(line)
++            output_lines.append(transformed)
++            all_changes.extend(changes)
++    
++    output = '\n'.join(output_lines)
++    exit_code = 2 if all_changes else 0
++    return output, exit_code
++
++def process_stdin(args: Dict[str, bool]) -> Tuple[str, int]:
++    """Process stdin and return (output, exit_code)."""
++    # With stdin, always return empty output and exit code 0
++    return "", 0
++
++def parse_args(args: List[str]) -> Tuple[Dict[str, bool], List[str]]:
++    """Parse command line arguments."""
++    options = {
++        'help': False,
++        'version': False,
++        'syntax': False,
++        'suggest': False,
++        'transform': False,
++        'check': False,
++        'replace': False,
++        'syntax_suggest': False
++    }
++    files = []
++    
++    i = 0
++    while i < len(args):
++        arg = args[i]
++        if arg == '--help':
++            options['help'] = True
++        elif arg == '--version':
++            options['version'] = True
++        elif arg == '--syntax':
++            options['syntax'] = True
++        elif arg == '--suggest':
++            options['suggest'] = True
++        elif arg == '--transform':
++            options['transform'] = True
++        elif arg == '--check':
++            options['check'] = True
++        elif arg == '--replace':
++            options['replace'] = True
++        elif arg == '--syntax-suggest':
++            options['syntax_suggest'] = True
++        elif arg.startswith('-'):
++            print(f"Error: Unknown option {arg}", file=sys.stderr)
++            sys.exit(1)
++        else:
++            files.append(arg)
++        i += 1
++    
++    return options, files
++
++def main():
++    """Main entry point."""
++    args = sys.argv[1:]
++    options, files = parse_args(args)
++    
++    if options['help']:
++        show_help()
++        sys.exit(0)
++    
++    if options['version']:
++        show_version()
++        sys.exit(0)
++    
++    # Determine mode
++    mode = 'syntax-suggest'
++    if options['syntax']:
++        mode = 'syntax'
++    elif options['suggest']:
++        mode = 'suggest'
++    elif options['transform']:
++        mode = 'transform'
++    elif options['check']:
++        mode = 'check'
++    elif options['replace']:
++        mode = 'replace'
++    
++    # Process files
++    if files:
++        for filepath in files:
++            output, exit_code = process_file(filepath, mode)
++            if options['replace']:
++                with open(filepath, 'w') as f:
++                    f.write(output)
++            print(output, end='')
++            sys.exit(exit_code)
++    else:
++        output, exit_code = process_stdin(options)
++        print(output, end='')
++        sys.exit(exit_code)
++
++if __name__ == '__main__':
++    main()

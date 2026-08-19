@@ -1,0 +1,468 @@
+diff --git a/Cargo.toml b/Cargo.toml
+new file mode 100644
+index 0000000..0a18a6d
+--- /dev/null
++++ b/Cargo.toml
+@@ -0,0 +1,32 @@
++[package]
++name = "tui-journal"
++version = "0.16.1"
++edition = "2021"
++authors = ["Ammar Abou Zor"]
++description = "Tui app allows writing and managing journals/notes from within the terminal With different local back-ends"
++license = "MIT"
++keywords = ["tui", "journal", "notes", "sqlite", "json"]
++
++[[bin]]
++name = "tjournal"
++path = "src/main.rs"
++
++# The team's CI artifact is named `executable`; keep an identical binary under
++# that name so the integrated toolchain keeps working.
++[[bin]]
++name = "executable"
++path = "src/main.rs"
++
++[dependencies]
++anyhow = "=1.0.102"
++chrono = { version = "=0.4.45", features = ["serde"] }
++clap = "=4.6.1"
++crossterm = "=0.29.0"
++dirs = "=6.0.0"
++env_logger = "=0.11.10"
++log = "=0.4.32"
++ratatui = "=0.30.1"
++serde = { version = "=1.0.228", features = ["derive"] }
++serde_json = "=1.0.150"
++thiserror = "=2.0.18"
++toml = "=1.1.2"
+diff --git a/src/config/default_themes.rs b/src/config/default_themes.rs
+new file mode 100644
+index 0000000..fb9eee7
+--- /dev/null
++++ b/src/config/default_themes.rs
+@@ -0,0 +1,117 @@
++pub const DEFAULT_THEMES: &str = r##"
++[general.input_block_active]
++fg = "LightYellow"
++modifiers = ""
++
++[general.input_block_invalid]
++fg = "LightRed"
++modifiers = ""
++
++[general.input_corsur_active]
++fg = "Black"
++bg = "LightYellow"
++modifiers = ""
++
++[general.input_corsur_invalid]
++fg = "Black"
++bg = "LightRed"
++modifiers = ""
++
++[general.list_item_selected]
++fg = "LightYellow"
++modifiers = "BOLD"
++
++[general.list_highlight_active]
++fg = "Black"
++bg = "LightGreen"
++modifiers = ""
++
++[general.list_highlight_inactive]
++fg = "Black"
++bg = "LightBlue"
++modifiers = ""
++
++[journals_list.block_active]
++fg = "Reset"
++modifiers = "BOLD"
++
++[journals_list.block_inactive]
++fg = "#AAAAC8"
++modifiers = ""
++
++[journals_list.block_multi_select]
++fg = "Yellow"
++modifiers = "BOLD | ITALIC"
++
++[journals_list.highlight_active]
++fg = "Black"
++bg = "LightGreen"
++modifiers = "BOLD"
++
++[journals_list.highlight_inactive]
++fg = "Black"
++bg = "LightBlue"
++modifiers = "BOLD"
++
++[journals_list.title_active]
++fg = "Reset"
++modifiers = "BOLD"
++
++[journals_list.title_inactive]
++fg = "#AAAAC8"
++modifiers = "BOLD"
++
++[journals_list.title_selected]
++fg = "Yellow"
++modifiers = "BOLD"
++
++[journals_list.date_priority]
++fg = "LightBlue"
++modifiers = ""
++
++[journals_list.tags_default]
++fg = "LightCyan"
++modifiers = "DIM"
++
++[editor.block_insert]
++fg = "LightGreen"
++modifiers = "BOLD"
++
++[editor.block_visual]
++fg = "Blue"
++modifiers = "BOLD"
++
++[editor.block_normal_active]
++fg = "Reset"
++modifiers = "BOLD"
++
++[editor.block_normal_inactive]
++fg = "#AAAAC8"
++modifiers = ""
++
++[editor.cursor_normal]
++fg = "Black"
++bg = "White"
++modifiers = ""
++
++[editor.cursor_insert]
++fg = "Black"
++bg = "LightGreen"
++modifiers = ""
++
++[editor.cursor_visual]
++fg = "Black"
++bg = "Blue"
++modifiers = ""
++
++[editor.selection_style]
++fg = "Black"
++bg = "White"
++modifiers = ""
++
++[msgbox]
++error = "LightRed"
++warning = "Yellow"
++info = "LightGreen"
++question = "LightBlue"
++"##;
+diff --git a/src/config/mod.rs b/src/config/mod.rs
+new file mode 100644
+index 0000000..5b3f93c
+--- /dev/null
++++ b/src/config/mod.rs
+@@ -0,0 +1,261 @@
++//! Application configuration: loading, defaults and the `print-config` output.
++
++pub mod default_themes;
++pub mod theme;
++
++use std::fs;
++use std::path::{Path, PathBuf};
++
++use serde::{Deserialize, Serialize};
++
++use crate::errors::AppError;
++
++pub use self::theme::Theme;
++
++/// Backend used to persist the journal entries.
++#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
++pub enum BackendType {
++    Json,
++    Sqlite,
++}
++
++impl std::fmt::Display for BackendType {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        f.write_str(match self {
++            BackendType::Json => "Json",
++            BackendType::Sqlite => "Sqlite",
++        })
++    }
++}
++
++/// Whether the entry date is shown in the journals list.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum DatumVisibility {
++    Show,
++    Hide,
++}
++
++impl Default for DatumVisibility {
++    fn default() -> Self {
++        DatumVisibility::Show
++    }
++}
++
++impl Serialize for DatumVisibility {
++    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
++        serializer.serialize_str(match self {
++            DatumVisibility::Show => "show",
++            DatumVisibility::Hide => "hide",
++        })
++    }
++}
++
++impl<'de> Deserialize<'de> for DatumVisibility {
++    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
++        let s = String::deserialize(deserializer)?;
++        match s.as_str() {
++            "hide" => Ok(DatumVisibility::Hide),
++            _ => Ok(DatumVisibility::Show),
++        }
++    }
++}
++
++#[derive(Debug, Clone, Serialize, Deserialize)]
++pub struct ExportSettings {
++    pub show_confirmation: bool,
++}
++
++impl Default for ExportSettings {
++    fn default() -> Self {
++        Self {
++            show_confirmation: true,
++        }
++    }
++}
++
++#[derive(Debug, Clone, Serialize, Deserialize)]
++pub struct ExternalEditorSettings {
++    pub auto_save: bool,
++    pub temp_file_extension: String,
++}
++
++impl Default for ExternalEditorSettings {
++    fn default() -> Self {
++        Self {
++            auto_save: false,
++            temp_file_extension: "txt".to_string(),
++        }
++    }
++}
++
++#[derive(Debug, Clone, Serialize, Deserialize)]
++pub struct JsonBackendSettings {
++    pub file_path: PathBuf,
++}
++
++impl Default for JsonBackendSettings {
++    fn default() -> Self {
++        Self {
++            file_path: home_dir().join("tui-journal").join("entries.json"),
++        }
++    }
++}
++
++#[derive(Debug, Clone, Serialize, Deserialize)]
++pub struct SqliteBackendSettings {
++    pub file_path: PathBuf,
++}
++
++impl Default for SqliteBackendSettings {
++    fn default() -> Self {
++        Self {
++            file_path: home_dir().join("tui-journal").join("entries.db"),
++        }
++    }
++}
++
++fn home_dir() -> PathBuf {
++    dirs::home_dir().unwrap_or_else(|| PathBuf::from("."))
++}
++
++fn state_dir() -> PathBuf {
++    dirs::state_dir()
++        .map(|d| d.join("tui-journal"))
++        .unwrap_or_else(|| home_dir().join(".local/state/tui-journal"))
++}
++
++#[derive(Debug, Clone, Serialize, Deserialize)]
++pub struct Config {
++    #[serde(default = "default_backend_type")]
++    pub backend_type: BackendType,
++    #[serde(default = "default_scroll_per_page")]
++    pub scroll_per_page: usize,
++    #[serde(default = "default_sync_os_clipboard")]
++    pub sync_os_clipboard: bool,
++    #[serde(default = "default_history_limit")]
++    pub history_limit: usize,
++    #[serde(default = "default_colored_tags")]
++    pub colored_tags: bool,
++    #[serde(default)]
++    pub datum_visibility: DatumVisibility,
++    #[serde(default = "default_app_state_dir")]
++    pub app_state_dir: PathBuf,
++    #[serde(default)]
++    pub export: ExportSettings,
++    #[serde(default)]
++    pub external_editor: ExternalEditorSettings,
++    #[serde(default)]
++    pub json_backend: JsonBackendSettings,
++    #[serde(default)]
++    pub sqlite_backend: SqliteBackendSettings,
++}
++
++fn default_backend_type() -> BackendType {
++    BackendType::Sqlite
++}
++fn default_scroll_per_page() -> usize {
++    5
++}
++fn default_sync_os_clipboard() -> bool {
++    false
++}
++fn default_history_limit() -> usize {
++    10
++}
++fn default_colored_tags() -> bool {
++    true
++}
++fn default_app_state_dir() -> PathBuf {
++    state_dir()
++}
++
++impl Default for Config {
++    fn default() -> Self {
++        Self {
++            backend_type: default_backend_type(),
++            scroll_per_page: default_scroll_per_page(),
++            sync_os_clipboard: default_sync_os_clipboard(),
++            history_limit: default_history_limit(),
++            colored_tags: default_colored_tags(),
++            datum_visibility: DatumVisibility::default(),
++            app_state_dir: default_app_state_dir(),
++            export: ExportSettings::default(),
++            external_editor: ExternalEditorSettings::default(),
++            json_backend: JsonBackendSettings::default(),
++            sqlite_backend: SqliteBackendSettings::default(),
++        }
++    }
++}
++
++impl Config {
++    /// Loads the configuration from `dir_path`.
++    ///
++    /// For backward compatibility a path to an existing configuration *file*
++    /// is also accepted. When nothing is found the defaults are used.
++    pub fn load(dir_path: &Path) -> Result<Config, AppError> {
++        let file = if dir_path.is_file() {
++            dir_path.to_path_buf()
++        } else {
++            dir_path.join("config.toml")
++        };
++
++        if file.exists() {
++            let raw = fs::read_to_string(&file)?;
++            let mut config: Config = toml::from_str(&raw)?;
++            // Make sure parent folders of the backend files exist.
++            config.json_backend.ensure_parent();
++            config.sqlite_backend.ensure_parent();
++            Ok(config)
++        } else {
++            Ok(Config::default())
++        }
++    }
++
++    /// The TOML dump printed by the `print-config` subcommand.
++    pub fn print_config(&self) -> Result<String, AppError> {
++        Ok(toml::to_string(self)?)
++    }
++
++    /// The directory used for themes; a configuration file is considered as
++    /// the root for the themes file too.
++    pub fn themes_root(&self) -> PathBuf {
++        self.state_root.clone().unwrap_or_else(default_state_config_root)
++    }
++
++    fn ensure_dir(&self) {
++        if let Some(root) = &self.state_root {
++            let _ = fs::create_dir_all(root);
++        }
++    }
++}
++
++impl Config {
++    pub fn with_state_root(mut self, root: PathBuf) -> Self {
++        self.state_root = Some(root);
++        self
++    }
++}
++
++fn default_state_config_root() -> PathBuf {
++    dirs::config_dir()
++        .map(|d| d.join("tui-journal"))
++        .unwrap_or_else(|| home_dir().join(".config/tui-journal"))
++}
++
++// ---------------------------------------------------------------------------
++
++impl JsonBackendSettings {
++    pub fn ensure_parent(&self) {
++        if let Some(parent) = self.file_path.parent() {
++            let _ = fs::create_dir_all(parent);
++        }
++    }
++}
++
++impl SqliteBackendSettings {
++    pub fn ensure_parent(&self) {
++        if let Some(parent) = self.file_path.parent() {
++            let _ = fs::create_dir_all(parent);
++        }
++    }
++}
+diff --git a/src/errors.rs b/src/errors.rs
+new file mode 100644
+index 0000000..3f82621
+--- /dev/null
++++ b/src/errors.rs
+@@ -0,0 +1,34 @@
++//! Unified error type shared by every module of the app.
++
++use thiserror::Error;
++
++/// Errors surfaced to the user as `Error: <message>`.
++#[derive(Debug, Error)]
++pub enum AppError {
++    #[error("{0}")]
++    Io(#[from] std::io::Error),
++
++    #[error("failed to parse JSON: {0}")]
++    Json(#[from] serde_json::Error),
++
++    #[error("failed to parse TOML: {0}")]
++    Toml(#[from] toml::de::Error),
++
++    #[error("failed to serialize TOML: {0}")]
++    TomlSer(#[from] toml::ser::Error),
++
++    #[error("sqlite error: {0}")]
++    Sqlite(String),
++
++    #[error("failed to parse date: {0}")]
++    Date(String),
++
++    #[error("{0}")]
++    General(String),
++}
++
++impl From<chrono::ParseError> for AppError {
++    fn from(err: chrono::ParseError) -> Self {
++        AppError::Date(err.to_string())
++    }
++}

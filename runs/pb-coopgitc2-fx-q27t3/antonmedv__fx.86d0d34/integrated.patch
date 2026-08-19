@@ -1,0 +1,218 @@
+diff --git a/probe/agent1/comp_bash.txt b/probe/agent1/comp_bash.txt
+new file mode 100644
+index 0000000..d08ae55
+--- /dev/null
++++ b/probe/agent1/comp_bash.txt
+@@ -0,0 +1 @@
++complete -o filenames -C fx fx
+diff --git a/probe/agent1/comp_elv.txt b/probe/agent1/comp_elv.txt
+new file mode 100644
+index 0000000..d3a3e02
+--- /dev/null
++++ b/probe/agent1/comp_elv.txt
+@@ -0,0 +1 @@
++unknown shell type
+diff --git a/probe/agent1/comp_fish.txt b/probe/agent1/comp_fish.txt
+new file mode 100644
+index 0000000..ab55af5
+--- /dev/null
++++ b/probe/agent1/comp_fish.txt
+@@ -0,0 +1 @@
++complete --command fx --arguments '(COMP_FISH=(commandline -cp) fx)'
+diff --git a/probe/agent1/comp_ps.txt b/probe/agent1/comp_ps.txt
+new file mode 100644
+index 0000000..d3a3e02
+--- /dev/null
++++ b/probe/agent1/comp_ps.txt
+@@ -0,0 +1 @@
++unknown shell type
+diff --git a/probe/agent1/comp_zsh.txt b/probe/agent1/comp_zsh.txt
+new file mode 100644
+index 0000000..b6afd12
+--- /dev/null
++++ b/probe/agent1/comp_zsh.txt
+@@ -0,0 +1,38 @@
++#compdef fx
++
++_fx() {
++    local -a reply
++    reply=("${(@f)$(COMP_ZSH="${LBUFFER}" fx)}")
++    if (( ${#reply} )); then
++        local -a insert_files display_files insert_other display_other
++        local line display rest value typ
++        
++        for line in "${reply[@]}"; do
++            display="${line%%$'\t'*}"
++            rest="${line#*$'\t'}"
++            value="${rest%%$'\t'*}"
++            typ="${rest#*$'\t'}"
++
++            if [[ "$typ" == "file" ]]; then
++                display_files+=("$display")
++                insert_files+=("$value")
++            else
++                display_other+=("$display")
++                insert_other+=("$value")
++            fi
++        done
++
++        if (( ${#insert_files} )); then
++            compadd -f -d display_files -a insert_files
++        fi
++        if (( ${#insert_other} )); then
++            compadd -S '' -d display_other -a insert_other
++        fi
++    fi
++}
++
++if [ "$funcstack[1]" = "_fx" ]; then
++    _fx "$@"
++else
++    compdef _fx fx
++fi
+diff --git a/probe/agent1/scaffold.sh b/probe/agent1/scaffold.sh
+new file mode 100644
+index 0000000..2b293db
+--- /dev/null
++++ b/probe/agent1/scaffold.sh
+@@ -0,0 +1,2 @@
++# scaffold (run once)
++mkdir -p /workspace/src
+diff --git a/probe/agent1/themes.err b/probe/agent1/themes.err
+new file mode 100644
+index 0000000..5cf5d3d
+--- /dev/null
++++ b/probe/agent1/themes.err
+@@ -0,0 +1,14 @@
++
++
++
++
++
++
++
++
++
++
++
++
++
++
+diff --git a/probe/agent1/themes.txt b/probe/agent1/themes.txt
+new file mode 100644
+index 0000000..e69be78
+--- /dev/null
++++ b/probe/agent1/themes.txt
+@@ -0,0 +1,112 @@
++export FX_THEME="0"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}
++export FX_THEME="1"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}
++export FX_THEME="2"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}
++export FX_THEME="3"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}
++export FX_THEME="4"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}
++export FX_THEME="5"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}
++export FX_THEME="6"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}
++export FX_THEME="7"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}
++export FX_THEME="8"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}
++export FX_THEME="9"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}
++export FX_THEME="🔥"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}
++export FX_THEME="🔵"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}
++export FX_THEME="🟣"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}
++export FX_THEME="🥝"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}

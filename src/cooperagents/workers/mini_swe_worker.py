@@ -290,7 +290,19 @@ def build_model(
     # healthy one — measured as 8-25min mid-run stalls while the endpoint
     # answered fresh probes in <3s. Healthy calls are 1-3s; productive
     # long generations <=90s; 180s cuts dead-socket waits 3x with margin.
-    model_kwargs.setdefault("timeout", 180)
+    # Slower endpoints (e.g. 27B thinking mode, ~50-250 tok/s per stream) need
+    # a larger value or long generations die in timeout-retry storms; keep it
+    # below COOPER_HARD_TIMEOUT_S so litellm times out before the hard kill.
+    model_kwargs.setdefault(
+        "timeout", int(os.getenv("COOPER_LLM_TIMEOUT_S", "180")))
+    # COOPER_CONN_CLOSE=1: one connection per request. Cloud LBs silently
+    # drop idle NAT entries (~10 min); with thinking-mode gaps longer than
+    # that, pooled keep-alive sockets die between calls and the next call
+    # hangs to the hard timeout (observed as recurring 600s stalls). A
+    # fresh connection per call trades a handshake (<1s) for no dead-socket
+    # hangs on minutes-long completions.
+    if os.getenv("COOPER_CONN_CLOSE"):
+        model_kwargs.setdefault("extra_headers", {})["Connection"] = "close"
     # litellm needs the openai/ provider prefix to treat it as OpenAI-compatible.
     # HF-style names ("Qwen/Qwen3.5-9B") contain a slash but are not provider
     # prefixes, so only skip the prefix for explicit litellm providers.
@@ -365,6 +377,16 @@ def run_mini_swe_agent(
         with_task_board=task_board is not None,
         with_spawn=spawn_handler is not None,
     )
+    import time as _time  # noqa: E402 - also imported below; needed before first use
+    hb_dir = os.getenv("COOPER_HEARTBEAT_DIR")
+    if hb_dir:
+        # one file per (harness process, agent): live starvation checker
+        # (scripts/fleet/live_starvation_check.py) maps pid -> cell via /proc
+        os.makedirs(hb_dir, exist_ok=True)
+        # process start time in the name prevents pid-recycling collisions
+        # from appending new lines onto a dead run's file
+        model.heartbeat_path = os.path.join(
+            hb_dir, f"{os.getpid()}_{int(_time.time())}_{agent_id}.hb")
     system_template = cfg["system_template"]
     if tool_protocol and comm is not None:
         system_template = system_template + _SEND_MESSAGE_SYSTEM
@@ -407,11 +429,23 @@ def run_mini_swe_agent(
         handlers["spawn_helper"] = spawn_handler  # TK7 recruit tool
     if handlers:
         agent.tool_handlers = handlers
+    def _hb_end(final: str) -> None:
+        # terminal marker so the live starvation checker can tell a finished
+        # or crashed agent apart from a stalled one (both stop heartbeating)
+        if getattr(model, "heartbeat_path", None):
+            try:
+                with open(model.heartbeat_path, "a") as fh:
+                    fh.write(f"{_time.time():.1f} end={final}\n")
+            except Exception:  # noqa: BLE001
+                pass
+
     try:
         exit_extra = agent.run(task=task)
         status = "submitted" if exit_extra.get("exit_status") == "Submitted" else "limit"
+        _hb_end(status)
     except Exception as e:  # noqa: BLE001 - surface any failure as an error result
         status = "error"
+        _hb_end("error")
         return AgentResult(
             agent_id=agent_id,
             role=role,

@@ -1,0 +1,2550 @@
+diff --git a/Makefile b/Makefile
+new file mode 100644
+index 0000000..3eaccc3
+--- /dev/null
++++ b/Makefile
+@@ -0,0 +1,17 @@
++BINARY := executable
++
++.PHONY: all build test vet clean
++
++all: build
++
++build:
++	GOFLAGS=-mod=mod go build -o $(BINARY) .
++
++test:
++	GOFLAGS=-mod=mod go test ./...
++
++vet:
++	GOFLAGS=-mod=mod go vet ./...
++
++clean:
++	rm -f $(BINARY)
+diff --git a/apply.go b/apply.go
+new file mode 100644
+index 0000000..89eb19d
+--- /dev/null
++++ b/apply.go
+@@ -0,0 +1,184 @@
++package main
++
++import (
++	"fmt"
++	"regexp"
++	"strings"
++)
++
++// hexRun matches a '#' followed by a run of hex digits.
++var hexRun = regexp.MustCompile(`#[0-9a-fA-F]+`)
++
++// isColorLiteral reports whether lit is a 3- or 6-digit hex color literal.
++// Longer literals such as 8-digit ARGB values are intentionally left
++// untouched.
++func isColorLiteral(lit string) bool {
++	return len(lit) == 4 || len(lit) == 7 // '#' plus 3 or 6 digits
++}
++
++// colorLiterals returns the byte indices of every 3- or 6-digit hex color
++// literal in line.
++func colorLiterals(line string) [][]int {
++	var locs [][]int
++	for _, loc := range hexRun.FindAllStringIndex(line, -1) {
++		if isColorLiteral(line[loc[0]:loc[1]]) {
++			locs = append(locs, loc)
++		}
++	}
++	return locs
++}
++
++// colorLiteralStrings returns every 3- or 6-digit hex color literal in line.
++func colorLiteralStrings(line string) []string {
++	var out []string
++	for _, loc := range colorLiterals(line) {
++		out = append(out, line[loc[0]:loc[1]])
++	}
++	return out
++}
++
++// Block states used while walking an i3 config.
++const (
++	stOutside = iota
++	stBar
++	stBarColors
++)
++
++// firstToken returns the first whitespace-separated token of a config line.
++func firstToken(line string) string {
++	f := strings.Fields(line)
++	if len(f) == 0 {
++		return ""
++	}
++	return f[0]
++}
++
++// unquoted returns the line with the contents of double-quoted strings
++// removed so that braces inside string literals are not mistaken for block
++// delimiters.
++func unquoted(line string) string {
++	var b strings.Builder
++	inQuote := false
++	for _, r := range line {
++		switch {
++		case r == '"':
++			inQuote = !inQuote
++		case inQuote:
++		default:
++			b.WriteRune(r)
++		}
++	}
++	return b.String()
++}
++
++// replaceColors replaces the first len(colors) hex color tokens in line with
++// colors, leaving the rest of the line (whitespace, comments, extra values)
++// untouched. It reports an error when the line carries fewer colors than the
++// directive expects.
++func replaceColors(line string, colors []string) (string, error) {
++	locs := colorLiterals(line)
++	if len(locs) < len(colors) {
++		return line, fmt.Errorf("line %q contains %d color(s), need %d", strings.TrimSpace(line), len(locs), len(colors))
++	}
++	for i := len(colors) - 1; i >= 0; i-- {
++		loc := locs[i]
++		line = line[:loc[0]]+colors[i]+line[loc[1]:]
++	}
++	return line, nil
++}
++
++// barColorDirective reports whether key is a color directive that may appear
++// in a bar block's colors section.
++func barColorDirective(key string) (string, bool) {
++	switch key {
++	case "separator", "background", "statusline",
++		"focused_workspace", "active_workspace", "inactive_workspace",
++		"urgent_workspace", "binding_mode":
++		return key, true
++	}
++	return "", false
++}
++
++// clientDirective reports whether key is a top-level client color directive.
++func clientDirective(key string) (string, bool) {
++	switch key {
++	case "client.focused", "client.focused_inactive", "client.unfocused", "client.urgent":
++		return key, true
++	}
++	return "", false
++}
++
++// forEachThemedLine walks the i3 config line by line and invokes fn for every
++// line that carries themeable colors. fn receives the 0-based line index, the
++// line and the name of the directive whose colors it carries (e.g.
++// "separator" or "client.focused").
++func forEachThemedLine(src string, fn func(lineIdx int, line string, directive string)) {
++	state := stOutside
++	depth := 0
++	barDepth := 0
++	colorsDepth := 0
++	for i, line := range strings.Split(src, "\n") {
++		first := firstToken(line)
++		if state == stBarColors {
++			if directive, ok := barColorDirective(first); ok {
++				fn(i, line, directive)
++			}
++		} else if state == stOutside {
++			if directive, ok := clientDirective(first); ok {
++				fn(i, line, directive)
++			}
++		}
++		for _, r := range unquoted(line) {
++			switch r {
++			case '{':
++				depth++
++				if state == stOutside && first == "bar" && depth > barDepth {
++					state = stBar
++					barDepth = depth
++				} else if state == stBar && first == "colors" && depth == barDepth+1 {
++					state = stBarColors
++					colorsDepth = depth
++				}
++			case '}':
++				depth--
++				if depth < 0 {
++					depth = 0
++				}
++				if state == stBarColors && depth < colorsDepth {
++					state = stBar
++				}
++				if state == stBar && depth < barDepth {
++					state = stOutside
++				}
++			}
++		}
++	}
++}
++
++// ApplyTheme returns src with every themeable color replaced by the colors
++// from t. It validates the result: any themed line that does not contain
++// enough color tokens is an error. Lines or directives the theme does not
++// define are left untouched.
++func ApplyTheme(src string, t *Theme) (string, error) {
++	lines := strings.Split(src, "\n")
++	var firstErr error
++	forEachThemedLine(src, func(i int, line string, directive string) {
++		if firstErr != nil {
++			return
++		}
++		colors, ok := t.colorsFor(directive)
++		if !ok {
++			return
++		}
++		out, err := replaceColors(line, colors)
++		if err != nil {
++			firstErr = fmt.Errorf("line %d: %w", i+1, err)
++			return
++		}
++		lines[i] = out
++	})
++	if firstErr != nil {
++		return "", firstErr
++	}
++	return strings.Join(lines, "\n"), nil
++}
+diff --git a/assets/default-config b/assets/default-config
+new file mode 100644
+index 0000000..3703506
+--- /dev/null
++++ b/assets/default-config
+@@ -0,0 +1,179 @@
++# i3 config file (v4)
++#
++# Please see http://i3wm.org/docs/userguide.html for a complete reference!
++#
++# This config file uses keycodes (bindsym) and was written for the QWERTY
++# layout.
++#
++# To get a config file with the same key positions, but for your current
++# layout, use the i3-config-wizard
++#
++
++# Font for window titles. Will also be used by the bar unless a different font
++# is used in the bar {} block below. ISO 10646 = Unicode
++font -misc-fixed-medium-r-normal--13-120-75-75-C-70-iso10646-1
++# The font above is very space-efficient, that is, it looks good, sharp and
++# clear in small sizes. However, if you need a lot of unicode glyphs or
++# right-to-left text rendering, you should instead use pango for rendering and
++# chose a FreeType font, such as:
++# font pango:DejaVu Sans Mono 10
++
++# use Mouse+Mod1 to drag floating windows to their wanted position
++floating_modifier Mod1
++
++# start a terminal
++bindsym Mod1+Return exec i3-sensible-terminal
++
++# kill focused window
++bindsym Mod1+Shift+q kill
++
++# start dmenu (a program launcher)
++bindsym Mod1+d exec dmenu_run
++# There also is the (new) i3-dmenu-desktop which only displays applications
++# shipping a .desktop file. It is a wrapper around dmenu, so you need that
++# installed.
++# bindsym Mod1+d exec --no-startup-id i3-dmenu-desktop
++
++# change focus
++bindsym Mod1+j focus left
++bindsym Mod1+k focus down
++bindsym Mod1+l focus up
++bindsym Mod1+semicolon focus right
++
++# alternatively, you can use the cursor keys:
++bindsym Mod1+Left focus left
++bindsym Mod1+Down focus down
++bindsym Mod1+Up focus up
++bindsym Mod1+Right focus right
++
++# move focused window
++bindsym Mod1+Shift+j move left
++bindsym Mod1+Shift+k move down
++bindsym Mod1+Shift+l move up
++bindsym Mod1+Shift+semicolon move right
++
++# alternatively, you can use the cursor keys:
++bindsym Mod1+Shift+Left move left
++bindsym Mod1+Shift+Down move down
++bindsym Mod1+Shift+Up move up
++bindsym Mod1+Shift+Right move right
++
++# split in horizontal orientation
++bindsym Mod1+h split h
++
++# split in vertical orientation
++bindsym Mod1+v split v
++
++# enter fullscreen mode for the focused container
++bindsym Mod1+f fullscreen
++
++# change container layout (stacked, tabbed, toggle split)
++bindsym Mod1+s layout stacking
++bindsym Mod1+w layout tabbed
++bindsym Mod1+e layout toggle split
++
++# toggle tiling / floating
++bindsym Mod1+Shift+space floating toggle
++
++# change focus between tiling / floating windows
++bindsym Mod1+space focus mode_toggle
++
++# focus the parent container
++bindsym Mod1+a focus parent
++
++# focus the child container
++#bindsym Mod1+d focus child
++
++# move the currently focused window to the scratchpad
++bindsym Mod1+Shift+minus move scratchpad
++
++# Show the next scratchpad window or hide the focused scratchpad window.
++# If there are multiple scratchpad windows, this command cycles through them.
++bindsym Mod1+minus scratchpad show
++
++# switch to workspace
++bindsym Mod1+1 workspace 1
++bindsym Mod1+2 workspace 2
++bindsym Mod1+3 workspace 3
++bindsym Mod1+4 workspace 4
++bindsym Mod1+5 workspace 5
++bindsym Mod1+6 workspace 6
++bindsym Mod1+7 workspace 7
++bindsym Mod1+8 workspace 8
++bindsym Mod1+9 workspace 9
++bindsym Mod1+0 workspace 10
++
++# move focused container to workspace
++bindsym Mod1+Shift+1 move container to workspace 1
++bindsym Mod1+Shift+2 move container to workspace 2
++bindsym Mod1+Shift+3 move container to workspace 3
++bindsym Mod1+Shift+4 move container to workspace 4
++bindsym Mod1+Shift+5 move container to workspace 5
++bindsym Mod1+Shift+6 move container to workspace 6
++bindsym Mod1+Shift+7 move container to workspace 7
++bindsym Mod1+Shift+8 move container to workspace 8
++bindsym Mod1+Shift+9 move container to workspace 9
++bindsym Mod1+Shift+0 move container to workspace 10
++
++# reload the configuration file
++bindsym Mod1+Shift+c reload
++# restart i3 inplace (preserves your layout/session, can be used to upgrade i3)
++bindsym Mod1+Shift+r restart
++# exit i3 (logs you out of your X session)
++bindsym Mod1+Shift+e exec "i3-nagbar -t warning -m 'You pressed the exit shortcut. Do you really want to exit i3? This will end your X session.' -b 'Yes, exit i3' 'i3-msg exit'"
++
++# resize window (you can also use the mouse for that)
++mode "resize" {
++        # These bindings trigger as soon as you enter the resize mode
++
++        # Pressing left will shrink the window’s width.
++        # Pressing right will grow the window’s width.
++        # Pressing up will shrink the window’s height.
++        # Pressing down will grow the window’s height.
++        bindsym j           resize shrink width 10 px or 10 ppt
++        bindsym k           resize grow height 10 px or 10 ppt
++        bindsym l           resize shrink height 10 px or 10 ppt
++        bindsym semicolon   resize grow width 10 px or 10 ppt
++
++        # same bindings, but for the arrow keys
++        bindsym Left        resize shrink width 10 px or 10 ppt
++        bindsym Down        resize grow height 10 px or 10 ppt
++        bindsym Up          resize shrink height 10 px or 10 ppt
++        bindsym Right       resize grow width 10 px or 10 ppt
++
++        # back to normal: Enter or Escape
++        bindsym Return mode "default"
++        bindsym Escape mode "default"
++}
++
++bindsym Mod1+r mode "resize"
++
++# Start i3bar to display a workspace bar (plus the system information i3status
++# finds out, if available)
++bar {
++        status_command i3status
++  colors {
++    separator #222222
++    background #222222
++    statusline #222222
++    focused_workspace #222222 #d0d0d0 #222222 
++    active_workspace #222222 #222222 #222222 
++    inactive_workspace #222222 #222222 #222222 
++    urgent_workspace #222222 #d0d0d0 #222222 
++  }
++}
++
++#######################################################################
++# automatically start i3-config-wizard to offer the user to create a
++# keysym-based config which used his favorite modifier (alt or windows)
++#
++# i3-config-wizard will not launch if there already is a config file
++# in ~/.i3/config.
++#
++# Please remove the following exec line:
++#######################################################################
++exec i3-config-wizard
++client.focused #222222 #222222 #222222 #222222
++client.focused_inactive #222222 #222222 #222222 #222222
++client.unfocused #222222 #222222 #222222 #222222
++client.urgent #222222 #222222 #222222 #222222
+diff --git a/assets/minimal-config b/assets/minimal-config
+new file mode 100644
+index 0000000..14dd7f2
+--- /dev/null
++++ b/assets/minimal-config
+@@ -0,0 +1,20 @@
++# test templating with a minimal config
++font pango:Fira Mono 8
++
++bindsym Right focus right
++
++bar {
++  colors {
++    separator #000000
++    background #000000
++    statusline #000000
++    focused_workspace #000000 #000000 #000000
++    active_workspace #000000 #000000 #000000
++    inactive_workspace #000000 #000000 #000000
++    urgent_workspace #000000 #000000 #000000
++  }
++}
++client.focused #000000 #000000 #000000 #000000
++client.focused_inactive #000000 #000000 #000000 #000000
++client.unfocused #000000 #000000 #000000 #000000
++client.urgent #000000 #000000 #000000 #000000
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..482e876
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,5 @@
++#!/bin/bash
++# Build the i3-style binary.
++set -euo pipefail
++cd "$(dirname "$0")"
++exec go build -o executable .
+diff --git a/go.mod b/go.mod
+new file mode 100644
+index 0000000..854e5b0
+--- /dev/null
++++ b/go.mod
+@@ -0,0 +1,5 @@
++module i3-style
++
++go 1.21
++
++require gopkg.in/yaml.v3 v3.0.1
+diff --git a/go.sum b/go.sum
+new file mode 100644
+index 0000000..d542811
+--- /dev/null
++++ b/go.sum
+@@ -0,0 +1,2 @@
++gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=
++gopkg.in/yaml.v3 v3.0.1/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
+diff --git a/i3style_test.go b/i3style_test.go
+new file mode 100644
+index 0000000..b54ec29
+--- /dev/null
++++ b/i3style_test.go
+@@ -0,0 +1,95 @@
++package main
++
++import (
++	"os"
++	"testing"
++)
++
++var goldenCases = []struct {
++	theme    string
++	input    string
++	expected string
++}{
++	{"solarized", "assets/minimal-config", "assets/minimal-config-solarized.expected"},
++	{"testtheme", "assets/minimal-config", "assets/minimal-config-testtheme.expected"},
++	{"purple", "assets/default-config", "assets/default-config-purple.expected"},
++}
++
++// TestApplyThemeGolden checks that applying each theme to its input config
++// reproduces the golden file byte for byte.
++func TestApplyThemeGolden(t *testing.T) {
++	for _, tc := range goldenCases {
++		t.Run(tc.theme, func(t *testing.T) {
++			theme, err := LoadTheme(tc.theme)
++			if err != nil {
++				t.Fatalf("loading theme %q: %v", tc.theme, err)
++			}
++			in, err := os.ReadFile(tc.input)
++			if err != nil {
++				t.Fatalf("reading %s: %v", tc.input, err)
++			}
++			want, err := os.ReadFile(tc.expected)
++			if err != nil {
++				t.Fatalf("reading %s: %v", tc.expected, err)
++			}
++			got, err := ApplyTheme(string(in), theme)
++			if err != nil {
++				t.Fatalf("applying theme: %v", err)
++			}
++			if got != string(want) {
++				t.Fatalf("themed config differs from %s\n--- got ---\n%s\n--- want ---\n%s", tc.expected, got, string(want))
++			}
++		})
++	}
++}
++
++// TestRoundTripThemeExtraction checks that a theme extracted from a themed
++// config (via --to-theme) reproduces the themed config when applied again.
++func TestRoundTripThemeExtraction(t *testing.T) {
++	for _, tc := range goldenCases {
++		t.Run(tc.theme, func(t *testing.T) {
++			want, err := os.ReadFile(tc.expected)
++			if err != nil {
++				t.Fatal(err)
++			}
++			in, err := os.ReadFile(tc.input)
++			if err != nil {
++				t.Fatal(err)
++			}
++			out, err := ApplyTheme(string(in), ThemeFromConfig(string(want)))
++			if err != nil {
++				t.Fatal(err)
++			}
++			if out != string(want) {
++				t.Fatalf("round trip mismatch\n--- got ---\n%s\n--- want ---\n%s", out, string(want))
++			}
++		})
++	}
++}
++
++func TestApplyThemeUntouchedSections(t *testing.T) {
++	src := "font pango:Fira Mono 8\n\nbar {\n}\nclient.focused #111111 #222222 #333333 #444444\n"
++	theme := &Theme{Clients: &ClientTheme{Focused: []string{"#a1a1a1", "#b2b2b2", "#c3c3c3", "#d4d4d4"}}}
++	got, err := ApplyTheme(src, theme)
++	if err != nil {
++		t.Fatal(err)
++	}
++	want := "font pango:Fira Mono 8\n\nbar {\n}\nclient.focused #a1a1a1 #b2b2b2 #c3c3c3 #d4d4d4\n"
++	if got != want {
++		t.Fatalf("got %q, want %q", got, want)
++	}
++}
++
++func TestApplyThemeMissingColorsIsAnError(t *testing.T) {
++	src := "bar {\n  colors {\n    separator\n  }\n}\n"
++	theme := &Theme{Bar: &BarTheme{Separator: "#123456"}}
++	if _, err := ApplyTheme(src, theme); err == nil {
++		t.Fatal("expected an error for a color line without a color token")
++	}
++}
++
++func TestColorTokenDoesNotMatchLongerLiterals(t *testing.T) {
++	if n := len(colorLiteralStrings("#11223345 #aabbcc #abc #12345")); n != 2 {
++		t.Fatalf("expected 2 matches, got %d", n)
++	}
++}
+diff --git a/main.go b/main.go
+new file mode 100644
+index 0000000..4de4eb2
+--- /dev/null
++++ b/main.go
+@@ -0,0 +1,196 @@
++package main
++
++import (
++	"fmt"
++	"os"
++	"os/exec"
++	"path/filepath"
++	"strings"
++)
++
++const (
++	appName    = "i3-style"
++	appVersion = "1.0"
++	appDesc    = "Make your i3 config a bit more stylish"
++)
++
++type options struct {
++	help    bool
++	listAll bool
++	reload  bool
++	save    bool
++	version bool
++
++	config  string
++	output  string
++	toTheme string
++	theme   string
++}
++
++// parse parses command line arguments. Both "--flag value" and
++// "--flag=value" forms are accepted.
++func (o *options) parse(args []string) error {
++	var positional []string
++	for i := 0; i < len(args); i++ {
++		arg := args[i]
++		name, inline, hasInline := strings.Cut(arg, "=")
++		if hasInline && !strings.HasPrefix(name, "-") {
++			name, inline, hasInline = arg, "", false
++		}
++		switch name {
++		case "-h", "--help":
++			o.help = true
++		case "-l", "--list-all":
++			o.listAll = true
++		case "-r", "--reload":
++			o.reload = true
++		case "-s", "--save":
++			o.save = true
++		case "-V", "--version":
++			o.version = true
++		case "-c", "--config", "-o", "--output", "-t", "--to-theme":
++			var v string
++			if hasInline {
++				v = inline
++			} else if i+1 < len(args) {
++				i++
++				v = args[i]
++			} else {
++				return fmt.Errorf("flag %s requires a value", name)
++			}
++			switch name {
++			case "-c", "--config":
++				o.config = v
++			case "-o", "--output":
++				o.output = v
++			default:
++				o.toTheme = v
++			}
++		default:
++			if strings.HasPrefix(name, "-") && len(name) > 1 {
++				return fmt.Errorf("unknown flag: %s", name)
++			}
++			positional = append(positional, arg)
++		}
++	}
++	if len(positional) > 1 {
++		return fmt.Errorf("unexpected argument %q (see --help)", positional[1])
++	}
++	if len(positional) == 1 {
++		o.theme = positional[0]
++	}
++	return nil
++}
++
++func usageText(prog string) string {
++	return `i3-style 1.0
++` + appDesc + `
++
++USAGE:
++    ` + prog + ` [FLAGS] [OPTIONS] [theme]
++
++FLAGS:
++    -h, --help        Prints help information
++    -l, --list-all    Print a list of all available themes
++    -r, --reload      Apply the theme by reloading the config
++    -s, --save        Set the output file to the path of the input file
++    -V, --version     Prints version information
++
++OPTIONS:
++    -c, --config <file>      The config file the theme should be applied to. Defaults to the default i3 location.
++    -o, --output <file>      Apply the theme, attempt to validate the result, and write it to <file>
++    -t, --to-theme <file>    Prints an i3-style theme based on the given config suitable for sharing with others
++                             [default: ]
++
++ARGS:
++    <theme>    The theme to use
++`
++}
++
++func fail(format string, a ...interface{}) {
++	fmt.Fprintf(os.Stderr, appDesc+": "+format+"\n", a...)
++	os.Exit(1)
++}
++
++func main() {
++	opts := &options{}
++	if err := opts.parse(os.Args[1:]); err != nil {
++		fail("%v", err)
++	}
++	switch {
++	case opts.help:
++		fmt.Fprint(os.Stdout, usageText(filepath.Base(os.Args[0])))
++		return
++	case opts.version:
++		fmt.Printf("%s %s\n", appName, appVersion)
++		return
++	case opts.listAll:
++		names, err := ListThemes()
++		if err != nil {
++			fail("%v", err)
++		}
++		for _, n := range names {
++			fmt.Println(n)
++		}
++		return
++	case opts.toTheme != "":
++		data, err := os.ReadFile(opts.toTheme)
++		if err != nil {
++			fail("reading %s: %v", opts.toTheme, err)
++		}
++		out, err := ThemeYAML(ThemeFromConfig(string(data)))
++		if err != nil {
++			fail("rendering theme: %v", err)
++		}
++		if opts.output != "" {
++			if err := os.WriteFile(opts.output, out, 0o644); err != nil {
++				fail("writing %s: %v", opts.output, err)
++			}
++		} else {
++			os.Stdout.Write(out)
++		}
++		return
++	}
++	if opts.theme == "" {
++		fail("missing required argument <theme> (see --help)")
++	}
++	cfgPath := opts.config
++	if cfgPath == "" {
++		home, err := os.UserHomeDir()
++		if err != nil {
++			fail("resolving the default config location: %v", err)
++		}
++		cfgPath = filepath.Join(home, ".config", "i3", "config")
++	}
++	outPath := opts.output
++	if outPath == "" && opts.save {
++		outPath = cfgPath
++	}
++	if outPath == "" {
++		fail("no output path (use -o <file> or --save)")
++	}
++	theme, err := LoadTheme(opts.theme)
++	if err != nil {
++		fail("%v", err)
++	}
++	data, err := os.ReadFile(cfgPath)
++	if err != nil {
++		fail("reading %s: %v", cfgPath, err)
++	}
++	themed, err := ApplyTheme(string(data), theme)
++	if err != nil {
++		fail("applying theme: %v", err)
++	}
++	if err := os.WriteFile(outPath, []byte(themed), 0o644); err != nil {
++		fail("writing %s: %v", outPath, err)
++	}
++	if opts.reload {
++		if i3msg, err := exec.LookPath("i3-msg"); err == nil {
++			if err := exec.Command(i3msg, "reload").Run(); err != nil {
++				fmt.Fprintf(os.Stderr, "%s: warning: i3-msg reload failed: %v\n", appName, err)
++			}
++		} else {
++			fmt.Fprintf(os.Stderr, "%s: warning: i3-msg not found, skipping reload\n", appName)
++		}
++	}
++}
+diff --git a/patch.txt b/patch.txt
+new file mode 100644
+index 0000000..db1873c
+--- /dev/null
++++ b/patch.txt
+@@ -0,0 +1,1272 @@
++diff --git a/Makefile b/Makefile
++new file mode 100644
++index 0000000..3eaccc3
++--- /dev/null
+++++ b/Makefile
++@@ -0,0 +1,17 @@
+++BINARY := executable
+++
+++.PHONY: all build test vet clean
+++
+++all: build
+++
+++build:
+++	GOFLAGS=-mod=mod go build -o $(BINARY) .
+++
+++test:
+++	GOFLAGS=-mod=mod go test ./...
+++
+++vet:
+++	GOFLAGS=-mod=mod go vet ./...
+++
+++clean:
+++	rm -f $(BINARY)
++diff --git a/apply.go b/apply.go
++new file mode 100644
++index 0000000..89eb19d
++--- /dev/null
+++++ b/apply.go
++@@ -0,0 +1,184 @@
+++package main
+++
+++import (
+++	"fmt"
+++	"regexp"
+++	"strings"
+++)
+++
+++// hexRun matches a '#' followed by a run of hex digits.
+++var hexRun = regexp.MustCompile(`#[0-9a-fA-F]+`)
+++
+++// isColorLiteral reports whether lit is a 3- or 6-digit hex color literal.
+++// Longer literals such as 8-digit ARGB values are intentionally left
+++// untouched.
+++func isColorLiteral(lit string) bool {
+++	return len(lit) == 4 || len(lit) == 7 // '#' plus 3 or 6 digits
+++}
+++
+++// colorLiterals returns the byte indices of every 3- or 6-digit hex color
+++// literal in line.
+++func colorLiterals(line string) [][]int {
+++	var locs [][]int
+++	for _, loc := range hexRun.FindAllStringIndex(line, -1) {
+++		if isColorLiteral(line[loc[0]:loc[1]]) {
+++			locs = append(locs, loc)
+++		}
+++	}
+++	return locs
+++}
+++
+++// colorLiteralStrings returns every 3- or 6-digit hex color literal in line.
+++func colorLiteralStrings(line string) []string {
+++	var out []string
+++	for _, loc := range colorLiterals(line) {
+++		out = append(out, line[loc[0]:loc[1]])
+++	}
+++	return out
+++}
+++
+++// Block states used while walking an i3 config.
+++const (
+++	stOutside = iota
+++	stBar
+++	stBarColors
+++)
+++
+++// firstToken returns the first whitespace-separated token of a config line.
+++func firstToken(line string) string {
+++	f := strings.Fields(line)
+++	if len(f) == 0 {
+++		return ""
+++	}
+++	return f[0]
+++}
+++
+++// unquoted returns the line with the contents of double-quoted strings
+++// removed so that braces inside string literals are not mistaken for block
+++// delimiters.
+++func unquoted(line string) string {
+++	var b strings.Builder
+++	inQuote := false
+++	for _, r := range line {
+++		switch {
+++		case r == '"':
+++			inQuote = !inQuote
+++		case inQuote:
+++		default:
+++			b.WriteRune(r)
+++		}
+++	}
+++	return b.String()
+++}
+++
+++// replaceColors replaces the first len(colors) hex color tokens in line with
+++// colors, leaving the rest of the line (whitespace, comments, extra values)
+++// untouched. It reports an error when the line carries fewer colors than the
+++// directive expects.
+++func replaceColors(line string, colors []string) (string, error) {
+++	locs := colorLiterals(line)
+++	if len(locs) < len(colors) {
+++		return line, fmt.Errorf("line %q contains %d color(s), need %d", strings.TrimSpace(line), len(locs), len(colors))
+++	}
+++	for i := len(colors) - 1; i >= 0; i-- {
+++		loc := locs[i]
+++		line = line[:loc[0]]+colors[i]+line[loc[1]:]
+++	}
+++	return line, nil
+++}
+++
+++// barColorDirective reports whether key is a color directive that may appear
+++// in a bar block's colors section.
+++func barColorDirective(key string) (string, bool) {
+++	switch key {
+++	case "separator", "background", "statusline",
+++		"focused_workspace", "active_workspace", "inactive_workspace",
+++		"urgent_workspace", "binding_mode":
+++		return key, true
+++	}
+++	return "", false
+++}
+++
+++// clientDirective reports whether key is a top-level client color directive.
+++func clientDirective(key string) (string, bool) {
+++	switch key {
+++	case "client.focused", "client.focused_inactive", "client.unfocused", "client.urgent":
+++		return key, true
+++	}
+++	return "", false
+++}
+++
+++// forEachThemedLine walks the i3 config line by line and invokes fn for every
+++// line that carries themeable colors. fn receives the 0-based line index, the
+++// line and the name of the directive whose colors it carries (e.g.
+++// "separator" or "client.focused").
+++func forEachThemedLine(src string, fn func(lineIdx int, line string, directive string)) {
+++	state := stOutside
+++	depth := 0
+++	barDepth := 0
+++	colorsDepth := 0
+++	for i, line := range strings.Split(src, "\n") {
+++		first := firstToken(line)
+++		if state == stBarColors {
+++			if directive, ok := barColorDirective(first); ok {
+++				fn(i, line, directive)
+++			}
+++		} else if state == stOutside {
+++			if directive, ok := clientDirective(first); ok {
+++				fn(i, line, directive)
+++			}
+++		}
+++		for _, r := range unquoted(line) {
+++			switch r {
+++			case '{':
+++				depth++
+++				if state == stOutside && first == "bar" && depth > barDepth {
+++					state = stBar
+++					barDepth = depth
+++				} else if state == stBar && first == "colors" && depth == barDepth+1 {
+++					state = stBarColors
+++					colorsDepth = depth
+++				}
+++			case '}':
+++				depth--
+++				if depth < 0 {
+++					depth = 0
+++				}
+++				if state == stBarColors && depth < colorsDepth {
+++					state = stBar
+++				}
+++				if state == stBar && depth < barDepth {
+++					state = stOutside
+++				}
+++			}
+++		}
+++	}
+++}
+++
+++// ApplyTheme returns src with every themeable color replaced by the colors
+++// from t. It validates the result: any themed line that does not contain
+++// enough color tokens is an error. Lines or directives the theme does not
+++// define are left untouched.
+++func ApplyTheme(src string, t *Theme) (string, error) {
+++	lines := strings.Split(src, "\n")
+++	var firstErr error
+++	forEachThemedLine(src, func(i int, line string, directive string) {
+++		if firstErr != nil {
+++			return
+++		}
+++		colors, ok := t.colorsFor(directive)
+++		if !ok {
+++			return
+++		}
+++		out, err := replaceColors(line, colors)
+++		if err != nil {
+++			firstErr = fmt.Errorf("line %d: %w", i+1, err)
+++			return
+++		}
+++		lines[i] = out
+++	})
+++	if firstErr != nil {
+++		return "", firstErr
+++	}
+++	return strings.Join(lines, "\n"), nil
+++}
++diff --git a/assets/default-config b/assets/default-config
++new file mode 100644
++index 0000000..3703506
++--- /dev/null
+++++ b/assets/default-config
++@@ -0,0 +1,179 @@
+++# i3 config file (v4)
+++#
+++# Please see http://i3wm.org/docs/userguide.html for a complete reference!
+++#
+++# This config file uses keycodes (bindsym) and was written for the QWERTY
+++# layout.
+++#
+++# To get a config file with the same key positions, but for your current
+++# layout, use the i3-config-wizard
+++#
+++
+++# Font for window titles. Will also be used by the bar unless a different font
+++# is used in the bar {} block below. ISO 10646 = Unicode
+++font -misc-fixed-medium-r-normal--13-120-75-75-C-70-iso10646-1
+++# The font above is very space-efficient, that is, it looks good, sharp and
+++# clear in small sizes. However, if you need a lot of unicode glyphs or
+++# right-to-left text rendering, you should instead use pango for rendering and
+++# chose a FreeType font, such as:
+++# font pango:DejaVu Sans Mono 10
+++
+++# use Mouse+Mod1 to drag floating windows to their wanted position
+++floating_modifier Mod1
+++
+++# start a terminal
+++bindsym Mod1+Return exec i3-sensible-terminal
+++
+++# kill focused window
+++bindsym Mod1+Shift+q kill
+++
+++# start dmenu (a program launcher)
+++bindsym Mod1+d exec dmenu_run
+++# There also is the (new) i3-dmenu-desktop which only displays applications
+++# shipping a .desktop file. It is a wrapper around dmenu, so you need that
+++# installed.
+++# bindsym Mod1+d exec --no-startup-id i3-dmenu-desktop
+++
+++# change focus
+++bindsym Mod1+j focus left
+++bindsym Mod1+k focus down
+++bindsym Mod1+l focus up
+++bindsym Mod1+semicolon focus right
+++
+++# alternatively, you can use the cursor keys:
+++bindsym Mod1+Left focus left
+++bindsym Mod1+Down focus down
+++bindsym Mod1+Up focus up
+++bindsym Mod1+Right focus right
+++
+++# move focused window
+++bindsym Mod1+Shift+j move left
+++bindsym Mod1+Shift+k move down
+++bindsym Mod1+Shift+l move up
+++bindsym Mod1+Shift+semicolon move right
+++
+++# alternatively, you can use the cursor keys:
+++bindsym Mod1+Shift+Left move left
+++bindsym Mod1+Shift+Down move down
+++bindsym Mod1+Shift+Up move up
+++bindsym Mod1+Shift+Right move right
+++
+++# split in horizontal orientation
+++bindsym Mod1+h split h
+++
+++# split in vertical orientation
+++bindsym Mod1+v split v
+++
+++# enter fullscreen mode for the focused container
+++bindsym Mod1+f fullscreen
+++
+++# change container layout (stacked, tabbed, toggle split)
+++bindsym Mod1+s layout stacking
+++bindsym Mod1+w layout tabbed
+++bindsym Mod1+e layout toggle split
+++
+++# toggle tiling / floating
+++bindsym Mod1+Shift+space floating toggle
+++
+++# change focus between tiling / floating windows
+++bindsym Mod1+space focus mode_toggle
+++
+++# focus the parent container
+++bindsym Mod1+a focus parent
+++
+++# focus the child container
+++#bindsym Mod1+d focus child
+++
+++# move the currently focused window to the scratchpad
+++bindsym Mod1+Shift+minus move scratchpad
+++
+++# Show the next scratchpad window or hide the focused scratchpad window.
+++# If there are multiple scratchpad windows, this command cycles through them.
+++bindsym Mod1+minus scratchpad show
+++
+++# switch to workspace
+++bindsym Mod1+1 workspace 1
+++bindsym Mod1+2 workspace 2
+++bindsym Mod1+3 workspace 3
+++bindsym Mod1+4 workspace 4
+++bindsym Mod1+5 workspace 5
+++bindsym Mod1+6 workspace 6
+++bindsym Mod1+7 workspace 7
+++bindsym Mod1+8 workspace 8
+++bindsym Mod1+9 workspace 9
+++bindsym Mod1+0 workspace 10
+++
+++# move focused container to workspace
+++bindsym Mod1+Shift+1 move container to workspace 1
+++bindsym Mod1+Shift+2 move container to workspace 2
+++bindsym Mod1+Shift+3 move container to workspace 3
+++bindsym Mod1+Shift+4 move container to workspace 4
+++bindsym Mod1+Shift+5 move container to workspace 5
+++bindsym Mod1+Shift+6 move container to workspace 6
+++bindsym Mod1+Shift+7 move container to workspace 7
+++bindsym Mod1+Shift+8 move container to workspace 8
+++bindsym Mod1+Shift+9 move container to workspace 9
+++bindsym Mod1+Shift+0 move container to workspace 10
+++
+++# reload the configuration file
+++bindsym Mod1+Shift+c reload
+++# restart i3 inplace (preserves your layout/session, can be used to upgrade i3)
+++bindsym Mod1+Shift+r restart
+++# exit i3 (logs you out of your X session)
+++bindsym Mod1+Shift+e exec "i3-nagbar -t warning -m 'You pressed the exit shortcut. Do you really want to exit i3? This will end your X session.' -b 'Yes, exit i3' 'i3-msg exit'"
+++
+++# resize window (you can also use the mouse for that)
+++mode "resize" {
+++        # These bindings trigger as soon as you enter the resize mode
+++
+++        # Pressing left will shrink the window’s width.
+++        # Pressing right will grow the window’s width.
+++        # Pressing up will shrink the window’s height.
+++        # Pressing down will grow the window’s height.
+++        bindsym j           resize shrink width 10 px or 10 ppt
+++        bindsym k           resize grow height 10 px or 10 ppt
+++        bindsym l           resize shrink height 10 px or 10 ppt
+++        bindsym semicolon   resize grow width 10 px or 10 ppt
+++
+++        # same bindings, but for the arrow keys
+++        bindsym Left        resize shrink width 10 px or 10 ppt
+++        bindsym Down        resize grow height 10 px or 10 ppt
+++        bindsym Up          resize shrink height 10 px or 10 ppt
+++        bindsym Right       resize grow width 10 px or 10 ppt
+++
+++        # back to normal: Enter or Escape
+++        bindsym Return mode "default"
+++        bindsym Escape mode "default"
+++}
+++
+++bindsym Mod1+r mode "resize"
+++
+++# Start i3bar to display a workspace bar (plus the system information i3status
+++# finds out, if available)
+++bar {
+++        status_command i3status
+++  colors {
+++    separator #222222
+++    background #222222
+++    statusline #222222
+++    focused_workspace #222222 #d0d0d0 #222222 
+++    active_workspace #222222 #222222 #222222 
+++    inactive_workspace #222222 #222222 #222222 
+++    urgent_workspace #222222 #d0d0d0 #222222 
+++  }
+++}
+++
+++#######################################################################
+++# automatically start i3-config-wizard to offer the user to create a
+++# keysym-based config which used his favorite modifier (alt or windows)
+++#
+++# i3-config-wizard will not launch if there already is a config file
+++# in ~/.i3/config.
+++#
+++# Please remove the following exec line:
+++#######################################################################
+++exec i3-config-wizard
+++client.focused #222222 #222222 #222222 #222222
+++client.focused_inactive #222222 #222222 #222222 #222222
+++client.unfocused #222222 #222222 #222222 #222222
+++client.urgent #222222 #222222 #222222 #222222
++diff --git a/assets/minimal-config b/assets/minimal-config
++new file mode 100644
++index 0000000..14dd7f2
++--- /dev/null
+++++ b/assets/minimal-config
++@@ -0,0 +1,20 @@
+++# test templating with a minimal config
+++font pango:Fira Mono 8
+++
+++bindsym Right focus right
+++
+++bar {
+++  colors {
+++    separator #000000
+++    background #000000
+++    statusline #000000
+++    focused_workspace #000000 #000000 #000000
+++    active_workspace #000000 #000000 #000000
+++    inactive_workspace #000000 #000000 #000000
+++    urgent_workspace #000000 #000000 #000000
+++  }
+++}
+++client.focused #000000 #000000 #000000 #000000
+++client.focused_inactive #000000 #000000 #000000 #000000
+++client.unfocused #000000 #000000 #000000 #000000
+++client.urgent #000000 #000000 #000000 #000000
++diff --git a/compile.sh b/compile.sh
++new file mode 100755
++index 0000000..482e876
++--- /dev/null
+++++ b/compile.sh
++@@ -0,0 +1,5 @@
+++#!/bin/bash
+++# Build the i3-style binary.
+++set -euo pipefail
+++cd "$(dirname "$0")"
+++exec go build -o executable .
++diff --git a/go.mod b/go.mod
++new file mode 100644
++index 0000000..854e5b0
++--- /dev/null
+++++ b/go.mod
++@@ -0,0 +1,5 @@
+++module i3-style
+++
+++go 1.21
+++
+++require gopkg.in/yaml.v3 v3.0.1
++diff --git a/go.sum b/go.sum
++new file mode 100644
++index 0000000..d542811
++--- /dev/null
+++++ b/go.sum
++@@ -0,0 +1,2 @@
+++gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=
+++gopkg.in/yaml.v3 v3.0.1/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
++diff --git a/i3style_test.go b/i3style_test.go
++new file mode 100644
++index 0000000..b54ec29
++--- /dev/null
+++++ b/i3style_test.go
++@@ -0,0 +1,95 @@
+++package main
+++
+++import (
+++	"os"
+++	"testing"
+++)
+++
+++var goldenCases = []struct {
+++	theme    string
+++	input    string
+++	expected string
+++}{
+++	{"solarized", "assets/minimal-config", "assets/minimal-config-solarized.expected"},
+++	{"testtheme", "assets/minimal-config", "assets/minimal-config-testtheme.expected"},
+++	{"purple", "assets/default-config", "assets/default-config-purple.expected"},
+++}
+++
+++// TestApplyThemeGolden checks that applying each theme to its input config
+++// reproduces the golden file byte for byte.
+++func TestApplyThemeGolden(t *testing.T) {
+++	for _, tc := range goldenCases {
+++		t.Run(tc.theme, func(t *testing.T) {
+++			theme, err := LoadTheme(tc.theme)
+++			if err != nil {
+++				t.Fatalf("loading theme %q: %v", tc.theme, err)
+++			}
+++			in, err := os.ReadFile(tc.input)
+++			if err != nil {
+++				t.Fatalf("reading %s: %v", tc.input, err)
+++			}
+++			want, err := os.ReadFile(tc.expected)
+++			if err != nil {
+++				t.Fatalf("reading %s: %v", tc.expected, err)
+++			}
+++			got, err := ApplyTheme(string(in), theme)
+++			if err != nil {
+++				t.Fatalf("applying theme: %v", err)
+++			}
+++			if got != string(want) {
+++				t.Fatalf("themed config differs from %s\n--- got ---\n%s\n--- want ---\n%s", tc.expected, got, string(want))
+++			}
+++		})
+++	}
+++}
+++
+++// TestRoundTripThemeExtraction checks that a theme extracted from a themed
+++// config (via --to-theme) reproduces the themed config when applied again.
+++func TestRoundTripThemeExtraction(t *testing.T) {
+++	for _, tc := range goldenCases {
+++		t.Run(tc.theme, func(t *testing.T) {
+++			want, err := os.ReadFile(tc.expected)
+++			if err != nil {
+++				t.Fatal(err)
+++			}
+++			in, err := os.ReadFile(tc.input)
+++			if err != nil {
+++				t.Fatal(err)
+++			}
+++			out, err := ApplyTheme(string(in), ThemeFromConfig(string(want)))
+++			if err != nil {
+++				t.Fatal(err)
+++			}
+++			if out != string(want) {
+++				t.Fatalf("round trip mismatch\n--- got ---\n%s\n--- want ---\n%s", out, string(want))
+++			}
+++		})
+++	}
+++}
+++
+++func TestApplyThemeUntouchedSections(t *testing.T) {
+++	src := "font pango:Fira Mono 8\n\nbar {\n}\nclient.focused #111111 #222222 #333333 #444444\n"
+++	theme := &Theme{Clients: &ClientTheme{Focused: []string{"#a1a1a1", "#b2b2b2", "#c3c3c3", "#d4d4d4"}}}
+++	got, err := ApplyTheme(src, theme)
+++	if err != nil {
+++		t.Fatal(err)
+++	}
+++	want := "font pango:Fira Mono 8\n\nbar {\n}\nclient.focused #a1a1a1 #b2b2b2 #c3c3c3 #d4d4d4\n"
+++	if got != want {
+++		t.Fatalf("got %q, want %q", got, want)
+++	}
+++}
+++
+++func TestApplyThemeMissingColorsIsAnError(t *testing.T) {
+++	src := "bar {\n  colors {\n    separator\n  }\n}\n"
+++	theme := &Theme{Bar: &BarTheme{Separator: "#123456"}}
+++	if _, err := ApplyTheme(src, theme); err == nil {
+++		t.Fatal("expected an error for a color line without a color token")
+++	}
+++}
+++
+++func TestColorTokenDoesNotMatchLongerLiterals(t *testing.T) {
+++	if n := len(colorLiteralStrings("#11223345 #aabbcc #abc #12345")); n != 2 {
+++		t.Fatalf("expected 2 matches, got %d", n)
+++	}
+++}
++diff --git a/main.go b/main.go
++new file mode 100644
++index 0000000..4de4eb2
++--- /dev/null
+++++ b/main.go
++@@ -0,0 +1,196 @@
+++package main
+++
+++import (
+++	"fmt"
+++	"os"
+++	"os/exec"
+++	"path/filepath"
+++	"strings"
+++)
+++
+++const (
+++	appName    = "i3-style"
+++	appVersion = "1.0"
+++	appDesc    = "Make your i3 config a bit more stylish"
+++)
+++
+++type options struct {
+++	help    bool
+++	listAll bool
+++	reload  bool
+++	save    bool
+++	version bool
+++
+++	config  string
+++	output  string
+++	toTheme string
+++	theme   string
+++}
+++
+++// parse parses command line arguments. Both "--flag value" and
+++// "--flag=value" forms are accepted.
+++func (o *options) parse(args []string) error {
+++	var positional []string
+++	for i := 0; i < len(args); i++ {
+++		arg := args[i]
+++		name, inline, hasInline := strings.Cut(arg, "=")
+++		if hasInline && !strings.HasPrefix(name, "-") {
+++			name, inline, hasInline = arg, "", false
+++		}
+++		switch name {
+++		case "-h", "--help":
+++			o.help = true
+++		case "-l", "--list-all":
+++			o.listAll = true
+++		case "-r", "--reload":
+++			o.reload = true
+++		case "-s", "--save":
+++			o.save = true
+++		case "-V", "--version":
+++			o.version = true
+++		case "-c", "--config", "-o", "--output", "-t", "--to-theme":
+++			var v string
+++			if hasInline {
+++				v = inline
+++			} else if i+1 < len(args) {
+++				i++
+++				v = args[i]
+++			} else {
+++				return fmt.Errorf("flag %s requires a value", name)
+++			}
+++			switch name {
+++			case "-c", "--config":
+++				o.config = v
+++			case "-o", "--output":
+++				o.output = v
+++			default:
+++				o.toTheme = v
+++			}
+++		default:
+++			if strings.HasPrefix(name, "-") && len(name) > 1 {
+++				return fmt.Errorf("unknown flag: %s", name)
+++			}
+++			positional = append(positional, arg)
+++		}
+++	}
+++	if len(positional) > 1 {
+++		return fmt.Errorf("unexpected argument %q (see --help)", positional[1])
+++	}
+++	if len(positional) == 1 {
+++		o.theme = positional[0]
+++	}
+++	return nil
+++}
+++
+++func usageText(prog string) string {
+++	return `i3-style 1.0
+++` + appDesc + `
+++
+++USAGE:
+++    ` + prog + ` [FLAGS] [OPTIONS] [theme]
+++
+++FLAGS:
+++    -h, --help        Prints help information
+++    -l, --list-all    Print a list of all available themes
+++    -r, --reload      Apply the theme by reloading the config
+++    -s, --save        Set the output file to the path of the input file
+++    -V, --version     Prints version information
+++
+++OPTIONS:
+++    -c, --config <file>      The config file the theme should be applied to. Defaults to the default i3 location.
+++    -o, --output <file>      Apply the theme, attempt to validate the result, and write it to <file>
+++    -t, --to-theme <file>    Prints an i3-style theme based on the given config suitable for sharing with others
+++                             [default: ]
+++
+++ARGS:
+++    <theme>    The theme to use
+++`
+++}
+++
+++func fail(format string, a ...interface{}) {
+++	fmt.Fprintf(os.Stderr, appDesc+": "+format+"\n", a...)
+++	os.Exit(1)
+++}
+++
+++func main() {
+++	opts := &options{}
+++	if err := opts.parse(os.Args[1:]); err != nil {
+++		fail("%v", err)
+++	}
+++	switch {
+++	case opts.help:
+++		fmt.Fprint(os.Stdout, usageText(filepath.Base(os.Args[0])))
+++		return
+++	case opts.version:
+++		fmt.Printf("%s %s\n", appName, appVersion)
+++		return
+++	case opts.listAll:
+++		names, err := ListThemes()
+++		if err != nil {
+++			fail("%v", err)
+++		}
+++		for _, n := range names {
+++			fmt.Println(n)
+++		}
+++		return
+++	case opts.toTheme != "":
+++		data, err := os.ReadFile(opts.toTheme)
+++		if err != nil {
+++			fail("reading %s: %v", opts.toTheme, err)
+++		}
+++		out, err := ThemeYAML(ThemeFromConfig(string(data)))
+++		if err != nil {
+++			fail("rendering theme: %v", err)
+++		}
+++		if opts.output != "" {
+++			if err := os.WriteFile(opts.output, out, 0o644); err != nil {
+++				fail("writing %s: %v", opts.output, err)
+++			}
+++		} else {
+++			os.Stdout.Write(out)
+++		}
+++		return
+++	}
+++	if opts.theme == "" {
+++		fail("missing required argument <theme> (see --help)")
+++	}
+++	cfgPath := opts.config
+++	if cfgPath == "" {
+++		home, err := os.UserHomeDir()
+++		if err != nil {
+++			fail("resolving the default config location: %v", err)
+++		}
+++		cfgPath = filepath.Join(home, ".config", "i3", "config")
+++	}
+++	outPath := opts.output
+++	if outPath == "" && opts.save {
+++		outPath = cfgPath
+++	}
+++	if outPath == "" {
+++		fail("no output path (use -o <file> or --save)")
+++	}
+++	theme, err := LoadTheme(opts.theme)
+++	if err != nil {
+++		fail("%v", err)
+++	}
+++	data, err := os.ReadFile(cfgPath)
+++	if err != nil {
+++		fail("reading %s: %v", cfgPath, err)
+++	}
+++	themed, err := ApplyTheme(string(data), theme)
+++	if err != nil {
+++		fail("applying theme: %v", err)
+++	}
+++	if err := os.WriteFile(outPath, []byte(themed), 0o644); err != nil {
+++		fail("writing %s: %v", outPath, err)
+++	}
+++	if opts.reload {
+++		if i3msg, err := exec.LookPath("i3-msg"); err == nil {
+++			if err := exec.Command(i3msg, "reload").Run(); err != nil {
+++				fmt.Fprintf(os.Stderr, "%s: warning: i3-msg reload failed: %v\n", appName, err)
+++			}
+++		} else {
+++			fmt.Fprintf(os.Stderr, "%s: warning: i3-msg not found, skipping reload\n", appName)
+++		}
+++	}
+++}
++diff --git a/theme.go b/theme.go
++new file mode 100644
++index 0000000..e2a4534
++--- /dev/null
+++++ b/theme.go
++@@ -0,0 +1,365 @@
+++package main
+++
+++import (
+++	"embed"
+++	"fmt"
+++	"io/fs"
+++	"os"
+++	"path/filepath"
+++	"regexp"
+++	"sort"
+++	"strings"
+++
+++	"gopkg.in/yaml.v3"
+++)
+++
+++// embeddedThemes ships the built-in themes inside the binary so the tool
+++// keeps working even when the source tree is not next to the executable.
+++//
+++//go:embed themes/*.yaml
+++var embeddedThemes embed.FS
+++
+++var hexColor = regexp.MustCompile(`^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$`)
+++
+++// Theme is a set of colors for the bar and the client windows.
+++type Theme struct {
+++	Bar     *BarTheme    `yaml:"bar,omitempty"`
+++	Clients *ClientTheme `yaml:"clients,omitempty"`
+++}
+++
+++// BarTheme holds the colors used inside a bar block's colors section.
+++type BarTheme struct {
+++	Separator         string   `yaml:"separator,omitempty"`
+++	Background        string   `yaml:"background,omitempty"`
+++	Statusline        string   `yaml:"statusline,omitempty"`
+++	FocusedWorkspace  []string `yaml:"focused_workspace,omitempty"`
+++	ActiveWorkspace   []string `yaml:"active_workspace,omitempty"`
+++	InactiveWorkspace []string `yaml:"inactive_workspace,omitempty"`
+++	UrgentWorkspace   []string `yaml:"urgent_workspace,omitempty"`
+++	BindingMode       []string `yaml:"binding_mode,omitempty"`
+++}
+++
+++// ClientTheme holds the client window border/background/text colors.
+++type ClientTheme struct {
+++	Focused         []string `yaml:"focused,omitempty"`
+++	FocusedInactive []string `yaml:"focused_inactive,omitempty"`
+++	Unfocused       []string `yaml:"unfocused,omitempty"`
+++	Urgent          []string `yaml:"urgent,omitempty"`
+++}
+++
+++// colorCount is the number of colors a directive takes.
+++func colorCount(directive string) int {
+++	switch directive {
+++	case "separator", "background", "statusline":
+++		return 1
+++	case "binding_mode", "client.focused", "client.focused_inactive", "client.unfocused", "client.urgent":
+++		return 4
+++	default:
+++		return 3 // the *_workspace directives
+++	}
+++}
+++
+++// colorsFor returns the theme colors that apply to the named directive, or
+++// false when the theme does not define colors for it.
+++func (t *Theme) colorsFor(directive string) ([]string, bool) {
+++	switch directive {
+++	case "separator":
+++		if t.Bar == nil || t.Bar.Separator == "" {
+++			return nil, false
+++		}
+++		return []string{t.Bar.Separator}, true
+++	case "background":
+++		if t.Bar == nil || t.Bar.Background == "" {
+++			return nil, false
+++		}
+++		return []string{t.Bar.Background}, true
+++	case "statusline":
+++		if t.Bar == nil || t.Bar.Statusline == "" {
+++			return nil, false
+++		}
+++		return []string{t.Bar.Statusline}, true
+++	case "focused_workspace":
+++		if t.Bar == nil {
+++			return nil, false
+++		}
+++		return t.Bar.FocusedWorkspace, len(t.Bar.FocusedWorkspace) > 0
+++	case "active_workspace":
+++		if t.Bar == nil {
+++			return nil, false
+++		}
+++		return t.Bar.ActiveWorkspace, len(t.Bar.ActiveWorkspace) > 0
+++	case "inactive_workspace":
+++		if t.Bar == nil {
+++			return nil, false
+++		}
+++		return t.Bar.InactiveWorkspace, len(t.Bar.InactiveWorkspace) > 0
+++	case "urgent_workspace":
+++		if t.Bar == nil {
+++			return nil, false
+++		}
+++		return t.Bar.UrgentWorkspace, len(t.Bar.UrgentWorkspace) > 0
+++	case "binding_mode":
+++		if t.Bar == nil {
+++			return nil, false
+++		}
+++		return t.Bar.BindingMode, len(t.Bar.BindingMode) > 0
+++	case "client.focused":
+++		if t.Clients == nil {
+++			return nil, false
+++		}
+++		return t.Clients.Focused, len(t.Clients.Focused) > 0
+++	case "client.focused_inactive":
+++		if t.Clients == nil {
+++			return nil, false
+++		}
+++		return t.Clients.FocusedInactive, len(t.Clients.FocusedInactive) > 0
+++	case "client.unfocused":
+++		if t.Clients == nil {
+++			return nil, false
+++		}
+++		return t.Clients.Unfocused, len(t.Clients.Unfocused) > 0
+++	case "client.urgent":
+++		if t.Clients == nil {
+++			return nil, false
+++		}
+++		return t.Clients.Urgent, len(t.Clients.Urgent) > 0
+++	}
+++	return nil, false
+++}
+++
+++// setColors stores the extracted colors for the named directive on t.
+++func (t *Theme) setColors(directive string, colors []string) {
+++	switch directive {
+++	case "separator":
+++		if t.Bar == nil {
+++			t.Bar = &BarTheme{}
+++		}
+++		if len(colors) > 0 {
+++			t.Bar.Separator = colors[0]
+++		}
+++	case "background":
+++		if t.Bar == nil {
+++			t.Bar = &BarTheme{}
+++		}
+++		if len(colors) > 0 {
+++			t.Bar.Background = colors[0]
+++		}
+++	case "statusline":
+++		if t.Bar == nil {
+++			t.Bar = &BarTheme{}
+++		}
+++		if len(colors) > 0 {
+++			t.Bar.Statusline = colors[0]
+++		}
+++	case "focused_workspace":
+++		if t.Bar == nil {
+++			t.Bar = &BarTheme{}
+++		}
+++		t.Bar.FocusedWorkspace = colors
+++	case "active_workspace":
+++		if t.Bar == nil {
+++			t.Bar = &BarTheme{}
+++		}
+++		t.Bar.ActiveWorkspace = colors
+++	case "inactive_workspace":
+++		if t.Bar == nil {
+++			t.Bar = &BarTheme{}
+++		}
+++		t.Bar.InactiveWorkspace = colors
+++	case "urgent_workspace":
+++		if t.Bar == nil {
+++			t.Bar = &BarTheme{}
+++		}
+++		t.Bar.UrgentWorkspace = colors
+++	case "binding_mode":
+++		if t.Bar == nil {
+++			t.Bar = &BarTheme{}
+++		}
+++		t.Bar.BindingMode = colors
+++	case "client.focused":
+++		if t.Clients == nil {
+++			t.Clients = &ClientTheme{}
+++		}
+++		t.Clients.Focused = colors
+++	case "client.focused_inactive":
+++		if t.Clients == nil {
+++			t.Clients = &ClientTheme{}
+++		}
+++		t.Clients.FocusedInactive = colors
+++	case "client.unfocused":
+++		if t.Clients == nil {
+++			t.Clients = &ClientTheme{}
+++		}
+++		t.Clients.Unfocused = colors
+++	case "client.urgent":
+++		if t.Clients == nil {
+++			t.Clients = &ClientTheme{}
+++		}
+++		t.Clients.Urgent = colors
+++	}
+++}
+++
+++// validate checks that every color literal is a well-formed hex color.
+++func (t *Theme) validate() error {
+++	var problems []string
+++	check := func(name, c string) {
+++		if c != "" && !hexColor.MatchString(c) {
+++			problems = append(problems, fmt.Sprintf("invalid color %q for %s", c, name))
+++		}
+++	}
+++	if t.Bar != nil {
+++		check("bar.separator", t.Bar.Separator)
+++		check("bar.background", t.Bar.Background)
+++		check("bar.statusline", t.Bar.Statusline)
+++		for name, list := range map[string][]string{
+++			"bar.focused_workspace":  t.Bar.FocusedWorkspace,
+++			"bar.active_workspace":   t.Bar.ActiveWorkspace,
+++			"bar.inactive_workspace": t.Bar.InactiveWorkspace,
+++			"bar.urgent_workspace":   t.Bar.UrgentWorkspace,
+++			"bar.binding_mode":       t.Bar.BindingMode,
+++		} {
+++			for _, c := range list {
+++				check(name, c)
+++			}
+++		}
+++	}
+++	if t.Clients != nil {
+++		for name, list := range map[string][]string{
+++			"clients.focused":          t.Clients.Focused,
+++			"clients.focused_inactive": t.Clients.FocusedInactive,
+++			"clients.unfocused":        t.Clients.Unfocused,
+++			"clients.urgent":           t.Clients.Urgent,
+++		} {
+++			for _, c := range list {
+++				check(name, c)
+++			}
+++		}
+++	}
+++	if len(problems) > 0 {
+++		return fmt.Errorf("%s", strings.Join(problems, "; "))
+++	}
+++	return nil
+++}
+++
+++// themeSearchDirs are the directories, in order, that themes are looked up in.
+++func themeSearchDirs() []string {
+++	dirs := []string{"themes"}
+++	if exe, err := os.Executable(); err == nil {
+++		dirs = append(dirs, filepath.Join(filepath.Dir(exe), "themes"))
+++	}
+++	if d := os.Getenv("I3STYLE_THEMES"); d != "" {
+++		dirs = append(dirs, d)
+++	}
+++	if home, err := os.UserHomeDir(); err == nil {
+++		dirs = append(dirs, filepath.Join(home, ".config", "i3", "themes"))
+++	}
+++	return dirs
+++}
+++
+++func fileExists(path string) bool {
+++	st, err := os.Stat(path)
+++	return err == nil && !st.IsDir()
+++}
+++
+++// LoadTheme loads a theme by name or by path. Names are resolved against the
+++// on-disk theme directories first and against the embedded themes second.
+++func LoadTheme(nameOrPath string) (*Theme, error) {
+++	var path string
+++	if fileExists(nameOrPath) {
+++		path = nameOrPath
+++	} else {
+++		for _, dir := range themeSearchDirs() {
+++			for _, ext := range []string{".yaml", ".yml"} {
+++				if p := filepath.Join(dir, nameOrPath+ext); fileExists(p) {
+++					path = p
+++					break
+++				}
+++			}
+++			if path != "" {
+++				break
+++			}
+++		}
+++	}
+++	var data []byte
+++	var err error
+++	switch {
+++	case path != "":
+++		data, err = os.ReadFile(path)
+++	default:
+++		for _, ext := range []string{".yaml", ".yml"} {
+++			if data, err = embeddedThemes.ReadFile("themes/" + nameOrPath + ext); err == nil {
+++				break
+++			}
+++		}
+++	}
+++	if err != nil {
+++		return nil, fmt.Errorf("theme %q not found (looked in: %s)", nameOrPath, strings.Join(themeSearchDirs(), ", "))
+++	}
+++	var t Theme
+++	if err := yaml.Unmarshal(data, &t); err != nil {
+++		return nil, fmt.Errorf("parsing theme %q: %w", nameOrPath, err)
+++	}
+++	if err := t.validate(); err != nil {
+++		return nil, fmt.Errorf("theme %q: %w", nameOrPath, err)
+++	}
+++	return &t, nil
+++}
+++
+++// ListThemes returns the sorted names of all available themes.
+++func ListThemes() ([]string, error) {
+++	seen := make(map[string]bool)
+++	var names []string
+++	add := func(name string) {
+++		if !seen[name] {
+++			seen[name] = true
+++			names = append(names, name)
+++		}
+++	}
+++	for _, dir := range themeSearchDirs() {
+++		entries, err := os.ReadDir(dir)
+++		if err != nil {
+++			continue
+++		}
+++		for _, e := range entries {
+++			if e.IsDir() {
+++				continue
+++			}
+++			ext := filepath.Ext(e.Name())
+++			if ext == ".yaml" || ext == ".yml" {
+++				add(strings.TrimSuffix(e.Name(), ext))
+++			}
+++		}
+++	}
+++	if entries, err := fs.ReadDir(embeddedThemes, "themes"); err == nil {
+++		for _, e := range entries {
+++			if e.IsDir() {
+++				continue
+++			}
+++			ext := filepath.Ext(e.Name())
+++			if ext == ".yaml" || ext == ".yml" {
+++				add(strings.TrimSuffix(e.Name(), ext))
+++			}
+++		}
+++	}
+++	sort.Strings(names)
+++	return names, nil
+++}
+++
+++// ThemeFromConfig extracts the colors currently used in an i3 config so they
+++// can be shared with others as a theme.
+++func ThemeFromConfig(src string) *Theme {
+++	var t Theme
+++	forEachThemedLine(src, func(_ int, line string, directive string) {
+++		colors := colorLiteralStrings(line)
+++		if want := colorCount(directive); len(colors) > want {
+++			colors = colors[:want]
+++		}
+++		t.setColors(directive, colors)
+++	})
+++	return &t
+++}
+++
+++// ThemeYAML renders the theme as a YAML document suitable for sharing.
+++func ThemeYAML(t *Theme) ([]byte, error) {
+++	return yaml.Marshal(t)
+++}
++diff --git a/themes/purple.yaml b/themes/purple.yaml
++new file mode 100644
++index 0000000..148776e
++--- /dev/null
+++++ b/themes/purple.yaml
++@@ -0,0 +1,42 @@
+++# Purple theme for i3-style.
+++bar:
+++  separator: "#AAAAAA"
+++  background: "#222133"
+++  statusline: "#FFFFFF"
+++  focused_workspace:
+++    - "#664477"
+++    - "#664477"
+++    - "#cccccc"
+++  active_workspace:
+++    - "#DCCD69"
+++    - "#DCCD69"
+++    - "#181715"
+++  inactive_workspace:
+++    - "#222133"
+++    - "#222133"
+++    - "#AAAAAA"
+++  urgent_workspace:
+++    - "#CE4045"
+++    - "#CE4045"
+++    - "#FFFFFF"
+++clients:
+++  focused:
+++    - "#664477"
+++    - "#664477"
+++    - "#cccccc"
+++    - "#e7d8b1"
+++  focused_inactive:
+++    - "#e7d8b1"
+++    - "#e7d8b1"
+++    - "#181715"
+++    - "#A074C4"
+++  unfocused:
+++    - "#222133"
+++    - "#222133"
+++    - "#AAAAAA"
+++    - "#A074C4"
+++  urgent:
+++    - "#CE4045"
+++    - "#CE4045"
+++    - "#e7d8b1"
+++    - "#DCCD69"
++diff --git a/themes/solarized.yaml b/themes/solarized.yaml
++new file mode 100644
++index 0000000..66f24b7
++--- /dev/null
+++++ b/themes/solarized.yaml
++@@ -0,0 +1,42 @@
+++# Solarized theme for i3-style.
+++bar:
+++  separator: "#dc322f"
+++  background: "#002b36"
+++  statusline: "#268bd2"
+++  focused_workspace:
+++    - "#fdf6e3"
+++    - "#859900"
+++    - "#fdf6e3"
+++  active_workspace:
+++    - "#fdf6e3"
+++    - "#6c71c4"
+++    - "#fdf6e3"
+++  inactive_workspace:
+++    - "#586e75"
+++    - "#93a1a1"
+++    - "#002b36"
+++  urgent_workspace:
+++    - "#d33682"
+++    - "#d33682"
+++    - "#fdf6e3"
+++clients:
+++  focused:
+++    - "#859900"
+++    - "#859900"
+++    - "#fdf6e3"
+++    - "#6c71c4"
+++  focused_inactive:
+++    - "#073642"
+++    - "#073642"
+++    - "#eee8d5"
+++    - "#6c71c4"
+++  unfocused:
+++    - "#073642"
+++    - "#073642"
+++    - "#93a1a1"
+++    - "#586e75"
+++  urgent:
+++    - "#d33682"
+++    - "#d33682"
+++    - "#fdf6e3"
+++    - "#dc322f"
++diff --git a/themes/testtheme.yaml b/themes/testtheme.yaml
++new file mode 100644
++index 0000000..29c1325
++--- /dev/null
+++++ b/themes/testtheme.yaml
++@@ -0,0 +1,42 @@
+++# Theme used by the test suite.
+++bar:
+++  separator: "#000000"
+++  background: "#FDF6E3"
+++  statusline: "#002B36"
+++  focused_workspace:
+++    - "#000000"
+++    - "#268BD2"
+++    - "#FFFFFF"
+++  active_workspace:
+++    - "#333333"
+++    - "#222222"
+++    - "#FFFFFF"
+++  inactive_workspace:
+++    - "#333333"
+++    - "#222222"
+++    - "#888888"
+++  urgent_workspace:
+++    - "#2F343A"
+++    - "#900000"
+++    - "#FFFFFF"
+++clients:
+++  focused:
+++    - "#000000"
+++    - "#FDF6E3"
+++    - "#002B36"
+++    - "#000000"
+++  focused_inactive:
+++    - "#000000"
+++    - "#5F676A"
+++    - "#FDF6E3"
+++    - "#484E50"
+++  unfocused:
+++    - "#000000"
+++    - "#000000"
+++    - "#FDF6E3"
+++    - "#000000"
+++  urgent:
+++    - "#000000"
+++    - "#DC322F"
+++    - "#FDF6E3"
+++    - "#DC322F"
+diff --git a/theme.go b/theme.go
+new file mode 100644
+index 0000000..e2a4534
+--- /dev/null
++++ b/theme.go
+@@ -0,0 +1,365 @@
++package main
++
++import (
++	"embed"
++	"fmt"
++	"io/fs"
++	"os"
++	"path/filepath"
++	"regexp"
++	"sort"
++	"strings"
++
++	"gopkg.in/yaml.v3"
++)
++
++// embeddedThemes ships the built-in themes inside the binary so the tool
++// keeps working even when the source tree is not next to the executable.
++//
++//go:embed themes/*.yaml
++var embeddedThemes embed.FS
++
++var hexColor = regexp.MustCompile(`^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$`)
++
++// Theme is a set of colors for the bar and the client windows.
++type Theme struct {
++	Bar     *BarTheme    `yaml:"bar,omitempty"`
++	Clients *ClientTheme `yaml:"clients,omitempty"`
++}
++
++// BarTheme holds the colors used inside a bar block's colors section.
++type BarTheme struct {
++	Separator         string   `yaml:"separator,omitempty"`
++	Background        string   `yaml:"background,omitempty"`
++	Statusline        string   `yaml:"statusline,omitempty"`
++	FocusedWorkspace  []string `yaml:"focused_workspace,omitempty"`
++	ActiveWorkspace   []string `yaml:"active_workspace,omitempty"`
++	InactiveWorkspace []string `yaml:"inactive_workspace,omitempty"`
++	UrgentWorkspace   []string `yaml:"urgent_workspace,omitempty"`
++	BindingMode       []string `yaml:"binding_mode,omitempty"`
++}
++
++// ClientTheme holds the client window border/background/text colors.
++type ClientTheme struct {
++	Focused         []string `yaml:"focused,omitempty"`
++	FocusedInactive []string `yaml:"focused_inactive,omitempty"`
++	Unfocused       []string `yaml:"unfocused,omitempty"`
++	Urgent          []string `yaml:"urgent,omitempty"`
++}
++
++// colorCount is the number of colors a directive takes.
++func colorCount(directive string) int {
++	switch directive {
++	case "separator", "background", "statusline":
++		return 1
++	case "binding_mode", "client.focused", "client.focused_inactive", "client.unfocused", "client.urgent":
++		return 4
++	default:
++		return 3 // the *_workspace directives
++	}
++}
++
++// colorsFor returns the theme colors that apply to the named directive, or
++// false when the theme does not define colors for it.
++func (t *Theme) colorsFor(directive string) ([]string, bool) {
++	switch directive {
++	case "separator":
++		if t.Bar == nil || t.Bar.Separator == "" {
++			return nil, false
++		}
++		return []string{t.Bar.Separator}, true
++	case "background":
++		if t.Bar == nil || t.Bar.Background == "" {
++			return nil, false
++		}
++		return []string{t.Bar.Background}, true
++	case "statusline":
++		if t.Bar == nil || t.Bar.Statusline == "" {
++			return nil, false
++		}
++		return []string{t.Bar.Statusline}, true
++	case "focused_workspace":
++		if t.Bar == nil {
++			return nil, false
++		}
++		return t.Bar.FocusedWorkspace, len(t.Bar.FocusedWorkspace) > 0
++	case "active_workspace":
++		if t.Bar == nil {
++			return nil, false
++		}
++		return t.Bar.ActiveWorkspace, len(t.Bar.ActiveWorkspace) > 0
++	case "inactive_workspace":
++		if t.Bar == nil {
++			return nil, false
++		}
++		return t.Bar.InactiveWorkspace, len(t.Bar.InactiveWorkspace) > 0
++	case "urgent_workspace":
++		if t.Bar == nil {
++			return nil, false
++		}
++		return t.Bar.UrgentWorkspace, len(t.Bar.UrgentWorkspace) > 0
++	case "binding_mode":
++		if t.Bar == nil {
++			return nil, false
++		}
++		return t.Bar.BindingMode, len(t.Bar.BindingMode) > 0
++	case "client.focused":
++		if t.Clients == nil {
++			return nil, false
++		}
++		return t.Clients.Focused, len(t.Clients.Focused) > 0
++	case "client.focused_inactive":
++		if t.Clients == nil {
++			return nil, false
++		}
++		return t.Clients.FocusedInactive, len(t.Clients.FocusedInactive) > 0
++	case "client.unfocused":
++		if t.Clients == nil {
++			return nil, false
++		}
++		return t.Clients.Unfocused, len(t.Clients.Unfocused) > 0
++	case "client.urgent":
++		if t.Clients == nil {
++			return nil, false
++		}
++		return t.Clients.Urgent, len(t.Clients.Urgent) > 0
++	}
++	return nil, false
++}
++
++// setColors stores the extracted colors for the named directive on t.
++func (t *Theme) setColors(directive string, colors []string) {
++	switch directive {
++	case "separator":
++		if t.Bar == nil {
++			t.Bar = &BarTheme{}
++		}
++		if len(colors) > 0 {
++			t.Bar.Separator = colors[0]
++		}
++	case "background":
++		if t.Bar == nil {
++			t.Bar = &BarTheme{}
++		}
++		if len(colors) > 0 {
++			t.Bar.Background = colors[0]
++		}
++	case "statusline":
++		if t.Bar == nil {
++			t.Bar = &BarTheme{}
++		}
++		if len(colors) > 0 {
++			t.Bar.Statusline = colors[0]
++		}
++	case "focused_workspace":
++		if t.Bar == nil {
++			t.Bar = &BarTheme{}
++		}
++		t.Bar.FocusedWorkspace = colors
++	case "active_workspace":
++		if t.Bar == nil {
++			t.Bar = &BarTheme{}
++		}
++		t.Bar.ActiveWorkspace = colors
++	case "inactive_workspace":
++		if t.Bar == nil {
++			t.Bar = &BarTheme{}
++		}
++		t.Bar.InactiveWorkspace = colors
++	case "urgent_workspace":
++		if t.Bar == nil {
++			t.Bar = &BarTheme{}
++		}
++		t.Bar.UrgentWorkspace = colors
++	case "binding_mode":
++		if t.Bar == nil {
++			t.Bar = &BarTheme{}
++		}
++		t.Bar.BindingMode = colors
++	case "client.focused":
++		if t.Clients == nil {
++			t.Clients = &ClientTheme{}
++		}
++		t.Clients.Focused = colors
++	case "client.focused_inactive":
++		if t.Clients == nil {
++			t.Clients = &ClientTheme{}
++		}
++		t.Clients.FocusedInactive = colors
++	case "client.unfocused":
++		if t.Clients == nil {
++			t.Clients = &ClientTheme{}
++		}
++		t.Clients.Unfocused = colors
++	case "client.urgent":
++		if t.Clients == nil {
++			t.Clients = &ClientTheme{}
++		}
++		t.Clients.Urgent = colors
++	}
++}
++
++// validate checks that every color literal is a well-formed hex color.
++func (t *Theme) validate() error {
++	var problems []string
++	check := func(name, c string) {
++		if c != "" && !hexColor.MatchString(c) {
++			problems = append(problems, fmt.Sprintf("invalid color %q for %s", c, name))
++		}
++	}
++	if t.Bar != nil {
++		check("bar.separator", t.Bar.Separator)
++		check("bar.background", t.Bar.Background)
++		check("bar.statusline", t.Bar.Statusline)
++		for name, list := range map[string][]string{
++			"bar.focused_workspace":  t.Bar.FocusedWorkspace,
++			"bar.active_workspace":   t.Bar.ActiveWorkspace,
++			"bar.inactive_workspace": t.Bar.InactiveWorkspace,
++			"bar.urgent_workspace":   t.Bar.UrgentWorkspace,
++			"bar.binding_mode":       t.Bar.BindingMode,
++		} {
++			for _, c := range list {
++				check(name, c)
++			}
++		}
++	}
++	if t.Clients != nil {
++		for name, list := range map[string][]string{
++			"clients.focused":          t.Clients.Focused,
++			"clients.focused_inactive": t.Clients.FocusedInactive,
++			"clients.unfocused":        t.Clients.Unfocused,
++			"clients.urgent":           t.Clients.Urgent,
++		} {
++			for _, c := range list {
++				check(name, c)
++			}
++		}
++	}
++	if len(problems) > 0 {
++		return fmt.Errorf("%s", strings.Join(problems, "; "))
++	}
++	return nil
++}
++
++// themeSearchDirs are the directories, in order, that themes are looked up in.
++func themeSearchDirs() []string {
++	dirs := []string{"themes"}
++	if exe, err := os.Executable(); err == nil {
++		dirs = append(dirs, filepath.Join(filepath.Dir(exe), "themes"))
++	}
++	if d := os.Getenv("I3STYLE_THEMES"); d != "" {
++		dirs = append(dirs, d)
++	}
++	if home, err := os.UserHomeDir(); err == nil {
++		dirs = append(dirs, filepath.Join(home, ".config", "i3", "themes"))
++	}
++	return dirs
++}
++
++func fileExists(path string) bool {
++	st, err := os.Stat(path)
++	return err == nil && !st.IsDir()
++}
++
++// LoadTheme loads a theme by name or by path. Names are resolved against the
++// on-disk theme directories first and against the embedded themes second.
++func LoadTheme(nameOrPath string) (*Theme, error) {
++	var path string
++	if fileExists(nameOrPath) {
++		path = nameOrPath
++	} else {
++		for _, dir := range themeSearchDirs() {
++			for _, ext := range []string{".yaml", ".yml"} {
++				if p := filepath.Join(dir, nameOrPath+ext); fileExists(p) {
++					path = p
++					break
++				}
++			}
++			if path != "" {
++				break
++			}
++		}
++	}
++	var data []byte
++	var err error
++	switch {
++	case path != "":
++		data, err = os.ReadFile(path)
++	default:
++		for _, ext := range []string{".yaml", ".yml"} {
++			if data, err = embeddedThemes.ReadFile("themes/" + nameOrPath + ext); err == nil {
++				break
++			}
++		}
++	}
++	if err != nil {
++		return nil, fmt.Errorf("theme %q not found (looked in: %s)", nameOrPath, strings.Join(themeSearchDirs(), ", "))
++	}
++	var t Theme
++	if err := yaml.Unmarshal(data, &t); err != nil {
++		return nil, fmt.Errorf("parsing theme %q: %w", nameOrPath, err)
++	}
++	if err := t.validate(); err != nil {
++		return nil, fmt.Errorf("theme %q: %w", nameOrPath, err)
++	}
++	return &t, nil
++}
++
++// ListThemes returns the sorted names of all available themes.
++func ListThemes() ([]string, error) {
++	seen := make(map[string]bool)
++	var names []string
++	add := func(name string) {
++		if !seen[name] {
++			seen[name] = true
++			names = append(names, name)
++		}
++	}
++	for _, dir := range themeSearchDirs() {
++		entries, err := os.ReadDir(dir)
++		if err != nil {
++			continue
++		}
++		for _, e := range entries {
++			if e.IsDir() {
++				continue
++			}
++			ext := filepath.Ext(e.Name())
++			if ext == ".yaml" || ext == ".yml" {
++				add(strings.TrimSuffix(e.Name(), ext))
++			}
++		}
++	}
++	if entries, err := fs.ReadDir(embeddedThemes, "themes"); err == nil {
++		for _, e := range entries {
++			if e.IsDir() {
++				continue
++			}
++			ext := filepath.Ext(e.Name())
++			if ext == ".yaml" || ext == ".yml" {
++				add(strings.TrimSuffix(e.Name(), ext))
++			}
++		}
++	}
++	sort.Strings(names)
++	return names, nil
++}
++
++// ThemeFromConfig extracts the colors currently used in an i3 config so they
++// can be shared with others as a theme.
++func ThemeFromConfig(src string) *Theme {
++	var t Theme
++	forEachThemedLine(src, func(_ int, line string, directive string) {
++		colors := colorLiteralStrings(line)
++		if want := colorCount(directive); len(colors) > want {
++			colors = colors[:want]
++		}
++		t.setColors(directive, colors)
++	})
++	return &t
++}
++
++// ThemeYAML renders the theme as a YAML document suitable for sharing.
++func ThemeYAML(t *Theme) ([]byte, error) {
++	return yaml.Marshal(t)
++}
+diff --git a/themes/purple.yaml b/themes/purple.yaml
+new file mode 100644
+index 0000000..148776e
+--- /dev/null
++++ b/themes/purple.yaml
+@@ -0,0 +1,42 @@
++# Purple theme for i3-style.
++bar:
++  separator: "#AAAAAA"
++  background: "#222133"
++  statusline: "#FFFFFF"
++  focused_workspace:
++    - "#664477"
++    - "#664477"
++    - "#cccccc"
++  active_workspace:
++    - "#DCCD69"
++    - "#DCCD69"
++    - "#181715"
++  inactive_workspace:
++    - "#222133"
++    - "#222133"
++    - "#AAAAAA"
++  urgent_workspace:
++    - "#CE4045"
++    - "#CE4045"
++    - "#FFFFFF"
++clients:
++  focused:
++    - "#664477"
++    - "#664477"
++    - "#cccccc"
++    - "#e7d8b1"
++  focused_inactive:
++    - "#e7d8b1"
++    - "#e7d8b1"
++    - "#181715"
++    - "#A074C4"
++  unfocused:
++    - "#222133"
++    - "#222133"
++    - "#AAAAAA"
++    - "#A074C4"
++  urgent:
++    - "#CE4045"
++    - "#CE4045"
++    - "#e7d8b1"
++    - "#DCCD69"
+diff --git a/themes/solarized.yaml b/themes/solarized.yaml
+new file mode 100644
+index 0000000..66f24b7
+--- /dev/null
++++ b/themes/solarized.yaml
+@@ -0,0 +1,42 @@
++# Solarized theme for i3-style.
++bar:
++  separator: "#dc322f"
++  background: "#002b36"
++  statusline: "#268bd2"
++  focused_workspace:
++    - "#fdf6e3"
++    - "#859900"
++    - "#fdf6e3"
++  active_workspace:
++    - "#fdf6e3"
++    - "#6c71c4"
++    - "#fdf6e3"
++  inactive_workspace:
++    - "#586e75"
++    - "#93a1a1"
++    - "#002b36"
++  urgent_workspace:
++    - "#d33682"
++    - "#d33682"
++    - "#fdf6e3"
++clients:
++  focused:
++    - "#859900"
++    - "#859900"
++    - "#fdf6e3"
++    - "#6c71c4"
++  focused_inactive:
++    - "#073642"
++    - "#073642"
++    - "#eee8d5"
++    - "#6c71c4"
++  unfocused:
++    - "#073642"
++    - "#073642"
++    - "#93a1a1"
++    - "#586e75"
++  urgent:
++    - "#d33682"
++    - "#d33682"
++    - "#fdf6e3"
++    - "#dc322f"
+diff --git a/themes/testtheme.yaml b/themes/testtheme.yaml
+new file mode 100644
+index 0000000..29c1325
+--- /dev/null
++++ b/themes/testtheme.yaml
+@@ -0,0 +1,42 @@
++# Theme used by the test suite.
++bar:
++  separator: "#000000"
++  background: "#FDF6E3"
++  statusline: "#002B36"
++  focused_workspace:
++    - "#000000"
++    - "#268BD2"
++    - "#FFFFFF"
++  active_workspace:
++    - "#333333"
++    - "#222222"
++    - "#FFFFFF"
++  inactive_workspace:
++    - "#333333"
++    - "#222222"
++    - "#888888"
++  urgent_workspace:
++    - "#2F343A"
++    - "#900000"
++    - "#FFFFFF"
++clients:
++  focused:
++    - "#000000"
++    - "#FDF6E3"
++    - "#002B36"
++    - "#000000"
++  focused_inactive:
++    - "#000000"
++    - "#5F676A"
++    - "#FDF6E3"
++    - "#484E50"
++  unfocused:
++    - "#000000"
++    - "#000000"
++    - "#FDF6E3"
++    - "#000000"
++  urgent:
++    - "#000000"
++    - "#DC322F"
++    - "#FDF6E3"
++    - "#DC322F"

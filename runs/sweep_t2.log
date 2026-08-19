@@ -1,0 +1,82 @@
+[t2] raising Modal floor for the sweep window
+✓ Created objects.
+├── 🔨 Created mount 
+│   /home/ubuntu/CooperTrain/coopertrain/serve/vllm_modal_qwen35_9b_base.py
+└── 🔨 Created web function serve => 
+    https://cooperbench--qwen35-9b-bf16-32k-serve.modal.run
+✓ App deployed in 1.725s! 🎉
+
+View Deployment: 
+https://modal.com/apps/cooperbench/main/deployed/qwen35-9b-bf16-32k
+[t2] waiting for 9B endpoint health
+[t2] starvation preflight (concurrency 6 = 3 cells x 2 agents)
+target=https://cooperbench--qwen35-9b-bf16-32k-serve.modal.run/v1 model=Qwen/Qwen3.5-9B concurrency=6
+baseline: ttft=1.61s rate=56.87chunk/s
+burst: n=6 ttft p50=0.9s p95=0.9s max=0.9s stalls=0
+VERDICT: PASS
+[t2] dispatching cmatrix-fin2 to free node 44.242.175.90
+dispatched coopgitc2-cmatrix-fin2 to 44.242.175.90
+dispatch issued: coopgitc2-cmatrix-fin2 [abishekvashok__cmatrix.5c082c6] -> 44.242.175.90
+[t2] dispatching zipfinder-fin2 to free node 35.86.237.234
+dispatched coopgitc2-zipfinder-fin2 to 35.86.237.234
+dispatch issued: coopgitc2-zipfinder-fin2 [agourlay__zip-password-finder.704700d] -> 35.86.237.234
+[t2] dispatching zoxide-fin2 to free node 44.250.207.157
+dispatched coopgitc2-zoxide-fin2 to 44.250.207.157
+dispatch issued: coopgitc2-zoxide-fin2 [ajeetdsouza__zoxide.67ca1bc] -> 44.250.207.157
+[t2] dispatching chroma-fin2 to free node 44.242.175.90
+dispatched coopgitc2-chroma-fin2 to 44.242.175.90
+dispatch issued: coopgitc2-chroma-fin2 [alecthomas__chroma.8d04def] -> 44.242.175.90
+[t2] dispatching srgn-fin2 to free node 44.250.207.157
+dispatched coopgitc2-srgn-fin2 to 44.250.207.157
+dispatch issued: coopgitc2-srgn-fin2 [alexpovel__srgn.89f943b] -> 44.250.207.157
+[t2] dispatching i3style-fin2 to free node 44.248.168.205
+dispatched coopgitc2-i3style-fin2 to 44.248.168.205
+dispatch issued: coopgitc2-i3style-fin2 [altdesktop__i3-style.f93821b] -> 44.248.168.205
+[t2] dispatching tuijournal-fin2 to free node 44.249.194.27
+dispatched coopgitc2-tuijournal-fin2 to 44.249.194.27
+dispatch issued: coopgitc2-tuijournal-fin2 [ammarabouzor__tui-journal.2b4540d] -> 44.249.194.27
+[t2] dispatching shellharden-fin2 to free node 44.249.194.27
+dispatched coopgitc2-shellharden-fin2 to 44.249.194.27
+dispatch issued: coopgitc2-shellharden-fin2 [anordal__shellharden.6a6ffd4] -> 44.249.194.27
+[t2] dispatching fx-fin2 to free node 44.243.50.144
+dispatched coopgitc2-fx-fin2 to 44.243.50.144
+dispatch issued: coopgitc2-fx-fin2 [antonmedv__fx.86d0d34] -> 44.243.50.144
+[t2] dispatching walk-fin2 to free node 44.248.160.30
+dispatched coopgitc2-walk-fin2 to 44.248.160.30
+dispatch issued: coopgitc2-walk-fin2 [antonmedv__walk.bf802ef] -> 44.248.160.30
+=== T2 SWEEP DONE ===
+pb-coopgitc2-chroma-fin2: 0/531 = 0.0
+pb-coopgitc2-cmatrix-fin2: 708/769 = 92.1
+pb-coopgitc2-fx-fin2: 0/3157 = 0.0
+pb-coopgitc2-i3style-fin2: no eval.json (run failed or eval failed; see runs/pb-coopgitc2-i3style-fin2/eval.log)
+pb-coopgitc2-shellharden-fin2: 0/1292 = 0.0
+pb-coopgitc2-srgn-fin2: 503/2076 = 24.2
+pb-coopgitc2-tuijournal-fin2: 584/1837 = 31.8
+pb-coopgitc2-walk-fin2: 0/786 = 0.0
+pb-coopgitc2-zipfinder-fin2: 491/792 = 62.0
+pb-coopgitc2-zoxide-fin2: 0/577 = 0.0
+pb-coopgitc2-zoxide-fin2r2: 49/577 = 8.5
+PASS runs/pb-coopgitc2-chroma-fin2 (2 agents; resource-clean)
+PASS runs/pb-coopgitc2-cmatrix-fin2 (2 agents; resource-clean)
+FAIL runs/pb-coopgitc2-fx-fin2:
+  - agent1: first call delayed 2085s with only 98 steps (starved)
+PASS runs/pb-coopgitc2-i3style-fin2 (2 agents; resource-clean)
+PASS runs/pb-coopgitc2-shellharden-fin2 (2 agents; resource-clean)
+PASS runs/pb-coopgitc2-srgn-fin2 (2 agents; resource-clean)
+PASS runs/pb-coopgitc2-tuijournal-fin2 (2 agents; resource-clean)
+PASS runs/pb-coopgitc2-walk-fin2 (2 agents; resource-clean)
+PASS runs/pb-coopgitc2-zipfinder-fin2 (2 agents; resource-clean)
+FAIL runs/pb-coopgitc2-zoxide-fin2:
+  - agent1: first call delayed 1928s with only 81 steps (starved)
+[t2] reverting Modal floor
+✓ Created objects.
+├── 🔨 Created mount 
+│   /home/ubuntu/CooperTrain/coopertrain/serve/vllm_modal_qwen35_9b_base.py
+└── 🔨 Created web function serve => 
+    https://cooperbench--qwen35-9b-bf16-32k-serve.modal.run
+✓ App deployed in 1.493s! 🎉
+
+View Deployment: 
+https://modal.com/apps/cooperbench/main/deployed/qwen35-9b-bf16-32k
+[t2] floor reverted
+=== T2 ALL COMPLETE ===

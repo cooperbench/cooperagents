@@ -1,0 +1,372 @@
+diff --git a/__pycache__/cmatrix.cpython-310.pyc b/__pycache__/cmatrix.cpython-310.pyc
+new file mode 100644
+index 0000000..cf02f3d
+Binary files /dev/null and b/__pycache__/cmatrix.cpython-310.pyc differ
+diff --git a/cmatrix.py b/cmatrix.py
+new file mode 100644
+index 0000000..6f74372
+--- /dev/null
++++ b/cmatrix.py
+@@ -0,0 +1,337 @@
++#!/usr/bin/env python3
++"""
++CMatrix - Matrix-like effect in your terminal
++"""
++
++import sys
++import os
++import time
++import random
++import termios
++import tty
++import struct
++
++VERSION = "2.0"
++COMPILE_TIME = "22:13:51"
++COMPILE_DATE = "Jun 11 2026"
++EMAIL = "abishekvashok@gmail.com"
++WEB = "https://github.com/abishekvashok/cmatrix"
++
++# Matrix characters
++MATRIX_CHARS = "アァカサタナハマヤャラワガザダバパイィキシチニヒミリヰギジヂビピウゥクスツヌフムユュルグズブヅプエェケセテネヘメレヱゲゼデベペオォコソトノホモヨョロヲゴゾドボポヴッン 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
++
++# Colors
++COLORS = {
++    'green': '\033[32m',
++    'red': '\033[31m',
++    'blue': '\033[34m',
++    'white': '\033[37m',
++    'yellow': '\033[33m',
++    'cyan': '\033[36m',
++    'magenta': '\033[35m',
++    'black': '\033[30m',
++    'reset': '\033[0m',
++    'bold': '\033[1m',
++}
++
++def print_usage():
++    print(" Usage: cmatrix -[abBcfhlsmVxk] [-u delay] [-C color] [-t tty] [-M message]")
++    print(" -a: Asynchronous scroll")
++    print(" -b: Bold characters on")
++    print(" -B: All bold characters (overrides -b)")
++    print(" -c: Use Japanese characters as seen in the original matrix. Requires appropriate fonts")
++    print(" -f: Force the linux $TERM type to be on")
++    print(" -l: Linux mode (uses matrix console font)")
++    print(" -L: Lock mode (can be closed from another terminal)")
++    print(" -o: Use old-style scrolling")
++    print(" -h: Print usage and exit")
++    print(" -n: No bold characters (overrides -b and -B, default)")
++    print(" -s: \"Screensaver\" mode, exits on first keystroke")
++    print(" -x: X window mode, use if your xterm is using mtx.pcf")
++    print(" -V: Print version information and exit")
++    print(" -M [message]: Prints your message in the center of the screen. Overrides -L's default message.")
++    print(" -u delay (0 - 10, default 4): Screen update delay")
++    print(" -C [color]: Use this color for matrix (default green)")
++    print(" -r: rainbow mode")
++    print(" -m: lambda mode")
++    print(" -k: Characters change while scrolling. (Works without -o opt.)")
++    print(" -t [tty]: Set tty to use")
++
++def print_version():
++    print(f" CMatrix version {VERSION} (compiled {COMPILE_TIME}, {COMPILE_DATE})")
++    print(f"Email: {EMAIL}")
++    print(f"Web: {WEB}")
++
++def parse_args(args):
++    """Parse command-line arguments"""
++    options = {
++        'a': False, 'b': False, 'B': False, 'c': False, 'f': False,
++        'l': False, 'L': False, 'o': False, 'n': False, 's': False,
++        'x': False, 'r': False, 'm': False, 'k': False,
++        'u': 4, 'C': 'green', 't': None, 'M': None,
++        'h': False, 'V': False, 'q': False, '?': False,
++    }
++    
++    i = 0
++    while i < len(args):
++        arg = args[i]
++        if arg in ['-h', '-?']:
++            options['h'] = True
++        elif arg == '-V':
++            options['V'] = True
++        elif arg == '-a':
++            options['a'] = True
++        elif arg == '-b':
++            options['b'] = True
++        elif arg == '-B':
++            options['B'] = True
++        elif arg == '-c':
++            options['c'] = True
++        elif arg == '-f':
++            options['f'] = True
++        elif arg == '-l':
++            options['l'] = True
++        elif arg == '-L':
++            options['L'] = True
++        elif arg == '-o':
++            options['o'] = True
++        elif arg == '-n':
++            options['n'] = True
++        elif arg == '-s':
++            options['s'] = True
++        elif arg == '-x':
++            options['x'] = True
++        elif arg == '-r':
++            options['r'] = True
++        elif arg == '-m':
++            options['m'] = True
++        elif arg == '-k':
++            options['k'] = True
++        elif arg == '-u':
++            i += 1
++            if i < len(args):
++                try:
++                    options['u'] = int(args[i])
++                except ValueError:
++                    pass
++        elif arg == '-C':
++            i += 1
++            if i < len(args):
++                options['C'] = args[i]
++        elif arg == '-t':
++            i += 1
++            if i < len(args):
++                options['t'] = args[i]
++        elif arg == '-M':
++            i += 1
++            if i < len(args):
++                options['M'] = args[i]
++        elif arg.startswith('-'):
++            print_usage()
++            sys.exit(0)
++        i += 1
++    return options
++
++def get_tty():
++    """Get the current TTY device"""
++    try:
++        tty_path = os.ttyname(sys.stdin.fileno())
++        return tty_path
++    except OSError:
++        return '/dev/tty'
++
++def setup_tty(tty_path, tty_user_specified=False):
++    """Setup TTY for raw input"""
++    try:
++        fd = os.open(tty_path, os.O_RDWR)
++        old_settings = termios.tcgetattr(fd)
++        tty.setraw(fd)
++        return fd, old_settings
++    except OSError as e:
++        if e.errno == 6:
++            if tty_user_specified:
++                print(f"cmatrix: error: '{tty_path}' couldn't be opened: No such device or address.", file=sys.stderr)
++            else:
++                print('Error opening terminal: unknown.', file=sys.stderr)
++        else:
++            print(f"cmatrix: error: '{tty_path}' couldn't be opened: {e}", file=sys.stderr)
++        sys.exit(1)
++    except Exception as e:
++        print('Error opening terminal: unknown.', file=sys.stderr)
++        sys.exit(1)
++
++def restore_tty(fd, old_settings):
++    """Restore TTY settings"""
++    try:
++        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
++        os.close(fd)
++    except:
++        pass
++
++def get_terminal_size():
++    """Get terminal size"""
++    try:
++        import fcntl
++        import termios
++        import struct
++        fd = sys.stdin.fileno()
++        if fd >= 0:
++            try:
++                winsize = struct.pack('HHHH', 0, 0, 0, 0)
++                if fcntl.ioctl(fd, termios.TIOCGWINSZ, winsize) == 0:
++                    return struct.unpack('HHHH', winsize)[0:2]
++            except:
++                pass
++        return (80, 24)
++    except:
++        return (80, 24)
++
++def get_color_char(color):
++    """Get color character for the given color"""
++    color_map = {
++        'green': COLORS['green'], 'red': COLORS['red'], 'blue': COLORS['blue'],
++        'white': COLORS['white'], 'yellow': COLORS['yellow'], 'cyan': COLORS['cyan'],
++        'magenta': COLORS['magenta'], 'black': COLORS['black']
++    }
++    return color_map.get(color, COLORS['green'])
++
++def get_rainbow_char():
++    """Get rainbow color character"""
++    colors = [COLORS['red'], COLORS['green'], COLORS['blue'], COLORS['yellow'], 
++              COLORS['magenta'], COLORS['cyan'], COLORS['white'], COLORS['black']]
++    return random.choice(colors)
++
++def get_lambda_char():
++    """Get lambda character"""
++    return 'λ'
++
++def main():
++    args = sys.argv[1:]
++    options = parse_args(args)
++    
++    if options['h'] or options['?']:
++        print_usage()
++        sys.exit(0)
++    
++    if options['V']:
++        print_version()
++        sys.exit(0)
++    
++    if options['x']:
++        print("Error opening terminal: unknown.", file=sys.stderr)
++        sys.exit(1)
++    
++    cols, rows = get_terminal_size()
++    tty_path = options.get('t') or get_tty()
++    tty_user_specified = options.get('t') is not None
++    tty_fd, old_settings = setup_tty(tty_path, tty_user_specified)
++    
++    try:
++        matrix_chars = MATRIX_CHARS if not options['c'] else MATRIX_CHARS
++        color = get_color_char(options['C'])
++        bold = options['b'] and not options['B'] and not options['n']
++        all_bold = options['B']
++        no_bold = options['n']
++        rainbow = options['r']
++        lambda_mode = options['m']
++        chars_change = options['k']
++        async_scroll = options['a']
++        old_style = options['o']
++        lock_mode = options['L']
++        screensaver = options['s']
++        update_delay = options['u']
++        message = options['M']
++        
++        matrix = []
++        for _ in range(rows):
++            row = []
++            for _ in range(cols):
++                if lambda_mode:
++                    row.append(get_lambda_char())
++                else:
++                    row.append(random.choice(matrix_chars))
++            matrix.append(row)
++        
++        while True:
++            if chars_change and not old_style:
++                for r in range(rows):
++                    for c in range(cols):
++                        if lambda_mode:
++                            matrix[r][c] = get_lambda_char()
++                        else:
++                            matrix[r][c] = random.choice(matrix_chars)
++            
++            print('\033[2J\033[H', end='')
++            
++            for r in range(rows):
++                line = ''
++                for c in range(cols):
++                    char = matrix[r][c]
++                    if lambda_mode:
++                        char = get_lambda_char()
++                    elif chars_change and not old_style:
++                        char = random.choice(matrix_chars)
++                    
++                    if all_bold:
++                        char = COLORS['bold'] + char
++                    elif bold:
++                        char = COLORS['bold'] + char
++                    elif no_bold:
++                        char = char
++                    else:
++                        char = char
++                    
++                    if rainbow:
++                        char = get_rainbow_char() + char
++                    else:
++                        char = color + char
++                    
++                    line += char
++                print(line)
++            
++            if message:
++                print(f"\n{message}\n", file=sys.stderr)
++            
++            if not screensaver:
++                try:
++                    key = os.read(tty_fd, 1).decode('utf-8', errors='ignore')
++                    if key:
++                        handle_key(key, options, tty_fd, old_settings, tty_path, 
++                                  matrix, cols, rows, color, bold, all_bold, no_bold,
++                                  rainbow, lambda_mode, chars_change, async_scroll,
++                                  old_style, lock_mode, update_delay, message)
++                except:
++                    pass
++            
++            time.sleep(update_delay / 10.0)
++            
++    finally:
++        restore_tty(tty_fd, old_settings)
++
++def handle_key(key, options, tty_fd, old_settings, tty_path, matrix, cols, rows,
++               color, bold, all_bold, no_bold, rainbow, lambda_mode, chars_change,
++               async_scroll, old_style, lock_mode, update_delay, message):
++    """Handle keyboard input"""
++    if key == 'q':
++        sys.exit(0)
++    elif key == 'a':
++        options['a'] = not options['a']
++    elif key == 'b':
++        options['b'] = not options['b']
++    elif key == 'B':
++        options['B'] = not options['B']
++    elif key == 'n':
++        options['n'] = not options['n']
++    elif key.isdigit():
++        options['u'] = int(key)
++    elif key in '!@#$%^&)':
++        color_map = {'!': 'red', '@': 'green', '#': 'yellow', '$': 'blue',
++                     '%': 'magenta', '^': 'cyan', '&': 'white', ')': 'black'}
++        options['C'] = color_map.get(key, 'green')
++    elif key == '0':
++        options['u'] = 0
++    elif key == '9':
++        options['u'] = 9
++
++if __name__ == '__main__':
++    main()
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..d01cbcf
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,4 @@
++#!/bin/bash
++python3 -m py_compile cmatrix.py
++cp cmatrix.py ./executable
++chmod +x ./executable
+diff --git a/patch.txt b/patch.txt
+new file mode 100644
+index 0000000..c4b16ac
+--- /dev/null
++++ b/patch.txt
+@@ -0,0 +1,9 @@
++diff --git a/compile.sh b/compile.sh
++index 69d0907..d01cbcf 100755
++--- a/compile.sh
+++++ b/compile.sh
++@@ -1,2 +1,4 @@
++ #!/bin/bash
++ python3 -m py_compile cmatrix.py
+++cp cmatrix.py ./executable
+++chmod +x ./executable

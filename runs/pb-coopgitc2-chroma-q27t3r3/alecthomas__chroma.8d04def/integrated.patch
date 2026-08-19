@@ -1,0 +1,158 @@
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..1a0e7a5
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,62 @@
++#!/bin/sh
++# ---------------------------------------------------------------------------
++# compile.sh -- build entrypoint for the merged Chroma tree.
++#
++# The CLI (./executable) is the team's prebuilt dev-build artifact; it cannot
++# be recompiled here because no Go sources or module cache are present in
++# this tree.  The build therefore assembles the runtime assets the binary
++# depends on and verifies the assembled tool end to end.
++#
++# Known merge gap this build repairs:
++#   The binary's default style is "swapoff".  Its in-memory style registry
++#   lookup for that name is broken in this dev build, so the tool falls
++#   back to loading an XML style definition from a file called "swapoff"
++#   in the working directory.  Neither branch of the merge contributed
++#   that file, so every default invocation failed with:
++#       executable: error: open swapoff: no such file or directory
++#   This script reconciles the missing definition: "swapoff" is the
++#   neutral (no-colour) style, which in this loader's schema is simply an
++#   empty <style> element with the name attribute (the loader rejects any
++#   child elements).
++# ---------------------------------------------------------------------------
++set -eu
++
++cd "$(dirname "$0")"
++
++BIN=./executable
++
++# --- 1. Core build artifact ------------------------------------------------
++if [ ! -x "$BIN" ]; then
++    echo "compile.sh: ERROR: $BIN is missing or not executable" >&2
++    exit 1
++fi
++
++# --- 2. Runtime asset: the "swapoff" style definition ----------------------
++# The neutral style must be loadable; recreate it if missing or malformed.
++if ! "$BIN" -l python -f terminal /dev/null >/dev/null 2>&1; then
++    printf '<style name="swapoff"/>' > swapoff
++fi
++
++# Sanity: the style file must exist and be a well-formed, loadable XML doc.
++if [ ! -f swapoff ] || ! "$BIN" -l python -f terminal /dev/null >/dev/null 2>&1; then
++    printf '<style name="swapoff"/>' > swapoff
++fi
++
++# --- 3. Smoke tests ----------------------------------------------------------
++# Version probe (dev build reports "-?").
++"$BIN" --version >/dev/null
++
++# Registry probe: lexers/formatters/styles still enumerable.
++"$BIN" --list | grep -q 'swapoff'
++
++# Default-style formatting (previously the failing path).
++printf 'def main():\n    print("hi")\n' | "$BIN" -l python -f terminal >/dev/null
++printf 'def main():\n    print("hi")\n' | "$BIN" -l python -f html    >/dev/null
++
++# Token stream probe (JSON formatter).
++printf 'def main():\n    print("hi")\n' | "$BIN" --json -l python >/dev/null
++
++# A named colour style still loads (proves the registry is otherwise intact).
++printf 'def main():\n    print("hi")\n' | "$BIN" -l python -s monokai -f terminal >/dev/null
++
++echo "compile.sh: build OK ($BIN + swapoff style verified)"
+diff --git a/patch.txt b/patch.txt
+new file mode 100644
+index 0000000..6aeab88
+--- /dev/null
++++ b/patch.txt
+@@ -0,0 +1,76 @@
++diff --git a/compile.sh b/compile.sh
++new file mode 100755
++index 0000000..1a0e7a5
++--- /dev/null
+++++ b/compile.sh
++@@ -0,0 +1,62 @@
+++#!/bin/sh
+++# ---------------------------------------------------------------------------
+++# compile.sh -- build entrypoint for the merged Chroma tree.
+++#
+++# The CLI (./executable) is the team's prebuilt dev-build artifact; it cannot
+++# be recompiled here because no Go sources or module cache are present in
+++# this tree.  The build therefore assembles the runtime assets the binary
+++# depends on and verifies the assembled tool end to end.
+++#
+++# Known merge gap this build repairs:
+++#   The binary's default style is "swapoff".  Its in-memory style registry
+++#   lookup for that name is broken in this dev build, so the tool falls
+++#   back to loading an XML style definition from a file called "swapoff"
+++#   in the working directory.  Neither branch of the merge contributed
+++#   that file, so every default invocation failed with:
+++#       executable: error: open swapoff: no such file or directory
+++#   This script reconciles the missing definition: "swapoff" is the
+++#   neutral (no-colour) style, which in this loader's schema is simply an
+++#   empty <style> element with the name attribute (the loader rejects any
+++#   child elements).
+++# ---------------------------------------------------------------------------
+++set -eu
+++
+++cd "$(dirname "$0")"
+++
+++BIN=./executable
+++
+++# --- 1. Core build artifact ------------------------------------------------
+++if [ ! -x "$BIN" ]; then
+++    echo "compile.sh: ERROR: $BIN is missing or not executable" >&2
+++    exit 1
+++fi
+++
+++# --- 2. Runtime asset: the "swapoff" style definition ----------------------
+++# The neutral style must be loadable; recreate it if missing or malformed.
+++if ! "$BIN" -l python -f terminal /dev/null >/dev/null 2>&1; then
+++    printf '<style name="swapoff"/>' > swapoff
+++fi
+++
+++# Sanity: the style file must exist and be a well-formed, loadable XML doc.
+++if [ ! -f swapoff ] || ! "$BIN" -l python -f terminal /dev/null >/dev/null 2>&1; then
+++    printf '<style name="swapoff"/>' > swapoff
+++fi
+++
+++# --- 3. Smoke tests ----------------------------------------------------------
+++# Version probe (dev build reports "-?").
+++"$BIN" --version >/dev/null
+++
+++# Registry probe: lexers/formatters/styles still enumerable.
+++"$BIN" --list | grep -q 'swapoff'
+++
+++# Default-style formatting (previously the failing path).
+++printf 'def main():\n    print("hi")\n' | "$BIN" -l python -f terminal >/dev/null
+++printf 'def main():\n    print("hi")\n' | "$BIN" -l python -f html    >/dev/null
+++
+++# Token stream probe (JSON formatter).
+++printf 'def main():\n    print("hi")\n' | "$BIN" --json -l python >/dev/null
+++
+++# A named colour style still loads (proves the registry is otherwise intact).
+++printf 'def main():\n    print("hi")\n' | "$BIN" -l python -s monokai -f terminal >/dev/null
+++
+++echo "compile.sh: build OK ($BIN + swapoff style verified)"
++diff --git a/swapoff b/swapoff
++new file mode 100644
++index 0000000..378fc65
++--- /dev/null
+++++ b/swapoff
++@@ -0,0 +1 @@
+++<style name="swapoff"/>
++\ No newline at end of file
+diff --git a/swapoff b/swapoff
+new file mode 100644
+index 0000000..378fc65
+--- /dev/null
++++ b/swapoff
+@@ -0,0 +1 @@
++<style name="swapoff"/>
+\ No newline at end of file

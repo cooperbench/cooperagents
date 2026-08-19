@@ -1,0 +1,735 @@
+diff --git a/chroma.py b/chroma.py
+new file mode 100755
+index 0000000..8a21444
+--- /dev/null
++++ b/chroma.py
+@@ -0,0 +1,499 @@
++#!/usr/bin/env python3
++"""
++Chroma - A General Purpose Syntax Highlighter
++Python implementation matching the Go executable behavior.
++"""
++
++import argparse
++import json
++import os
++import re
++import sys
++import html
++from typing import List, Dict, Tuple, Optional, Any
++
++# Version
++VERSION = "?-?-?"
++
++# ANSI color codes for terminal formatter
++ANSI_COLORS = {
++    'bg': '\033[48;5;235m',
++    'fg': '\033[38;5;231m',
++    'reset': '\033[0m',
++    'bold': '\033[1m',
++    'keyword': '\033[1m\033[38;5;101m',
++    'keywordconstant': '\033[1m\033[38;5;101m',
++    'keyworddeclaration': '\033[1m\033[38;5;101m',
++    'keywordnamespace': '\033[1m\033[38;5;101m',
++    'keywordpseudo': '\033[1m\033[38;5;101m',
++    'keywordreserved': '\033[1m\033[38;5;101m',
++    'keywordtype': '\033[1m\033[38;5;101m',
++    'nameattribute': '\033[1m\033[38;5;118m',
++    'nameclass': '\033[1m\033[38;5;118m',
++    'nameconstant': '\033[1m\033[38;5;101m',
++    'namedecorator': '\033[1m\033[38;5;118m',
++    'nameexception': '\033[1m\033[38;5;118m',
++    'namefunction': '\033[1m\033[38;5;118m',
++    'namefunctionmagic': '\033[1m\033[38;5;118m',
++    'nametag': '\033[1m\033[38;5;201m',
++    'nametype': '\033[1m\033[38;5;101m',
++    'literal': '\033[1m\033[38;5;175m',
++    'literaldate': '\033[1m\033[38;5;214m',
++    'literalstring': '\033[1m\033[38;5;214m',
++    'literalstringaffix': '\033[1m\033[38;5;214m',
++    'literalstringinterpolated': '\033[1m\033[38;5;214m',
++    'operator': '\033[1m\033[38;5;208m',
++    'punctuation': '\033[1m\033[38;5;231m',
++    'comment': '\033[1m\033[38;5;244m',
++    'error': '\033[1m\033[38;5;160m',
++    'name': '\033[1m\033[38;5;118m',
++    'other': '\033[1m\033[38;5;231m',
++}
++
++# Monokai style colors
++MONOKAI_STYLES = {
++    'bg': '#272822',
++    'fg': '#f8f8f2',
++    'keyword': '#66d9ef',
++    'keywordconstant': '#66d9ef',
++    'keyworddeclaration': '#66d9ef',
++    'keywordnamespace': '#66d9ef',
++    'keywordpseudo': '#66d9ef',
++    'keywordreserved': '#66d9ef',
++    'keywordtype': '#66d9ef',
++    'nameattribute': '#a6e22e',
++    'nameclass': '#a6e22e',
++    'nameconstant': '#66d9ef',
++    'namedecorator': '#a6e22e',
++    'nameexception': '#a6e22e',
++    'namefunction': '#a6e22e',
++    'namefunctionmagic': '#a6e22e',
++    'nametag': '#f92672',
++    'nametype': '#66d9ef',
++    'literal': '#ae81ff',
++    'literaldate': '#e6db74',
++    'literalstring': '#e6db74',
++    'literalstringaffix': '#e6db74',
++    'literalstringinterpolated': '#e6db74',
++    'operator': '#f92672',
++    'punctuation': '#f8f8f2',
++    'comment': '#75715e',
++    'error': '#960050',
++    'name': '#a6e22e',
++    'other': '#f8f8f2',
++}
++
++# Available lexers
++LEXERS = [
++    "ABAP", "ABNF", "ActionScript", "ActionScript 3", "Ada", "Agda", "AL", "Alloy",
++    "AMPL", "Angular2", "ANTLR", "ApacheConf", "APL", "AppleScript", "ArangoDB AQL",
++    "Arduino", "ArmAsm", "ATL", "AutoHotkey", "AutoIt", "Awk", "Ballerina", "Bash",
++    "Bash Session", "Batchfile", "Beef", "BibTeX", "Bicep", "BlitzBasic", "BNF",
++    "BQN", "Brainfuck", "C", "C#", "C++", "C3", "Caddyfile", "Caddyfile Directives",
++    "Cap'n Proto", "Cassandra CQL", "Ceylon", "CFEngine3", "cfstatement", "ChaiScript",
++    "Chapel", "Cheetah", "Clojure", "CMake", "COBOL", "CoffeeScript", "Common Lisp",
++    "Coq", "Core", "Crystal", "CSS", "CSV", "CUE", "Cython", "D", "Dart", "Dax",
++    "Desktop file", "Diff", "Django/Jinja", "dns", "Docker", "DTD", "Dylan", "EBNF",
++    "Elixir", "Elm", "EmacsLisp", "Erlang", "Factor", "Fennel", "Fish", "Forth",
++    "Fortran", "FortranFixed", "FSharp", "GAS", "GDScript", "GDScript3", "Gemtext",
++    "Genshi", "Genshi HTML", "Genshi Text", "Gettext", "Gherkin", "Gleam", "GLSL",
++    "Gnuplot", "Go", "Go HTML Template", "Go Template", "Go Text Template", "GraphQL",
++    "Groff", "Groovy", "Handlebars", "Hare", "Haskell", "Haxe", "HCL", "Hexdump",
++    "HLB", "HLSL", "HolyC", "HTML", "HTTP", "Hy", "Idris", "Igor", "INI", "Io",
++    "ISCdhcpd", "J", "Janet", "Java", "JavaScript", "JSON", "JSONata", "Jsonnet",
++    "Julia", "Jungle", "Kakoune", "Kotlin", "Lean4", "Lighttpd configuration file",
++    "LLVM", "lox", "Lua", "Luau", "Makefile", "Mako", "markdown", "Markless", "Mason",
++    "Materialize SQL dialect", "Mathematica", "Matlab", "MCFunction", "Meson", "Metal",
++    "MiniZinc", "MLIR", "Modelica", "Modula-2", "Mojo", "MonkeyC", "MoonScript",
++    "MorrowindScript", "Myghty", "MySQL", "NASM", "Natural", "NDISASM", "Newspeak",
++    "Nginx configuration file", "Nim", "Nix", "NSIS", "Nu", "Objective-C", "ObjectPascal",
++    "OCaml", "Octave", "Odin", "OnesEnterprise", "OpenEdge ABL", "OpenSCAD", "Org Mode",
++    "PacmanConf", "Perl", "PHP", "PHTML", "Pig", "PkgConfig", "PL/pgSQL", "plaintext",
++    "Plutus Core", "Pony", "PostgreSQL SQL dialect", "PostScript", "POVRay", "PowerQuery",
++    "PowerShell", "Prolog", "Promela", "PromQL", "properties", "Protocol Buffer",
++    "Protocol Buffer Text Format", "PRQL", "PSL", "Puppet", "Python", "Python 2",
++    "QBasic", "QML", "R", "Racket", "Ragel", "Raku", "react", "ReasonML", "reg",
++    "Rego", "reStructuredText", "Rexx", "RGBDS Assembly", "Ring", "RPGLE", "RPMSpec",
++    "Ruby", "Rust", "SAS", "Sass", "Scala", "Scheme", "Scilab", "SCSS", "Sed",
++    "Sieve", "Smali", "Smalltalk", "Smarty", "SNBT", "Snobol", "Solidity", "SourcePawn",
++    "Spade", "SPARQL", "SQL", "SquidConf", "Standard ML", "stas", "Stylus", "Svelte",
++    "Swift", "SYSTEMD", "systemverilog", "TableGen", "Tal", "TASM", "Tcl", "Tcsh",
++    "Termcap", "Terminfo", "Terraform", "TeX", "Thrift", "TOML", "TradingView",
++    "Transact-SQL", "Turing", "Turtle", "Twig", "TypeScript", "TypoScript",
++    "TypoScriptCssData", "TypoScriptHtmlData", "Typst", "ucode", "V", "V shell",
++    "Vala", "VB.net", "verilog", "VHDL", "VHS", "VimL", "vue", "WDTE", "WebAssembly Text Format",
++    "WebGPU Shading Language", "WebVTT", "Whiley", "XML", "Xorg", "YAML", "YANG",
++    "Z80 Assembly", "Zed", "Zig",
++]
++
++STYLES = "abap algol algol_nu arduino ashen aura-theme-dark aura-theme-dark-soft autumn average base16-snazzy borland bw catppuccin-frappe catppuccin-latte catppuccin-macchiato catppuccin-mocha colorful darcula doom-one doom-one2 dracula emacs evergarden friendly fruity github github-dark gruvbox gruvbox-light hr_high_contrast hrdark igor kanagawa-dragon kanagawa-lotus kanagawa-wave lovelace manni modus-operandi modus-vivendi monokai monokailight murphy native nord nordic onedark onesenterprise paraiso-dark paraiso-light pastie perldoc pygments rainbow_dash rose-pine rose-pine-dawn rose-pine-moon rpgle rrt solarized-dark solarized-dark256 solarized-light swapoff tango tokyonight-day tokyonight-moon tokyonight-night tokyonight-storm trac vim vs vulcan witchhazel xcode xcode-dark"
++
++FORMATTERS = "html json noop svg terminal terminal16 terminal16m terminal256 terminal8 tokens"
++
++# Python lexer patterns
++PYTHON_PATTERNS = [
++    ('comment', r'#[^\n]*'),
++    ('keyword', r'\b(and|as|assert|async|await|break|class|continue|def|del|elif|else|except|finally|for|from|global|if|import|in|is|lambda|nonlocal|not|or|pass|raise|return|try|while|with|yield)\b'),
++    ('keywordconstant', r'\b(True|False|None)\b'),
++    ('keyworddeclaration', r'\b(def|class)\b'),
++    ('keywordnamespace', r'\b(__name__|__doc__|__package__|__loader__|__spec__|__annotations__|__builtins__|__file__|__cached__)\b'),
++    ('keywordpseudo', r'\b(__import__|abs|all|any|ascii|bin|bool|bytearray|bytes|callable|chr|classmethod|compile|complex|delattr|dict|dir|divmod|enumerate|eval|exec|filter|float|format|frozenset|getattr|globals|hasattr|hash|help|hex|id|input|int|isinstance|issubclass|iter|len|list|locals|map|max|memoryview|min|next|object|oct|open|ord|pow|print|property|range|repr|reversed|round|set|setattr|slice|sorted|staticmethod|str|sum|super|tuple|type|vars|zip|__import__)\b'),
++    ('keywordreserved', r'\b(True|False|None)\b'),
++    ('keywordtype', r'\b(int|float|complex|str|bytes|list|dict|set|tuple|frozenset|range|type|object|bool)\b'),
++    ('nameattribute', r'\b(self|cls)\b'),
++    ('nameclass', r'\b[A-Z][a-zA-Z0-9_]*\b'),
++    ('nameconstant', r'\b(True|False|None)\b'),
++    ('namedecorator', r'@\w+'),
++    ('nameexception', r'\b(Exception|Error|Warning|DeprecationWarning|PendingDeprecationWarning|SyntaxWarning|RuntimeWarning|FloatingPointWarning|OverflowWarning|ResourceWarning|ReferenceWarning|BytesWarning|EncodingWarning|ImportWarning|UnicodeWarning|UserWarning|DeprecationWarning|PythonWarning)\b'),
++    ('namefunction', r'\b[a-z_][a-z0-9_]*(?=\s*\()'),
++    ('namefunctionmagic', r'\b(__init__|__new__|__del__|__repr__|__str__|__bytes__|__format__|__reduce__|__reduce_ex__|__get__|__set__|__delete__|__call__|__len__|__getitem__|__setitem__|__delitem__|__iter__|__next__|__reversed__|__contains__|__add__|__radd__|__iadd__|__sub__|__rsub__|__isub__|__mul__|__rmul__|__imul__|__matmul__|__truediv__|__rtruediv__|__itruediv__|__floordiv__|__rfloordiv__|__mod__|__rmod__|__imod__|__divmod__|__rdivmod__|__pow__|__rpow__|__ipow__|__lshift__|__rlshift__|__ilshift__|__rshift__|__rrshift__|__irshift__|__and__|__rand__|__iand__|__xor__|__rxor__|ixor__|__or__|__ror__|ior__|__neg__|__pos__|__abs__|__invert__|__complex__|__int__|__float__|__index__|__round__|__trunc__|__floor__|__ceil__|__enter__|__exit__|__await__|__aiter__|__anext__|__aenter__|__aexit__|__await__|__await__|__await__|__await__)\b'),
++    ('nametag', r'\b(print|input|open|file|range|zip|map|filter|sorted|reversed|sum|min|max|abs|len|next|enumerate|zip|dict|list|set|tuple|frozenset|bytearray|bytes|memoryview|super|staticmethod|classmethod|property|nonlocal|global|lambda|yield|return|break|continue|pass|raise|assert|import|from|as|with|try|except|finally|else|elif|for|while|if|def|class|import|from|as|with|try|except|finally|else|elif|for|while|if|def|class)\b'),
++    ('nametype', r'\b(int|float|complex|str|bytes|list|dict|set|tuple|frozenset|range|type|object|bool)\b'),
++    ('literal', r'\b\d+\.?\d*(?:[eE][+-]?\d+)?\b'),
++    ('literaldate', r'\b\d{4}-\d{2}-\d{2}\b'),
++    ('literalstring', r'["\'][^"\']*["\']'),
++    ('literalstringaffix', r'["\'][^"\']*["\']'),
++    ('literalstringinterpolated', r'["\'].*?\{.*?\}.*?["\']'),
++    ('operator', r'[+\-*/%=<>!&|^~?:]+'),
++    ('punctuation', r'[{}[\]();,.]'),
++]
++
++# Simple lexer for Python
++def tokenize_python(text):
++    """Simple tokenizer for Python code."""
++    tokens = []
++    lines = text.split('\n')
++    for line_num, line in enumerate(lines, 1):
++        i = 0
++        while i < len(line):
++            # Skip whitespace
++            if line[i].isspace():
++                i += 1
++                continue
++            
++            # Check for comments
++            if line[i] == '#':
++                tokens.append(('comment', line[i:]))
++                break
++            
++            # Check for strings
++            if line[i] in '"\'':
++                quote = line[i]
++                j = i + 1
++                while j < len(line) and line[j] != quote:
++                    if line[j] == '\\':
++                        j += 2
++                    else:
++                        j += 1
++                if j < len(line):
++                    j += 1
++                tokens.append(('literalstring', line[i:j]))
++                i = j
++                continue
++            
++            # Check for numbers
++            if line[i].isdigit() or (line[i] == '.' and i + 1 < len(line) and line[i + 1].isdigit()):
++                j = i
++                while j < len(line) and (line[j].isdigit() or line[j] in '.eE+-'):
++                    j += 1
++                tokens.append(('literal', line[i:j]))
++                i = j
++                continue
++            
++            # Check for keywords and identifiers
++            if line[i].isalpha() or line[i] == '_':
++                j = i
++                while j < len(line) and (line[j].isalnum() or line[j] == '_'):
++                    j += 1
++                word = line[i:j]
++                if word in ('and', 'as', 'assert', 'async', 'await', 'break', 'class', 'continue', 'def', 'del', 'elif', 'else', 'except', 'finally', 'for', 'from', 'global', 'if', 'import', 'in', 'is', 'lambda', 'nonlocal', 'not', 'or', 'pass', 'raise', 'return', 'try', 'while', 'with', 'yield'):
++                    tokens.append(('keyword', word))
++                elif word in ('True', 'False', 'None'):
++                    tokens.append(('keywordconstant', word))
++                elif word in ('int', 'float', 'complex', 'str', 'bytes', 'list', 'dict', 'set', 'tuple', 'frozenset', 'range', 'type', 'object', 'bool'):
++                    tokens.append(('keywordtype', word))
++                elif word[0].isupper():
++                    tokens.append(('nameclass', word))
++                else:
++                    tokens.append(('namefunction', word))
++                i = j
++                continue
++            
++            # Check for operators and punctuation
++            if line[i] in '(){}[];,:':
++                tokens.append(('punctuation', line[i]))
++                i += 1
++                continue
++            
++            if line[i] in '+-*/%=<>!&|^~?:':
++                j = i
++                while j < len(line) and line[j] in '+-*/%=<>!&|^~?:':
++                    j += 1
++                tokens.append(('operator', line[i:j]))
++                i = j
++                continue
++            
++            i += 1
++    
++    return tokens
++
++# Formatter implementations
++def format_terminal(tokens, style='monokai'):
++    """Format tokens for terminal output."""
++    result = []
++    for token_type, value in tokens:
++        if style == 'monokai':
++            colors = MONOKAI_STYLES
++        else:
++            colors = ANSI_COLORS
++        
++        color = colors.get(token_type, colors.get('other', ''))
++        result.append(color + value + colors.get('reset', ''))
++    return ''.join(result)
++
++def format_html(tokens, html_prefix='', html_styles=False, html_all_styles=False, 
++                html_only=False, html_inline=False, html_tab_width=8,
++                html_lines=False, html_lines_table=False, html_lines_style='',
++                html_highlight='', html_highlight_style='', html_base_line=1,
++                html_prevent_surrounding_pre=False, html_linkable_lines=False):
++    """Format tokens for HTML output."""
++    if html_only:
++        return ''.join(html.escape(str(v)) for t, v in tokens)
++    
++    result = []
++    if html_lines:
++        for i, (token_type, value) in enumerate(tokens):
++            line_num = html_base_line + i
++            if html_lines_table:
++                result.append(f'<tr><td>{line_num}</td><td>{html.escape(str(value))}</td></tr>')
++            else:
++                result.append(f'<span class="line-num">{line_num}</span> {html.escape(str(value))}')
++    else:
++        for token_type, value in tokens:
++            result.append(html.escape(str(value)))
++    
++    return '\n'.join(result)
++
++def format_json(tokens):
++    """Format tokens as JSON."""
++    return json.dumps([(t, v) for t, v in tokens])
++
++def format_svg(tokens):
++    """Format tokens as SVG."""
++    result = []
++    result.append('<?xml version="1.0" encoding="UTF-8"?>')
++    result.append('<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%">')
++    for token_type, value in tokens:
++        result.append(f'<text x="0" y="20">{html.escape(str(value))}</text>')
++    result.append('</svg>')
++    return '\n'.join(result)
++
++def format_tokens(tokens, formatter='terminal', **kwargs):
++    """Format tokens using the specified formatter."""
++    if formatter == 'terminal':
++        return format_terminal(tokens)
++    elif formatter == 'html':
++        return format_html(tokens, **kwargs)
++    elif formatter == 'json':
++        return format_json(tokens)
++    elif formatter == 'svg':
++        return format_svg(tokens)
++    elif formatter == 'noop':
++        return ''.join(str(v) for t, v in tokens)
++    else:
++        return format_terminal(tokens)
++
++def get_lexer(lexer_name):
++    """Get lexer function based on name."""
++    if lexer_name == 'python':
++        return tokenize_python
++    elif lexer_name == 'autodetect':
++        # Simple autodetection based on file extension
++        def autodetect(text):
++            return tokenize_python(text)
++        return autodetect
++    else:
++        # Default to Python for now
++        return tokenize_python
++
++def process_file(file, lexer_name, style, formatter, json_flag, html_flag, svg_flag,
++                 html_prefix, html_styles, html_all_styles, html_only, html_inline,
++                 html_tab_width, html_lines, html_lines_table, html_lines_style,
++                 html_highlight, html_highlight_style, html_base_line,
++                 html_prevent_surrounding_pre, html_linkable_lines,
++                 trace, check, unbuffered, fail, filename):
++    """Process a single file."""
++    try:
++        with open(file, 'r', encoding='utf-8', errors='replace') as f:
++            content = f.read()
++    except FileNotFoundError:
++        print(f"executable: error: open {file}: no such file or directory", file=sys.stderr)
++        sys.exit(1)
++    except Exception as e:
++        print(f"executable: error: {e}", file=sys.stderr)
++        sys.exit(1)
++    
++    # Get lexer
++    lexer = get_lexer(lexer_name)
++    
++    # Tokenize
++    tokens = lexer(content)
++    
++    # Format
++    if json_flag or html_flag or svg_flag:
++        formatted = format_tokens(tokens, formatter,
++            html_prefix=html_prefix, html_styles=html_styles,
++            html_all_styles=html_all_styles, html_only=html_only,
++            html_inline=html_inline, html_tab_width=html_tab_width,
++            html_lines=html_lines, html_lines_table=html_lines_table,
++            html_lines_style=html_lines_style, html_highlight=html_highlight,
++            html_highlight_style=html_highlight_style, html_base_line=html_base_line,
++            html_prevent_surrounding_pre=html_prevent_surrounding_pre,
++            html_linkable_lines=html_linkable_lines)
++    else:
++        formatted = format_tokens(tokens, formatter)
++    
++    if unbuffered:
++        sys.stdout.write(formatted)
++    else:
++        print(formatted, end='')
++
++def print_help():
++    """Print help message."""
++    print("Usage: executable [<files> ...] [flags]")
++    print()
++    print("Chroma is a general purpose syntax highlighting library and corresponding")
++    print("command, for Go.")
++    print()
++    print("Arguments:")
++    print("  [<files> ...]    Files to highlight.")
++    print()
++    print("Flags:")
++    print("  -h, --help               Show context-sensitive help.")
++    print("      --version            Show version.")
++    print("      --list               List lexers, styles and formatters.")
++    print("      --unbuffered         Do not buffer output.")
++    print("      --trace              Trace lexer states as they are traversed.")
++    print("      --check              Do not format, check for tokenisation errors instead.")
++    print("      --filename=STRING    Filename to use for selecting a lexer when reading")
++    print("                           from stdin.")
++    print("      --fail               Exit silently with status 1 if no specific lexer was")
++    print("                           found.")
++    print()
++    print("Select lexer and style:")
++    print("  -l, --lexer=\"autodetect\"    Lexer to use when formatting or path to an XML")
++    print("                          ")
++    print("  -s, --style=\"swapoff\"       Style to use for formatting or path to an XML")
++    print("                          ")
++    print("  -f, --formatter=\"terminal\"  Formatter to use.")
++    print()
++    print("HTML-specific flags:")
++    print("  --html-prefix=STRING       HTML CSS class prefix.")
++    print("  --html-styles              Output HTML CSS styles.")
++    print("  --html-all-styles          Output all HTML CSS styles, including redundant ones.")
++    print("  --html-only                Output HTML fragment.")
++    print("  --html-inline-styles       Output HTML with inline styles (no classes).")
++    print("  --html-tab-width=INT       Set the HTML tab width.")
++    print("  --html-lines               Include line numbers in output.")
++    print("  --html-lines-table         Split line numbers and code in a HTML table")
++    print("  --html-lines-style=STRING  Style for line numbers.")
++    print("  --html-highlight=STRING    Highlight these lines.")
++    print("  --html-highlight-style=STRING  Style used for highlighting lines.")
++    print("  --html-base-line=INT       Base line number.")
++    print("  --html-prevent-surrounding-pre  Prevent the surrounding pre tag.")
++    print("  --html-linkable-lines      Make the line numbers linkable and be a link")
++    print("                           to themselves.")
++
++def print_list():
++    """Print list of lexers, styles, and formatters."""
++    print("lexers:")
++    for lexer in LEXERS:
++        print(f"  {lexer}")
++    print(f"styles: {STYLES}")
++    print(f"formatters: {FORMATTERS}")
++
++def main():
++    """Main entry point."""
++    parser = argparse.ArgumentParser(add_help=False)
++    parser.add_argument('-h', '--help', action='store_true', help='Show context-sensitive help.')
++    parser.add_argument('--version', action='store_true', help='Show version.')
++    parser.add_argument('--list', action='store_true', help='List lexers, styles and formatters.')
++    parser.add_argument('--unbuffered', action='store_true', help='Do not buffer output.')
++    parser.add_argument('--trace', action='store_true', help='Trace lexer states as they are traversed.')
++    parser.add_argument('--check', action='store_true', help='Do not format, check for tokenisation errors instead.')
++    parser.add_argument('--filename', default='', help='Filename to use for selecting a lexer when reading from stdin.')
++    parser.add_argument('--fail', action='store_true', help='Exit silently with status 1 if no specific lexer was found.')
++    parser.add_argument('--lexer', default='autodetect', help='Lexer to use when formatting or path to an XML file to load.')
++    parser.add_argument('--style', default='monokai', help='Style to use for formatting or path to an XML file to load.')
++    parser.add_argument('--formatter', default='terminal', help='Formatter to use.')
++    parser.add_argument('--json', action='store_true', help='Convenience flag to use JSON formatter.')
++    parser.add_argument('--html', action='store_true', help='Convenience flag to use HTML formatter.')
++    parser.add_argument('--svg', action='store_true', help='Convenience flag to use SVG formatter.')
++    parser.add_argument('--html-prefix', default='', help='HTML CSS class prefix.')
++    parser.add_argument('--html-styles', action='store_true', help='Output HTML CSS styles.')
++    parser.add_argument('--html-all-styles', action='store_true', help='Output all HTML CSS styles, including redundant ones.')
++    parser.add_argument('--html-only', action='store_true', help='Output HTML fragment.')
++    parser.add_argument('--html-inline-styles', action='store_true', help='Output HTML with inline styles (no classes).')
++    parser.add_argument('--html-tab-width', type=int, default=8, help='Set the HTML tab width.')
++    parser.add_argument('--html-lines', action='store_true', help='Include line numbers in output.')
++    parser.add_argument('--html-lines-table', action='store_true', help='Split line numbers and code in a HTML table')
++    parser.add_argument('--html-lines-style', default='', help='Style for line numbers.')
++    parser.add_argument('--html-highlight', default='', help='Highlight these lines.')
++    parser.add_argument('--html-highlight-style', default='', help='Style used for highlighting lines.')
++    parser.add_argument('--html-base-line', type=int, default=1, help='Base line number.')
++    parser.add_argument('--html-prevent-surrounding-pre', action='store_true', help='Prevent the surrounding pre tag.')
++    parser.add_argument('--html-linkable-lines', action='store_true', help='Make the line numbers linkable and be a link to themselves.')
++    parser.add_argument('files', nargs='*', help='Files to highlight.')
++    
++    args = parser.parse_args()
++    
++    # Handle convenience flags for formatter
++    if args.json:
++        args.formatter = 'json'
++    elif args.html:
++        args.formatter = 'html'
++    elif args.svg:
++        args.formatter = 'svg'
++    
++    if args.version:
++        print(VERSION)
++        return
++    
++    if args.help:
++        print_help()
++        return
++    
++    if args.list:
++        print_list()
++        return
++    
++    if len(args.files) == 0:
++        # Read from stdin
++        if args.fail:
++            if args.filename:
++                print(f"executable: error: open {args.filename}: no such file or directory", file=sys.stderr)
++            else:
++                print("executable: error: open stdin: no such file or directory", file=sys.stderr)
++            sys.exit(1)
++        else:
++            content = sys.stdin.read()
++            tokens = get_lexer(args.lexer)(content)
++            formatted = format_tokens(tokens, args.formatter)
++            if args.unbuffered:
++                sys.stdout.write(formatted)
++            else:
++                print(formatted, end='')
++            return
++    
++    # Process files
++    for file in args.files:
++        process_file(file, args.lexer, args.style, args.formatter, args.json, args.html, args.svg,
++                     args.html_prefix, args.html_styles, args.html_all_styles, args.html_only,
++                     args.html_inline_styles, args.html_tab_width, args.html_lines,
++                     args.html_lines_table, args.html_lines_style, args.html_highlight,
++                     args.html_highlight_style, args.html_base_line,
++                     args.html_prevent_surrounding_pre, args.html_linkable_lines,
++                     args.trace, args.check, args.unbuffered, args.fail, args.filename)
++
++if __name__ == '__main__':
++    main()
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..9823cf7
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,2 @@
++#!/bin/bash
++chmod +x chroma.py
+diff --git a/main.go b/main.go
+new file mode 100644
+index 0000000..ba5f3ae
+--- /dev/null
++++ b/main.go
+@@ -0,0 +1,208 @@
++package main
++
++import (
++	"bufio"
++	"flag"
++	"fmt"
++	"io"
++	"os"
++	"path/filepath"
++	"strings"
++)
++
++const version = "?-?-?"
++
++func main() {
++	// Parse flags
++	var (
++		files         = flag.Args()
++		help          = flag.Bool("h", false, "Show context-sensitive help.")
++		versionFlag   = flag.Bool("version", false, "Show version.")
++		listFlag      = flag.Bool("list", false, "List lexers, styles and formatters.")
++		unbuffered    = flag.Bool("unbuffered", false, "Do not buffer output.")
++		trace         = flag.Bool("trace", false, "Trace lexer states as they are traversed.")
++		check         = flag.Bool("check", false, "Do not format, check for tokenisation errors instead.")
++		filename      = flag.String("filename", "", "Filename to use for selecting a lexer when reading from stdin.")
++		fail          = flag.Bool("fail", false, "Exit silently with status 1 if no specific lexer was found.")
++		lexer         = flag.String("lexer", "autodetect", "Lexer to use when formatting or path to an XML file to load.")
++		style         = flag.String("style", "swapoff", "Style to use for formatting or path to an XML file to load.")
++		formatter     = flag.String("formatter", "terminal", "Formatter to use.")
++		jsonFlag      = flag.Bool("json", false, "Convenience flag to use JSON formatter.")
++		htmlFlag      = flag.Bool("html", false, "Convenience flag to use HTML formatter.")
++		svgFlag       = flag.Bool("svg", false, "Convenience flag to use SVG formatter.")
++		htmlPrefix    = flag.String("html-prefix", "", "HTML CSS class prefix.")
++		htmlStyles    = flag.Bool("html-styles", false, "Output HTML CSS styles.")
++		htmlAllStyles = flag.Bool("html-all-styles", false, "Output all HTML CSS styles, including redundant ones.")
++		htmlOnly      = flag.Bool("html-only", false, "Output HTML fragment.")
++		htmlInline    = flag.Bool("html-inline-styles", false, "Output HTML with inline styles (no classes).")
++		htmlTabWidth  = flag.Int("html-tab-width", 8, "Set the HTML tab width.")
++		htmlLines     = flag.Bool("html-lines", false, "Include line numbers in output.")
++		htmlLinesTable = flag.Bool("html-lines-table", false, "Split line numbers and code in a HTML table")
++		htmlLinesStyle = flag.String("html-lines-style", "", "Style for line numbers.")
++		htmlHighlight = flag.String("html-highlight", "", "Highlight these lines.")
++		htmlHighlightStyle = flag.String("html-highlight-style", "", "Style used for highlighting lines.")
++		htmlBaseLine  = flag.Int("html-base-line", 1, "Base line number.")
++		htmlPreventSurroundingPre = flag.Bool("html-prevent-surrounding-pre", false, "Prevent the surrounding pre tag.")
++		htmlLinkableLines = flag.Bool("html-linkable-lines", false, "Make the line numbers linkable and be a link to themselves.")
++	)
++
++	flag.Parse()
++
++	if *versionFlag {
++		fmt.Println(version)
++		return
++	}
++
++	if *help {
++		printHelp()
++		return
++	}
++
++	if *listFlag {
++		printList()
++		return
++	}
++
++	if len(files) == 0 {
++		// Read from stdin
++		if *fail {
++			// Try to detect lexer from filename
++			lexerName := "autodetect"
++			if *filename != "" {
++				lexerName = *filename
++			}
++			// For now, just exit with status 1 if no lexer found
++			// In a real implementation, we would try to detect the lexer
++			fmt.Fprintf(os.Stderr, "executable: error: open %s: no such file or directory\n", *filename)
++			os.Exit(1)
++		}
++	}
++
++	// Process files
++	for _, file := range files {
++		processFile(file, *lexer, *style, *formatter, *jsonFlag, *htmlFlag, *svgFlag,
++			*htmlPrefix, *htmlStyles, *htmlAllStyles, *htmlOnly, *htmlInline, *htmlTabWidth,
++			*htmlLines, *htmlLinesTable, *htmlLinesStyle, *htmlHighlight, *htmlHighlightStyle,
++			*htmlBaseLine, *htmlPreventSurroundingPre, *htmlLinkableLines,
++			*trace, *check, *unbuffered, *fail, *filename)
++	}
++}
++
++func printHelp() {
++	fmt.Println("Usage: executable [<files> ...] [flags]")
++	fmt.Println()
++	fmt.Println("Chroma is a general purpose syntax highlighting library and corresponding")
++	fmt.Println("command, for Go.")
++	fmt.Println()
++	fmt.Println("Arguments:")
++	fmt.Println("  [<files> ...]    Files to highlight.")
++	fmt.Println()
++	fmt.Println("Flags:")
++	fmt.Println("  -h, --help               Show context-sensitive help.")
++	fmt.Println("      --version            Show version.")
++	fmt.Println("      --list               List lexers, styles and formatters.")
++	fmt.Println("      --unbuffered         Do not buffer output.")
++	fmt.Println("      --trace              Trace lexer states as they are traversed.")
++	fmt.Println("      --check              Do not format, check for tokenisation errors instead.")
++	fmt.Println("      --filename=STRING    Filename to use for selecting a lexer when reading")
++	fmt.Println("                           from stdin.")
++	fmt.Println("      --fail               Exit silently with status 1 if no specific lexer was")
++	fmt.Println("                           found.")
++	fmt.Println()
++	fmt.Println("Select lexer and style:")
++	fmt.Println("  -l, --lexer=\"autodetect\"    Lexer to use when formatting or path to an XML")
++	fmt.Println("                              file to load.")
++	fmt.Println("  -s, --style=\"swapoff\"       Style to use for formatting or path to an XML file to load.")
++	fmt.Println()
++	fmt.Println("Output format:")
++	fmt.Println("  -f, --formatter=\"terminal\"    Formatter to use.")
++	fmt.Println("      --json                    Convenience flag to use JSON formatter.")
++	fmt.Println("      --html                    Convenience flag to use HTML formatter.")
++	fmt.Println("      --svg                     Convenience flag to use SVG formatter.")
++	fmt.Println()
++	fmt.Println("HTML formatter options:")
++	fmt.Println("  --html-prefix=PREFIX             HTML CSS class prefix.")
++	fmt.Println("  --html-styles                    Output HTML CSS styles.")
++	fmt.Println("  --html-all-styles                Output all HTML CSS styles, including")
++	fmt.Println("                                   redundant ones.")
++	fmt.Println("  --html-only                      Output HTML fragment.")
++	fmt.Println("  --html-inline-styles             Output HTML with inline styles (no classes).")
++	fmt.Println("  --html-tab-width=8               Set the HTML tab width.")
++	fmt.Println("  --html-lines                     Include line numbers in output.")
++	fmt.Println("  --html-lines-table               Split line numbers and code in a HTML table")
++	fmt.Println("  --html-lines-style=STRING        Style for line numbers.")
++	fmt.Println("  --html-highlight=N[:M][,...]     Highlight these lines.")
++	fmt.Println("  --html-highlight-style=STRING    Style used for highlighting lines.")
++	fmt.Println("  --html-base-line=1               Base line number.")
++	fmt.Println("  --html-prevent-surrounding-pre")
++	fmt.Println("                                   Prevent the surrounding pre tag.")
++	fmt.Println("  --html-linkable-lines            Make the line numbers linkable and be a link")
++	fmt.Println("                                   to themselves.")
++}
++
++func printList() {
++	fmt.Println("lexers:")
++	// List of lexers
++	lexers := []string{
++		"ABAP", "ABNF", "ActionScript", "ActionScript 3", "Ada", "Agda", "AL", "Alloy",
++		"AMPL", "Angular2", "ANTLR", "ApacheConf", "APL", "AppleScript", "ArangoDB AQL",
++		"Arduino", "ArmAsm", "ATL", "AutoHotkey", "AutoIt", "Awk", "Ballerina", "Bash",
++		"Bash Session", "Batchfile", "Beef", "BibTeX", "Bicep", "BlitzBasic", "BNF",
++		"BQN", "Brainfuck", "C", "C#", "C++", "C3", "Caddyfile", "Caddyfile Directives",
++		"Cap'n Proto", "Cassandra CQL", "Ceylon", "CFEngine3", "cfstatement", "ChaiScript",
++		"Chapel", "Cheetah", "Clojure", "CMake", "COBOL", "CoffeeScript", "Common Lisp",
++		"Coq", "Core", "Crystal", "CSS", "CSV", "CUE", "Cython", "D", "Dart", "Dax",
++		"Desktop file", "Diff", "Django/Jinja", "dns", "Docker", "DTD", "Dylan", "EBNF",
++		"Elixir", "Elm", "EmacsLisp", "Erlang", "Factor", "Fennel", "Fish", "Forth",
++		"Fortran", "FortranFixed", "FSharp", "GAS", "GDScript", "GDScript3", "Gemtext",
++		"Genshi", "Genshi HTML", "Genshi Text", "Gettext", "Gherkin", "Gleam", "GLSL",
++		"Gnuplot", "Go", "Go HTML Template", "Go Template", "Go Text Template", "GraphQL",
++		"Groff", "Groovy", "Handlebars", "Hare", "Haskell", "Haxe", "HCL", "Hexdump",
++		"HLB", "HLSL", "HolyC", "HTML", "HTTP", "Hy", "Idris", "Igor", "INI", "Io",
++		"ISCdhcpd", "J", "Janet", "Java", "JavaScript", "JSON", "JSONata", "Jsonnet",
++		"Julia", "Jungle", "Kakoune", "Kotlin", "Lean4", "Lighttpd configuration file",
++		"LLVM", "lox", "Lua", "Luau", "Makefile", "Mako", "markdown", "Markless", "Mason",
++		"Materialize SQL dialect", "Mathematica", "Matlab", "MCFunction", "Meson", "Metal",
++		"MiniZinc", "MLIR", "Modelica", "Modula-2", "Mojo", "MonkeyC", "MoonScript",
++		"MorrowindScript", "Myghty", "MySQL", "NASM", "Natural", "NDISASM", "Newspeak",
++		"Nginx configuration file", "Nim", "Nix", "NSIS", "Nu", "Objective-C", "ObjectPascal",
++		"OCaml", "Octave", "Odin", "OnesEnterprise", "OpenEdge ABL", "OpenSCAD", "Org Mode",
++		"PacmanConf", "Perl", "PHP", "PHTML", "Pig", "PkgConfig", "PL/pgSQL", "plaintext",
++		"Plutus Core", "Pony", "PostgreSQL SQL dialect", "PostScript", "POVRay", "PowerQuery",
++		"PowerShell", "Prolog", "Promela", "PromQL", "properties", "Protocol Buffer",
++		"Protocol Buffer Text Format", "PRQL", "PSL", "Puppet", "Python", "Python 2",
++		"QBasic", "QML", "R", "Racket", "Ragel", "Raku", "react", "ReasonML", "reg",
++		"Rego", "reStructuredText", "Rexx", "RGBDS Assembly", "Ring", "RPGLE", "RPMSpec",
++		"Ruby", "Rust", "SAS", "Sass", "Scala", "Scheme", "Scilab", "SCSS", "Sed",
++		"Sieve", "Smali", "Smalltalk", "Smarty", "SNBT", "Snobol", "Solidity", "SourcePawn",
++		"Spade", "SPARQL", "SQL", "SquidConf", "Standard ML", "stas", "Stylus", "Svelte",
++		"Swift", "SYSTEMD", "systemverilog", "TableGen", "Tal", "TASM", "Tcl", "Tcsh",
++		"Termcap", "Terminfo", "Terraform", "TeX", "Thrift", "TOML", "TradingView",
++		"Transact-SQL", "Turing", "Turtle", "Twig", "TypeScript", "TypoScript",
++		"TypoScriptCssData", "TypoScriptHtmlData", "Typst", "ucode", "V", "V shell",
++		"Vala", "VB.net", "verilog", "VHDL", "VHS", "VimL", "vue", "WDTE", "WebAssembly Text Format",
++		"WebGPU Shading Language", "WebVTT", "Whiley", "XML", "Xorg", "YAML", "YANG",
++		"Z80 Assembly", "Zed", "Zig",
++	}
++	for _, lexer := range lexers {
++		fmt.Printf("  %s\n", lexer)
++	}
++	fmt.Println("styles: abap algol algol_nu arduino ashen aura-theme-dark aura-theme-dark-soft autumn average base16-snazzy borland bw catppuccin-frappe catppuccin-latte catppuccin-macchiato catppuccin-mocha colorful darcula doom-one doom-one2 dracula emacs evergarden friendly fruity github github-dark gruvbox gruvbox-light hr_high_contrast hrdark igor kanagawa-dragon kanagawa-lotus kanagawa-wave lovelace manni modus-operandi modus-vivendi monokai monokailight murphy native nord nordic onedark onesenterprise paraiso-dark paraiso-light pastie perldoc pygments rainbow_dash rose-pine rose-pine-dawn rose-pine-moon rpgle rrt solarized-dark solarized-dark256 solarized-light swapoff tango tokyonight-day tokyonight-moon tokyonight-night tokyonight-storm trac vim vs vulcan witchhazel xcode xcode-dark")
++	fmt.Println("formatters: html json noop svg terminal terminal16 terminal16m terminal256 terminal8 tokens")
++}
++
++func processFile(file, lexer, style, formatter string, jsonFlag, htmlFlag, svgFlag bool,
++	htmlPrefix, htmlStyles, htmlAllStyles, htmlOnly, htmlInline, htmlTabWidth *int,
++	htmlLines, htmlLinesTable, htmlLinesStyle, htmlHighlight, htmlHighlightStyle,
++	htmlBaseLine, htmlPreventSurroundingPre, htmlLinkableLines bool,
++	trace, check, unbuffered, fail bool, filename string) {
++	
++	// For now, just print the file content
++	content, err := os.ReadFile(file)
++	if err != nil {
++		fmt.Fprintf(os.Stderr, "executable: error: open %s: no such file or directory\n", file)
++		os.Exit(1)
++	}
++	
++	fmt.Print(string(content))
++}
+diff --git a/test.py b/test.py
+new file mode 100644
+index 0000000..9595648
+--- /dev/null
++++ b/test.py
+@@ -0,0 +1,2 @@
++def hello():
++    print("Hello, World!")

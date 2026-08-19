@@ -148,7 +148,23 @@ def validate(run_dir: str) -> int:
         # timestamp of a long-running agent lands late in the run and mimics
         # a delayed first call. Real starvation leaves the agent with few
         # completed steps; require both signals.
-        if (first is not None and first > LIMITS["first_call_delay_s"]
+        # Heartbeat telemetry, when present, is ground truth and overrides
+        # both trajectory heuristics: hb filename embeds the harness start
+        # (pid_start_agent.hb) and line 1 is the first COMPLETED call.
+        hb_delay = None
+        for hb in glob.glob(os.path.join(run_dir, "heartbeats", f"*_{aid}.hb")):
+            parts = os.path.basename(hb)[:-3].split("_")
+            try:
+                hb_start = float(parts[1])
+                with open(hb) as fh:
+                    hb_delay = float(fh.readline().split()[0]) - hb_start
+            except (IndexError, ValueError):
+                pass
+        if hb_delay is not None:
+            if hb_delay > LIMITS["first_call_delay_s"]:
+                problems.append(f"{aid}: first call completed {hb_delay:.0f}s after "
+                                f"harness start (starved; heartbeat evidence)")
+        elif (first is not None and first > LIMITS["first_call_delay_s"]
                 and a.get("steps", 0) < 100):
             problems.append(f"{aid}: first call delayed {first:.0f}s with only "
                             f"{a.get('steps', 0)} steps (starved)")

@@ -1,0 +1,1178 @@
+diff --git a/probe/batch.py b/probe/batch.py
+new file mode 100644
+index 0000000..67d1c48
+--- /dev/null
++++ b/probe/batch.py
+@@ -0,0 +1,50 @@
++import harness, time, os, json, sys
++
++ENV = dict(EDITOR='/bin/true')
++
++def T(cmd, steps, rows=24, cols=80, name=None, cwd='/tmp/walktest', env=None, pre=b''):
++    e = dict(ENV)
++    if env: e.update(env)
++    return harness.run(cmd=cmd, rows=rows, cols=cols, steps=steps, cwd=cwd, env=e, name=name or 'x')
++
++scenarios = [
++    # name, args, steps (delay, bytes), kwargs
++    ("nav",   [],          [(0.5, b'j'), (0.4, b'j'), (0.4, b'k'), (0.4, b'l'), (0.4, b'h'), (0.4, b'q')]),
++    ("enter_dir", [],      [(0.5, b'j'), (0.5, b'\r'), (0.5, b'q')]),
++    ("enter_file", [],     [(0.5, b'\r'), (0.7, b'q')]),
++    ("backspace", [],      [(0.5, b'\x7f'), (0.5, b'q')]),
++    ("wsize_100x30", [],    [(0.8, b'q')], dict(rows=30, cols=100)),
++    ("wsize_40x10", [],     [(0.8, b'q')], dict(rows=10, cols=40)),
++    ("wsize_200x50", [],    [(0.8, b'q')], dict(rows=50, cols=200)),
++    ("wsize_15x5", [],      [(0.8, b'q')], dict(rows=5, cols=15)),
++    ("dot",    [],          [(0.5, b'.'), (0.5, b'.'), (0.5, b'q')]),
++    ("fuzzy",  [],          [(0.5, b'/'), (0.5, b'fil'), (0.3, b'x'), (0.4, b'q')]),
++    ("fuzzy_enter", [],     [(0.5, b'/'), (0.5, b'fil'), (0.4, b'\r'), (0.6, b'q')]),
++    ("space_preview", [],   [(0.5, b' '), (0.6, b'q')]),
++    ("help",   [],          [(0.5, b'?'), (0.5, b'q')]),
++    ("yank",   [],          [(0.5, b'y'), (0.6, b'q')]),
++    ("del",    [],          [(0.5, b'd'), (0.5, b'y'), (0.6, b'q')]),
++    ("undo",   [],          [(0.5, b'd'), (0.5, b'u'), (0.6, b'q')]),
++    ("ctrlc",  [],          [(0.5, b'\x03'), (0.5, None)]),
++    ("esc",    [],          [(0.5, b'\x1b'), (0.5, None)]),
++    ("icons",  ["--icons"], [(0.8, b'q')]),
++    ("dir_only", ["--dir-only"], [(0.8, b'q')]),
++    ("hide_hidden", ["--hide-hidden"], [(0.8, b'q')]),
++    ("preview_on", ["--preview"], [(0.8, b'q')]),
++    ("preview_border", ["--with-border","--preview"], [(0.8, b'q')]),
++    ("fuzzy_start", ["--fuzzy"], [(0.8, b'q')]),
++    ("main_color", [], [(0.8, b'q')], dict(env=dict(WALK_MAIN_COLOR='#ff0000'))),
++    ("statusbar", [], [(0.8, b'q')], dict(env=dict(WALK_STATUS_BAR='[Mode(), Size() | PadLeft(7), ModTime() | PadLeft(12)] | join(" ")'))),
++]
++
++os.makedirs('caps', exist_ok=True)
++for name, args, steps, *kw in scenarios:
++    kwargs = kw[0] if kw else {}
++    try:
++        out = T(['/workspace/executable'] + args, steps, **kwargs)
++    except Exception as ex:
++        print(f"{name}: ERROR {ex}")
++        continue
++    fn = f'caps/{name}.bin'
++    open(fn, 'wb').write(out)
++    print(f"{name}: {len(out)} bytes")
+diff --git a/probe/cap_initial.bin b/probe/cap_initial.bin
+new file mode 100644
+index 0000000..a457c37
+--- /dev/null
++++ b/probe/cap_initial.bin
+@@ -0,0 +1,7 @@
++]11;?\[6n[?25l[?2004h
+/tmp/walktest[K
++.dotfile        link.txt[K
++.hidden_dir/    pipe1   [K
++README.md       run.sh  [K
++file1.txt       sub1/   [K
++file2.md        sub2/   [K
++file3.bin               [K[80D
+\ No newline at end of file
+diff --git a/probe/caps/backspace.bin b/probe/caps/backspace.bin
+new file mode 100644
+index 0000000..a457c37
+--- /dev/null
++++ b/probe/caps/backspace.bin
+@@ -0,0 +1,7 @@
++]11;?\[6n[?25l[?2004h
+/tmp/walktest[K
++.dotfile        link.txt[K
++.hidden_dir/    pipe1   [K
++README.md       run.sh  [K
++file1.txt       sub1/   [K
++file2.md        sub2/   [K
++file3.bin               [K[80D
+\ No newline at end of file
+diff --git a/probe/caps/ctrlc.bin b/probe/caps/ctrlc.bin
+new file mode 100644
+index 0000000..6166259
+--- /dev/null
++++ b/probe/caps/ctrlc.bin
+@@ -0,0 +1 @@
++]11;?\[6n
+\ No newline at end of file
+diff --git a/probe/caps/del.bin b/probe/caps/del.bin
+new file mode 100644
+index 0000000..a457c37
+--- /dev/null
++++ b/probe/caps/del.bin
+@@ -0,0 +1,7 @@
++]11;?\[6n[?25l[?2004h
+/tmp/walktest[K
++.dotfile        link.txt[K
++.hidden_dir/    pipe1   [K
++README.md       run.sh  [K
++file1.txt       sub1/   [K
++file2.md        sub2/   [K
++file3.bin               [K[80D
+\ No newline at end of file
+diff --git a/probe/caps/dir_only.bin b/probe/caps/dir_only.bin
+new file mode 100644
+index 0000000..17de967
+--- /dev/null
++++ b/probe/caps/dir_only.bin
+@@ -0,0 +1,4 @@
++]11;?\[6n[?25l[?2004h
+/tmp/walktest[K
++.hidden_dir/[K
++sub1/       [K
++sub2/       [K[80D
+\ No newline at end of file
+diff --git a/probe/caps/dot.bin b/probe/caps/dot.bin
+new file mode 100644
+index 0000000..a457c37
+--- /dev/null
++++ b/probe/caps/dot.bin
+@@ -0,0 +1,7 @@
++]11;?\[6n[?25l[?2004h
+/tmp/walktest[K
++.dotfile        link.txt[K
++.hidden_dir/    pipe1   [K
++README.md       run.sh  [K
++file1.txt       sub1/   [K
++file2.md        sub2/   [K
++file3.bin               [K[80D
+\ No newline at end of file
+diff --git a/probe/caps/enter_dir.bin b/probe/caps/enter_dir.bin
+new file mode 100644
+index 0000000..a457c37
+--- /dev/null
++++ b/probe/caps/enter_dir.bin
+@@ -0,0 +1,7 @@
++]11;?\[6n[?25l[?2004h
+/tmp/walktest[K
++.dotfile        link.txt[K
++.hidden_dir/    pipe1   [K
++README.md       run.sh  [K
++file1.txt       sub1/   [K
++file2.md        sub2/   [K
++file3.bin               [K[80D
+\ No newline at end of file
+diff --git a/probe/caps/enter_file.bin b/probe/caps/enter_file.bin
+new file mode 100644
+index 0000000..a457c37
+--- /dev/null
++++ b/probe/caps/enter_file.bin
+@@ -0,0 +1,7 @@
++]11;?\[6n[?25l[?2004h
+/tmp/walktest[K
++.dotfile        link.txt[K
++.hidden_dir/    pipe1   [K
++README.md       run.sh  [K
++file1.txt       sub1/   [K
++file2.md        sub2/   [K
++file3.bin               [K[80D
+\ No newline at end of file
+diff --git a/probe/caps/esc.bin b/probe/caps/esc.bin
+new file mode 100644
+index 0000000..a457c37
+--- /dev/null
++++ b/probe/caps/esc.bin
+@@ -0,0 +1,7 @@
++]11;?\[6n[?25l[?2004h
+/tmp/walktest[K
++.dotfile        link.txt[K
++.hidden_dir/    pipe1   [K
++README.md       run.sh  [K
++file1.txt       sub1/   [K
++file2.md        sub2/   [K
++file3.bin               [K[80D
+\ No newline at end of file
+diff --git a/probe/caps/fuzzy.bin b/probe/caps/fuzzy.bin
+new file mode 100644
+index 0000000..a457c37
+--- /dev/null
++++ b/probe/caps/fuzzy.bin
+@@ -0,0 +1,7 @@
++]11;?\[6n[?25l[?2004h
+/tmp/walktest[K
++.dotfile        link.txt[K
++.hidden_dir/    pipe1   [K
++README.md       run.sh  [K
++file1.txt       sub1/   [K
++file2.md        sub2/   [K
++file3.bin               [K[80D
+\ No newline at end of file
+diff --git a/probe/caps/fuzzy_enter.bin b/probe/caps/fuzzy_enter.bin
+new file mode 100644
+index 0000000..a457c37
+--- /dev/null
++++ b/probe/caps/fuzzy_enter.bin
+@@ -0,0 +1,7 @@
++]11;?\[6n[?25l[?2004h
+/tmp/walktest[K
++.dotfile        link.txt[K
++.hidden_dir/    pipe1   [K
++README.md       run.sh  [K
++file1.txt       sub1/   [K
++file2.md        sub2/   [K
++file3.bin               [K[80D
+\ No newline at end of file
+diff --git a/probe/caps/fuzzy_start.bin b/probe/caps/fuzzy_start.bin
+new file mode 100644
+index 0000000..a457c37
+--- /dev/null
++++ b/probe/caps/fuzzy_start.bin
+@@ -0,0 +1,7 @@
++]11;?\[6n[?25l[?2004h
+/tmp/walktest[K
++.dotfile        link.txt[K
++.hidden_dir/    pipe1   [K
++README.md       run.sh  [K
++file1.txt       sub1/   [K
++file2.md        sub2/   [K
++file3.bin               [K[80D
+\ No newline at end of file
+diff --git a/probe/caps/help.bin b/probe/caps/help.bin
+new file mode 100644
+index 0000000..a457c37
+--- /dev/null
++++ b/probe/caps/help.bin
+@@ -0,0 +1,7 @@
++]11;?\[6n[?25l[?2004h
+/tmp/walktest[K
++.dotfile        link.txt[K
++.hidden_dir/    pipe1   [K
++README.md       run.sh  [K
++file1.txt       sub1/   [K
++file2.md        sub2/   [K
++file3.bin               [K[80D
+\ No newline at end of file
+diff --git a/probe/caps/hide_hidden.bin b/probe/caps/hide_hidden.bin
+new file mode 100644
+index 0000000..17abebc
+--- /dev/null
++++ b/probe/caps/hide_hidden.bin
+@@ -0,0 +1,10 @@
++]11;?\[6n[?25l[?2004h
+/tmp/walktest[K
++README.md[K
++file1.txt[K
++file2.md [K
++file3.bin[K
++link.txt [K
++pipe1    [K
++run.sh   [K
++sub1/    [K
++sub2/    [K[80D
+\ No newline at end of file
+diff --git a/probe/caps/icons.bin b/probe/caps/icons.bin
+new file mode 100644
+index 0000000..eec9a9b
+--- /dev/null
++++ b/probe/caps/icons.bin
+@@ -0,0 +1,7 @@
++]11;?\[6n[?25l[?2004h
+/tmp/walktest[K
++ .dotfile         link.txt[K
++ .hidden_dir/    p pipe1   [K
++ README.md        run.sh  [K
++ file1.txt        sub1/   [K
++ file2.md         sub2/   [K
++ file3.bin                 [K[80D
+\ No newline at end of file
+diff --git a/probe/caps/main_color.bin b/probe/caps/main_color.bin
+new file mode 100644
+index 0000000..a457c37
+--- /dev/null
++++ b/probe/caps/main_color.bin
+@@ -0,0 +1,7 @@
++]11;?\[6n[?25l[?2004h
+/tmp/walktest[K
++.dotfile        link.txt[K
++.hidden_dir/    pipe1   [K
++README.md       run.sh  [K
++file1.txt       sub1/   [K
++file2.md        sub2/   [K
++file3.bin               [K[80D
+\ No newline at end of file
+diff --git a/probe/caps/nav.bin b/probe/caps/nav.bin
+new file mode 100644
+index 0000000..a457c37
+--- /dev/null
++++ b/probe/caps/nav.bin
+@@ -0,0 +1,7 @@
++]11;?\[6n[?25l[?2004h
+/tmp/walktest[K
++.dotfile        link.txt[K
++.hidden_dir/    pipe1   [K
++README.md       run.sh  [K
++file1.txt       sub1/   [K
++file2.md        sub2/   [K
++file3.bin               [K[80D
+\ No newline at end of file
+diff --git a/probe/caps/preview_border.bin b/probe/caps/preview_border.bin
+new file mode 100644
+index 0000000..19e489a
+--- /dev/null
++++ b/probe/caps/preview_border.bin
+@@ -0,0 +1,7 @@
++]11;?\[6n[?25l[?1049h[2J[H[?25l[?2004h[H
+/tmp/walktest            │ .dotfile[K
++.dotfile        link.txt │ hidden  [K
++.hidden_dir/    pipe1    │         [K
++README.md       run.sh             [K
++file1.txt       sub1/              [K
++file2.md        sub2/              [K
++file3.bin                          [K[7;H
+\ No newline at end of file
+diff --git a/probe/caps/preview_on.bin b/probe/caps/preview_on.bin
+new file mode 100644
+index 0000000..a44a470
+--- /dev/null
++++ b/probe/caps/preview_on.bin
+@@ -0,0 +1,7 @@
++]11;?\[6n[?25l[?1049h[2J[H[?25l[?2004h[H
+/tmp/walktest             .dotfile[K
++.dotfile        link.txt  hidden  [K
++.hidden_dir/    pipe1             [K
++README.md       run.sh            [K
++file1.txt       sub1/             [K
++file2.md        sub2/             [K
++file3.bin                         [K[7;H
+\ No newline at end of file
+diff --git a/probe/caps/space_preview.bin b/probe/caps/space_preview.bin
+new file mode 100644
+index 0000000..a457c37
+--- /dev/null
++++ b/probe/caps/space_preview.bin
+@@ -0,0 +1,7 @@
++]11;?\[6n[?25l[?2004h
+/tmp/walktest[K
++.dotfile        link.txt[K
++.hidden_dir/    pipe1   [K
++README.md       run.sh  [K
++file1.txt       sub1/   [K
++file2.md        sub2/   [K
++file3.bin               [K[80D
+\ No newline at end of file
+diff --git a/probe/caps/statusbar.bin b/probe/caps/statusbar.bin
+new file mode 100644
+index 0000000..60b9b29
+--- /dev/null
++++ b/probe/caps/statusbar.bin
+@@ -0,0 +1,8 @@
++]11;?\[6n[?25l[?2004h
+/tmp/walktest[K
++.dotfile        link.txt[K
++.hidden_dir/    pipe1   [K
++README.md       run.sh  [K
++file1.txt       sub1/   [K
++file2.md        sub2/   [K
++file3.bin               [K
++-rw-r--r--      7B Aug 19 04:09[K[80D
+\ No newline at end of file
+diff --git a/probe/caps/undo.bin b/probe/caps/undo.bin
+new file mode 100644
+index 0000000..a457c37
+--- /dev/null
++++ b/probe/caps/undo.bin
+@@ -0,0 +1,7 @@
++]11;?\[6n[?25l[?2004h
+/tmp/walktest[K
++.dotfile        link.txt[K
++.hidden_dir/    pipe1   [K
++README.md       run.sh  [K
++file1.txt       sub1/   [K
++file2.md        sub2/   [K
++file3.bin               [K[80D
+\ No newline at end of file
+diff --git a/probe/caps/wsize_100x30.bin b/probe/caps/wsize_100x30.bin
+new file mode 100644
+index 0000000..079f3e5
+--- /dev/null
++++ b/probe/caps/wsize_100x30.bin
+@@ -0,0 +1,7 @@
++]11;?\[6n[?25l[?2004h
+/tmp/walktest[K
++.dotfile        link.txt[K
++.hidden_dir/    pipe1   [K
++README.md       run.sh  [K
++file1.txt       sub1/   [K
++file2.md        sub2/   [K
++file3.bin               [K[100D
+\ No newline at end of file
+diff --git a/probe/caps/wsize_15x5.bin b/probe/caps/wsize_15x5.bin
+new file mode 100644
+index 0000000..0cd64fb
+--- /dev/null
++++ b/probe/caps/wsize_15x5.bin
+@@ -0,0 +1,5 @@
++]11;?\[6n[?25l[?2004h
+/tmp/walktest[K
++.dotfile    [K
++.hidden_dir/[K
++README.md   [K
++file1.txt   [K[15D
+\ No newline at end of file
+diff --git a/probe/caps/wsize_200x50.bin b/probe/caps/wsize_200x50.bin
+new file mode 100644
+index 0000000..2b0a888
+--- /dev/null
++++ b/probe/caps/wsize_200x50.bin
+@@ -0,0 +1,7 @@
++]11;?\[6n[?25l[?2004h
+/tmp/walktest[K
++.dotfile        link.txt[K
++.hidden_dir/    pipe1   [K
++README.md       run.sh  [K
++file1.txt       sub1/   [K
++file2.md        sub2/   [K
++file3.bin               [K[200D
+\ No newline at end of file
+diff --git a/probe/caps/wsize_40x10.bin b/probe/caps/wsize_40x10.bin
+new file mode 100644
+index 0000000..f7570a2
+--- /dev/null
++++ b/probe/caps/wsize_40x10.bin
+@@ -0,0 +1,5 @@
++]11;?\[6n[?25l[?2004h
+/tmp/walktest[K
++.dotfile        file2.md     run.sh[K
++.hidden_dir/    file3.bin    sub1/ [K
++README.md       link.txt     sub2/ [K
++file1.txt       pipe1              [K[40D
+\ No newline at end of file
+diff --git a/probe/caps/yank.bin b/probe/caps/yank.bin
+new file mode 100644
+index 0000000..a457c37
+--- /dev/null
++++ b/probe/caps/yank.bin
+@@ -0,0 +1,7 @@
++]11;?\[6n[?25l[?2004h
+/tmp/walktest[K
++.dotfile        link.txt[K
++.hidden_dir/    pipe1   [K
++README.md       run.sh  [K
++file1.txt       sub1/   [K
++file2.md        sub2/   [K
++file3.bin               [K[80D
+\ No newline at end of file
+diff --git a/probe/conv.py b/probe/conv.py
+new file mode 100644
+index 0000000..0a3140a
+--- /dev/null
++++ b/probe/conv.py
+@@ -0,0 +1,65 @@
++#!/usr/bin/env python3
++"""Conversational pty capture.
++usage: conv.py <tag> <start_dir> <width> <height> [base64:delay;...]
++events sorted by delay; delays absolute (seconds from start).
++"""
++import pty, os, time, select, struct, fcntl, termios, sys, base64
++def log(m): print(f'[{time.time()-t0:6.2f}] {m}', flush=True)
++t0 = time.time()
++tag = sys.argv[1]
++startdir = sys.argv[2]
++W, H = int(sys.argv[3]), int(sys.argv[4])
++events = []
++if len(sys.argv) > 5:
++    for ev in sys.argv[5].split(';'):
++        if not ev: continue
++        b, d = ev.split(':')
++        events.append((float(d), base64.b64decode(b)))
++events.sort()
++pid, fd = pty.fork()
++if pid == 0:
++    os.execv('/workspace/executable', ['/workspace/executable', startdir])
++fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', H, W, 0, 0))
++os.set_blocking(fd, False)
++out = b''
++def drain():
++    global out
++    while True:
++        try: d = os.read(fd, 65536)
++        except BlockingIOError: break
++        except OSError: return False
++        if not d: return False
++        out += d
++    return True
++answered = False
++next_ev = 0
++exit_wait = 0
++while True:
++    r,_,_ = select.select([fd],[],[],0.02)
++    if fd in r and not drain():
++        log('pty closed'); break
++    if not answered and b'\x1b[6n' in out and b'\x1b]11;?' in out and time.time()-t0 > 0.2:
++        answered = True
++        os.write(fd, b'\x1b[1;1R')
++        os.write(fd, b'\x1b]11;rgb:1e1e/1e1e/1e1e\x1b\\')
++        log(f'answered @ {time.time()-t0:.2f}')
++    while next_ev < len(events) and time.time()-t0 >= events[next_ev][0]:
++        d, b = events[next_ev]
++        os.write(fd, b)
++        log(f'sent {b!r} @ {time.time()-t0:.2f}')
++        next_ev += 1
++    p, st = os.waitpid(pid, os.WNOHANG)
++    if p != 0:
++        log(f'child exited @ {time.time()-t0:.2f} status={st}')
++        exit_wait = 1.0
++        break
++    if time.time() - t0 > 20:
++        log('timeout; kill'); os.kill(pid, 9); break
++time.sleep(0.2); drain()
++p, st = os.waitpid(pid, os.WNOHANG)
++if p == 0:
++    try: p, st = os.waitpid(pid, 0)
++    except ChildProcessError: pass
++log(f'final pid={p} status={st}')
++open(f'conv_{tag}.bin','wb').write(out)
++log(f'saved conv_{tag}.bin ({len(out)}B)')
+diff --git a/probe/conv_w120.bin b/probe/conv_w120.bin
+new file mode 100644
+index 0000000..7ecf036
+--- /dev/null
++++ b/probe/conv_w120.bin
+@@ -0,0 +1,14 @@
++]11;?\[6n[?25l[?2004h
+/tmp/walktest[K
++.dotfile        file3.bin[K
++.hidden_dir/    link.txt [K
++README.md       pipe1    [K
++big/            run.sh   [K
++file1.txt       sub1/    [K
++file2.md        sub2/    [K[120D[6A
++
++
++
++
++
++
++[K[120D[2K
+[?2004l[?25h[?1002l[?1003l[?1006l/tmp/walktest
+diff --git a/probe/conv_w24.bin b/probe/conv_w24.bin
+new file mode 100644
+index 0000000..561ea4e
+--- /dev/null
++++ b/probe/conv_w24.bin
+@@ -0,0 +1,26 @@
++]11;?\[6n[?25l[?2004h
+/tmp/walktest[K
++.dotfile    [K
++.hidden_dir/[K
++README.md   [K
++big/        [K
++file1.txt   [K
++file2.md    [K
++file3.bin   [K
++link.txt    [K
++pipe1       [K
++run.sh      [K
++sub1/       [K
++sub2/       [K[24D[12A
++
++
++
++
++
++
++
++
++
++
++
++
++[K[24D[2K
+[?2004l[?25h[?1002l[?1003l[?1006l/tmp/walktest
+diff --git a/probe/conv_w28.bin b/probe/conv_w28.bin
+new file mode 100644
+index 0000000..5bfe446
+--- /dev/null
++++ b/probe/conv_w28.bin
+@@ -0,0 +1,14 @@
++]11;?\[6n[?25l[?2004h
+/tmp/walktest[K
++.dotfile        file3.bin[K
++.hidden_dir/    link.txt [K
++README.md       pipe1    [K
++big/            run.sh   [K
++file1.txt       sub1/    [K
++file2.md        sub2/    [K[28D[6A
++
++
++
++
++
++
++[K[28D[2K
+[?2004l[?25h[?1002l[?1003l[?1006l/tmp/walktest
+diff --git a/probe/conv_w32.bin b/probe/conv_w32.bin
+new file mode 100644
+index 0000000..8bc5cdf
+--- /dev/null
++++ b/probe/conv_w32.bin
+@@ -0,0 +1,14 @@
++]11;?\[6n[?25l[?2004h
+/tmp/walktest[K
++.dotfile        file3.bin[K
++.hidden_dir/    link.txt [K
++README.md       pipe1    [K
++big/            run.sh   [K
++file1.txt       sub1/    [K
++file2.md        sub2/    [K[32D[6A
++
++
++
++
++
++
++[K[32D[2K
+[?2004l[?25h[?1002l[?1003l[?1006l/tmp/walktest
+diff --git a/probe/conv_w36.bin b/probe/conv_w36.bin
+new file mode 100644
+index 0000000..9d154c5
+--- /dev/null
++++ b/probe/conv_w36.bin
+@@ -0,0 +1,14 @@
++]11;?\[6n[?25l[?2004h
+/tmp/walktest[K
++.dotfile        file3.bin[K
++.hidden_dir/    link.txt [K
++README.md       pipe1    [K
++big/            run.sh   [K
++file1.txt       sub1/    [K
++file2.md        sub2/    [K[36D[6A
++
++
++
++
++
++
++[K[36D[2K
+[?2004l[?25h[?1002l[?1003l[?1006l/tmp/walktest
+diff --git a/probe/conv_w44.bin b/probe/conv_w44.bin
+new file mode 100644
+index 0000000..3953fe8
+--- /dev/null
++++ b/probe/conv_w44.bin
+@@ -0,0 +1,14 @@
++]11;?\[6n[?25l[?2004h
+/tmp/walktest[K
++.dotfile        file3.bin[K
++.hidden_dir/    link.txt [K
++README.md       pipe1    [K
++big/            run.sh   [K
++file1.txt       sub1/    [K
++file2.md        sub2/    [K[44D[6A
++
++
++
++
++
++
++[K[44D[2K
+[?2004l[?25h[?1002l[?1003l[?1006l/tmp/walktest
+diff --git a/probe/conv_w48.bin b/probe/conv_w48.bin
+new file mode 100644
+index 0000000..af984f4
+--- /dev/null
++++ b/probe/conv_w48.bin
+@@ -0,0 +1,14 @@
++]11;?\[6n[?25l[?2004h
+/tmp/walktest[K
++.dotfile        file3.bin[K
++.hidden_dir/    link.txt [K
++README.md       pipe1    [K
++big/            run.sh   [K
++file1.txt       sub1/    [K
++file2.md        sub2/    [K[48D[6A
++
++
++
++
++
++
++[K[48D[2K
+[?2004l[?25h[?1002l[?1003l[?1006l/tmp/walktest
+diff --git a/probe/conv_w56.bin b/probe/conv_w56.bin
+new file mode 100644
+index 0000000..be803eb
+--- /dev/null
++++ b/probe/conv_w56.bin
+@@ -0,0 +1,14 @@
++]11;?\[6n[?25l[?2004h
+/tmp/walktest[K
++.dotfile        file3.bin[K
++.hidden_dir/    link.txt [K
++README.md       pipe1    [K
++big/            run.sh   [K
++file1.txt       sub1/    [K
++file2.md        sub2/    [K[56D[6A
++
++
++
++
++
++
++[K[56D[2K
+[?2004l[?25h[?1002l[?1003l[?1006l/tmp/walktest
+diff --git a/probe/conv_w64.bin b/probe/conv_w64.bin
+new file mode 100644
+index 0000000..eb96f0b
+--- /dev/null
++++ b/probe/conv_w64.bin
+@@ -0,0 +1,14 @@
++]11;?\[6n[?25l[?2004h
+/tmp/walktest[K
++.dotfile        file3.bin[K
++.hidden_dir/    link.txt [K
++README.md       pipe1    [K
++big/            run.sh   [K
++file1.txt       sub1/    [K
++file2.md        sub2/    [K[64D[6A
++
++
++
++
++
++
++[K[64D[2K
+[?2004l[?25h[?1002l[?1003l[?1006l/tmp/walktest
+diff --git a/probe/conv_w72.bin b/probe/conv_w72.bin
+new file mode 100644
+index 0000000..6f8e500
+--- /dev/null
++++ b/probe/conv_w72.bin
+@@ -0,0 +1,14 @@
++]11;?\[6n[?25l[?2004h
+/tmp/walktest[K
++.dotfile        file3.bin[K
++.hidden_dir/    link.txt [K
++README.md       pipe1    [K
++big/            run.sh   [K
++file1.txt       sub1/    [K
++file2.md        sub2/    [K[72D[6A
++
++
++
++
++
++
++[K[72D[2K
+[?2004l[?25h[?1002l[?1003l[?1006l/tmp/walktest
+diff --git a/probe/conv_w96.bin b/probe/conv_w96.bin
+new file mode 100644
+index 0000000..aadbb76
+--- /dev/null
++++ b/probe/conv_w96.bin
+@@ -0,0 +1,14 @@
++]11;?\[6n[?25l[?2004h
+/tmp/walktest[K
++.dotfile        file3.bin[K
++.hidden_dir/    link.txt [K
++README.md       pipe1    [K
++big/            run.sh   [K
++file1.txt       sub1/    [K
++file2.md        sub2/    [K[96D[6A
++
++
++
++
++
++
++[K[96D[2K
+[?2004l[?25h[?1002l[?1003l[?1006l/tmp/walktest
+diff --git a/probe/harness.py b/probe/harness.py
+new file mode 100644
+index 0000000..af1a79d
+--- /dev/null
++++ b/probe/harness.py
+@@ -0,0 +1,77 @@
++import os, pty, sys, time, select, struct, fcntl, termios, subprocess
++
++def run(cmd, rows=24, cols=80, pre_input=b"", hold=0.5, steps=None, cwd=None, env=None, name="out"):
++    """Run cmd in a pty. steps: list of (delay, bytes_to_send)."""
++    pid, fd = pty.fork()
++    if pid == 0:
++        if cwd: os.chdir(cwd)
++        e = dict(os.environ)
++        if env:
++            for k, v in env.items():
++                if v is None: del e[k]
++                else: e[k] = v
++        os.execvpe(cmd[0], cmd, e)
++    # set window size
++    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
++    out = b""
++    t0 = time.time()
++    if pre_input:
++        os.write(fd, pre_input)
++    if steps is None:
++        steps = []
++    next_send = [(hold, None)] + steps
++    idx = 0
++    while True:
++        r, _, _ = select.select([fd], [], [], 0.05)
++        if fd in r:
++            try:
++                data = os.read(fd, 65536)
++            except OSError:
++                break
++            if not data:
++                break
++            out += data
++        # check if child exited
++        p, st = os.waitpid(pid, os.WNOHANG)
++        done = False
++        if p != 0:
++            # drain
++            while True:
++                r, _, _ = select.select([fd], [], [], 0.05)
++                if fd in r:
++                    try:
++                        data = os.read(fd, 65536)
++                    except OSError:
++                        break
++                    if not data: break
++                    out += data
++                else:
++                    break
++            done = True
++        elapsed = time.time() - t0
++        if idx < len(next_send) and elapsed >= next_send[idx][0]:
++            b = next_send[idx][1]
++            if b is not None:
++                os.write(fd, b)
++            idx += 1
++        if done and idx >= len(next_send):
++            break
++        if elapsed > 15:
++            try: os.kill(pid, 9)
++            except: pass
++            break
++    try:
++        os.close(fd)
++    except: pass
++    try:
++        os.waitpid(pid, 0)
++    except: pass
++    return out
++
++if __name__ == "__main__":
++    import json
++    cfg = json.loads(sys.argv[1])
++    out = run(**cfg)
++    with open(cfg["name"], "wb") as f:
++        f.write(out)
++    print(f"Captured {len(out)} bytes -> {cfg['name']}")
+diff --git a/probe/mktestdir.sh b/probe/mktestdir.sh
+new file mode 100644
+index 0000000..f555296
+--- /dev/null
++++ b/probe/mktestdir.sh
+@@ -0,0 +1,15 @@
++#!/bin/bash
++# Create a deterministic test directory
++rm -rf /tmp/walktest && mkdir -p /tmp/walktest
++cd /tmp/walktest
++mkdir -p sub1 sub2 .hidden_dir
++echo "hello" > file1.txt
++echo "world" > file2.md
++echo "binary data here" > file3.bin
++echo "readme content" > README.md
++echo "script" > run.sh && chmod +x run.sh
++ln -s file1.txt link.txt
++mkfifo pipe1 2>/dev/null
++echo "hidden" > .dotfile
++touch -d "2020-01-02 03:04:05" file1.txt
++touch -d "2021-06-07 08:09:10" sub1
+diff --git a/probe/nav2.bin b/probe/nav2.bin
+new file mode 100644
+index 0000000..10e2ad4
+--- /dev/null
++++ b/probe/nav2.bin
+@@ -0,0 +1,23 @@
++]11;?\[6n[?25l[?2004h
+/tmp/walktest[K
++.dotfile        link.txt[K
++.hidden_dir/    pipe1   [K
++README.md       run.sh  [K
++file1.txt       sub1/   [K
++file2.md        sub2/   [K
++file3.bin               [K[80D[6A/tmp/walktest/.hidden_dir[K
++╭──────────╮[K
++│ No files │[K
++╰──────────╯[K[J[80D[3A/tmp/walktest[K
++.dotfile        link.txt[K
++.hidden_dir/    pipe1   [K
++README.md       run.sh  [K
++file1.txt       sub1/   [K
++file2.md        sub2/   [K
++file3.bin               [K[80D[6A
++
++
++
++
++
++
++[K[80D[2K
+[?2004l[?25h[?1002l[?1003l[?1006l/tmp/walktest
+diff --git a/probe/qtest.py b/probe/qtest.py
+new file mode 100644
+index 0000000..dc6bbc6
+--- /dev/null
++++ b/probe/qtest.py
+@@ -0,0 +1,43 @@
++import pty, os, time, select, struct, fcntl, termios, sys
++def log(m): print(m, flush=True)
++t0 = time.time()
++pid, fd = pty.fork()
++if pid == 0:
++    os.execv('/workspace/executable', ['/workspace/executable', '/tmp/walktest'])
++fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', 24, 80, 0, 0))
++os.set_blocking(fd, False)
++out = b''
++sent = False
++while True:
++    r,_,_ = select.select([fd],[],[],0.05)
++    if fd in r:
++        try: d = os.read(fd, 65536)
++        except BlockingIOError: d = b''
++        except OSError: break
++        if d: out += d
++    p, st = os.waitpid(pid, os.WNOHANG)
++    if p != 0:
++        log(f'CHILD EXITED at {time.time()-t0:.2f}s')
++        break
++    e = time.time()-t0
++    if e > 2.0 and not sent:
++        os.write(fd, b'q')
++        sent = True
++        log(f'sent q at {e:.2f}s')
++deadline = time.time() + 10
++while time.time() < deadline:
++    r,_,_ = select.select([fd],[],[],0.05)
++    if fd in r:
++        try: d = os.read(fd, 65536)
++        except BlockingIOError: d = b''
++        except OSError: break
++        if d: out += d
++    p, st = os.waitpid(pid, os.WNOHANG)
++    if p != 0:
++        log(f'EXITED after q at {time.time()-t0:.2f}s')
++        break
++else:
++    log('STILL RUNNING after 10s, killing')
++    os.kill(pid, 9)
++open('test_q.bin','wb').write(out)
++log(f'bytes: {len(out)}')
+diff --git a/probe/qtest2.py b/probe/qtest2.py
+new file mode 100644
+index 0000000..33733a1
+--- /dev/null
++++ b/probe/qtest2.py
+@@ -0,0 +1,64 @@
++import pty, os, time, select, struct, fcntl, termios
++def log(m):
++    print(f'[{time.time()-t0:6.2f}] {m}', flush=True)
++t0 = time.time()
++pid, fd = pty.fork()
++log(f'forked child pid={pid} fd={fd}')
++if pid == 0:
++    os.execv('/workspace/executable', ['/workspace/executable', '/tmp/walktest'])
++fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', 24, 80, 0, 0))
++os.set_blocking(fd, False)
++out = b''
++sent = False
++hb = 0
++while True:
++    try:
++        r,_,_ = select.select([fd],[],[],0.05)
++    except OSError as ex:
++        log(f'select err {ex}'); break
++    if fd in r:
++        try: d = os.read(fd, 65536)
++        except BlockingIOError: d = b''
++        except OSError as ex:
++            log(f'read err {ex}'); break
++        if d:
++            out += d
++            log(f'read {len(d)} bytes (total {len(out)})')
++    p, st = os.waitpid(pid, os.WNOHANG)
++    if p != 0:
++        log(f'child exited status={st}')
++        break
++    if time.time() - hb > 2.0:
++        hb = time.time()
++        log(f'heartbeat; child alive; out={len(out)}')
++    if time.time() - t0 > 3.0 and not sent:
++        os.write(fd, b'q')
++        sent = True
++        log('sent q')
++        break
++log('--- second phase ---')
++deadline = time.time() + 8
++hb = 0
++while time.time() < deadline:
++    try:
++        r,_,_ = select.select([fd],[],[],0.05)
++    except OSError as ex:
++        log(f'select err {ex}'); break
++    if fd in r:
++        try: d = os.read(fd, 65536)
++        except BlockingIOError: d = b''
++        except OSError as ex:
++            log(f'read err {ex}'); break
++        if d: out += d
++    p, st = os.waitpid(pid, os.WNOHANG)
++    if p != 0:
++        log(f'child exited after q, status={st}')
++        break
++    if time.time() - hb > 2.0:
++        hb = time.time()
++        log(f'heartbeat2; out={len(out)}')
++else:
++    log('still running at deadline, SIGKILL')
++    os.kill(pid, 9)
++open('test_q.bin','wb').write(out)
++log(f'saved {len(out)} bytes')
+diff --git a/probe/qtest3.py b/probe/qtest3.py
+new file mode 100644
+index 0000000..bf8f3e4
+--- /dev/null
++++ b/probe/qtest3.py
+@@ -0,0 +1,60 @@
++import pty, os, time, select, struct, fcntl, termios
++def log(m): print(f'[{time.time()-t0:6.2f}] {m}', flush=True)
++t0 = time.time()
++pid, fd = pty.fork()
++if pid == 0:
++    os.execv('/workspace/executable', ['/workspace/executable', '/tmp/walktest'])
++fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', 24, 80, 0, 0))
++os.set_blocking(fd, False)
++out = b''
++state = {}
++def drain():
++    global out
++    while True:
++        try: d = os.read(fd, 65536)
++        except BlockingIOError: break
++        except OSError: return False
++        if not d: return False
++        out += d
++    return True
++# phase 1: watch for queries, answer them
++t_last = 0
++while time.time() - t0 < 5:
++    r,_,_ = select.select([fd],[],[],0.02)
++    if fd in r:
++        if not drain(): log('closed early'); break
++        # check for queries in fresh output
++    if b'\x1b[6n' in out and 'dsr' not in state:
++        state['dsr'] = time.time()-t0
++        os.write(fd, b'\x1b[1;1R')
++        log(f'DSR query seen at {state["dsr"]:.2f}, answered')
++    if b'\x1b]11;?' in out and 'osc' not in state:
++        state['osc'] = time.time()-t0
++        os.write(fd, b'\x1b]11;rgb:1e1e/1e1e/1e1e\x1b\\')
++        log(f'OSC11 query seen at {state["osc"]:.2f}, answered')
++    e = time.time()-t0
++    if e - t_last > 1.0:
++        t_last = e
++        log(f'wait; out={len(out)} answered={list(state)}')
++    if len(out) > 47 and 'sent' in state:
++        break
++    if 'sent' not in state and e > 1.0 and 'osc' in state and 'dsr' in state:
++        os.write(fd, b'j'); state['sent'] = e
++        log('sent j after both queries answered')
++# phase 2: collect for a bit then send q
++time.sleep(0.5)
++drain(); log(f'after j: out={len(out)}')
++os.write(fd, b'q')
++log('sent q')
++t_end = time.time() + 6
++while time.time() < t_end:
++    r,_,_ = select.select([fd],[],[],0.02)
++    if fd in r and not drain(): break
++    p, st = os.waitpid(pid, os.WNOHANG)
++    if p != 0:
++        log(f'child exited at {time.time()-t0:.2f}, status={st}')
++        break
++else:
++    log('still running; killing'); os.kill(pid, 9)
++open('test_j.bin','wb').write(out)
++log(f'saved {len(out)} bytes')
+diff --git a/probe/screen.py b/probe/screen.py
+new file mode 100644
+index 0000000..f9b8acb
+--- /dev/null
++++ b/probe/screen.py
+@@ -0,0 +1,76 @@
++import re
++
++class Screen:
++    def __init__(self, rows=24, cols=80):
++        self.rows, self.cols = rows, cols
++        self.cells = [[' ']*cols for _ in range(rows)]
++        self.x = 0
++        self.y = 0
++    def put(self, ch):
++        if 0 <= self.y < self.rows and 0 <= self.x < self.cols:
++            self.cells[self.y][self.x] = ch
++        self.x += 1
++    def feed(self, data):
++        i = 0
++        while i < len(data):
++            c = data[i]
++            if c == 0x1b and i+1 < len(data) and data[i+1:i+2] == b'[':
++                m = re.match(rb'\[([0-9;?]*)([A-Za-z@])', data[i+1:])
++                if not m:
++                    # OSC? skip
++                    i += 1
++                    continue
++                args, fin = m.group(1).decode(), m.group(2).decode()
++                i += 1 + m.end()
++                self.esc(args, fin)
++            elif c == 0x1b:
++                i += 1  # other escapes (like \x1b\\)
++            elif c == 0x0d:
++                self.x = 0; i += 1
++            elif c == 0x0a:
++                self.y += 1; i += 1
++            elif c == 0x07:
++                i += 1
++            elif c == 0x08:
++                self.x = max(0, self.x-1); i += 1
++            elif 32 <= c < 127:
++                self.put(chr(c)); i += 1
++            else:
++                i += 1
++    def esc(self, args, fin):
++        if fin == 'K':
++            for x in range(self.x, self.cols):
++                self.cells[self.y][x] = ' '
++        elif fin == 'J':
++            pass
++        elif fin == 'D':
++            n = int(args) if args else 1
++            self.x = max(0, self.x - n)
++        elif fin == 'C':
++            n = int(args) if args else 1
++            self.x = min(self.cols-1, self.x + n)
++        elif fin == 'A':
++            n = int(args) if args else 1
++            self.y = max(0, self.y - n)
++        elif fin == 'B':
++            n = int(args) if args else 1
++            self.y = min(self.rows-1, self.y + n)
++        elif fin == 'H' or fin == 'f':
++            pass
++        elif fin == 'm':
++            pass
++    def render(self):
++        out = []
++        for r in self.cells:
++            out.append(''.join(r).rstrip())
++        return '\n'.join(out)
++    def cursor(self):
++        return (self.x, self.y)
++
++def show(data, rows=24, cols=80, label=''):
++    s = Screen(rows, cols)
++    s.feed(data)
++    print(f"=== {label} cursor={s.cursor()} ===")
++    for i, line in enumerate(s.render().split('\n')):
++        print(f"{i:2d}|{line}|")
++    print()

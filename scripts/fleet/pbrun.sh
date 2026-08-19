@@ -30,6 +30,8 @@ d=runs/pb-$arm-$rep
 if [ -d "\$d/$inst" ]; then
   (cd \$HOME/ProgramBench && uv run programbench eval \$HOME/CooperAgents/\$d) >> "\$d/eval.log" 2>&1
 fi
+mkdir -p "\$d/heartbeats" 2>/dev/null
+find /tmp/cooper_hb -name "*.hb" -newer /tmp/pbjob_${arm}_${rep}.sh -exec cp {} "\$d/heartbeats/" \\; 2>/dev/null
 echo "rc=\$rc inst=$inst \$(date -u +%FT%TZ)" > runs/pb-$arm-$rep.DONE
 EOF
 # timeout guard: the launch takes effect immediately, but ssh can linger on the

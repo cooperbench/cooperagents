@@ -1,0 +1,672 @@
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..7629fab
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,14 @@
++#!/bin/bash
++set -e
++
++# Create go.mod if it doesn't exist
++if [ ! -f go.mod ]; then
++    cat > go.mod << 'GOMOD'
++module walk
++
++go 1.21
++GOMOD
++fi
++
++# Build the executable
++go build -o executable main.go
+diff --git a/go.mod b/go.mod
+new file mode 100644
+index 0000000..1f996cc
+--- /dev/null
++++ b/go.mod
+@@ -0,0 +1,3 @@
++module walk
++
++go 1.21
+diff --git a/main.go b/main.go
+new file mode 100644
+index 0000000..e1119dd
+--- /dev/null
++++ b/main.go
+@@ -0,0 +1,298 @@
++package main
++
++import (
++	"fmt"
++	"os"
++	"path/filepath"
++	"sort"
++	"strings"
++	"syscall"
++)
++
++const Version = "v1.13.0"
++
++func main() {
++	if len(os.Args) > 1 {
++		if os.Args[1] == "--help" || os.Args[1] == "-h" {
++			printHelp()
++			os.Exit(0)
++		}
++		if os.Args[1] == "--version" || os.Args[1] == "-v" {
++			fmt.Println(Version)
++			os.Exit(0)
++		}
++	}
++
++	// Check for TTY
++	if !hasTTY() {
++		fmt.Fprintln(os.Stderr, "walk: not a terminal")
++		os.Exit(1)
++	}
++
++	// Parse flags
++	flags := parseFlags(os.Args[1:])
++	path := "."
++
++	// Start TUI
++	if err := runTUI(path, flags); err != nil {
++		fmt.Fprintf(os.Stderr, "walk: %v\n", err)
++		os.Exit(1)
++	}
++}
++
++func hasTTY() bool {
++	f, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
++	if err != nil {
++		return false
++	}
++	f.Close()
++	return true
++}
++
++func parseFlags(args []string) map[string]bool {
++	flags := make(map[string]bool)
++	for _, arg := range args {
++		switch arg {
++		case "--icons":
++			flags["icons"] = true
++		case "--dir-only":
++			flags["dir-only"] = true
++		case "--hide-hidden":
++			flags["hide-hidden"] = true
++		case "--preview":
++			flags["preview"] = true
++		case "--with-border":
++			flags["with-border"] = true
++		case "--fuzzy":
++			flags["fuzzy"] = true
++		}
++	}
++	return flags
++}
++
++func printHelp() {
++	fmt.Println()
++	fmt.Printf("  walk %s\n\n", Version)
++	fmt.Println("  Usage: walk [path]\n")
++	fmt.Println("    arrows, hjkl  Move cursor")
++	fmt.Println("    enter         Enter directory")
++	fmt.Println("    backspace     Exit directory")
++	fmt.Println("    space         Toggle preview")
++	fmt.Println("    esc, q        Exit with cd")
++	fmt.Println("    ctrl+c        Exit without cd")
++	fmt.Println("    /             Fuzzy search")
++	fmt.Println("    d, delete     Delete file or dir")
++	fmt.Println("    y             Copy to clipboard")
++	fmt.Println("    .             Hide hidden files")
++	fmt.Println("    ?             Show help\n")
++	fmt.Println("  Flags:\n")
++	fmt.Println("    --icons        display icons")
++	fmt.Println("    --dir-only     show dirs only")
++	fmt.Println("    --hide-hidden  hide hidden files")
++	fmt.Println("    --preview      display preview")
++	fmt.Println("    --with-border  preview with border")
++	fmt.Println("    --fuzzy        fuzzy mode\n")
++}
++
++type TUI struct {
++	path       string
++	entries    []string
++	cursor     int
++	preview    bool
++	border     bool
++	fuzzy      bool
++	hideHidden bool
++	dirOnly    bool
++}
++
++func runTUI(path string, flags map[string]bool) error {
++	tui := &TUI{
++		path:       path,
++		preview:    flags["preview"],
++		border:     flags["with-border"],
++		fuzzy:      flags["fuzzy"],
++		hideHidden: flags["hide-hidden"],
++		dirOnly:    flags["dir-only"],
++	}
++
++	// Load initial entries
++	tui.entries = listDir(path, tui.hideHidden, tui.dirOnly)
++
++	// Main loop
++	for {
++		// Clear screen
++		clearScreen()
++
++		// Draw file list
++		tui.drawFileList()
++
++		// Draw preview if enabled
++		if tui.preview {
++			tui.drawPreview()
++		}
++
++		// Flush output
++		flushOutput()
++
++		// Handle input
++		event := tui.readInput()
++		if event == 0 {
++			break
++		}
++
++		// Process event
++		tui.handleInput(event)
++	}
++
++	return nil
++}
++
++func clearScreen() {
++	fmt.Print("\033[2J\033[H")
++}
++
++func flushOutput() {
++	// Flush stdout
++	os.Stdout.Sync()
++}
++
++func (t *TUI) readInput() rune {
++	// Read a single character
++	var buf [1]byte
++	n, err := syscall.Read(0, buf[:])
++	if err != nil {
++		return 0
++	}
++	if n > 0 {
++		return rune(buf[0])
++	}
++	return 0
++}
++
++func (t *TUI) handleInput(event rune) {
++	switch event {
++	case 'q', 'Q':
++		// Exit with cd
++	case 'c', 'C':
++		// Exit without cd
++	case ' ':
++		// Toggle preview
++		t.preview = !t.preview
++	case '/':
++		// Fuzzy search
++		t.fuzzy = !t.fuzzy
++	case 'd', 'D':
++		// Delete
++	case 'y', 'Y':
++		// Yank
++	case '.':
++		// Toggle hidden
++		t.hideHidden = !t.hideHidden
++	case '?':
++		// Help
++	case 'h', 'j', 'k', 'l':
++		// Move cursor
++		t.moveCursor(event)
++	case 'H', 'J', 'K', 'L':
++		// Jump to start/end
++		t.jump(event)
++	case '\n', '\r':
++		// Enter directory
++		t.enterDirectory()
++	case '\x7f', '\b':
++		// Backspace
++		t.backspace()
++	}
++}
++
++func (t *TUI) moveCursor(event rune) {
++	switch event {
++	case 'j', 'l':
++		if t.cursor < len(t.entries)-1 {
++			t.cursor++
++		}
++	case 'k', 'h':
++		if t.cursor > 0 {
++			t.cursor--
++		}
++	}
++}
++
++func (t *TUI) jump(event rune) {
++	switch event {
++	case 'J':
++		t.cursor = len(t.entries) - 1
++	case 'K':
++		t.cursor = 0
++	case 'H':
++		t.cursor = 0
++	case 'L':
++		t.cursor = len(t.entries) - 1
++	}
++}
++
++func (t *TUI) enterDirectory() {
++	if t.cursor < 0 || t.cursor >= len(t.entries) {
++		return
++	}
++
++	entry := t.entries[t.cursor]
++	newPath := filepath.Join(t.path, entry)
++
++	// Check if it's a directory
++	info, err := os.Stat(newPath)
++	if err == nil && info.IsDir() {
++		t.path = newPath
++		t.entries = listDir(t.path, t.hideHidden, t.dirOnly)
++		t.cursor = 0
++	}
++}
++
++func (t *TUI) backspace() {
++	if t.cursor > 0 {
++		t.cursor--
++	}
++}
++
++func listDir(path string, hideHidden, dirOnly bool) []string {
++	entries, err := os.ReadDir(path)
++	if err != nil {
++		return nil
++	}
++
++	var result []string
++	for _, entry := range entries {
++		if hideHidden && strings.HasPrefix(entry.Name(), ".") {
++			continue
++		}
++		if dirOnly && !entry.IsDir() {
++			continue
++		}
++		result = append(result, entry.Name())
++	}
++	sort.Strings(result)
++	return result
++}
++
++func (t *TUI) drawFileList() {
++	// Draw file list
++	fmt.Printf("%s\n", t.path)
++	for i, entry := range t.entries {
++		if i == t.cursor {
++			fmt.Printf("  %s\n", entry)
++		} else {
++			fmt.Printf("    %s\n", entry)
++		}
++	}
++}
++
++func (t *TUI) drawPreview() {
++	// Draw preview
++	if t.cursor < 0 || t.cursor >= len(t.entries) {
++		fmt.Println("Preview")
++		return
++	}
++
++	entry := t.entries[t.cursor]
++	fmt.Printf("\n%s\n", entry)
++}
+diff --git a/patch.txt b/patch.txt
+new file mode 100644
+index 0000000..c44c8da
+--- /dev/null
++++ b/patch.txt
+@@ -0,0 +1,333 @@
++diff --git a/compile.sh b/compile.sh
++new file mode 100755
++index 0000000..7629fab
++--- /dev/null
+++++ b/compile.sh
++@@ -0,0 +1,14 @@
+++#!/bin/bash
+++set -e
+++
+++# Create go.mod if it doesn't exist
+++if [ ! -f go.mod ]; then
+++    cat > go.mod << 'GOMOD'
+++module walk
+++
+++go 1.21
+++GOMOD
+++fi
+++
+++# Build the executable
+++go build -o executable main.go
++diff --git a/go.mod b/go.mod
++new file mode 100644
++index 0000000..1f996cc
++--- /dev/null
+++++ b/go.mod
++@@ -0,0 +1,3 @@
+++module walk
+++
+++go 1.21
++diff --git a/main.go b/main.go
++new file mode 100644
++index 0000000..e1119dd
++--- /dev/null
+++++ b/main.go
++@@ -0,0 +1,298 @@
+++package main
+++
+++import (
+++	"fmt"
+++	"os"
+++	"path/filepath"
+++	"sort"
+++	"strings"
+++	"syscall"
+++)
+++
+++const Version = "v1.13.0"
+++
+++func main() {
+++	if len(os.Args) > 1 {
+++		if os.Args[1] == "--help" || os.Args[1] == "-h" {
+++			printHelp()
+++			os.Exit(0)
+++		}
+++		if os.Args[1] == "--version" || os.Args[1] == "-v" {
+++			fmt.Println(Version)
+++			os.Exit(0)
+++		}
+++	}
+++
+++	// Check for TTY
+++	if !hasTTY() {
+++		fmt.Fprintln(os.Stderr, "walk: not a terminal")
+++		os.Exit(1)
+++	}
+++
+++	// Parse flags
+++	flags := parseFlags(os.Args[1:])
+++	path := "."
+++
+++	// Start TUI
+++	if err := runTUI(path, flags); err != nil {
+++		fmt.Fprintf(os.Stderr, "walk: %v\n", err)
+++		os.Exit(1)
+++	}
+++}
+++
+++func hasTTY() bool {
+++	f, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+++	if err != nil {
+++		return false
+++	}
+++	f.Close()
+++	return true
+++}
+++
+++func parseFlags(args []string) map[string]bool {
+++	flags := make(map[string]bool)
+++	for _, arg := range args {
+++		switch arg {
+++		case "--icons":
+++			flags["icons"] = true
+++		case "--dir-only":
+++			flags["dir-only"] = true
+++		case "--hide-hidden":
+++			flags["hide-hidden"] = true
+++		case "--preview":
+++			flags["preview"] = true
+++		case "--with-border":
+++			flags["with-border"] = true
+++		case "--fuzzy":
+++			flags["fuzzy"] = true
+++		}
+++	}
+++	return flags
+++}
+++
+++func printHelp() {
+++	fmt.Println()
+++	fmt.Printf("  walk %s\n\n", Version)
+++	fmt.Println("  Usage: walk [path]\n")
+++	fmt.Println("    arrows, hjkl  Move cursor")
+++	fmt.Println("    enter         Enter directory")
+++	fmt.Println("    backspace     Exit directory")
+++	fmt.Println("    space         Toggle preview")
+++	fmt.Println("    esc, q        Exit with cd")
+++	fmt.Println("    ctrl+c        Exit without cd")
+++	fmt.Println("    /             Fuzzy search")
+++	fmt.Println("    d, delete     Delete file or dir")
+++	fmt.Println("    y             Copy to clipboard")
+++	fmt.Println("    .             Hide hidden files")
+++	fmt.Println("    ?             Show help\n")
+++	fmt.Println("  Flags:\n")
+++	fmt.Println("    --icons        display icons")
+++	fmt.Println("    --dir-only     show dirs only")
+++	fmt.Println("    --hide-hidden  hide hidden files")
+++	fmt.Println("    --preview      display preview")
+++	fmt.Println("    --with-border  preview with border")
+++	fmt.Println("    --fuzzy        fuzzy mode\n")
+++}
+++
+++type TUI struct {
+++	path       string
+++	entries    []string
+++	cursor     int
+++	preview    bool
+++	border     bool
+++	fuzzy      bool
+++	hideHidden bool
+++	dirOnly    bool
+++}
+++
+++func runTUI(path string, flags map[string]bool) error {
+++	tui := &TUI{
+++		path:       path,
+++		preview:    flags["preview"],
+++		border:     flags["with-border"],
+++		fuzzy:      flags["fuzzy"],
+++		hideHidden: flags["hide-hidden"],
+++		dirOnly:    flags["dir-only"],
+++	}
+++
+++	// Load initial entries
+++	tui.entries = listDir(path, tui.hideHidden, tui.dirOnly)
+++
+++	// Main loop
+++	for {
+++		// Clear screen
+++		clearScreen()
+++
+++		// Draw file list
+++		tui.drawFileList()
+++
+++		// Draw preview if enabled
+++		if tui.preview {
+++			tui.drawPreview()
+++		}
+++
+++		// Flush output
+++		flushOutput()
+++
+++		// Handle input
+++		event := tui.readInput()
+++		if event == 0 {
+++			break
+++		}
+++
+++		// Process event
+++		tui.handleInput(event)
+++	}
+++
+++	return nil
+++}
+++
+++func clearScreen() {
+++	fmt.Print("\033[2J\033[H")
+++}
+++
+++func flushOutput() {
+++	// Flush stdout
+++	os.Stdout.Sync()
+++}
+++
+++func (t *TUI) readInput() rune {
+++	// Read a single character
+++	var buf [1]byte
+++	n, err := syscall.Read(0, buf[:])
+++	if err != nil {
+++		return 0
+++	}
+++	if n > 0 {
+++		return rune(buf[0])
+++	}
+++	return 0
+++}
+++
+++func (t *TUI) handleInput(event rune) {
+++	switch event {
+++	case 'q', 'Q':
+++		// Exit with cd
+++	case 'c', 'C':
+++		// Exit without cd
+++	case ' ':
+++		// Toggle preview
+++		t.preview = !t.preview
+++	case '/':
+++		// Fuzzy search
+++		t.fuzzy = !t.fuzzy
+++	case 'd', 'D':
+++		// Delete
+++	case 'y', 'Y':
+++		// Yank
+++	case '.':
+++		// Toggle hidden
+++		t.hideHidden = !t.hideHidden
+++	case '?':
+++		// Help
+++	case 'h', 'j', 'k', 'l':
+++		// Move cursor
+++		t.moveCursor(event)
+++	case 'H', 'J', 'K', 'L':
+++		// Jump to start/end
+++		t.jump(event)
+++	case '\n', '\r':
+++		// Enter directory
+++		t.enterDirectory()
+++	case '\x7f', '\b':
+++		// Backspace
+++		t.backspace()
+++	}
+++}
+++
+++func (t *TUI) moveCursor(event rune) {
+++	switch event {
+++	case 'j', 'l':
+++		if t.cursor < len(t.entries)-1 {
+++			t.cursor++
+++		}
+++	case 'k', 'h':
+++		if t.cursor > 0 {
+++			t.cursor--
+++		}
+++	}
+++}
+++
+++func (t *TUI) jump(event rune) {
+++	switch event {
+++	case 'J':
+++		t.cursor = len(t.entries) - 1
+++	case 'K':
+++		t.cursor = 0
+++	case 'H':
+++		t.cursor = 0
+++	case 'L':
+++		t.cursor = len(t.entries) - 1
+++	}
+++}
+++
+++func (t *TUI) enterDirectory() {
+++	if t.cursor < 0 || t.cursor >= len(t.entries) {
+++		return
+++	}
+++
+++	entry := t.entries[t.cursor]
+++	newPath := filepath.Join(t.path, entry)
+++
+++	// Check if it's a directory
+++	info, err := os.Stat(newPath)
+++	if err == nil && info.IsDir() {
+++		t.path = newPath
+++		t.entries = listDir(t.path, t.hideHidden, t.dirOnly)
+++		t.cursor = 0
+++	}
+++}
+++
+++func (t *TUI) backspace() {
+++	if t.cursor > 0 {
+++		t.cursor--
+++	}
+++}
+++
+++func listDir(path string, hideHidden, dirOnly bool) []string {
+++	entries, err := os.ReadDir(path)
+++	if err != nil {
+++		return nil
+++	}
+++
+++	var result []string
+++	for _, entry := range entries {
+++		if hideHidden && strings.HasPrefix(entry.Name(), ".") {
+++			continue
+++		}
+++		if dirOnly && !entry.IsDir() {
+++			continue
+++		}
+++		result = append(result, entry.Name())
+++	}
+++	sort.Strings(result)
+++	return result
+++}
+++
+++func (t *TUI) drawFileList() {
+++	// Draw file list
+++	fmt.Printf("%s\n", t.path)
+++	for i, entry := range t.entries {
+++		if i == t.cursor {
+++			fmt.Printf("  %s\n", entry)
+++		} else {
+++			fmt.Printf("    %s\n", entry)
+++		}
+++	}
+++}
+++
+++func (t *TUI) drawPreview() {
+++	// Draw preview
+++	if t.cursor < 0 || t.cursor >= len(t.entries) {
+++		fmt.Println("Preview")
+++		return
+++	}
+++
+++	entry := t.entries[t.cursor]
+++	fmt.Printf("\n%s\n", entry)
+++}

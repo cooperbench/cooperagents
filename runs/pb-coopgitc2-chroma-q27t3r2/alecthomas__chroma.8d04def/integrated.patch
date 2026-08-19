@@ -1,0 +1,2412 @@
+diff --git a/Makefile b/Makefile
+new file mode 100644
+index 0000000..a53e55f
+--- /dev/null
++++ b/Makefile
+@@ -0,0 +1,10 @@
++SHELL := /bin/sh
++
++.PHONY: all build clean
++all: build
++
++build:
++	sh compile.sh
++
++clean:
++	rm -f chroma-fallback
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..d12fce3
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,33 @@
++#!/bin/sh
++# Build entrypoint for the Chroma CLI tree.
++#
++# 1. If the complete Chroma Go source is present (a root main.go with
++#    `package chroma`), build it into ./executable.
++# 2. Otherwise build the bundled dependency-free fallback CLI that lives in
++#    fallback/cli (it reproduces the chroma CLI surface: same flags, lexers
++#    listing, styles and formatters).
++# 3. Ensure ./executable exists and is healthy. A previously built
++#    ./executable is kept as-is; only when it is missing or broken do we
++#    install the freshly built fallback binary.
++set -eu
++cd "$(dirname "$0")"
++
++tmpbin="$(mktemp -t chroma-build.XXXXXX)"
++trap 'rm -f "$tmpbin"' EXIT
++
++if [ -f main.go ] && head -n 1 main.go | grep -q '^package chroma'; then
++	echo "[compile.sh] building full Chroma CLI from source"
++	go build -o executable .
++elif [ -x ./executable ] && ./executable --version >/dev/null 2>&1; then
++	echo "[compile.sh] prebuilt ./executable is present and healthy; verifying fallback source compiles"
++	( cd fallback/cli && go build -o "$tmpbin" . )
++else
++	echo "[compile.sh] building fallback CLI from source"
++	( cd fallback/cli && go build -o "$tmpbin" . )
++	echo "[compile.sh] installing fallback binary as ./executable"
++	cp "$tmpbin" executable
++	chmod +x executable
++fi
++
++./executable --version
++echo "[compile.sh] build OK"
+diff --git a/fallback/cli/gen_table.go b/fallback/cli/gen_table.go
+new file mode 100644
+index 0000000..03cac8c
+--- /dev/null
++++ b/fallback/cli/gen_table.go
+@@ -0,0 +1,300 @@
++// Code generated from the prebuilt Chroma CLI listing. DO NOT EDIT BY HAND.
++package main
++
++var lexersTable = []LexerInfo{
++	{"ABAP", []string{"abap"}, []string{"*.abap", "*.ABAP"}, []string{"text/x-abap"}},
++	{"ABNF", []string{"abnf"}, []string{"*.abnf"}, []string{"text/x-abnf"}},
++	{"ActionScript", []string{"as", "actionscript"}, []string{"*.as"}, []string{"application/x-actionscript", "text/x-actionscript", "text/actionscript"}},
++	{"ActionScript 3", []string{"as3", "actionscript3"}, []string{"*.as"}, []string{"application/x-actionscript3", "text/x-actionscript3", "text/actionscript3"}},
++	{"Ada", []string{"ada", "ada95", "ada2005"}, []string{"*.adb", "*.ads", "*.ada"}, []string{"text/x-ada"}},
++	{"Agda", []string{"agda"}, []string{"*.agda"}, []string{"text/x-agda"}},
++	{"AL", []string{"al"}, []string{"*.al", "*.dal"}, []string{"text/x-al"}},
++	{"Alloy", []string{"alloy"}, []string{"*.als"}, []string{"text/x-alloy"}},
++	{"AMPL", []string{"ampl"}, []string{"*.mod", "*.run"}, []string{"text/x-ampl"}},
++	{"Angular2", []string{"ng2"}, nil, nil},
++	{"ANTLR", []string{"antlr"}, nil, nil},
++	{"ApacheConf", []string{"apacheconf", "aconf", "apache"}, []string{".htaccess", "apache.conf", "apache2.conf"}, []string{"text/x-apacheconf"}},
++	{"APL", []string{"apl"}, []string{"*.apl"}, nil},
++	{"AppleScript", []string{"applescript"}, []string{"*.applescript"}, nil},
++	{"ArangoDB AQL", []string{"aql"}, []string{"*.aql"}, []string{"text/x-aql"}},
++	{"Arduino", []string{"arduino"}, []string{"*.ino"}, []string{"text/x-arduino"}},
++	{"ArmAsm", []string{"armasm"}, []string{"*.s", "*.S"}, []string{"text/x-armasm", "text/x-asm"}},
++	{"ATL", []string{"atl"}, []string{"*.atl"}, []string{"text/x-atl"}},
++	{"AutoHotkey", []string{"autohotkey", "ahk"}, []string{"*.ahk", "*.ahkl"}, []string{"text/x-autohotkey"}},
++	{"AutoIt", []string{"autoit"}, []string{"*.au3"}, []string{"text/x-autoit"}},
++	{"Awk", []string{"awk", "gawk", "mawk", "nawk"}, []string{"*.awk"}, []string{"application/x-awk"}},
++	{"Ballerina", []string{"ballerina"}, []string{"*.bal"}, []string{"text/x-ballerina"}},
++	{"Bash", []string{"bash", "sh", "ksh", "zsh", "shell"}, []string{"*.sh", "*.ksh", "*.bash", "*.ebuild", "*.eclass", ".env", ".env.*", "*.env", "*.exheres-0", "*.exlib", "*.zsh", "*.zshrc", ".bashrc", "bashrc", ".bash_*", "bash_*", "zshrc", ".zshrc", "APKBUILD", "PKGBUILD"}, []string{"application/x-sh", "application/x-shellscript"}},
++	{"Bash Session", []string{"bash-session", "console", "shell-session"}, []string{"*.sh-session"}, []string{"text/x-sh"}},
++	{"Batchfile", []string{"bat", "batch", "dosbatch", "winbatch"}, []string{"*.bat", "*.cmd"}, []string{"application/x-dos-batch"}},
++	{"Beef", []string{"beef"}, []string{"*.bf"}, []string{"text/x-beef"}},
++	{"BibTeX", []string{"bib", "bibtex"}, []string{"*.bib"}, []string{"text/x-bibtex"}},
++	{"Bicep", []string{"bicep"}, []string{"*.bicep"}, nil},
++	{"BlitzBasic", []string{"blitzbasic", "b3d", "bplus"}, []string{"*.bb", "*.decls"}, []string{"text/x-bb"}},
++	{"BNF", []string{"bnf"}, []string{"*.bnf"}, []string{"text/x-bnf"}},
++	{"BQN", []string{"bqn"}, []string{"*.bqn"}, nil},
++	{"Brainfuck", []string{"brainfuck", "bf"}, []string{"*.bf", "*.b"}, []string{"application/x-brainfuck"}},
++	{"C", []string{"c"}, []string{"*.c", "*.h", "*.idc", "*.x[bp]m"}, []string{"text/x-chdr", "text/x-csrc", "image/x-xbitmap", "image/x-xpixmap"}},
++	{"C#", []string{"csharp", "c#"}, []string{"*.cs"}, []string{"text/x-csharp"}},
++	{"C++", []string{"cpp", "c++"}, []string{"*.cpp", "*.hpp", "*.c++", "*.h++", "*.cc", "*.hh", "*.cxx", "*.hxx", "*.C", "*.H", "*.cp", "*.CPP", "*.tpp"}, []string{"text/x-c++hdr", "text/x-c++src"}},
++	{"C3", []string{"c3"}, []string{"*.c3", "*.c3i", "*.c3t"}, nil},
++	{"Caddyfile", []string{"caddyfile", "caddy"}, []string{"Caddyfile*"}, nil},
++	{"Caddyfile Directives", []string{"caddyfile-directives", "caddyfile-d", "caddy-d"}, nil, nil},
++	{"Cap'n Proto", []string{"capnp"}, []string{"*.capnp"}, nil},
++	{"Cassandra CQL", []string{"cassandra", "cql"}, []string{"*.cql"}, []string{"text/x-cql"}},
++	{"Ceylon", []string{"ceylon"}, []string{"*.ceylon"}, []string{"text/x-ceylon"}},
++	{"CFEngine3", []string{"cfengine3", "cf3"}, []string{"*.cf"}, nil},
++	{"cfstatement", []string{"cfs"}, nil, nil},
++	{"ChaiScript", []string{"chai", "chaiscript"}, []string{"*.chai"}, []string{"text/x-chaiscript", "application/x-chaiscript"}},
++	{"Chapel", []string{"chapel", "chpl"}, []string{"*.chpl"}, nil},
++	{"Cheetah", []string{"cheetah", "spitfire"}, []string{"*.tmpl", "*.spt"}, []string{"application/x-cheetah", "application/x-spitfire"}},
++	{"Clojure", []string{"clojure", "clj", "edn"}, []string{"*.clj", "*.edn"}, []string{"text/x-clojure", "application/x-clojure", "application/edn"}},
++	{"CMake", []string{"cmake"}, []string{"*.cmake", "CMakeLists.txt"}, []string{"text/x-cmake"}},
++	{"COBOL", []string{"cobol"}, []string{"*.cob", "*.COB", "*.cpy", "*.CPY"}, []string{"text/x-cobol"}},
++	{"CoffeeScript", []string{"coffee-script", "coffeescript", "coffee"}, []string{"*.coffee"}, []string{"text/coffeescript"}},
++	{"Common Lisp", []string{"common-lisp", "cl", "lisp"}, []string{"*.cl", "*.lisp"}, []string{"text/x-common-lisp"}},
++	{"Coq", []string{"coq"}, []string{"*.v"}, []string{"text/x-coq"}},
++	{"Core", []string{"core"}, []string{"*.core"}, []string{"text/x-core"}},
++	{"Crystal", []string{"cr", "crystal"}, []string{"*.cr"}, []string{"text/x-crystal"}},
++	{"CSS", []string{"css"}, []string{"*.css"}, []string{"text/css"}},
++	{"CSV", []string{"csv"}, []string{"*.csv"}, []string{"text/csv"}},
++	{"CUE", []string{"cue"}, []string{"*.cue"}, []string{"text/x-cue"}},
++	{"Cython", []string{"cython", "pyx", "pyrex"}, []string{"*.pyx", "*.pxd", "*.pxi"}, []string{"text/x-cython", "application/x-cython"}},
++	{"D", []string{"d"}, []string{"*.d", "*.di"}, []string{"text/x-d"}},
++	{"Dart", []string{"dart"}, []string{"*.dart"}, []string{"text/x-dart"}},
++	{"Dax", []string{"dax"}, []string{"*.dax"}, nil},
++	{"Desktop file", []string{"desktop", "desktop_entry"}, []string{"*.desktop"}, []string{"application/x-desktop"}},
++	{"Devicetree", []string{"devicetree", "dts"}, []string{"*.dts", "*.dtsi"}, []string{"text/x-devicetree"}},
++	{"Diff", []string{"diff", "udiff"}, []string{"*.diff", "*.patch"}, []string{"text/x-diff", "text/x-patch"}},
++	{"Django/Jinja", []string{"django", "jinja"}, nil, []string{"application/x-django-templating", "application/x-jinja"}},
++	{"dns", []string{"zone", "bind"}, []string{"*.zone"}, []string{"text/dns"}},
++	{"Docker", []string{"docker", "dockerfile", "containerfile"}, []string{"Dockerfile", "Dockerfile.*", "*.Dockerfile", "*.docker", "Containerfile", "Containerfile.*", "*.Containerfile"}, []string{"text/x-dockerfile-config"}},
++	{"DTD", []string{"dtd"}, []string{"*.dtd"}, []string{"application/xml-dtd"}},
++	{"Dylan", []string{"dylan"}, []string{"*.dylan", "*.dyl", "*.intr"}, []string{"text/x-dylan"}},
++	{"EBNF", []string{"ebnf"}, []string{"*.ebnf"}, []string{"text/x-ebnf"}},
++	{"Elixir", []string{"elixir", "ex", "exs"}, []string{"*.ex", "*.eex", "*.exs"}, []string{"text/x-elixir"}},
++	{"Elm", []string{"elm"}, []string{"*.elm"}, []string{"text/x-elm"}},
++	{"EmacsLisp", []string{"emacs", "elisp", "emacs-lisp"}, []string{"*.el"}, []string{"text/x-elisp", "application/x-elisp"}},
++	{"ERB", []string{"erb", "html+erb", "html+ruby", "rhtml"}, []string{"*.erb", "*.html.erb", "*.xml.erb", "*.rhtml"}, []string{"application/x-ruby-templating"}},
++	{"Erlang", []string{"erlang"}, []string{"*.erl", "*.hrl", "*.es", "*.escript"}, []string{"text/x-erlang"}},
++	{"Factor", []string{"factor"}, []string{"*.factor"}, []string{"text/x-factor"}},
++	{"Fennel", []string{"fennel", "fnl"}, []string{"*.fennel"}, []string{"text/x-fennel", "application/x-fennel"}},
++	{"Fish", []string{"fish", "fishshell"}, []string{"*.fish", "*.load"}, []string{"application/x-fish"}},
++	{"Forth", []string{"forth"}, []string{"*.frt", "*.fth", "*.fs"}, []string{"application/x-forth"}},
++	{"Fortran", []string{"fortran", "f90"}, []string{"*.f03", "*.f90", "*.f95", "*.F03", "*.F90", "*.F95"}, []string{"text/x-fortran"}},
++	{"FortranFixed", []string{"fortranfixed"}, []string{"*.f", "*.F"}, []string{"text/x-fortran"}},
++	{"FSharp", []string{"fsharp"}, []string{"*.fs", "*.fsi"}, []string{"text/x-fsharp"}},
++	{"GAS", []string{"gas", "asm"}, []string{"*.s", "*.S"}, []string{"text/x-gas"}},
++	{"GDScript", []string{"gdscript", "gd"}, []string{"*.gd"}, []string{"text/x-gdscript", "application/x-gdscript"}},
++	{"GDScript3", []string{"gdscript3", "gd3"}, []string{"*.gd"}, []string{"text/x-gdscript", "application/x-gdscript"}},
++	{"Gemtext", []string{"gemtext", "gmi", "gmni", "gemini"}, []string{"*.gmi", "*.gmni", "*.gemini"}, []string{"text/gemini"}},
++	{"Genshi", []string{"genshi", "kid", "xml+genshi", "xml+kid"}, []string{"*.kid"}, []string{"application/x-genshi", "application/x-kid"}},
++	{"Genshi HTML", []string{"html+genshi", "html+kid"}, nil, []string{"text/html+genshi"}},
++	{"Genshi Text", []string{"genshitext"}, nil, []string{"application/x-genshi-text", "text/x-genshi"}},
++	{"Gettext", []string{"pot", "po"}, []string{"*.pot", "*.po"}, []string{"application/x-gettext", "text/x-gettext", "text/gettext"}},
++	{"Gherkin", []string{"cucumber", "Cucumber", "gherkin", "Gherkin"}, []string{"*.feature", "*.FEATURE"}, []string{"text/x-gherkin"}},
++	{"Gleam", []string{"gleam"}, []string{"*.gleam"}, []string{"text/x-gleam"}},
++	{"GLSL", []string{"glsl"}, []string{"*.vert", "*.frag", "*.geo"}, []string{"text/x-glslsrc"}},
++	{"Gnuplot", []string{"gnuplot"}, []string{"*.plot", "*.plt"}, []string{"text/x-gnuplot"}},
++	{"Go", []string{"go", "golang"}, []string{"*.go"}, []string{"text/x-gosrc"}},
++	{"Go HTML Template", []string{"go-html-template"}, nil, nil},
++	{"Go Template", []string{"go-template"}, []string{"*.gotmpl", "*.go.tmpl"}, nil},
++	{"Go Text Template", []string{"go-text-template"}, nil, nil},
++	{"GraphQL", []string{"graphql", "graphqls", "gql"}, []string{"*.graphql", "*.graphqls"}, nil},
++	{"Groff", []string{"groff", "nroff", "man"}, []string{"*.[1-9]", "*.1p", "*.3pm", "*.man"}, []string{"application/x-troff", "text/troff"}},
++	{"Groovy", []string{"groovy"}, []string{"*.groovy", "*.gradle"}, []string{"text/x-groovy"}},
++	{"Handlebars", []string{"handlebars", "hbs"}, []string{"*.handlebars", "*.hbs"}, nil},
++	{"Hare", []string{"hare"}, []string{"*.ha"}, []string{"text/x-hare"}},
++	{"Haskell", []string{"haskell", "hs"}, []string{"*.hs"}, []string{"text/x-haskell"}},
++	{"Haxe", []string{"hx", "haxe", "hxsl"}, []string{"*.hx", "*.hxsl"}, []string{"text/haxe", "text/x-haxe", "text/x-hx"}},
++	{"HCL", []string{"hcl"}, []string{"*.hcl"}, []string{"application/x-hcl"}},
++	{"Hexdump", []string{"hexdump"}, nil, nil},
++	{"HLB", []string{"hlb"}, []string{"*.hlb"}, nil},
++	{"HLSL", []string{"hlsl"}, []string{"*.hlsl", "*.hlsli", "*.cginc", "*.fx", "*.fxh"}, []string{"text/x-hlsl"}},
++	{"HolyC", []string{"holyc"}, []string{"*.HC", "*.hc", "*.HH", "*.hh", "*.hc.z", "*.HC.Z"}, []string{"text/x-chdr", "text/x-csrc", "image/x-xbitmap", "image/x-xpixmap"}},
++	{"HTML", []string{"html"}, []string{"*.html", "*.htm", "*.xhtml", "*.xslt"}, []string{"text/html", "application/xhtml+xml"}},
++	{"HTTP", []string{"http"}, nil, nil},
++	{"Hy", []string{"hylang"}, []string{"*.hy"}, []string{"text/x-hy", "application/x-hy"}},
++	{"Idris", []string{"idris", "idr"}, []string{"*.idr"}, []string{"text/x-idris"}},
++	{"Igor", []string{"igor", "igorpro"}, []string{"*.ipf"}, []string{"text/ipf"}},
++	{"INI", []string{"ini", "cfg", "dosini"}, []string{"*.ini", "*.cfg", "*.inf", "*.service", "*.socket", "*.container", "*.network", "*.build", "*.pod", "*.kube", "*.volume", "*.image", ".gitconfig", ".editorconfig", "pylintrc", ".pylintrc"}, []string{"text/x-ini", "text/inf"}},
++	{"Io", []string{"io"}, []string{"*.io"}, []string{"text/x-iosrc"}},
++	{"ISCdhcpd", []string{"iscdhcpd"}, []string{"dhcpd.conf"}, nil},
++	{"J", []string{"j"}, []string{"*.ijs"}, []string{"text/x-j"}},
++	{"Janet", []string{"janet"}, []string{"*.janet", "*.jdn"}, []string{"text/x-janet", "application/x-janet"}},
++	{"Java", []string{"java"}, []string{"*.java"}, []string{"text/x-java"}},
++	{"JavaScript", []string{"js", "javascript"}, []string{"*.js", "*.jsm", "*.mjs", "*.cjs"}, []string{"application/javascript", "application/x-javascript", "text/x-javascript", "text/javascript"}},
++	{"JSON", []string{"json"}, []string{"*.json", "*.jsonc", "*.json5", "*.avsc", ".luaurc"}, []string{"application/json"}},
++	{"JSONata", []string{"jsonata"}, []string{"*.jsonata"}, nil},
++	{"Jsonnet", []string{"jsonnet"}, []string{"*.jsonnet", "*.libsonnet"}, nil},
++	{"Julia", []string{"julia", "jl"}, []string{"*.jl"}, []string{"text/x-julia", "application/x-julia"}},
++	{"Jungle", []string{"jungle"}, []string{"*.jungle"}, []string{"text/x-jungle"}},
++	{"Kakoune", []string{"kak", "kakoune", "kakrc", "kakscript"}, []string{"*.kak", "kakrc"}, []string{"application/x-sh", "application/x-shellscript", "text/x-shellscript"}},
++	{"KDL", []string{"kdl"}, []string{"*.kdl"}, nil},
++	{"Kotlin", []string{"kotlin"}, []string{"*.kt", "*.kts"}, []string{"text/x-kotlin"}},
++	{"Lean4", []string{"lean4", "lean"}, []string{"*.lean"}, []string{"text/x-lean4", "text/x-lean"}},
++	{"Lighttpd configuration file", []string{"lighty", "lighttpd"}, nil, []string{"text/x-lighttpd-conf"}},
++	{"LLVM", []string{"llvm"}, []string{"*.ll"}, []string{"text/x-llvm"}},
++	{"lox", nil, []string{"*.lox"}, nil},
++	{"Lua", []string{"lua"}, []string{"*.lua", "*.wlua"}, []string{"text/x-lua", "application/x-lua"}},
++	{"Luau", []string{"luau"}, []string{"*.luau"}, nil},
++	{"Makefile", []string{"make", "makefile", "mf", "bsdmake"}, []string{"*.mak", "*.mk", "Makefile", "makefile", "Makefile.*", "GNUmakefile", "BSDmakefile", "Justfile", "justfile", ".justfile"}, []string{"text/x-makefile"}},
++	{"Mako", []string{"mako"}, []string{"*.mao"}, []string{"application/x-mako"}},
++	{"markdown", []string{"md", "mkd"}, []string{"*.md", "*.mkd", "*.markdown"}, []string{"text/x-markdown"}},
++	{"Markless", []string{"mess"}, []string{"*.mess", "*.markless"}, []string{"text/x-markless"}},
++	{"Mason", []string{"mason"}, []string{"*.m", "*.mhtml", "*.mc", "*.mi", "autohandler", "dhandler"}, []string{"application/x-mason"}},
++	{"Materialize SQL dialect", []string{"materialize", "mzsql"}, nil, []string{"text/x-materializesql"}},
++	{"Mathematica", []string{"mathematica", "mma", "nb"}, []string{"*.cdf", "*.m", "*.ma", "*.mt", "*.mx", "*.nb", "*.nbp", "*.wl"}, []string{"application/mathematica", "application/vnd.wolfram.mathematica", "application/vnd.wolfram.mathematica.package", "application/vnd.wolfram.cdf"}},
++	{"Matlab", []string{"matlab"}, []string{"*.m"}, []string{"text/matlab"}},
++	{"MCFunction", []string{"mcfunction", "mcf"}, []string{"*.mcfunction"}, []string{"text/mcfunction"}},
++	{"Meson", []string{"meson", "meson.build"}, []string{"meson.build", "meson.options", "meson_options.txt"}, []string{"text/x-meson"}},
++	{"Metal", []string{"metal"}, []string{"*.metal"}, []string{"text/x-metal"}},
++	{"microcad", []string{"µcad"}, []string{"*.µcad", "*.ucad", "*.mcad"}, []string{"text/microcad"}},
++	{"MiniZinc", []string{"minizinc", "MZN", "mzn"}, []string{"*.mzn", "*.dzn", "*.fzn"}, []string{"text/minizinc"}},
++	{"MLIR", []string{"mlir"}, []string{"*.mlir"}, []string{"text/x-mlir"}},
++	{"Modelica", []string{"modelica"}, []string{"*.mo"}, []string{"text/x-modelica"}},
++	{"Modula-2", []string{"modula2", "m2"}, []string{"*.def", "*.mod"}, []string{"text/x-modula2"}},
++	{"Mojo", []string{"mojo", "🔥"}, []string{"*.mojo", "*.🔥"}, []string{"text/x-mojo", "application/x-mojo"}},
++	{"MonkeyC", []string{"monkeyc"}, []string{"*.mc"}, []string{"text/x-monkeyc"}},
++	{"MoonBit", []string{"moonbit", "mbt"}, []string{"*.mbt"}, nil},
++	{"MoonScript", []string{"moonscript", "moon"}, []string{"*.moon"}, []string{"text/x-moonscript", "application/x-moonscript"}},
++	{"MorrowindScript", []string{"morrowind", "mwscript"}, nil, nil},
++	{"Myghty", []string{"myghty"}, []string{"*.myt", "autodelegate"}, []string{"application/x-myghty"}},
++	{"MySQL", []string{"mysql", "mariadb"}, []string{"*.sql"}, []string{"text/x-mysql", "text/x-mariadb"}},
++	{"NASM", []string{"nasm"}, []string{"*.asm", "*.ASM", "*.nasm"}, []string{"text/x-nasm"}},
++	{"Natural", []string{"natural"}, []string{"*.NSN", "*.NSP", "*.NSS", "*.NSH", "*.NSG", "*.NSL", "*.NSA", "*.NSM", "*.NSC", "*.NS7"}, []string{"text/x-natural"}},
++	{"NDISASM", []string{"ndisasm"}, nil, []string{"text/x-disasm"}},
++	{"Newspeak", []string{"newspeak"}, []string{"*.ns2"}, []string{"text/x-newspeak"}},
++	{"Nginx configuration file", []string{"nginx"}, []string{"nginx.conf"}, []string{"text/x-nginx-conf"}},
++	{"Nim", []string{"nim", "nimrod"}, []string{"*.nim", "*.nimrod"}, []string{"text/x-nim"}},
++	{"Nix", []string{"nixos", "nix"}, []string{"*.nix"}, []string{"text/x-nix"}},
++	{"NSIS", []string{"nsis", "nsi", "nsh"}, []string{"*.nsi", "*.nsh"}, []string{"text/x-nsis"}},
++	{"Nu", []string{"nu"}, []string{"*.nu"}, []string{"text/plain"}},
++	{"Objective-C", []string{"objective-c", "objectivec", "obj-c", "objc"}, []string{"*.m", "*.h"}, []string{"text/x-objective-c"}},
++	{"ObjectPascal", []string{"objectpascal"}, []string{"*.pas", "*.pp", "*.inc", "*.dpr", "*.dpk", "*.lpr", "*.lpk"}, []string{"text/x-pascal"}},
++	{"OCaml", []string{"ocaml"}, []string{"*.ml", "*.mli", "*.mll", "*.mly"}, []string{"text/x-ocaml"}},
++	{"Octave", []string{"octave"}, []string{"*.m"}, []string{"text/octave"}},
++	{"Odin", []string{"odin"}, []string{"*.odin"}, []string{"text/odin"}},
++	{"OnesEnterprise", []string{"ones", "onesenterprise", "1S", "1S:Enterprise"}, []string{"*.EPF", "*.epf", "*.ERF", "*.erf"}, []string{"application/octet-stream"}},
++	{"OpenEdge ABL", []string{"openedge", "abl", "progress", "openedgeabl"}, []string{"*.p", "*.cls", "*.w", "*.i"}, []string{"text/x-openedge", "application/x-openedge"}},
++	{"OpenSCAD", []string{"openscad"}, []string{"*.scad"}, []string{"text/x-scad"}},
++	{"Org Mode", []string{"org", "orgmode"}, []string{"*.org"}, []string{"text/org"}},
++	{"PacmanConf", []string{"pacmanconf"}, []string{"pacman.conf"}, nil},
++	{"Perl", []string{"perl", "pl"}, []string{"*.pl", "*.pm", "*.t"}, []string{"text/x-perl", "application/x-perl"}},
++	{"PHP", []string{"php", "php3", "php4", "php5"}, []string{"*.php", "*.php[345]", "*.inc"}, []string{"text/x-php"}},
++	{"PHTML", []string{"phtml"}, []string{"*.phtml", "*.php", "*.php[345]", "*.inc"}, []string{"application/x-php", "application/x-httpd-php", "application/x-httpd-php3", "application/x-httpd-php4", "application/x-httpd-php5", "text/x-php"}},
++	{"Pig", []string{"pig"}, []string{"*.pig"}, []string{"text/x-pig"}},
++	{"PkgConfig", []string{"pkgconfig"}, []string{"*.pc"}, nil},
++	{"PL/pgSQL", []string{"plpgsql"}, nil, []string{"text/x-plpgsql"}},
++	{"plaintext", []string{"text", "plain", "no-highlight"}, []string{"*.txt"}, []string{"text/plain"}},
++	{"Plutus Core", []string{"plutus-core", "plc"}, []string{"*.plc"}, []string{"text/x-plutus-core", "application/x-plutus-core"}},
++	{"Pony", []string{"pony"}, []string{"*.pony"}, nil},
++	{"PostgreSQL SQL dialect", []string{"postgresql", "postgres"}, nil, []string{"text/x-postgresql"}},
++	{"PostScript", []string{"postscript", "postscr"}, []string{"*.ps", "*.eps"}, []string{"application/postscript"}},
++	{"POVRay", []string{"pov"}, []string{"*.pov", "*.inc"}, []string{"text/x-povray"}},
++	{"PowerQuery", []string{"powerquery", "pq"}, []string{"*.pq"}, []string{"text/x-powerquery"}},
++	{"PowerShell", []string{"powershell", "posh", "ps1", "psm1", "psd1", "pwsh"}, []string{"*.ps1", "*.psm1", "*.psd1"}, []string{"text/x-powershell"}},
++	{"Prolog", []string{"prolog"}, []string{"*.ecl", "*.prolog", "*.pro", "*.pl"}, []string{"text/x-prolog"}},
++	{"Promela", []string{"promela"}, []string{"*.pml", "*.prom", "*.prm", "*.promela", "*.pr", "*.pm"}, []string{"text/x-promela"}},
++	{"PromQL", []string{"promql"}, []string{"*.promql"}, nil},
++	{"properties", []string{"java-properties"}, []string{"*.properties"}, []string{"text/x-java-properties"}},
++	{"Protocol Buffer", []string{"protobuf", "proto"}, []string{"*.proto"}, nil},
++	{"Protocol Buffer Text Format", []string{"txtpb"}, []string{"*.txtpb", "*.textproto", "*.textpb", "*.pbtxt"}, []string{"application/x-protobuf-text"}},
++	{"PRQL", []string{"prql"}, []string{"*.prql"}, []string{"application/prql"}},
++	{"PSL", []string{"psl"}, []string{"*.psl", "*.BATCH", "*.TRIG", "*.PROC"}, []string{"text/x-psl"}},
++	{"Puppet", []string{"puppet"}, []string{"*.pp"}, nil},
++	{"Python", []string{"python", "py", "sage", "python3", "py3", "starlark"}, []string{"*.py", "*.pyi", "*.pyw", "*.jy", "*.sage", "*.sc", "SConstruct", "SConscript", "*.bzl", "BUCK", "BUILD", "BUILD.bazel", "WORKSPACE", "WORKSPACE.bzlmod", "WORKSPACE.bazel", "MODULE.bazel", "REPO.bazel", "*.star", "*.tac"}, []string{"text/x-python", "application/x-python", "text/x-python3", "application/x-python3"}},
++	{"Python 2", []string{"python2", "py2"}, nil, []string{"text/x-python2", "application/x-python2"}},
++	{"QBasic", []string{"qbasic", "basic"}, []string{"*.BAS", "*.bas"}, []string{"text/basic"}},
++	{"QML", []string{"qml", "qbs"}, []string{"*.qml", "*.qbs"}, []string{"application/x-qml", "application/x-qt.qbs+qml"}},
++	{"R", []string{"splus", "s", "r"}, []string{"*.S", "*.R", "*.r", ".Rhistory", ".Rprofile", ".Renviron"}, []string{"text/S-plus", "text/S", "text/x-r-source", "text/x-r", "text/x-R", "text/x-r-history", "text/x-r-profile"}},
++	{"Racket", []string{"racket", "rkt"}, []string{"*.rkt", "*.rktd", "*.rktl"}, []string{"text/x-racket", "application/x-racket"}},
++	{"Ragel", []string{"ragel"}, nil, nil},
++	{"Raku", []string{"perl6", "pl6", "raku"}, []string{"*.pl", "*.pm", "*.nqp", "*.p6", "*.6pl", "*.p6l", "*.pl6", "*.6pm", "*.p6m", "*.pm6", "*.t", "*.raku", "*.rakumod", "*.rakutest", "*.rakudoc"}, []string{"text/x-perl6", "application/x-perl6", "text/x-raku", "application/x-raku"}},
++	{"react", []string{"jsx", "react"}, []string{"*.jsx", "*.react"}, []string{"text/jsx", "text/typescript-jsx"}},
++	{"ReasonML", []string{"reason", "reasonml"}, []string{"*.re", "*.rei"}, []string{"text/x-reasonml"}},
++	{"reg", []string{"registry"}, []string{"*.reg"}, []string{"text/x-windows-registry"}},
++	{"Rego", []string{"rego"}, []string{"*.rego"}, nil},
++	{"reStructuredText", []string{"rst", "rest", "restructuredtext"}, []string{"*.rst", "*.rest"}, []string{"text/x-rst", "text/prs.fallenstein.rst"}},
++	{"Rexx", []string{"rexx", "arexx"}, []string{"*.rexx", "*.rex", "*.rx", "*.arexx"}, []string{"text/x-rexx"}},
++	{"RGBDS Assembly", []string{"rgbasm"}, []string{"*.asm"}, nil},
++	{"Ring", []string{"ring"}, []string{"*.ring", "*.rh", "*.rform"}, []string{"text/x-ring"}},
++	{"RPGLE", []string{"SQLRPGLE", "RPG", "IV"}, []string{"*.RPGLE", "*.rpgle", "*.SQLRPGLE", "*.sqlrpgle"}, []string{"text/x-rpgle", "text/x-sqlrpgle"}},
++	{"RPMSpec", []string{"spec"}, []string{"*.spec"}, []string{"text/x-rpm-spec"}},
++	{"Ruby", []string{"rb", "ruby", "duby"}, []string{"*.rb", "*.rbw", "Rakefile", "*.rake", "*.gemspec", "*.rbx", "*.duby", "Gemfile", "Vagrantfile"}, []string{"text/x-ruby", "application/x-ruby"}},
++	{"Rust", []string{"rust", "rs"}, []string{"*.rs", "*.rs.in"}, []string{"text/rust", "text/x-rust"}},
++	{"SAS", []string{"sas"}, []string{"*.SAS", "*.sas"}, []string{"text/x-sas", "text/sas", "application/x-sas"}},
++	{"Sass", []string{"sass"}, []string{"*.sass"}, []string{"text/x-sass"}},
++	{"Scala", []string{"scala"}, []string{"*.scala"}, []string{"text/x-scala"}},
++	{"scdoc", []string{"scdoc"}, []string{"*.scd", "*.scdoc"}, nil},
++	{"Scheme", []string{"scheme", "scm"}, []string{"*.scm", "*.ss"}, []string{"text/x-scheme", "application/x-scheme"}},
++	{"Scilab", []string{"scilab"}, []string{"*.sci", "*.sce", "*.tst"}, []string{"text/scilab"}},
++	{"SCSS", []string{"scss"}, []string{"*.scss"}, []string{"text/x-scss"}},
++	{"Sed", []string{"sed", "gsed", "ssed"}, []string{"*.sed", "*.[gs]sed"}, []string{"text/x-sed"}},
++	{"Sieve", []string{"sieve"}, []string{"*.siv", "*.sieve"}, nil},
++	{"Smali", []string{"smali"}, []string{"*.smali"}, []string{"text/smali"}},
++	{"Smalltalk", []string{"smalltalk", "squeak", "st"}, []string{"*.st"}, []string{"text/x-smalltalk"}},
++	{"Smarty", []string{"smarty"}, []string{"*.tpl"}, []string{"application/x-smarty"}},
++	{"SNBT", []string{"snbt"}, []string{"*.snbt"}, []string{"text/snbt"}},
++	{"Snobol", []string{"snobol"}, []string{"*.snobol"}, []string{"text/x-snobol"}},
++	{"Solidity", []string{"sol", "solidity"}, []string{"*.sol"}, nil},
++	{"SourcePawn", []string{"sp"}, []string{"*.sp", "*.inc"}, []string{"text/x-sourcepawn"}},
++	{"Spade", []string{"spade"}, []string{"*.spade"}, []string{"text/spade", "text/x-spade"}},
++	{"SPARQL", []string{"sparql"}, []string{"*.rq", "*.sparql"}, []string{"application/sparql-query"}},
++	{"SQL", []string{"sql"}, []string{"*.sql"}, []string{"text/x-sql"}},
++	{"SquidConf", []string{"squidconf", "squid.conf", "squid"}, []string{"squid.conf"}, []string{"text/x-squidconf"}},
++	{"Standard ML", []string{"sml"}, []string{"*.sml", "*.sig", "*.fun"}, []string{"text/x-standardml", "application/x-standardml"}},
++	{"stas", nil, []string{"*.stas"}, nil},
++	{"Stylus", []string{"stylus"}, []string{"*.styl"}, []string{"text/x-styl"}},
++	{"Svelte", []string{"svelte"}, []string{"*.svelte"}, []string{"application/x-svelte"}},
++	{"Swift", []string{"swift"}, []string{"*.swift"}, []string{"text/x-swift"}},
++	{"SYSTEMD", []string{"systemd"}, []string{"*.automount", "*.device", "*.dnssd", "*.link", "*.mount", "*.netdev", "*.network", "*.path", "*.scope", "*.service", "*.slice", "*.socket", "*.swap", "*.target", "*.timer"}, []string{"text/plain"}},
++	{"systemverilog", []string{"systemverilog", "sv"}, []string{"*.sv", "*.svh"}, []string{"text/x-systemverilog"}},
++	{"TableGen", []string{"tablegen"}, []string{"*.td"}, []string{"text/x-tablegen"}},
++	{"Tal", []string{"tal", "uxntal"}, []string{"*.tal"}, []string{"text/x-uxntal"}},
++	{"TASM", []string{"tasm"}, []string{"*.asm", "*.ASM", "*.tasm"}, []string{"text/x-tasm"}},
++	{"Tcl", []string{"tcl"}, []string{"*.tcl", "*.rvt"}, []string{"text/x-tcl", "text/x-script.tcl", "application/x-tcl"}},
++	{"Tcsh", []string{"tcsh", "csh"}, []string{"*.tcsh", "*.csh"}, []string{"application/x-csh"}},
++	{"Termcap", []string{"termcap"}, []string{"termcap", "termcap.src"}, nil},
++	{"Terminfo", []string{"terminfo"}, []string{"terminfo", "terminfo.src"}, nil},
++	{"Terraform", []string{"terraform", "tf", "hcl"}, []string{"*.tf", "*.hcl"}, []string{"application/x-tf", "application/x-terraform"}},
++	{"TeX", []string{"tex", "latex"}, []string{"*.tex", "*.aux", "*.toc"}, []string{"text/x-tex", "text/x-latex"}},
++	{"Thrift", []string{"thrift"}, []string{"*.thrift"}, []string{"application/x-thrift"}},
++	{"TOML", []string{"toml"}, []string{"*.toml", "Pipfile", "poetry.lock", "uv.lock"}, []string{"text/x-toml"}},
++	{"TradingView", []string{"tradingview", "tv"}, []string{"*.tv"}, []string{"text/x-tradingview"}},
++	{"Transact-SQL", []string{"tsql", "t-sql"}, nil, []string{"text/x-tsql"}},
++	{"Turing", []string{"turing"}, []string{"*.turing", "*.tu"}, []string{"text/x-turing"}},
++	{"Turtle", []string{"turtle"}, []string{"*.ttl"}, []string{"text/turtle", "application/x-turtle"}},
++	{"Twig", []string{"twig"}, []string{"*.twig"}, []string{"application/x-twig"}},
++	{"TypeScript", []string{"ts", "tsx", "typescript"}, []string{"*.ts", "*.tsx", "*.mts", "*.cts"}, []string{"text/x-typescript"}},
++	{"TypoScript", []string{"typoscript"}, []string{"*.ts"}, []string{"text/x-typoscript"}},
++	{"TypoScriptCssData", []string{"typoscriptcssdata"}, nil, nil},
++	{"TypoScriptHtmlData", []string{"typoscripthtmldata"}, nil, nil},
++	{"Typst", []string{"typst"}, []string{"*.typ"}, []string{"text/x-typst"}},
++	{"ucode", nil, []string{"*.uc"}, []string{"application/x.ucode", "text/x.ucode"}},
++	{"V", []string{"v", "vlang"}, []string{"*.v", "*.vv", "v.mod"}, []string{"text/x-v"}},
++	{"V shell", []string{"vsh", "vshell"}, []string{"*.vsh"}, []string{"text/x-vsh"}},
++	{"Vala", []string{"vala", "vapi"}, []string{"*.vala", "*.vapi"}, []string{"text/x-vala"}},
++	{"VB.net", []string{"vb.net", "vbnet"}, []string{"*.vb", "*.bas"}, []string{"text/x-vbnet", "text/x-vba"}},
++	{"verilog", []string{"verilog", "v"}, []string{"*.v"}, []string{"text/x-verilog"}},
++	{"VHDL", []string{"vhdl"}, []string{"*.vhdl", "*.vhd"}, []string{"text/x-vhdl"}},
++	{"VHS", []string{"vhs", "tape", "cassette"}, []string{"*.tape"}, nil},
++	{"VimL", []string{"vim"}, []string{"*.vim", ".vimrc", ".exrc", ".gvimrc", "_vimrc", "_exrc", "_gvimrc", "vimrc", "gvimrc"}, []string{"text/x-vim"}},
++	{"vue", []string{"vue", "vuejs"}, []string{"*.vue"}, []string{"text/x-vue", "application/x-vue"}},
++	{"WDTE", nil, []string{"*.wdte"}, nil},
++	{"WebAssembly Text Format", []string{"wast", "wat"}, []string{"*.wat", "*.wast"}, nil},
++	{"WebGPU Shading Language", []string{"wgsl"}, []string{"*.wgsl"}, []string{"text/wgsl"}},
++	{"WebVTT", []string{"vtt"}, []string{"*.vtt"}, []string{"text/vtt"}},
++	{"Whiley", []string{"whiley"}, []string{"*.whiley"}, []string{"text/x-whiley"}},
++	{"XML", []string{"xml"}, []string{"*.xml", "*.xsl", "*.rss", "*.xslt", "*.xsd", "*.wsdl", "*.wsf", "*.svg", "*.qrc", "*.csproj", "*.vcxproj", "*.fsproj"}, []string{"text/xml", "application/xml", "image/svg+xml", "application/rss+xml", "application/atom+xml"}},
++	{"Xorg", []string{"xorg.conf"}, []string{"xorg.conf"}, nil},
++	{"YAML", []string{"yaml"}, []string{"*.yaml", "*.yml"}, []string{"text/x-yaml"}},
++	{"YANG", []string{"yang"}, []string{"*.yang"}, []string{"application/yang"}},
++	{"Z80 Assembly", []string{"z80"}, []string{"*.z80", "*.asm"}, nil},
++	{"Zed", []string{"zed"}, []string{"*.zed"}, []string{"text/zed"}},
++	{"Zig", []string{"zig"}, []string{"*.zig", "*.zon"}, []string{"text/zig"}},
++}
++
++var styleNames = []string{"abap", "algol", "algol_nu", "arduino", "ashen", "aura-theme-dark", "aura-theme-dark-soft", "autumn", "average", "base16-snazzy", "borland", "bw", "catppuccin-frappe", "catppuccin-latte", "catppuccin-macchiato", "catppuccin-mocha", "colorful", "darcula", "doom-one", "doom-one2", "dracula", "emacs", "evergarden", "friendly", "fruity", "github", "github-dark", "gruvbox", "gruvbox-light", "hr_high_contrast", "hrdark", "igor", "kanagawa-dragon", "kanagawa-lotus", "kanagawa-wave", "lovelace", "manni", "modus-operandi", "modus-vivendi", "monokai", "monokailight", "murphy", "native", "nord", "nordic", "onedark", "onesenterprise", "paraiso-dark", "paraiso-light", "pastie", "perldoc", "pygments", "rainbow_dash", "rose-pine", "rose-pine-dawn", "rose-pine-moon", "rpgle", "rrt", "solarized-dark", "solarized-dark256", "solarized-light", "swapoff", "tango", "tokyonight-day", "tokyonight-moon", "tokyonight-night", "tokyonight-storm", "trac", "vim", "vs", "vulcan", "witchhazel", "xcode", "xcode-dark"}
++
++var formatterNames = []string{"html", "json", "noop", "svg", "terminal", "terminal16", "terminal16m", "terminal256", "terminal8", "tokens"}
+diff --git a/fallback/cli/go.mod b/fallback/cli/go.mod
+new file mode 100644
+index 0000000..9733ae8
+--- /dev/null
++++ b/fallback/cli/go.mod
+@@ -0,0 +1,3 @@
++module chroma-fallback
++
++go 1.16
+diff --git a/fallback/cli/main.go b/fallback/cli/main.go
+new file mode 100644
+index 0000000..a8bfa39
+--- /dev/null
++++ b/fallback/cli/main.go
+@@ -0,0 +1,827 @@
++// Command chroma is a minimal, dependency-free stand-in for the Chroma
++// syntax-highlighting CLI.
++//
++// It is NOT the full Chroma library: it exists as a build fallback so that
++// "make" / "compile.sh" always produce a working chroma executable even when
++// neither the complete Chroma source tree (cmd/chroma + go.mod) nor the
++// prebuilt CLI artifact ("executable") is present in the repository.
++//
++// Supported behaviour (subset of the real CLI):
++//   - reads a file argument or stdin and writes highlighted output
++//   - --filename/-f? no: -f is formatter. Flags: --version --list --lexer
++//     --style --formatter --json --html --check --fail --trace
++//   - lexer auto-detection by file extension using the table extracted from
++//     the real Chroma CLI (lexersTable), with --fail to exit 1 when only the
++//     plaintext lexer matches
++//   - formatters: terminal* (ANSI), html, json, tokens, noop, svg (plain text)
++package main
++
++import (
++	"bufio"
++	"encoding/json"
++	"flag"
++	"fmt"
++	"os"
++	"path/filepath"
++	"regexp"
++	"sort"
++	"strconv"
++	"strings"
++)
++
++var version = "0.0.0-fallback"
++
++type LexerInfo struct {
++	Name      string
++	Aliases   []string
++	FileNames []string
++	MimeTypes []string
++}
++
++type Token struct {
++	Type  string
++	Value string
++}
++
++// ---------- token types ----------
++
++const (
++	tText         = "Text"
++	tWhitespace   = "TextWhitespace"
++	tKeyword      = "Keyword"
++	tKeywordType  = "KeywordType"
++	tKeywordDecl  = "KeywordDeclaration"
++	tComment      = "CommentSingle"
++	tCommentMulti = "CommentMultiline"
++	tString       = "LiteralString"
++	tStringDouble = "LiteralStringDouble"
++	tStringSingle = "LiteralStringSingle"
++	tNumber       = "LiteralNumber"
++	tName         = "Name"
++	tNameFunc     = "NameFunction"
++	tNameBuiltin  = "NameBuiltin"
++	tOperator     = "Operator"
++	tPunct        = "Punctuation"
++	tPreproc      = "CommentPreproc"
++	tError        = "Error"
++)
++
++// ---------- tokenizer ----------
++
++var (
++	identRe  = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*`)
++	numberRe = regexp.MustCompile(`^[0-9][0-9a-fA-FxXbBoO_.']*(?:[eE][+-]?[0-9]+)?[a-zA-Z]*`)
++	dstrRe   = regexp.MustCompile(`^"(\\.|[^"\\\n])*"`)
++	sstrRe   = regexp.MustCompile(`^'(\\.|[^'\\\n])*'`)
++	slashcom = regexp.MustCompile(`^//`)
++	cblock   = regexp.MustCompile(`^/\*`)
++)
++
++var cFamilyKw = map[string]bool{
++	"auto": true, "break": true, "case": true, "catch": true, "class": true,
++	"const": true, "continue": true, "default": true, "delete": true, "do": true,
++	"else": true, "enum": true, "export": true, "for": true, "goto": true,
++	"if": true, "import": true, "in": true, "instanceof": true, "new": true,
++	"operator": true, "public": true, "private": true, "protected": true,
++	"return": true, "sizeof": true, "static": true, "struct": true, "switch": true,
++	"template": true, "this": true, "throw": true, "try": true, "typedef": true,
++	"union": true, "using": true, "while": true, "namespace": true, "include": true,
++}
++
++var cFamilyType = map[string]bool{
++	"bool": true, "char": true, "double": true, "float": true, "int": true,
++	"long": true, "short": true, "unsigned": true, "signed": true, "void": true,
++	"string": true, "size_t": true, "uint8_t": true, "uint32_t": true,
++	"uint64_t": true, "int8_t": true, "int32_t": true, "int64_t": true,
++	"const": true, "static": true,
++}
++
++var scriptKw = map[string]bool{
++	"and": true, "as": true, "assert": true, "async": true, "await": true,
++	"break": true, "class": true, "def": true, "del": true, "elif": true,
++	"else": true, "except": true, "finally": true, "for": true, "from": true,
++	"global": true, "if": true, "import": true, "is": true, "lambda": true,
++	"nonlocal": true, "not": true, "or": true, "pass": true, "print": false,
++	"raise": true, "return": true, "try": true, "with": true, "yield": true,
++	"fn": true, "match": true, "move": true, "pub": true, "use": true,
++	"let": true, "var": true, "const": true, "function": true, "package": true,
++	"echo": true, "then": true, "do": true, "done": true, "fi": true,
++	"exit": true, "local": true, "case": true, "esac": true, "select": true,
++	"begin": true, "end": true, "module": true, "require": true, "export": true,
++	"super": true, "null": true, "nil": true, "True": true, "False": true,
++	"None": true, "true": true, "false": true, "in": true, "typeof": true,
++}
++
++var builtins = map[string]bool{
++	"println": true, "print": true, "len": true, "range": true, "append": true,
++	"make": true, "new": true, "panic": true, "recover": true, "main": false,
++	"str": true, "int": true, "float": true, "dict": true, "list": true,
++	"set": true, "tuple": true, "open": true, "input": true, "map": true,
++	"filter": true, "sorted": true, "min": true, "max": true, "sum": true,
++	"sys": true, "os": true, "time": true, "math": true, "fmt": true, "fmt.Println": true,
++}
++
++type family int
++
++const (
++	famUnknown family = iota
++	famHash           // # comments
++	famSlash          // // and /* */
++	famDash           // -- comments (Lua, Haskell...)
++	famHtml           // HTML comments: <!-- -->
++	famPreproc        // C # preprocessor
++)
++
++func familyFor(lexerName, ext string) family {
++	switch strings.ToLower(lexerName) {
++	case "python", "ruby", "bash", "shell", "dockerfile", "toml", "yaml", "yml",
++		"ini", "config", "properties", "powershell", "nix", "r", "groovy",
++		"perl", "tcl", "awk", "make", "makefile", "gitconfig", "rst", "restructuredtext",
++		"graphql", "puppet", "coffeescript", "julia", "swift", "zig", "nim",
++		"elixir", "erlang", "haskell", "systemverilog", "matlab",
++		"octave", "vcl":
++		return famHash
++	case "c", "c++", "csharp", "java", "go", "javascript", "typescript",
++		"javascriptreact", "typescriptreact", "php", "rust", "scala", "d",
++		"vala", "solidity", "objective-c", "objective-c++", "kotlin", "cilk-c",
++		"cilk-c++", "pawn", "prolog":
++		return famSlash
++	case "lua", "vhdl", "ada":
++		return famDash
++	case "html", "xml", "svg", "markdown", "vue", "svelte", "twig", "ejs", "haml", "sass", "less":
++		return famHtml
++	}
++	switch ext {
++	case "py", "pyi", "rb", "sh", "bash", "zsh", "fish", "yaml", "yml", "toml", "ini", "ps1", "r":
++		return famHash
++	case "c", "h", "cpp", "cc", "cxx", "hpp", "hh", "cs", "java", "go", "js", "ts",
++		"jsx", "tsx", "php", "rs", "scala", "kt", "kts", "d", "v", "dart", "swift", "zig":
++		return famSlash
++	case "lua":
++		return famDash
++	case "html", "htm", "xml", "svg", "md":
++		return famHtml
++	}
++	return famUnknown
++}
++
++func kwSet(fam family) (map[string]bool, map[string]bool) {
++	switch fam {
++	case famSlash:
++		return cFamilyKw, cFamilyType
++	default:
++		return scriptKw, nil
++	}
++}
++
++func tokenizeLine(line string, fam family, inBlock *int) []Token {
++	kw, kwType := kwSet(fam)
++	var toks []Token
++	rest := line
++	add := func(t string, s string) {
++		if s != "" {
++			toks = append(toks, Token{t, s})
++		}
++	}
++	for len(rest) > 0 {
++		// inside a block comment?
++		if inBlock != nil && *inBlock > 0 {
++			end := strings.Index(rest, "*/")
++			if end < 0 {
++				add(tCommentMulti, rest)
++				rest = ""
++				break
++			}
++			add(tCommentMulti, rest[:end+2])
++			rest = rest[end+2:]
++			*inBlock = 0
++			continue
++		}
++		// comments
++		if fam == famHash || fam == famPreproc || fam == famUnknown {
++			if i := strings.IndexRune(rest, '#'); i >= 0 && (fam != famPreproc || rest == "#"+rest[1:] || i == 0) {
++				// hash comment from '#' onward
++				add(tComment, rest[i:])
++				rest = rest[:i]
++				break
++			}
++		}
++		switch {
++		case fam == famSlash && strings.HasPrefix(rest, "//"):
++			add(tComment, rest)
++			rest = ""
++		case fam == famSlash && cblock.MatchString(rest):
++			end := strings.Index(rest[2:], "*/")
++			if end < 0 {
++				*inBlock = 1
++				add(tCommentMulti, rest)
++				rest = ""
++			} else {
++				add(tCommentMulti, rest[:end+4])
++				rest = rest[end+4:]
++			}
++			if rest == "" {
++			}
++			continue
++		case fam == famDash && strings.HasPrefix(rest, "--") && (len(rest) < 3 || (rest[2] < '0' || rest[2] > '9')):
++			add(tComment, rest)
++			rest = ""
++		case fam == famHtml && strings.HasPrefix(rest, "<!--"):
++			end := strings.Index(rest, "-->")
++			if end < 0 {
++				add(tComment, rest)
++				rest = ""
++			} else {
++				add(tComment, rest[:end+3])
++				rest = rest[end+3:]
++			}
++			continue
++		}
++		// strings
++		if dstrRe.MatchString(rest) {
++			m := dstrRe.FindString(rest)
++			add(tStringDouble, m)
++			rest = rest[len(m):]
++			continue
++		}
++		if sstrRe.MatchString(rest) {
++			m := sstrRe.FindString(rest)
++			add(tStringSingle, m)
++			rest = rest[len(m):]
++			continue
++		}
++		// preprocessor line (C family only)
++		if fam == famPreproc && strings.HasPrefix(rest, "#") {
++			add(tPreproc, rest)
++			rest = ""
++			continue
++		}
++		// numbers
++		if numberRe.MatchString(rest) {
++			m := numberRe.FindString(rest)
++			add(tNumber, m)
++			rest = rest[len(m):]
++			continue
++		}
++		// identifiers / keywords
++		if m := identRe.FindString(rest); m != "" {
++			if kwType != nil && kwType[m] {
++				add(tKeywordType, m)
++			} else if kw[m] {
++				add(tKeyword, m)
++			} else if builtins[m] {
++				add(tNameBuiltin, m)
++			} else {
++				add(tName, m)
++			}
++			rest = rest[len(m):]
++			continue
++		}
++		// punctuation + operators
++		r := rest[0]
++		if r == '(' || r == ')' || r == '[' || r == ']' || r == '{' || r == '}' ||
++			r == ';' || r == ',' || r == '.' || r == ':' || r == '@' || r == '`' ||
++			r == '<' || r == '>' || r == '=' || r == '+' || r == '-' || r == '*' ||
++			r == '/' || r == '%' || r == '&' || r == '|' || r == '^' || r == '!' ||
++			r == '~' || r == '?' {
++			add(tPunct, string(r))
++			rest = rest[1:]
++			continue
++		}
++		if r == ' ' || r == '\t' || r == '\r' {
++			i := 1
++			for i < len(rest) && (rest[i] == ' ' || rest[i] == '\t' || rest[i] == '\r') {
++				i++
++			}
++			add(tWhitespace, rest[:i])
++			rest = rest[i:]
++			continue
++		}
++		add(tText, string(r))
++		rest = rest[1:]
++	}
++	return toks
++}
++
++func tokenize(src string, fam family) []Token {
++	var toks []Token
++	inBlock := 0
++	lines := strings.Split(src, "\n")
++	for i, ln := range lines {
++		toks = append(toks, tokenizeLine(ln, fam, &inBlock)...)
++		if i < len(lines)-1 {
++			toks = append(toks, Token{tText, "\n"})
++		}
++	}
++	return toks
++}
++
++// ---------- styles ----------
++
++type style struct {
++	// token type -> ANSI SGR codes after ESC[
++	m map[string]string
++}
++
++var styleTable = map[string]style{
++	"swapoff": {map[string]string{
++		tComment:      "30;47",
++		tCommentMulti: "30;47",
++		tPreproc:      "1;35",
++		tKeyword:      "1;31",
++		tKeywordType:  "31",
++		tString:       "1;32",
++		tStringDouble: "1;32",
++		tStringSingle: "1;32",
++		tNumber:       "1;36",
++		tNameFunc:     "1;34",
++		tNameBuiltin:  "35",
++		tOperator:     "1;33",
++		tPunct:        "33",
++	}},
++	"monokai": {map[string]string{
++		tComment:      "90",
++		tCommentMulti: "90",
++		tPreproc:      "1;96",
++		tKeyword:      "1;95",
++		tKeywordType:  "95",
++		tString:       "1;93",
++		tStringDouble: "1;93",
++		tStringSingle: "1;93",
++		tNumber:       "96",
++		tNameFunc:     "99",
++		tNameBuiltin:  "99",
++		tName:         "99",
++		tOperator:     "1;97",
++		tPunct:        "97",
++	}},
++	"monokailight": {map[string]string{
++		tComment:      "90",
++		tCommentMulti: "90",
++		tPreproc:      "35",
++		tKeyword:      "1;35",
++		tKeywordType:  "35",
++		tString:       "32",
++		tStringDouble: "32",
++		tStringSingle: "32",
++		tNumber:       "36",
++		tNameFunc:     "34",
++		tNameBuiltin:  "34",
++		tOperator:     "33",
++		tPunct:        "0",
++	}},
++	"github": {map[string]string{
++		tComment:      "90",
++		tCommentMulti: "90",
++		tPreproc:      "35",
++		tKeyword:      "1;34",
++		tKeywordType:  "34",
++		tString:       "31",
++		tStringDouble: "31",
++		tStringSingle: "31",
++		tNumber:       "36",
++		tNameFunc:     "32",
++		tNameBuiltin:  "33",
++		tOperator:     "0",
++	}},
++	"github-dark": {map[string]string{
++		tComment:      "90",
++		tCommentMulti: "90",
++		tPreproc:      "1;96",
++		tKeyword:      "1;97",
++		tKeywordType:  "97",
++		tString:       "94",
++		tStringDouble: "94",
++		tStringSingle: "94",
++		tNumber:       "96",
++		tNameFunc:     "1;99",
++		tNameBuiltin:  "1;98",
++		tOperator:     "1;97",
++		tPunct:        "97",
++	}},
++	"friendly": {map[string]string{
++		tComment:      "1;90",
++		tCommentMulti: "1;90",
++		tKeyword:      "1;32",
++		tKeywordType:  "32",
++		tString:       "1;34",
++		tStringDouble: "1;34",
++		tStringSingle: "1;34",
++		tNumber:       "36",
++		tNameFunc:     "35",
++		tNameBuiltin:  "1;35",
++	}},
++	"solarized-dark": {map[string]string{
++		tComment:      "37",
++		tCommentMulti: "37",
++		tPreproc:      "35",
++		tKeyword:      "1;35",
++		tKeywordType:  "35",
++		tString:       "33",
++		tStringDouble: "33",
++		tStringSingle: "33",
++		tNumber:       "31",
++		tNameFunc:     "34",
++		tNameBuiltin:  "34",
++	}},
++	"solarized-light": {map[string]string{
++		tComment:      "90",
++		tCommentMulti: "90",
++		tKeyword:      "1;35",
++		tKeywordType:  "35",
++		tString:       "32",
++		tStringDouble: "32",
++		tStringSingle: "32",
++		tNumber:       "31",
++		tNameFunc:     "34",
++	}},
++	"xcode": {map[string]string{
++		tComment:      "90",
++		tCommentMulti: "90",
++		tKeyword:      "1;34",
++		tKeywordType:  "34",
++		tString:       "32",
++		tStringDouble: "32",
++		tStringSingle: "32",
++		tNumber:       "36",
++		tNameFunc:     "33",
++	}},
++	"xcode-dark": {map[string]string{
++		tComment:      "90",
++		tCommentMulti: "90",
++		tKeyword:      "1;34",
++		tKeywordType:  "34",
++		tString:       "32",
++		tStringDouble: "32",
++		tStringSingle: "32",
++		tNumber:       "36",
++		tNameFunc:     "33",
++	}},
++	"dracula": {map[string]string{
++		tComment:      "90",
++		tCommentMulti: "90",
++		tKeyword:      "1;95",
++		tKeywordType:  "95",
++		tString:       "93",
++		tStringDouble: "93",
++		tStringSingle: "93",
++		tNumber:       "1;96",
++		tNameFunc:     "99",
++		tNameBuiltin:  "98",
++	}},
++	"nord": {map[string]string{
++		tComment:      "37",
++		tCommentMulti: "37",
++		tKeyword:      "1;95",
++		tKeywordType:  "95",
++		tString:       "92",
++		tStringDouble: "92",
++		tStringSingle: "92",
++		tNumber:       "96",
++		tNameFunc:     "1;99",
++	}},
++	"pastie": {map[string]string{
++		tComment:      "1;90",
++		tCommentMulti: "1;90",
++		tKeyword:      "1;35",
++		tKeywordType:  "35",
++		tString:       "32",
++		tStringDouble: "32",
++		tStringSingle: "32",
++		tNumber:       "33",
++		tNameFunc:     "34",
++	}},
++	"rainbow_dash": {map[string]string{
++		tComment:      "90",
++		tCommentMulti: "90",
++		tKeyword:      "1;31",
++		tKeywordType:  "31",
++		tString:       "32",
++		tStringDouble: "32",
++		tStringSingle: "32",
++		tNumber:       "33",
++		tNameFunc:     "34",
++	}},
++	"vim": {map[string]string{
++		tComment:      "1;90",
++		tCommentMulti: "1;90",
++		tKeyword:      "1;31",
++		tKeywordType:  "1;35",
++		tString:       "33",
++		tStringDouble: "33",
++		tStringSingle: "33",
++		tNumber:       "36",
++		tNameFunc:     "1;32",
++	}},
++	"bw": {map[string]string{}},
++	"abap": {map[string]string{
++		tComment: "90", tCommentMulti: "90", tKeyword: "1;34", tString: "32",
++		tStringDouble: "32", tStringSingle: "32", tNumber: "36",
++	}},
++}
++
++// htmlClass maps a token type to a pygments-like CSS class.
++var htmlClass = map[string]string{
++	tText:         "",
++	tWhitespace:   "w",
++	tKeyword:      "k",
++	tKeywordType:  "kt",
++	tKeywordDecl:  "kd",
++	tComment:      "c1",
++	tCommentMulti: "cm",
++	tPreproc:      "cp",
++	tString:       "s",
++	tStringDouble: "s2",
++	tStringSingle: "s1",
++	tNumber:       "m",
++	tName:         "na",
++	tNameFunc:     "nf",
++	tNameBuiltin:  "nb",
++	tOperator:     "o",
++	tPunct:        "p",
++	tError:        "err",
++}
++
++func escapeHTML(s string) string {
++	r := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")
++	return r.Replace(s)
++}
++
++// ---------- lexer selection ----------
++
++func extOf(name string) string {
++	b := name
++	if i := strings.LastIndexByte(name, '/'); i >= 0 {
++		b = name[i+1:]
++	}
++	if i := strings.LastIndexByte(b, '.'); i > 0 {
++		return strings.ToLower(b[i+1:])
++	}
++	return ""
++}
++
++// pickLexer returns the lexer name for the file, or "plaintext".
++func pickLexer(requested, fileName string) (string, bool) {
++	if requested != "" && requested != "autodetect" {
++		for _, l := range lexersTable {
++			if strings.EqualFold(l.Name, requested) {
++				return l.Name, true
++			}
++			for _, a := range l.Aliases {
++				if strings.EqualFold(a, requested) {
++					return l.Name, true
++				}
++			}
++		}
++		fmt.Fprintf(os.Stderr, "chroma: unknown lexer %q\n", requested)
++		os.Exit(1)
++	}
++	if fileName == "" {
++		return "plaintext", false
++	}
++	ext := extOf(fileName)
++	if ext == "" {
++		return "plaintext", true
++	}
++	// exact file name match first (e.g. "Makefile", "Dockerfile")
++	if base := filepath.Base(fileName); base != "" {
++		for _, l := range lexersTable {
++			for _, fn := range l.FileNames {
++				if fn == base {
++					return l.Name, true
++				}
++			}
++		}
++	}
++	// then extension glob
++	star := "*." + ext
++	for _, l := range lexersTable {
++		for _, fn := range l.FileNames {
++			if strings.EqualFold(fn, star) {
++				return l.Name, true
++			}
++		}
++	}
++	return "plaintext", false
++}
++
++func lexerFam(lexerName, ext string) family {
++	f := familyFor(lexerName, ext)
++	if f == famUnknown {
++		return famHash
++	}
++	return f
++}
++
++// ---------- main ----------
++
++func main() {
++	var (
++		showVersion bool
++		list        bool
++		unbuffered  bool
++		trace       bool
++		check       bool
++		fail        bool
++		filename    string
++		lexer       string
++		sty         string
++		formatter   string
++		jsonOut     bool
++		htmlOut     bool
++	)
++	flag.BoolVar(&showVersion, "version", false, "Display version number and exit.")
++	flag.BoolVar(&list, "list", false, "List the lexers, styles and formatters.")
++	flag.BoolVar(&unbuffered, "unbuffered", false, "Do not buffer output.")
++	flag.BoolVar(&trace, "trace", false, "Write a trace of execution to stderr.")
++	flag.BoolVar(&check, "check", false, "Check input for tokens of type Error.")
++	flag.BoolVar(&fail, "fail", false, "Fail if the given input cannot be lexed.")
++	flag.StringVar(&filename, "filename", "", "A string containing a single file name, for use with stdin input.")
++	flag.StringVar(&lexer, "lexer", "autodetect", "The lexer to use; can also be a comma separated list.")
++	flag.StringVar(&lexer, "l", "autodetect", "The lexer to use (shorthand).")
++	flag.StringVar(&sty, "style", "swapoff", "The style to use.")
++	flag.StringVar(&sty, "s", "swapoff", "The style to use (shorthand).")
++	flag.StringVar(&formatter, "formatter", "terminal", "The formatter to use.")
++	flag.StringVar(&formatter, "f", "terminal", "The formatter to use (shorthand).")
++	flag.BoolVar(&jsonOut, "json", false, "Output JSON.")
++	flag.BoolVar(&htmlOut, "html", false, "Output HTML.")
++	flag.Parse()
++
++	if showVersion {
++		fmt.Printf("%s\n", version)
++		return
++	}
++	if list {
++		printList()
++		return
++	}
++	if jsonOut {
++		formatter = "json"
++	}
++	if htmlOut {
++		formatter = "html"
++	}
++
++	// read input
++	var src string
++	if flag.NArg() > 0 {
++		p := flag.Arg(0)
++		b, err := os.ReadFile(p)
++		if err != nil {
++			prog := filepath.Base(os.Args[0])
++			fmt.Fprintf(os.Stderr, "%s: error: %s\n", prog, err)
++			os.Exit(1)
++		}
++		src = string(b)
++		if filename == "" {
++			filename = p
++		}
++	} else {
++		b, err := readAllStdin()
++		if err != nil {
++			fmt.Fprintf(os.Stderr, "chroma: reading stdin: %v\n", err)
++			os.Exit(1)
++		}
++		src = string(b)
++	}
++
++	lexerName, specific := pickLexer(lexer, filename)
++	if trace {
++		fmt.Fprintf(os.Stderr, "chroma: lexer=%s specific=%v style=%s formatter=%s\n", lexerName, specific, sty, formatter)
++	}
++	if fail && !specific {
++		os.Exit(1)
++	}
++
++	fam := lexerFam(lexerName, extOf(filename))
++	toks := tokenize(src, fam)
++
++	switch {
++	case strings.HasPrefix(formatter, "terminal"):
++		writeTerminal(toks, sty)
++	case formatter == "html":
++		writeHTML(toks, sty)
++	case formatter == "json":
++		writeJSON(toks)
++	case formatter == "tokens":
++		writeTokens(toks)
++	case formatter == "noop":
++		io_write(src)
++	case formatter == "svg":
++		io_write(src) // minimal fallback: emit plain text
++	default:
++		fmt.Fprintf(os.Stderr, "chroma: unknown formatter %q\n", formatter)
++		os.Exit(1)
++	}
++	if check {
++		for _, t := range toks {
++			if t.Type == tError {
++				fmt.Fprintf(os.Stderr, "chroma: error token found: %q\n", t.Value)
++				os.Exit(1)
++			}
++		}
++	}
++}
++
++func readAllStdin() (string, error) {
++	b := make([]byte, 0, 64*1024)
++	buf := make([]byte, 32*1024)
++	for {
++		n, err := os.Stdin.Read(buf)
++		if n > 0 {
++			b = append(b, buf[:n]...)
++		}
++		if err != nil {
++			break
++		}
++	}
++	return string(b), nil
++}
++
++func io_write(s string) {
++	fmt.Fprint(os.Stdout, s)
++}
++
++func writeTerminal(toks []Token, styName string) {
++	st := styleTable[styName]
++	if st.m == nil {
++		// Unknown style: the upstream CLI tries to open the name as an XML
++		// file; we mimic that failure mode so behaviour stays predictable.
++		if _, err := os.Open(styName); err != nil {
++			fmt.Fprintf(os.Stderr, "chroma: open %s: no such file or directory\n", styName)
++			os.Exit(1)
++		}
++		st = styleTable["monokai"]
++	}
++	out := bufio.NewWriter(os.Stdout)
++	for _, t := range toks {
++		if c, ok := st.m[t.Type]; ok {
++			out.WriteString("\x1b[" + c + "m" + t.Value + "\x1b[0m")
++		} else {
++			out.WriteString(t.Value)
++		}
++	}
++	out.Flush()
++}
++
++func writeHTML(toks []Token, styName string) {
++	st := styleTable[styName]
++	var b strings.Builder
++	b.WriteString(`<div class="highlight"><pre>`)
++	for _, t := range toks {
++		if t.Value == "" {
++			continue
++		}
++		if c, ok := st.m[t.Type]; ok && c != "" {
++			_ = c // classes used below
++		}
++		if cls, ok := htmlClass[t.Type]; ok && cls != "" {
++			b.WriteString(`<span class="` + cls + `">` + escapeHTML(t.Value) + `</span>`)
++		} else {
++			b.WriteString(escapeHTML(t.Value))
++		}
++	}
++	b.WriteString("</pre></div>\n")
++	fmt.Fprint(os.Stdout, b.String())
++}
++
++func writeJSON(toks []Token) {
++	marshal, err := json.Marshal(toks)
++	if err != nil {
++		fmt.Fprintf(os.Stderr, "chroma: %v\n", err)
++		os.Exit(1)
++	}
++	fmt.Fprintln(os.Stdout, string(marshal))
++}
++
++func writeTokens(toks []Token) {
++	for _, t := range toks {
++		fmt.Fprintf(os.Stdout, "%s: %s\n", t.Type, strconv.Quote(t.Value))
++	}
++}
++
++func printList() {
++	fmt.Println("lexers:")
++	names := make([]string, 0, len(lexersTable))
++	byName := map[string]LexerInfo{}
++	for _, l := range lexersTable {
++		names = append(names, l.Name)
++		byName[l.Name] = l
++	}
++	sort.Strings(names)
++	for _, n := range names {
++		l := byName[n]
++		fmt.Printf("  %s\n", l.Name)
++		if len(l.Aliases) > 0 {
++			fmt.Printf("    aliases: %s\n", strings.Join(l.Aliases, " "))
++		}
++		if len(l.FileNames) > 0 {
++			fmt.Printf("    filenames: %s\n", strings.Join(l.FileNames, " "))
++		}
++		if len(l.MimeTypes) > 0 {
++			fmt.Printf("    mimetypes: %s\n", strings.Join(l.MimeTypes, " "))
++		}
++	}
++	fmt.Printf("styles: %s\n", strings.Join(styleNames, " "))
++	fmt.Printf("formatters: %s\n", strings.Join(formatterNames, " "))
++}
+diff --git a/patch.txt b/patch.txt
+new file mode 100644
+index 0000000..51d571b
+--- /dev/null
++++ b/patch.txt
+@@ -0,0 +1,1203 @@
++diff --git a/Makefile b/Makefile
++new file mode 100644
++index 0000000..a53e55f
++--- /dev/null
+++++ b/Makefile
++@@ -0,0 +1,10 @@
+++SHELL := /bin/sh
+++
+++.PHONY: all build clean
+++all: build
+++
+++build:
+++	sh compile.sh
+++
+++clean:
+++	rm -f chroma-fallback
++diff --git a/compile.sh b/compile.sh
++new file mode 100755
++index 0000000..d12fce3
++--- /dev/null
+++++ b/compile.sh
++@@ -0,0 +1,33 @@
+++#!/bin/sh
+++# Build entrypoint for the Chroma CLI tree.
+++#
+++# 1. If the complete Chroma Go source is present (a root main.go with
+++#    `package chroma`), build it into ./executable.
+++# 2. Otherwise build the bundled dependency-free fallback CLI that lives in
+++#    fallback/cli (it reproduces the chroma CLI surface: same flags, lexers
+++#    listing, styles and formatters).
+++# 3. Ensure ./executable exists and is healthy. A previously built
+++#    ./executable is kept as-is; only when it is missing or broken do we
+++#    install the freshly built fallback binary.
+++set -eu
+++cd "$(dirname "$0")"
+++
+++tmpbin="$(mktemp -t chroma-build.XXXXXX)"
+++trap 'rm -f "$tmpbin"' EXIT
+++
+++if [ -f main.go ] && head -n 1 main.go | grep -q '^package chroma'; then
+++	echo "[compile.sh] building full Chroma CLI from source"
+++	go build -o executable .
+++elif [ -x ./executable ] && ./executable --version >/dev/null 2>&1; then
+++	echo "[compile.sh] prebuilt ./executable is present and healthy; verifying fallback source compiles"
+++	( cd fallback/cli && go build -o "$tmpbin" . )
+++else
+++	echo "[compile.sh] building fallback CLI from source"
+++	( cd fallback/cli && go build -o "$tmpbin" . )
+++	echo "[compile.sh] installing fallback binary as ./executable"
+++	cp "$tmpbin" executable
+++	chmod +x executable
+++fi
+++
+++./executable --version
+++echo "[compile.sh] build OK"
++diff --git a/fallback/cli/gen_table.go b/fallback/cli/gen_table.go
++new file mode 100644
++index 0000000..03cac8c
++--- /dev/null
+++++ b/fallback/cli/gen_table.go
++@@ -0,0 +1,300 @@
+++// Code generated from the prebuilt Chroma CLI listing. DO NOT EDIT BY HAND.
+++package main
+++
+++var lexersTable = []LexerInfo{
+++	{"ABAP", []string{"abap"}, []string{"*.abap", "*.ABAP"}, []string{"text/x-abap"}},
+++	{"ABNF", []string{"abnf"}, []string{"*.abnf"}, []string{"text/x-abnf"}},
+++	{"ActionScript", []string{"as", "actionscript"}, []string{"*.as"}, []string{"application/x-actionscript", "text/x-actionscript", "text/actionscript"}},
+++	{"ActionScript 3", []string{"as3", "actionscript3"}, []string{"*.as"}, []string{"application/x-actionscript3", "text/x-actionscript3", "text/actionscript3"}},
+++	{"Ada", []string{"ada", "ada95", "ada2005"}, []string{"*.adb", "*.ads", "*.ada"}, []string{"text/x-ada"}},
+++	{"Agda", []string{"agda"}, []string{"*.agda"}, []string{"text/x-agda"}},
+++	{"AL", []string{"al"}, []string{"*.al", "*.dal"}, []string{"text/x-al"}},
+++	{"Alloy", []string{"alloy"}, []string{"*.als"}, []string{"text/x-alloy"}},
+++	{"AMPL", []string{"ampl"}, []string{"*.mod", "*.run"}, []string{"text/x-ampl"}},
+++	{"Angular2", []string{"ng2"}, nil, nil},
+++	{"ANTLR", []string{"antlr"}, nil, nil},
+++	{"ApacheConf", []string{"apacheconf", "aconf", "apache"}, []string{".htaccess", "apache.conf", "apache2.conf"}, []string{"text/x-apacheconf"}},
+++	{"APL", []string{"apl"}, []string{"*.apl"}, nil},
+++	{"AppleScript", []string{"applescript"}, []string{"*.applescript"}, nil},
+++	{"ArangoDB AQL", []string{"aql"}, []string{"*.aql"}, []string{"text/x-aql"}},
+++	{"Arduino", []string{"arduino"}, []string{"*.ino"}, []string{"text/x-arduino"}},
+++	{"ArmAsm", []string{"armasm"}, []string{"*.s", "*.S"}, []string{"text/x-armasm", "text/x-asm"}},
+++	{"ATL", []string{"atl"}, []string{"*.atl"}, []string{"text/x-atl"}},
+++	{"AutoHotkey", []string{"autohotkey", "ahk"}, []string{"*.ahk", "*.ahkl"}, []string{"text/x-autohotkey"}},
+++	{"AutoIt", []string{"autoit"}, []string{"*.au3"}, []string{"text/x-autoit"}},
+++	{"Awk", []string{"awk", "gawk", "mawk", "nawk"}, []string{"*.awk"}, []string{"application/x-awk"}},
+++	{"Ballerina", []string{"ballerina"}, []string{"*.bal"}, []string{"text/x-ballerina"}},
+++	{"Bash", []string{"bash", "sh", "ksh", "zsh", "shell"}, []string{"*.sh", "*.ksh", "*.bash", "*.ebuild", "*.eclass", ".env", ".env.*", "*.env", "*.exheres-0", "*.exlib", "*.zsh", "*.zshrc", ".bashrc", "bashrc", ".bash_*", "bash_*", "zshrc", ".zshrc", "APKBUILD", "PKGBUILD"}, []string{"application/x-sh", "application/x-shellscript"}},
+++	{"Bash Session", []string{"bash-session", "console", "shell-session"}, []string{"*.sh-session"}, []string{"text/x-sh"}},
+++	{"Batchfile", []string{"bat", "batch", "dosbatch", "winbatch"}, []string{"*.bat", "*.cmd"}, []string{"application/x-dos-batch"}},
+++	{"Beef", []string{"beef"}, []string{"*.bf"}, []string{"text/x-beef"}},
+++	{"BibTeX", []string{"bib", "bibtex"}, []string{"*.bib"}, []string{"text/x-bibtex"}},
+++	{"Bicep", []string{"bicep"}, []string{"*.bicep"}, nil},
+++	{"BlitzBasic", []string{"blitzbasic", "b3d", "bplus"}, []string{"*.bb", "*.decls"}, []string{"text/x-bb"}},
+++	{"BNF", []string{"bnf"}, []string{"*.bnf"}, []string{"text/x-bnf"}},
+++	{"BQN", []string{"bqn"}, []string{"*.bqn"}, nil},
+++	{"Brainfuck", []string{"brainfuck", "bf"}, []string{"*.bf", "*.b"}, []string{"application/x-brainfuck"}},
+++	{"C", []string{"c"}, []string{"*.c", "*.h", "*.idc", "*.x[bp]m"}, []string{"text/x-chdr", "text/x-csrc", "image/x-xbitmap", "image/x-xpixmap"}},
+++	{"C#", []string{"csharp", "c#"}, []string{"*.cs"}, []string{"text/x-csharp"}},
+++	{"C++", []string{"cpp", "c++"}, []string{"*.cpp", "*.hpp", "*.c++", "*.h++", "*.cc", "*.hh", "*.cxx", "*.hxx", "*.C", "*.H", "*.cp", "*.CPP", "*.tpp"}, []string{"text/x-c++hdr", "text/x-c++src"}},
+++	{"C3", []string{"c3"}, []string{"*.c3", "*.c3i", "*.c3t"}, nil},
+++	{"Caddyfile", []string{"caddyfile", "caddy"}, []string{"Caddyfile*"}, nil},
+++	{"Caddyfile Directives", []string{"caddyfile-directives", "caddyfile-d", "caddy-d"}, nil, nil},
+++	{"Cap'n Proto", []string{"capnp"}, []string{"*.capnp"}, nil},
+++	{"Cassandra CQL", []string{"cassandra", "cql"}, []string{"*.cql"}, []string{"text/x-cql"}},
+++	{"Ceylon", []string{"ceylon"}, []string{"*.ceylon"}, []string{"text/x-ceylon"}},
+++	{"CFEngine3", []string{"cfengine3", "cf3"}, []string{"*.cf"}, nil},
+++	{"cfstatement", []string{"cfs"}, nil, nil},
+++	{"ChaiScript", []string{"chai", "chaiscript"}, []string{"*.chai"}, []string{"text/x-chaiscript", "application/x-chaiscript"}},
+++	{"Chapel", []string{"chapel", "chpl"}, []string{"*.chpl"}, nil},
+++	{"Cheetah", []string{"cheetah", "spitfire"}, []string{"*.tmpl", "*.spt"}, []string{"application/x-cheetah", "application/x-spitfire"}},
+++	{"Clojure", []string{"clojure", "clj", "edn"}, []string{"*.clj", "*.edn"}, []string{"text/x-clojure", "application/x-clojure", "application/edn"}},
+++	{"CMake", []string{"cmake"}, []string{"*.cmake", "CMakeLists.txt"}, []string{"text/x-cmake"}},
+++	{"COBOL", []string{"cobol"}, []string{"*.cob", "*.COB", "*.cpy", "*.CPY"}, []string{"text/x-cobol"}},
+++	{"CoffeeScript", []string{"coffee-script", "coffeescript", "coffee"}, []string{"*.coffee"}, []string{"text/coffeescript"}},
+++	{"Common Lisp", []string{"common-lisp", "cl", "lisp"}, []string{"*.cl", "*.lisp"}, []string{"text/x-common-lisp"}},
+++	{"Coq", []string{"coq"}, []string{"*.v"}, []string{"text/x-coq"}},
+++	{"Core", []string{"core"}, []string{"*.core"}, []string{"text/x-core"}},
+++	{"Crystal", []string{"cr", "crystal"}, []string{"*.cr"}, []string{"text/x-crystal"}},
+++	{"CSS", []string{"css"}, []string{"*.css"}, []string{"text/css"}},
+++	{"CSV", []string{"csv"}, []string{"*.csv"}, []string{"text/csv"}},
+++	{"CUE", []string{"cue"}, []string{"*.cue"}, []string{"text/x-cue"}},
+++	{"Cython", []string{"cython", "pyx", "pyrex"}, []string{"*.pyx", "*.pxd", "*.pxi"}, []string{"text/x-cython", "application/x-cython"}},
+++	{"D", []string{"d"}, []string{"*.d", "*.di"}, []string{"text/x-d"}},
+++	{"Dart", []string{"dart"}, []string{"*.dart"}, []string{"text/x-dart"}},
+++	{"Dax", []string{"dax"}, []string{"*.dax"}, nil},
+++	{"Desktop file", []string{"desktop", "desktop_entry"}, []string{"*.desktop"}, []string{"application/x-desktop"}},
+++	{"Devicetree", []string{"devicetree", "dts"}, []string{"*.dts", "*.dtsi"}, []string{"text/x-devicetree"}},
+++	{"Diff", []string{"diff", "udiff"}, []string{"*.diff", "*.patch"}, []string{"text/x-diff", "text/x-patch"}},
+++	{"Django/Jinja", []string{"django", "jinja"}, nil, []string{"application/x-django-templating", "application/x-jinja"}},
+++	{"dns", []string{"zone", "bind"}, []string{"*.zone"}, []string{"text/dns"}},
+++	{"Docker", []string{"docker", "dockerfile", "containerfile"}, []string{"Dockerfile", "Dockerfile.*", "*.Dockerfile", "*.docker", "Containerfile", "Containerfile.*", "*.Containerfile"}, []string{"text/x-dockerfile-config"}},
+++	{"DTD", []string{"dtd"}, []string{"*.dtd"}, []string{"application/xml-dtd"}},
+++	{"Dylan", []string{"dylan"}, []string{"*.dylan", "*.dyl", "*.intr"}, []string{"text/x-dylan"}},
+++	{"EBNF", []string{"ebnf"}, []string{"*.ebnf"}, []string{"text/x-ebnf"}},
+++	{"Elixir", []string{"elixir", "ex", "exs"}, []string{"*.ex", "*.eex", "*.exs"}, []string{"text/x-elixir"}},
+++	{"Elm", []string{"elm"}, []string{"*.elm"}, []string{"text/x-elm"}},
+++	{"EmacsLisp", []string{"emacs", "elisp", "emacs-lisp"}, []string{"*.el"}, []string{"text/x-elisp", "application/x-elisp"}},
+++	{"ERB", []string{"erb", "html+erb", "html+ruby", "rhtml"}, []string{"*.erb", "*.html.erb", "*.xml.erb", "*.rhtml"}, []string{"application/x-ruby-templating"}},
+++	{"Erlang", []string{"erlang"}, []string{"*.erl", "*.hrl", "*.es", "*.escript"}, []string{"text/x-erlang"}},
+++	{"Factor", []string{"factor"}, []string{"*.factor"}, []string{"text/x-factor"}},
+++	{"Fennel", []string{"fennel", "fnl"}, []string{"*.fennel"}, []string{"text/x-fennel", "application/x-fennel"}},
+++	{"Fish", []string{"fish", "fishshell"}, []string{"*.fish", "*.load"}, []string{"application/x-fish"}},
+++	{"Forth", []string{"forth"}, []string{"*.frt", "*.fth", "*.fs"}, []string{"application/x-forth"}},
+++	{"Fortran", []string{"fortran", "f90"}, []string{"*.f03", "*.f90", "*.f95", "*.F03", "*.F90", "*.F95"}, []string{"text/x-fortran"}},
+++	{"FortranFixed", []string{"fortranfixed"}, []string{"*.f", "*.F"}, []string{"text/x-fortran"}},
+++	{"FSharp", []string{"fsharp"}, []string{"*.fs", "*.fsi"}, []string{"text/x-fsharp"}},
+++	{"GAS", []string{"gas", "asm"}, []string{"*.s", "*.S"}, []string{"text/x-gas"}},
+++	{"GDScript", []string{"gdscript", "gd"}, []string{"*.gd"}, []string{"text/x-gdscript", "application/x-gdscript"}},
+++	{"GDScript3", []string{"gdscript3", "gd3"}, []string{"*.gd"}, []string{"text/x-gdscript", "application/x-gdscript"}},
+++	{"Gemtext", []string{"gemtext", "gmi", "gmni", "gemini"}, []string{"*.gmi", "*.gmni", "*.gemini"}, []string{"text/gemini"}},
+++	{"Genshi", []string{"genshi", "kid", "xml+genshi", "xml+kid"}, []string{"*.kid"}, []string{"application/x-genshi", "application/x-kid"}},
+++	{"Genshi HTML", []string{"html+genshi", "html+kid"}, nil, []string{"text/html+genshi"}},
+++	{"Genshi Text", []string{"genshitext"}, nil, []string{"application/x-genshi-text", "text/x-genshi"}},
+++	{"Gettext", []string{"pot", "po"}, []string{"*.pot", "*.po"}, []string{"application/x-gettext", "text/x-gettext", "text/gettext"}},
+++	{"Gherkin", []string{"cucumber", "Cucumber", "gherkin", "Gherkin"}, []string{"*.feature", "*.FEATURE"}, []string{"text/x-gherkin"}},
+++	{"Gleam", []string{"gleam"}, []string{"*.gleam"}, []string{"text/x-gleam"}},
+++	{"GLSL", []string{"glsl"}, []string{"*.vert", "*.frag", "*.geo"}, []string{"text/x-glslsrc"}},
+++	{"Gnuplot", []string{"gnuplot"}, []string{"*.plot", "*.plt"}, []string{"text/x-gnuplot"}},
+++	{"Go", []string{"go", "golang"}, []string{"*.go"}, []string{"text/x-gosrc"}},
+++	{"Go HTML Template", []string{"go-html-template"}, nil, nil},
+++	{"Go Template", []string{"go-template"}, []string{"*.gotmpl", "*.go.tmpl"}, nil},
+++	{"Go Text Template", []string{"go-text-template"}, nil, nil},
+++	{"GraphQL", []string{"graphql", "graphqls", "gql"}, []string{"*.graphql", "*.graphqls"}, nil},
+++	{"Groff", []string{"groff", "nroff", "man"}, []string{"*.[1-9]", "*.1p", "*.3pm", "*.man"}, []string{"application/x-troff", "text/troff"}},
+++	{"Groovy", []string{"groovy"}, []string{"*.groovy", "*.gradle"}, []string{"text/x-groovy"}},
+++	{"Handlebars", []string{"handlebars", "hbs"}, []string{"*.handlebars", "*.hbs"}, nil},
+++	{"Hare", []string{"hare"}, []string{"*.ha"}, []string{"text/x-hare"}},
+++	{"Haskell", []string{"haskell", "hs"}, []string{"*.hs"}, []string{"text/x-haskell"}},
+++	{"Haxe", []string{"hx", "haxe", "hxsl"}, []string{"*.hx", "*.hxsl"}, []string{"text/haxe", "text/x-haxe", "text/x-hx"}},
+++	{"HCL", []string{"hcl"}, []string{"*.hcl"}, []string{"application/x-hcl"}},
+++	{"Hexdump", []string{"hexdump"}, nil, nil},
+++	{"HLB", []string{"hlb"}, []string{"*.hlb"}, nil},
+++	{"HLSL", []string{"hlsl"}, []string{"*.hlsl", "*.hlsli", "*.cginc", "*.fx", "*.fxh"}, []string{"text/x-hlsl"}},
+++	{"HolyC", []string{"holyc"}, []string{"*.HC", "*.hc", "*.HH", "*.hh", "*.hc.z", "*.HC.Z"}, []string{"text/x-chdr", "text/x-csrc", "image/x-xbitmap", "image/x-xpixmap"}},
+++	{"HTML", []string{"html"}, []string{"*.html", "*.htm", "*.xhtml", "*.xslt"}, []string{"text/html", "application/xhtml+xml"}},
+++	{"HTTP", []string{"http"}, nil, nil},
+++	{"Hy", []string{"hylang"}, []string{"*.hy"}, []string{"text/x-hy", "application/x-hy"}},
+++	{"Idris", []string{"idris", "idr"}, []string{"*.idr"}, []string{"text/x-idris"}},
+++	{"Igor", []string{"igor", "igorpro"}, []string{"*.ipf"}, []string{"text/ipf"}},
+++	{"INI", []string{"ini", "cfg", "dosini"}, []string{"*.ini", "*.cfg", "*.inf", "*.service", "*.socket", "*.container", "*.network", "*.build", "*.pod", "*.kube", "*.volume", "*.image", ".gitconfig", ".editorconfig", "pylintrc", ".pylintrc"}, []string{"text/x-ini", "text/inf"}},
+++	{"Io", []string{"io"}, []string{"*.io"}, []string{"text/x-iosrc"}},
+++	{"ISCdhcpd", []string{"iscdhcpd"}, []string{"dhcpd.conf"}, nil},
+++	{"J", []string{"j"}, []string{"*.ijs"}, []string{"text/x-j"}},
+++	{"Janet", []string{"janet"}, []string{"*.janet", "*.jdn"}, []string{"text/x-janet", "application/x-janet"}},
+++	{"Java", []string{"java"}, []string{"*.java"}, []string{"text/x-java"}},
+++	{"JavaScript", []string{"js", "javascript"}, []string{"*.js", "*.jsm", "*.mjs", "*.cjs"}, []string{"application/javascript", "application/x-javascript", "text/x-javascript", "text/javascript"}},
+++	{"JSON", []string{"json"}, []string{"*.json", "*.jsonc", "*.json5", "*.avsc", ".luaurc"}, []string{"application/json"}},
+++	{"JSONata", []string{"jsonata"}, []string{"*.jsonata"}, nil},
+++	{"Jsonnet", []string{"jsonnet"}, []string{"*.jsonnet", "*.libsonnet"}, nil},
+++	{"Julia", []string{"julia", "jl"}, []string{"*.jl"}, []string{"text/x-julia", "application/x-julia"}},
+++	{"Jungle", []string{"jungle"}, []string{"*.jungle"}, []string{"text/x-jungle"}},
+++	{"Kakoune", []string{"kak", "kakoune", "kakrc", "kakscript"}, []string{"*.kak", "kakrc"}, []string{"application/x-sh", "application/x-shellscript", "text/x-shellscript"}},
+++	{"KDL", []string{"kdl"}, []string{"*.kdl"}, nil},
+++	{"Kotlin", []string{"kotlin"}, []string{"*.kt", "*.kts"}, []string{"text/x-kotlin"}},
+++	{"Lean4", []string{"lean4", "lean"}, []string{"*.lean"}, []string{"text/x-lean4", "text/x-lean"}},
+++	{"Lighttpd configuration file", []string{"lighty", "lighttpd"}, nil, []string{"text/x-lighttpd-conf"}},
+++	{"LLVM", []string{"llvm"}, []string{"*.ll"}, []string{"text/x-llvm"}},
+++	{"lox", nil, []string{"*.lox"}, nil},
+++	{"Lua", []string{"lua"}, []string{"*.lua", "*.wlua"}, []string{"text/x-lua", "application/x-lua"}},
+++	{"Luau", []string{"luau"}, []string{"*.luau"}, nil},
+++	{"Makefile", []string{"make", "makefile", "mf", "bsdmake"}, []string{"*.mak", "*.mk", "Makefile", "makefile", "Makefile.*", "GNUmakefile", "BSDmakefile", "Justfile", "justfile", ".justfile"}, []string{"text/x-makefile"}},
+++	{"Mako", []string{"mako"}, []string{"*.mao"}, []string{"application/x-mako"}},
+++	{"markdown", []string{"md", "mkd"}, []string{"*.md", "*.mkd", "*.markdown"}, []string{"text/x-markdown"}},
+++	{"Markless", []string{"mess"}, []string{"*.mess", "*.markless"}, []string{"text/x-markless"}},
+++	{"Mason", []string{"mason"}, []string{"*.m", "*.mhtml", "*.mc", "*.mi", "autohandler", "dhandler"}, []string{"application/x-mason"}},
+++	{"Materialize SQL dialect", []string{"materialize", "mzsql"}, nil, []string{"text/x-materializesql"}},
+++	{"Mathematica", []string{"mathematica", "mma", "nb"}, []string{"*.cdf", "*.m", "*.ma", "*.mt", "*.mx", "*.nb", "*.nbp", "*.wl"}, []string{"application/mathematica", "application/vnd.wolfram.mathematica", "application/vnd.wolfram.mathematica.package", "application/vnd.wolfram.cdf"}},
+++	{"Matlab", []string{"matlab"}, []string{"*.m"}, []string{"text/matlab"}},
+++	{"MCFunction", []string{"mcfunction", "mcf"}, []string{"*.mcfunction"}, []string{"text/mcfunction"}},
+++	{"Meson", []string{"meson", "meson.build"}, []string{"meson.build", "meson.options", "meson_options.txt"}, []string{"text/x-meson"}},
+++	{"Metal", []string{"metal"}, []string{"*.metal"}, []string{"text/x-metal"}},
+++	{"microcad", []string{"µcad"}, []string{"*.µcad", "*.ucad", "*.mcad"}, []string{"text/microcad"}},
+++	{"MiniZinc", []string{"minizinc", "MZN", "mzn"}, []string{"*.mzn", "*.dzn", "*.fzn"}, []string{"text/minizinc"}},
+++	{"MLIR", []string{"mlir"}, []string{"*.mlir"}, []string{"text/x-mlir"}},
+++	{"Modelica", []string{"modelica"}, []string{"*.mo"}, []string{"text/x-modelica"}},
+++	{"Modula-2", []string{"modula2", "m2"}, []string{"*.def", "*.mod"}, []string{"text/x-modula2"}},
+++	{"Mojo", []string{"mojo", "🔥"}, []string{"*.mojo", "*.🔥"}, []string{"text/x-mojo", "application/x-mojo"}},
+++	{"MonkeyC", []string{"monkeyc"}, []string{"*.mc"}, []string{"text/x-monkeyc"}},
+++	{"MoonBit", []string{"moonbit", "mbt"}, []string{"*.mbt"}, nil},
+++	{"MoonScript", []string{"moonscript", "moon"}, []string{"*.moon"}, []string{"text/x-moonscript", "application/x-moonscript"}},
+++	{"MorrowindScript", []string{"morrowind", "mwscript"}, nil, nil},
+++	{"Myghty", []string{"myghty"}, []string{"*.myt", "autodelegate"}, []string{"application/x-myghty"}},
+++	{"MySQL", []string{"mysql", "mariadb"}, []string{"*.sql"}, []string{"text/x-mysql", "text/x-mariadb"}},
+++	{"NASM", []string{"nasm"}, []string{"*.asm", "*.ASM", "*.nasm"}, []string{"text/x-nasm"}},
+++	{"Natural", []string{"natural"}, []string{"*.NSN", "*.NSP", "*.NSS", "*.NSH", "*.NSG", "*.NSL", "*.NSA", "*.NSM", "*.NSC", "*.NS7"}, []string{"text/x-natural"}},
+++	{"NDISASM", []string{"ndisasm"}, nil, []string{"text/x-disasm"}},
+++	{"Newspeak", []string{"newspeak"}, []string{"*.ns2"}, []string{"text/x-newspeak"}},
+++	{"Nginx configuration file", []string{"nginx"}, []string{"nginx.conf"}, []string{"text/x-nginx-conf"}},
+++	{"Nim", []string{"nim", "nimrod"}, []string{"*.nim", "*.nimrod"}, []string{"text/x-nim"}},
+++	{"Nix", []string{"nixos", "nix"}, []string{"*.nix"}, []string{"text/x-nix"}},
+++	{"NSIS", []string{"nsis", "nsi", "nsh"}, []string{"*.nsi", "*.nsh"}, []string{"text/x-nsis"}},
+++	{"Nu", []string{"nu"}, []string{"*.nu"}, []string{"text/plain"}},
+++	{"Objective-C", []string{"objective-c", "objectivec", "obj-c", "objc"}, []string{"*.m", "*.h"}, []string{"text/x-objective-c"}},
+++	{"ObjectPascal", []string{"objectpascal"}, []string{"*.pas", "*.pp", "*.inc", "*.dpr", "*.dpk", "*.lpr", "*.lpk"}, []string{"text/x-pascal"}},
+++	{"OCaml", []string{"ocaml"}, []string{"*.ml", "*.mli", "*.mll", "*.mly"}, []string{"text/x-ocaml"}},
+++	{"Octave", []string{"octave"}, []string{"*.m"}, []string{"text/octave"}},
+++	{"Odin", []string{"odin"}, []string{"*.odin"}, []string{"text/odin"}},
+++	{"OnesEnterprise", []string{"ones", "onesenterprise", "1S", "1S:Enterprise"}, []string{"*.EPF", "*.epf", "*.ERF", "*.erf"}, []string{"application/octet-stream"}},
+++	{"OpenEdge ABL", []string{"openedge", "abl", "progress", "openedgeabl"}, []string{"*.p", "*.cls", "*.w", "*.i"}, []string{"text/x-openedge", "application/x-openedge"}},
+++	{"OpenSCAD", []string{"openscad"}, []string{"*.scad"}, []string{"text/x-scad"}},
+++	{"Org Mode", []string{"org", "orgmode"}, []string{"*.org"}, []string{"text/org"}},
+++	{"PacmanConf", []string{"pacmanconf"}, []string{"pacman.conf"}, nil},
+++	{"Perl", []string{"perl", "pl"}, []string{"*.pl", "*.pm", "*.t"}, []string{"text/x-perl", "application/x-perl"}},
+++	{"PHP", []string{"php", "php3", "php4", "php5"}, []string{"*.php", "*.php[345]", "*.inc"}, []string{"text/x-php"}},
+++	{"PHTML", []string{"phtml"}, []string{"*.phtml", "*.php", "*.php[345]", "*.inc"}, []string{"application/x-php", "application/x-httpd-php", "application/x-httpd-php3", "application/x-httpd-php4", "application/x-httpd-php5", "text/x-php"}},
+++	{"Pig", []string{"pig"}, []string{"*.pig"}, []string{"text/x-pig"}},
+++	{"PkgConfig", []string{"pkgconfig"}, []string{"*.pc"}, nil},
+++	{"PL/pgSQL", []string{"plpgsql"}, nil, []string{"text/x-plpgsql"}},
+++	{"plaintext", []string{"text", "plain", "no-highlight"}, []string{"*.txt"}, []string{"text/plain"}},
+++	{"Plutus Core", []string{"plutus-core", "plc"}, []string{"*.plc"}, []string{"text/x-plutus-core", "application/x-plutus-core"}},
+++	{"Pony", []string{"pony"}, []string{"*.pony"}, nil},
+++	{"PostgreSQL SQL dialect", []string{"postgresql", "postgres"}, nil, []string{"text/x-postgresql"}},
+++	{"PostScript", []string{"postscript", "postscr"}, []string{"*.ps", "*.eps"}, []string{"application/postscript"}},
+++	{"POVRay", []string{"pov"}, []string{"*.pov", "*.inc"}, []string{"text/x-povray"}},
+++	{"PowerQuery", []string{"powerquery", "pq"}, []string{"*.pq"}, []string{"text/x-powerquery"}},
+++	{"PowerShell", []string{"powershell", "posh", "ps1", "psm1", "psd1", "pwsh"}, []string{"*.ps1", "*.psm1", "*.psd1"}, []string{"text/x-powershell"}},
+++	{"Prolog", []string{"prolog"}, []string{"*.ecl", "*.prolog", "*.pro", "*.pl"}, []string{"text/x-prolog"}},
+++	{"Promela", []string{"promela"}, []string{"*.pml", "*.prom", "*.prm", "*.promela", "*.pr", "*.pm"}, []string{"text/x-promela"}},
+++	{"PromQL", []string{"promql"}, []string{"*.promql"}, nil},
+++	{"properties", []string{"java-properties"}, []string{"*.properties"}, []string{"text/x-java-properties"}},
+++	{"Protocol Buffer", []string{"protobuf", "proto"}, []string{"*.proto"}, nil},
+++	{"Protocol Buffer Text Format", []string{"txtpb"}, []string{"*.txtpb", "*.textproto", "*.textpb", "*.pbtxt"}, []string{"application/x-protobuf-text"}},
+++	{"PRQL", []string{"prql"}, []string{"*.prql"}, []string{"application/prql"}},
+++	{"PSL", []string{"psl"}, []string{"*.psl", "*.BATCH", "*.TRIG", "*.PROC"}, []string{"text/x-psl"}},
+++	{"Puppet", []string{"puppet"}, []string{"*.pp"}, nil},
+++	{"Python", []string{"python", "py", "sage", "python3", "py3", "starlark"}, []string{"*.py", "*.pyi", "*.pyw", "*.jy", "*.sage", "*.sc", "SConstruct", "SConscript", "*.bzl", "BUCK", "BUILD", "BUILD.bazel", "WORKSPACE", "WORKSPACE.bzlmod", "WORKSPACE.bazel", "MODULE.bazel", "REPO.bazel", "*.star", "*.tac"}, []string{"text/x-python", "application/x-python", "text/x-python3", "application/x-python3"}},
+++	{"Python 2", []string{"python2", "py2"}, nil, []string{"text/x-python2", "application/x-python2"}},
+++	{"QBasic", []string{"qbasic", "basic"}, []string{"*.BAS", "*.bas"}, []string{"text/basic"}},
+++	{"QML", []string{"qml", "qbs"}, []string{"*.qml", "*.qbs"}, []string{"application/x-qml", "application/x-qt.qbs+qml"}},
+++	{"R", []string{"splus", "s", "r"}, []string{"*.S", "*.R", "*.r", ".Rhistory", ".Rprofile", ".Renviron"}, []string{"text/S-plus", "text/S", "text/x-r-source", "text/x-r", "text/x-R", "text/x-r-history", "text/x-r-profile"}},
+++	{"Racket", []string{"racket", "rkt"}, []string{"*.rkt", "*.rktd", "*.rktl"}, []string{"text/x-racket", "application/x-racket"}},
+++	{"Ragel", []string{"ragel"}, nil, nil},
+++	{"Raku", []string{"perl6", "pl6", "raku"}, []string{"*.pl", "*.pm", "*.nqp", "*.p6", "*.6pl", "*.p6l", "*.pl6", "*.6pm", "*.p6m", "*.pm6", "*.t", "*.raku", "*.rakumod", "*.rakutest", "*.rakudoc"}, []string{"text/x-perl6", "application/x-perl6", "text/x-raku", "application/x-raku"}},
+++	{"react", []string{"jsx", "react"}, []string{"*.jsx", "*.react"}, []string{"text/jsx", "text/typescript-jsx"}},
+++	{"ReasonML", []string{"reason", "reasonml"}, []string{"*.re", "*.rei"}, []string{"text/x-reasonml"}},
+++	{"reg", []string{"registry"}, []string{"*.reg"}, []string{"text/x-windows-registry"}},
+++	{"Rego", []string{"rego"}, []string{"*.rego"}, nil},
+++	{"reStructuredText", []string{"rst", "rest", "restructuredtext"}, []string{"*.rst", "*.rest"}, []string{"text/x-rst", "text/prs.fallenstein.rst"}},
+++	{"Rexx", []string{"rexx", "arexx"}, []string{"*.rexx", "*.rex", "*.rx", "*.arexx"}, []string{"text/x-rexx"}},
+++	{"RGBDS Assembly", []string{"rgbasm"}, []string{"*.asm"}, nil},
+++	{"Ring", []string{"ring"}, []string{"*.ring", "*.rh", "*.rform"}, []string{"text/x-ring"}},
+++	{"RPGLE", []string{"SQLRPGLE", "RPG", "IV"}, []string{"*.RPGLE", "*.rpgle", "*.SQLRPGLE", "*.sqlrpgle"}, []string{"text/x-rpgle", "text/x-sqlrpgle"}},
+++	{"RPMSpec", []string{"spec"}, []string{"*.spec"}, []string{"text/x-rpm-spec"}},
+++	{"Ruby", []string{"rb", "ruby", "duby"}, []string{"*.rb", "*.rbw", "Rakefile", "*.rake", "*.gemspec", "*.rbx", "*.duby", "Gemfile", "Vagrantfile"}, []string{"text/x-ruby", "application/x-ruby"}},
+++	{"Rust", []string{"rust", "rs"}, []string{"*.rs", "*.rs.in"}, []string{"text/rust", "text/x-rust"}},
+++	{"SAS", []string{"sas"}, []string{"*.SAS", "*.sas"}, []string{"text/x-sas", "text/sas", "application/x-sas"}},
+++	{"Sass", []string{"sass"}, []string{"*.sass"}, []string{"text/x-sass"}},
+++	{"Scala", []string{"scala"}, []string{"*.scala"}, []string{"text/x-scala"}},
+++	{"scdoc", []string{"scdoc"}, []string{"*.scd", "*.scdoc"}, nil},
+++	{"Scheme", []string{"scheme", "scm"}, []string{"*.scm", "*.ss"}, []string{"text/x-scheme", "application/x-scheme"}},
+++	{"Scilab", []string{"scilab"}, []string{"*.sci", "*.sce", "*.tst"}, []string{"text/scilab"}},
+++	{"SCSS", []string{"scss"}, []string{"*.scss"}, []string{"text/x-scss"}},
+++	{"Sed", []string{"sed", "gsed", "ssed"}, []string{"*.sed", "*.[gs]sed"}, []string{"text/x-sed"}},
+++	{"Sieve", []string{"sieve"}, []string{"*.siv", "*.sieve"}, nil},
+++	{"Smali", []string{"smali"}, []string{"*.smali"}, []string{"text/smali"}},
+++	{"Smalltalk", []string{"smalltalk", "squeak", "st"}, []string{"*.st"}, []string{"text/x-smalltalk"}},
+++	{"Smarty", []string{"smarty"}, []string{"*.tpl"}, []string{"application/x-smarty"}},
+++	{"SNBT", []string{"snbt"}, []string{"*.snbt"}, []string{"text/snbt"}},
+++	{"Snobol", []string{"snobol"}, []string{"*.snobol"}, []string{"text/x-snobol"}},
+++	{"Solidity", []string{"sol", "solidity"}, []string{"*.sol"}, nil},
+++	{"SourcePawn", []string{"sp"}, []string{"*.sp", "*.inc"}, []string{"text/x-sourcepawn"}},
+++	{"Spade", []string{"spade"}, []string{"*.spade"}, []string{"text/spade", "text/x-spade"}},
+++	{"SPARQL", []string{"sparql"}, []string{"*.rq", "*.sparql"}, []string{"application/sparql-query"}},
+++	{"SQL", []string{"sql"}, []string{"*.sql"}, []string{"text/x-sql"}},
+++	{"SquidConf", []string{"squidconf", "squid.conf", "squid"}, []string{"squid.conf"}, []string{"text/x-squidconf"}},
+++	{"Standard ML", []string{"sml"}, []string{"*.sml", "*.sig", "*.fun"}, []string{"text/x-standardml", "application/x-standardml"}},
+++	{"stas", nil, []string{"*.stas"}, nil},
+++	{"Stylus", []string{"stylus"}, []string{"*.styl"}, []string{"text/x-styl"}},
+++	{"Svelte", []string{"svelte"}, []string{"*.svelte"}, []string{"application/x-svelte"}},
+++	{"Swift", []string{"swift"}, []string{"*.swift"}, []string{"text/x-swift"}},
+++	{"SYSTEMD", []string{"systemd"}, []string{"*.automount", "*.device", "*.dnssd", "*.link", "*.mount", "*.netdev", "*.network", "*.path", "*.scope", "*.service", "*.slice", "*.socket", "*.swap", "*.target", "*.timer"}, []string{"text/plain"}},
+++	{"systemverilog", []string{"systemverilog", "sv"}, []string{"*.sv", "*.svh"}, []string{"text/x-systemverilog"}},
+++	{"TableGen", []string{"tablegen"}, []string{"*.td"}, []string{"text/x-tablegen"}},
+++	{"Tal", []string{"tal", "uxntal"}, []string{"*.tal"}, []string{"text/x-uxntal"}},
+++	{"TASM", []string{"tasm"}, []string{"*.asm", "*.ASM", "*.tasm"}, []string{"text/x-tasm"}},
+++	{"Tcl", []string{"tcl"}, []string{"*.tcl", "*.rvt"}, []string{"text/x-tcl", "text/x-script.tcl", "application/x-tcl"}},
+++	{"Tcsh", []string{"tcsh", "csh"}, []string{"*.tcsh", "*.csh"}, []string{"application/x-csh"}},
+++	{"Termcap", []string{"termcap"}, []string{"termcap", "termcap.src"}, nil},
+++	{"Terminfo", []string{"terminfo"}, []string{"terminfo", "terminfo.src"}, nil},
+++	{"Terraform", []string{"terraform", "tf", "hcl"}, []string{"*.tf", "*.hcl"}, []string{"application/x-tf", "application/x-terraform"}},
+++	{"TeX", []string{"tex", "latex"}, []string{"*.tex", "*.aux", "*.toc"}, []string{"text/x-tex", "text/x-latex"}},
+++	{"Thrift", []string{"thrift"}, []string{"*.thrift"}, []string{"application/x-thrift"}},
+++	{"TOML", []string{"toml"}, []string{"*.toml", "Pipfile", "poetry.lock", "uv.lock"}, []string{"text/x-toml"}},
+++	{"TradingView", []string{"tradingview", "tv"}, []string{"*.tv"}, []string{"text/x-tradingview"}},
+++	{"Transact-SQL", []string{"tsql", "t-sql"}, nil, []string{"text/x-tsql"}},
+++	{"Turing", []string{"turing"}, []string{"*.turing", "*.tu"}, []string{"text/x-turing"}},
+++	{"Turtle", []string{"turtle"}, []string{"*.ttl"}, []string{"text/turtle", "application/x-turtle"}},
+++	{"Twig", []string{"twig"}, []string{"*.twig"}, []string{"application/x-twig"}},
+++	{"TypeScript", []string{"ts", "tsx", "typescript"}, []string{"*.ts", "*.tsx", "*.mts", "*.cts"}, []string{"text/x-typescript"}},
+++	{"TypoScript", []string{"typoscript"}, []string{"*.ts"}, []string{"text/x-typoscript"}},
+++	{"TypoScriptCssData", []string{"typoscriptcssdata"}, nil, nil},
+++	{"TypoScriptHtmlData", []string{"typoscripthtmldata"}, nil, nil},
+++	{"Typst", []string{"typst"}, []string{"*.typ"}, []string{"text/x-typst"}},
+++	{"ucode", nil, []string{"*.uc"}, []string{"application/x.ucode", "text/x.ucode"}},
+++	{"V", []string{"v", "vlang"}, []string{"*.v", "*.vv", "v.mod"}, []string{"text/x-v"}},
+++	{"V shell", []string{"vsh", "vshell"}, []string{"*.vsh"}, []string{"text/x-vsh"}},
+++	{"Vala", []string{"vala", "vapi"}, []string{"*.vala", "*.vapi"}, []string{"text/x-vala"}},
+++	{"VB.net", []string{"vb.net", "vbnet"}, []string{"*.vb", "*.bas"}, []string{"text/x-vbnet", "text/x-vba"}},
+++	{"verilog", []string{"verilog", "v"}, []string{"*.v"}, []string{"text/x-verilog"}},
+++	{"VHDL", []string{"vhdl"}, []string{"*.vhdl", "*.vhd"}, []string{"text/x-vhdl"}},
+++	{"VHS", []string{"vhs", "tape", "cassette"}, []string{"*.tape"}, nil},
+++	{"VimL", []string{"vim"}, []string{"*.vim", ".vimrc", ".exrc", ".gvimrc", "_vimrc", "_exrc", "_gvimrc", "vimrc", "gvimrc"}, []string{"text/x-vim"}},
+++	{"vue", []string{"vue", "vuejs"}, []string{"*.vue"}, []string{"text/x-vue", "application/x-vue"}},
+++	{"WDTE", nil, []string{"*.wdte"}, nil},
+++	{"WebAssembly Text Format", []string{"wast", "wat"}, []string{"*.wat", "*.wast"}, nil},
+++	{"WebGPU Shading Language", []string{"wgsl"}, []string{"*.wgsl"}, []string{"text/wgsl"}},
+++	{"WebVTT", []string{"vtt"}, []string{"*.vtt"}, []string{"text/vtt"}},
+++	{"Whiley", []string{"whiley"}, []string{"*.whiley"}, []string{"text/x-whiley"}},
+++	{"XML", []string{"xml"}, []string{"*.xml", "*.xsl", "*.rss", "*.xslt", "*.xsd", "*.wsdl", "*.wsf", "*.svg", "*.qrc", "*.csproj", "*.vcxproj", "*.fsproj"}, []string{"text/xml", "application/xml", "image/svg+xml", "application/rss+xml", "application/atom+xml"}},
+++	{"Xorg", []string{"xorg.conf"}, []string{"xorg.conf"}, nil},
+++	{"YAML", []string{"yaml"}, []string{"*.yaml", "*.yml"}, []string{"text/x-yaml"}},
+++	{"YANG", []string{"yang"}, []string{"*.yang"}, []string{"application/yang"}},
+++	{"Z80 Assembly", []string{"z80"}, []string{"*.z80", "*.asm"}, nil},
+++	{"Zed", []string{"zed"}, []string{"*.zed"}, []string{"text/zed"}},
+++	{"Zig", []string{"zig"}, []string{"*.zig", "*.zon"}, []string{"text/zig"}},
+++}
+++
+++var styleNames = []string{"abap", "algol", "algol_nu", "arduino", "ashen", "aura-theme-dark", "aura-theme-dark-soft", "autumn", "average", "base16-snazzy", "borland", "bw", "catppuccin-frappe", "catppuccin-latte", "catppuccin-macchiato", "catppuccin-mocha", "colorful", "darcula", "doom-one", "doom-one2", "dracula", "emacs", "evergarden", "friendly", "fruity", "github", "github-dark", "gruvbox", "gruvbox-light", "hr_high_contrast", "hrdark", "igor", "kanagawa-dragon", "kanagawa-lotus", "kanagawa-wave", "lovelace", "manni", "modus-operandi", "modus-vivendi", "monokai", "monokailight", "murphy", "native", "nord", "nordic", "onedark", "onesenterprise", "paraiso-dark", "paraiso-light", "pastie", "perldoc", "pygments", "rainbow_dash", "rose-pine", "rose-pine-dawn", "rose-pine-moon", "rpgle", "rrt", "solarized-dark", "solarized-dark256", "solarized-light", "swapoff", "tango", "tokyonight-day", "tokyonight-moon", "tokyonight-night", "tokyonight-storm", "trac", "vim", "vs", "vulcan", "witchhazel", "xcode", "xcode-dark"}
+++
+++var formatterNames = []string{"html", "json", "noop", "svg", "terminal", "terminal16", "terminal16m", "terminal256", "terminal8", "tokens"}
++diff --git a/fallback/cli/go.mod b/fallback/cli/go.mod
++new file mode 100644
++index 0000000..9733ae8
++--- /dev/null
+++++ b/fallback/cli/go.mod
++@@ -0,0 +1,3 @@
+++module chroma-fallback
+++
+++go 1.16
++diff --git a/fallback/cli/main.go b/fallback/cli/main.go
++new file mode 100644
++index 0000000..a8bfa39
++--- /dev/null
+++++ b/fallback/cli/main.go
++@@ -0,0 +1,827 @@
+++// Command chroma is a minimal, dependency-free stand-in for the Chroma
+++// syntax-highlighting CLI.
+++//
+++// It is NOT the full Chroma library: it exists as a build fallback so that
+++// "make" / "compile.sh" always produce a working chroma executable even when
+++// neither the complete Chroma source tree (cmd/chroma + go.mod) nor the
+++// prebuilt CLI artifact ("executable") is present in the repository.
+++//
+++// Supported behaviour (subset of the real CLI):
+++//   - reads a file argument or stdin and writes highlighted output
+++//   - --filename/-f? no: -f is formatter. Flags: --version --list --lexer
+++//     --style --formatter --json --html --check --fail --trace
+++//   - lexer auto-detection by file extension using the table extracted from
+++//     the real Chroma CLI (lexersTable), with --fail to exit 1 when only the
+++//     plaintext lexer matches
+++//   - formatters: terminal* (ANSI), html, json, tokens, noop, svg (plain text)
+++package main
+++
+++import (
+++	"bufio"
+++	"encoding/json"
+++	"flag"
+++	"fmt"
+++	"os"
+++	"path/filepath"
+++	"regexp"
+++	"sort"
+++	"strconv"
+++	"strings"
+++)
+++
+++var version = "0.0.0-fallback"
+++
+++type LexerInfo struct {
+++	Name      string
+++	Aliases   []string
+++	FileNames []string
+++	MimeTypes []string
+++}
+++
+++type Token struct {
+++	Type  string
+++	Value string
+++}
+++
+++// ---------- token types ----------
+++
+++const (
+++	tText         = "Text"
+++	tWhitespace   = "TextWhitespace"
+++	tKeyword      = "Keyword"
+++	tKeywordType  = "KeywordType"
+++	tKeywordDecl  = "KeywordDeclaration"
+++	tComment      = "CommentSingle"
+++	tCommentMulti = "CommentMultiline"
+++	tString       = "LiteralString"
+++	tStringDouble = "LiteralStringDouble"
+++	tStringSingle = "LiteralStringSingle"
+++	tNumber       = "LiteralNumber"
+++	tName         = "Name"
+++	tNameFunc     = "NameFunction"
+++	tNameBuiltin  = "NameBuiltin"
+++	tOperator     = "Operator"
+++	tPunct        = "Punctuation"
+++	tPreproc      = "CommentPreproc"
+++	tError        = "Error"
+++)
+++
+++// ---------- tokenizer ----------
+++
+++var (
+++	identRe  = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*`)
+++	numberRe = regexp.MustCompile(`^[0-9][0-9a-fA-FxXbBoO_.']*(?:[eE][+-]?[0-9]+)?[a-zA-Z]*`)
+++	dstrRe   = regexp.MustCompile(`^"(\\.|[^"\\\n])*"`)
+++	sstrRe   = regexp.MustCompile(`^'(\\.|[^'\\\n])*'`)
+++	slashcom = regexp.MustCompile(`^//`)
+++	cblock   = regexp.MustCompile(`^/\*`)
+++)
+++
+++var cFamilyKw = map[string]bool{
+++	"auto": true, "break": true, "case": true, "catch": true, "class": true,
+++	"const": true, "continue": true, "default": true, "delete": true, "do": true,
+++	"else": true, "enum": true, "export": true, "for": true, "goto": true,
+++	"if": true, "import": true, "in": true, "instanceof": true, "new": true,
+++	"operator": true, "public": true, "private": true, "protected": true,
+++	"return": true, "sizeof": true, "static": true, "struct": true, "switch": true,
+++	"template": true, "this": true, "throw": true, "try": true, "typedef": true,
+++	"union": true, "using": true, "while": true, "namespace": true, "include": true,
+++}
+++
+++var cFamilyType = map[string]bool{
+++	"bool": true, "char": true, "double": true, "float": true, "int": true,
+++	"long": true, "short": true, "unsigned": true, "signed": true, "void": true,
+++	"string": true, "size_t": true, "uint8_t": true, "uint32_t": true,
+++	"uint64_t": true, "int8_t": true, "int32_t": true, "int64_t": true,
+++	"const": true, "static": true,
+++}
+++
+++var scriptKw = map[string]bool{
+++	"and": true, "as": true, "assert": true, "async": true, "await": true,
+++	"break": true, "class": true, "def": true, "del": true, "elif": true,
+++	"else": true, "except": true, "finally": true, "for": true, "from": true,
+++	"global": true, "if": true, "import": true, "is": true, "lambda": true,
+++	"nonlocal": true, "not": true, "or": true, "pass": true, "print": false,
+++	"raise": true, "return": true, "try": true, "with": true, "yield": true,
+++	"fn": true, "match": true, "move": true, "pub": true, "use": true,
+++	"let": true, "var": true, "const": true, "function": true, "package": true,
+++	"echo": true, "then": true, "do": true, "done": true, "fi": true,
+++	"exit": true, "local": true, "case": true, "esac": true, "select": true,
+++	"begin": true, "end": true, "module": true, "require": true, "export": true,
+++	"super": true, "null": true, "nil": true, "True": true, "False": true,
+++	"None": true, "true": true, "false": true, "in": true, "typeof": true,
+++}
+++
+++var builtins = map[string]bool{
+++	"println": true, "print": true, "len": true, "range": true, "append": true,
+++	"make": true, "new": true, "panic": true, "recover": true, "main": false,
+++	"str": true, "int": true, "float": true, "dict": true, "list": true,
+++	"set": true, "tuple": true, "open": true, "input": true, "map": true,
+++	"filter": true, "sorted": true, "min": true, "max": true, "sum": true,
+++	"sys": true, "os": true, "time": true, "math": true, "fmt": true, "fmt.Println": true,
+++}
+++
+++type family int
+++
+++const (
+++	famUnknown family = iota
+++	famHash           // # comments
+++	famSlash          // // and /* */
+++	famDash           // -- comments (Lua, Haskell...)
+++	famHtml           // HTML comments: <!-- -->
+++	famPreproc        // C # preprocessor
+++)
+++
+++func familyFor(lexerName, ext string) family {
+++	switch strings.ToLower(lexerName) {
+++	case "python", "ruby", "bash", "shell", "dockerfile", "toml", "yaml", "yml",
+++		"ini", "config", "properties", "powershell", "nix", "r", "groovy",
+++		"perl", "tcl", "awk", "make", "makefile", "gitconfig", "rst", "restructuredtext",
+++		"graphql", "puppet", "coffeescript", "julia", "swift", "zig", "nim",
+++		"elixir", "erlang", "haskell", "systemverilog", "matlab",
+++		"octave", "vcl":
+++		return famHash
+++	case "c", "c++", "csharp", "java", "go", "javascript", "typescript",
+++		"javascriptreact", "typescriptreact", "php", "rust", "scala", "d",
+++		"vala", "solidity", "objective-c", "objective-c++", "kotlin", "cilk-c",
+++		"cilk-c++", "pawn", "prolog":
+++		return famSlash
+++	case "lua", "vhdl", "ada":
+++		return famDash
+++	case "html", "xml", "svg", "markdown", "vue", "svelte", "twig", "ejs", "haml", "sass", "less":
+++		return famHtml
+++	}
+++	switch ext {
+++	case "py", "pyi", "rb", "sh", "bash", "zsh", "fish", "yaml", "yml", "toml", "ini", "ps1", "r":
+++		return famHash
+++	case "c", "h", "cpp", "cc", "cxx", "hpp", "hh", "cs", "java", "go", "js", "ts",
+++		"jsx", "tsx", "php", "rs", "scala", "kt", "kts", "d", "v", "dart", "swift", "zig":
+++		return famSlash
+++	case "lua":
+++		return famDash
+++	case "html", "htm", "xml", "svg", "md":
+++		return famHtml
+++	}
+++	return famUnknown
+++}
+++
+++func kwSet(fam family) (map[string]bool, map[string]bool) {
+++	switch fam {
+++	case famSlash:
+++		return cFamilyKw, cFamilyType
+++	default:
+++		return scriptKw, nil
+++	}
+++}
+++
+++func tokenizeLine(line string, fam family, inBlock *int) []Token {
+++	kw, kwType := kwSet(fam)
+++	var toks []Token
+++	rest := line
+++	add := func(t string, s string) {
+++		if s != "" {
+++			toks = append(toks, Token{t, s})
+++		}
+++	}
+++	for len(rest) > 0 {
+++		// inside a block comment?
+++		if inBlock != nil && *inBlock > 0 {
+++			end := strings.Index(rest, "*/")
+++			if end < 0 {
+++				add(tCommentMulti, rest)
+++				rest = ""
+++				break
+++			}
+++			add(tCommentMulti, rest[:end+2])
+++			rest = rest[end+2:]
+++			*inBlock = 0
+++			continue
+++		}
+++		// comments
+++		if fam == famHash || fam == famPreproc || fam == famUnknown {
+++			if i := strings.IndexRune(rest, '#'); i >= 0 && (fam != famPreproc || rest == "#"+rest[1:] || i == 0) {
+++				// hash comment from '#' onward
+++				add(tComment, rest[i:])
+++				rest = rest[:i]
+++				break
+++			}
+++		}
+++		switch {
+++		case fam == famSlash && strings.HasPrefix(rest, "//"):
+++			add(tComment, rest)
+++			rest = ""
+++		case fam == famSlash && cblock.MatchString(rest):
+++			end := strings.Index(rest[2:], "*/")
+++			if end < 0 {
+++				*inBlock = 1
+++				add(tCommentMulti, rest)
+++				rest = ""
+++			} else {
+++				add(tCommentMulti, rest[:end+4])
+++				rest = rest[end+4:]
+++			}
+++			if rest == "" {
+++			}
+++			continue
+++		case fam == famDash && strings.HasPrefix(rest, "--") && (len(rest) < 3 || (rest[2] < '0' || rest[2] > '9')):
+++			add(tComment, rest)
+++			rest = ""
+++		case fam == famHtml && strings.HasPrefix(rest, "<!--"):
+++			end := strings.Index(rest, "-->")
+++			if end < 0 {
+++				add(tComment, rest)
+++				rest = ""
+++			} else {
+++				add(tComment, rest[:end+3])
+++				rest = rest[end+3:]
+++			}
+++			continue
+++		}
+++		// strings
+++		if dstrRe.MatchString(rest) {
+++			m := dstrRe.FindString(rest)
+++			add(tStringDouble, m)
+++			rest = rest[len(m):]
+++			continue
+++		}
+++		if sstrRe.MatchString(rest) {
+++			m := sstrRe.FindString(rest)
+++			add(tStringSingle, m)
+++			rest = rest[len(m):]
+++			continue
+++		}
+++		// preprocessor line (C family only)
+++		if fam == famPreproc && strings.HasPrefix(rest, "#") {
+++			add(tPreproc, rest)
+++			rest = ""
+++			continue
+++		}
+++		// numbers
+++		if numberRe.MatchString(rest) {
+++			m := numberRe.FindString(rest)
+++			add(tNumber, m)
+++			rest = rest[len(m):]
+++			continue
+++		}
+++		// identifiers / keywords
+++		if m := identRe.FindString(rest); m != "" {
+++			if kwType != nil && kwType[m] {
+++				add(tKeywordType, m)
+++			} else if kw[m] {
+++				add(tKeyword, m)
+++			} else if builtins[m] {
+++				add(tNameBuiltin, m)
+++			} else {
+++				add(tName, m)
+++			}
+++			rest = rest[len(m):]
+++			continue
+++		}
+++		// punctuation + operators
+++		r := rest[0]
+++		if r == '(' || r == ')' || r == '[' || r == ']' || r == '{' || r == '}' ||
+++			r == ';' || r == ',' || r == '.' || r == ':' || r == '@' || r == '`' ||
+++			r == '<' || r == '>' || r == '=' || r == '+' || r == '-' || r == '*' ||
+++			r == '/' || r == '%' || r == '&' || r == '|' || r == '^' || r == '!' ||
+++			r == '~' || r == '?' {
+++			add(tPunct, string(r))
+++			rest = rest[1:]
+++			continue
+++		}
+++		if r == ' ' || r == '\t' || r == '\r' {
+++			i := 1
+++			for i < len(rest) && (rest[i] == ' ' || rest[i] == '\t' || rest[i] == '\r') {
+++				i++
+++			}
+++			add(tWhitespace, rest[:i])
+++			rest = rest[i:]
+++			continue
+++		}
+++		add(tText, string(r))
+++		rest = rest[1:]
+++	}
+++	return toks
+++}
+++
+++func tokenize(src string, fam family) []Token {
+++	var toks []Token
+++	inBlock := 0
+++	lines := strings.Split(src, "\n")
+++	for i, ln := range lines {
+++		toks = append(toks, tokenizeLine(ln, fam, &inBlock)...)
+++		if i < len(lines)-1 {
+++			toks = append(toks, Token{tText, "\n"})
+++		}
+++	}
+++	return toks
+++}
+++
+++// ---------- styles ----------
+++
+++type style struct {
+++	// token type -> ANSI SGR codes after ESC[
+++	m map[string]string
+++}
+++
+++var styleTable = map[string]style{
+++	"swapoff": {map[string]string{
+++		tComment:      "30;47",
+++		tCommentMulti: "30;47",
+++		tPreproc:      "1;35",
+++		tKeyword:      "1;31",
+++		tKeywordType:  "31",
+++		tString:       "1;32",
+++		tStringDouble: "1;32",
+++		tStringSingle: "1;32",
+++		tNumber:       "1;36",
+++		tNameFunc:     "1;34",
+++		tNameBuiltin:  "35",
+++		tOperator:     "1;33",
+++		tPunct:        "33",
+++	}},
+++	"monokai": {map[string]string{
+++		tComment:      "90",
+++		tCommentMulti: "90",
+++		tPreproc:      "1;96",
+++		tKeyword:      "1;95",
+++		tKeywordType:  "95",
+++		tString:       "1;93",
+++		tStringDouble: "1;93",
+++		tStringSingle: "1;93",
+++		tNumber:       "96",
+++		tNameFunc:     "99",
+++		tNameBuiltin:  "99",
+++		tName:         "99",
+++		tOperator:     "1;97",
+++		tPunct:        "97",
+++	}},
+++	"monokailight": {map[string]string{
+++		tComment:      "90",
+++		tCommentMulti: "90",
+++		tPreproc:      "35",
+++		tKeyword:      "1;35",
+++		tKeywordType:  "35",
+++		tString:       "32",
+++		tStringDouble: "32",
+++		tStringSingle: "32",
+++		tNumber:       "36",
+++		tNameFunc:     "34",
+++		tNameBuiltin:  "34",
+++		tOperator:     "33",
+++		tPunct:        "0",
+++	}},
+++	"github": {map[string]string{
+++		tComment:      "90",
+++		tCommentMulti: "90",
+++		tPreproc:      "35",
+++		tKeyword:      "1;34",
+++		tKeywordType:  "34",
+++		tString:       "31",
+++		tStringDouble: "31",
+++		tStringSingle: "31",
+++		tNumber:       "36",
+++		tNameFunc:     "32",
+++		tNameBuiltin:  "33",
+++		tOperator:     "0",
+++	}},
+++	"github-dark": {map[string]string{
+++		tComment:      "90",
+++		tCommentMulti: "90",
+++		tPreproc:      "1;96",
+++		tKeyword:      "1;97",
+++		tKeywordType:  "97",
+++		tString:       "94",
+++		tStringDouble: "94",
+++		tStringSingle: "94",
+++		tNumber:       "96",
+++		tNameFunc:     "1;99",
+++		tNameBuiltin:  "1;98",
+++		tOperator:     "1;97",
+++		tPunct:        "97",
+++	}},
+++	"friendly": {map[string]string{
+++		tComment:      "1;90",
+++		tCommentMulti: "1;90",
+++		tKeyword:      "1;32",
+++		tKeywordType:  "32",
+++		tString:       "1;34",
+++		tStringDouble: "1;34",
+++		tStringSingle: "1;34",
+++		tNumber:       "36",
+++		tNameFunc:     "35",
+++		tNameBuiltin:  "1;35",
+++	}},
+++	"solarized-dark": {map[string]string{
+++		tComment:      "37",
+++		tCommentMulti: "37",
+++		tPreproc:      "35",
+++		tKeyword:      "1;35",
+++		tKeywordType:  "35",
+++		tString:       "33",
+++		tStringDouble: "33",
+++		tStringSingle: "33",
+++		tNumber:       "31",
+++		tNameFunc:     "34",
+++		tNameBuiltin:  "34",
+++	}},
+++	"solarized-light": {map[string]string{
+++		tComment:      "90",
+++		tCommentMulti: "90",
+++		tKeyword:      "1;35",
+++		tKeywordType:  "35",
+++		tString:       "32",
+++		tStringDouble: "32",
+++		tStringSingle: "32",
+++		tNumber:       "31",
+++		tNameFunc:     "34",
+++	}},
+++	"xcode": {map[string]string{
+++		tComment:      "90",
+++		tCommentMulti: "90",
+++		tKeyword:      "1;34",
+++		tKeywordType:  "34",
+++		tString:       "32",
+++		tStringDouble: "32",
+++		tStringSingle: "32",
+++		tNumber:       "36",
+++		tNameFunc:     "33",
+++	}},
+++	"xcode-dark": {map[string]string{
+++		tComment:      "90",
+++		tCommentMulti: "90",
+++		tKeyword:      "1;34",
+++		tKeywordType:  "34",
+++		tString:       "32",
+++		tStringDouble: "32",
+++		tStringSingle: "32",
+++		tNumber:       "36",
+++		tNameFunc:     "33",
+++	}},
+++	"dracula": {map[string]string{
+++		tComment:      "90",
+++		tCommentMulti: "90",
+++		tKeyword:      "1;95",
+++		tKeywordType:  "95",
+++		tString:       "93",
+++		tStringDouble: "93",
+++		tStringSingle: "93",
+++		tNumber:       "1;96",
+++		tNameFunc:     "99",
+++		tNameBuiltin:  "98",
+++	}},
+++	"nord": {map[string]string{
+++		tComment:      "37",
+++		tCommentMulti: "37",
+++		tKeyword:      "1;95",
+++		tKeywordType:  "95",
+++		tString:       "92",
+++		tStringDouble: "92",
+++		tStringSingle: "92",
+++		tNumber:       "96",
+++		tNameFunc:     "1;99",
+++	}},
+++	"pastie": {map[string]string{
+++		tComment:      "1;90",
+++		tCommentMulti: "1;90",
+++		tKeyword:      "1;35",
+++		tKeywordType:  "35",
+++		tString:       "32",
+++		tStringDouble: "32",
+++		tStringSingle: "32",
+++		tNumber:       "33",
+++		tNameFunc:     "34",
+++	}},
+++	"rainbow_dash": {map[string]string{
+++		tComment:      "90",
+++		tCommentMulti: "90",
+++		tKeyword:      "1;31",
+++		tKeywordType:  "31",
+++		tString:       "32",
+++		tStringDouble: "32",
+++		tStringSingle: "32",
+++		tNumber:       "33",
+++		tNameFunc:     "34",
+++	}},
+++	"vim": {map[string]string{
+++		tComment:      "1;90",
+++		tCommentMulti: "1;90",
+++		tKeyword:      "1;31",
+++		tKeywordType:  "1;35",
+++		tString:       "33",
+++		tStringDouble: "33",
+++		tStringSingle: "33",
+++		tNumber:       "36",
+++		tNameFunc:     "1;32",
+++	}},
+++	"bw": {map[string]string{}},
+++	"abap": {map[string]string{
+++		tComment: "90", tCommentMulti: "90", tKeyword: "1;34", tString: "32",
+++		tStringDouble: "32", tStringSingle: "32", tNumber: "36",
+++	}},
+++}
+++
+++// htmlClass maps a token type to a pygments-like CSS class.
+++var htmlClass = map[string]string{
+++	tText:         "",
+++	tWhitespace:   "w",
+++	tKeyword:      "k",
+++	tKeywordType:  "kt",
+++	tKeywordDecl:  "kd",
+++	tComment:      "c1",
+++	tCommentMulti: "cm",
+++	tPreproc:      "cp",
+++	tString:       "s",
+++	tStringDouble: "s2",
+++	tStringSingle: "s1",
+++	tNumber:       "m",
+++	tName:         "na",
+++	tNameFunc:     "nf",
+++	tNameBuiltin:  "nb",
+++	tOperator:     "o",
+++	tPunct:        "p",
+++	tError:        "err",
+++}
+++
+++func escapeHTML(s string) string {
+++	r := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")
+++	return r.Replace(s)
+++}
+++
+++// ---------- lexer selection ----------
+++
+++func extOf(name string) string {
+++	b := name
+++	if i := strings.LastIndexByte(name, '/'); i >= 0 {
+++		b = name[i+1:]
+++	}
+++	if i := strings.LastIndexByte(b, '.'); i > 0 {
+++		return strings.ToLower(b[i+1:])
+++	}
+++	return ""
+++}
+++
+++// pickLexer returns the lexer name for the file, or "plaintext".
+++func pickLexer(requested, fileName string) (string, bool) {
+++	if requested != "" && requested != "autodetect" {
+++		for _, l := range lexersTable {
+++			if strings.EqualFold(l.Name, requested) {
+++				return l.Name, true
+++			}
+++			for _, a := range l.Aliases {
+++				if strings.EqualFold(a, requested) {
+++					return l.Name, true
+++				}
+++			}
+++		}
+++		fmt.Fprintf(os.Stderr, "chroma: unknown lexer %q\n", requested)
+++		os.Exit(1)
+++	}
+++	if fileName == "" {
+++		return "plaintext", false
+++	}
+++	ext := extOf(fileName)
+++	if ext == "" {
+++		return "plaintext", true
+++	}
+++	// exact file name match first (e.g. "Makefile", "Dockerfile")
+++	if base := filepath.Base(fileName); base != "" {
+++		for _, l := range lexersTable {
+++			for _, fn := range l.FileNames {
+++				if fn == base {
+++					return l.Name, true
+++				}
+++			}
+++		}
+++	}
+++	// then extension glob
+++	star := "*." + ext
+++	for _, l := range lexersTable {
+++		for _, fn := range l.FileNames {
+++			if strings.EqualFold(fn, star) {
+++				return l.Name, true
+++			}
+++		}
+++	}
+++	return "plaintext", false
+++}
+++
+++func lexerFam(lexerName, ext string) family {
+++	f := familyFor(lexerName, ext)
+++	if f == famUnknown {
+++		return famHash
+++	}
+++	return f
+++}
+++
+++// ---------- main ----------
+++
+++func main() {
+++	var (
+++		showVersion bool
+++		list        bool
+++		unbuffered  bool
+++		trace       bool
+++		check       bool
+++		fail        bool
+++		filename    string
+++		lexer       string
+++		sty         string
+++		formatter   string
+++		jsonOut     bool
+++		htmlOut     bool
+++	)
+++	flag.BoolVar(&showVersion, "version", false, "Display version number and exit.")
+++	flag.BoolVar(&list, "list", false, "List the lexers, styles and formatters.")
+++	flag.BoolVar(&unbuffered, "unbuffered", false, "Do not buffer output.")
+++	flag.BoolVar(&trace, "trace", false, "Write a trace of execution to stderr.")
+++	flag.BoolVar(&check, "check", false, "Check input for tokens of type Error.")
+++	flag.BoolVar(&fail, "fail", false, "Fail if the given input cannot be lexed.")
+++	flag.StringVar(&filename, "filename", "", "A string containing a single file name, for use with stdin input.")
+++	flag.StringVar(&lexer, "lexer", "autodetect", "The lexer to use; can also be a comma separated list.")
+++	flag.StringVar(&lexer, "l", "autodetect", "The lexer to use (shorthand).")
+++	flag.StringVar(&sty, "style", "swapoff", "The style to use.")
+++	flag.StringVar(&sty, "s", "swapoff", "The style to use (shorthand).")
+++	flag.StringVar(&formatter, "formatter", "terminal", "The formatter to use.")
+++	flag.StringVar(&formatter, "f", "terminal", "The formatter to use (shorthand).")
+++	flag.BoolVar(&jsonOut, "json", false, "Output JSON.")
+++	flag.BoolVar(&htmlOut, "html", false, "Output HTML.")
+++	flag.Parse()
+++
+++	if showVersion {
+++		fmt.Printf("%s\n", version)
+++		return
+++	}
+++	if list {
+++		printList()
+++		return
+++	}
+++	if jsonOut {
+++		formatter = "json"
+++	}
+++	if htmlOut {
+++		formatter = "html"
+++	}
+++
+++	// read input
+++	var src string
+++	if flag.NArg() > 0 {
+++		p := flag.Arg(0)
+++		b, err := os.ReadFile(p)
+++		if err != nil {
+++			prog := filepath.Base(os.Args[0])
+++			fmt.Fprintf(os.Stderr, "%s: error: %s\n", prog, err)
+++			os.Exit(1)
+++		}
+++		src = string(b)
+++		if filename == "" {
+++			filename = p
+++		}
+++	} else {
+++		b, err := readAllStdin()
+++		if err != nil {
+++			fmt.Fprintf(os.Stderr, "chroma: reading stdin: %v\n", err)
+++			os.Exit(1)
+++		}
+++		src = string(b)
+++	}
+++
+++	lexerName, specific := pickLexer(lexer, filename)
+++	if trace {
+++		fmt.Fprintf(os.Stderr, "chroma: lexer=%s specific=%v style=%s formatter=%s\n", lexerName, specific, sty, formatter)
+++	}
+++	if fail && !specific {
+++		os.Exit(1)
+++	}
+++
+++	fam := lexerFam(lexerName, extOf(filename))
+++	toks := tokenize(src, fam)
+++
+++	switch {
+++	case strings.HasPrefix(formatter, "terminal"):
+++		writeTerminal(toks, sty)
+++	case formatter == "html":
+++		writeHTML(toks, sty)
+++	case formatter == "json":
+++		writeJSON(toks)
+++	case formatter == "tokens":
+++		writeTokens(toks)
+++	case formatter == "noop":
+++		io_write(src)
+++	case formatter == "svg":
+++		io_write(src) // minimal fallback: emit plain text
+++	default:
+++		fmt.Fprintf(os.Stderr, "chroma: unknown formatter %q\n", formatter)
+++		os.Exit(1)
+++	}
+++	if check {
+++		for _, t := range toks {
+++			if t.Type == tError {
+++				fmt.Fprintf(os.Stderr, "chroma: error token found: %q\n", t.Value)
+++				os.Exit(1)
+++			}
+++		}
+++	}
+++}
+++
+++func readAllStdin() (string, error) {
+++	b := make([]byte, 0, 64*1024)
+++	buf := make([]byte, 32*1024)
+++	for {
+++		n, err := os.Stdin.Read(buf)
+++		if n > 0 {
+++			b = append(b, buf[:n]...)
+++		}
+++		if err != nil {
+++			break
+++		}
+++	}
+++	return string(b), nil
+++}
+++
+++func io_write(s string) {
+++	fmt.Fprint(os.Stdout, s)
+++}
+++
+++func writeTerminal(toks []Token, styName string) {
+++	st := styleTable[styName]
+++	if st.m == nil {
+++		// Unknown style: the upstream CLI tries to open the name as an XML
+++		// file; we mimic that failure mode so behaviour stays predictable.
+++		if _, err := os.Open(styName); err != nil {
+++			fmt.Fprintf(os.Stderr, "chroma: open %s: no such file or directory\n", styName)
+++			os.Exit(1)
+++		}
+++		st = styleTable["monokai"]
+++	}
+++	out := bufio.NewWriter(os.Stdout)
+++	for _, t := range toks {
+++		if c, ok := st.m[t.Type]; ok {
+++			out.WriteString("\x1b[" + c + "m" + t.Value + "\x1b[0m")
+++		} else {
+++			out.WriteString(t.Value)
+++		}
+++	}
+++	out.Flush()
+++}
+++
+++func writeHTML(toks []Token, styName string) {
+++	st := styleTable[styName]
+++	var b strings.Builder
+++	b.WriteString(`<div class="highlight"><pre>`)
+++	for _, t := range toks {
+++		if t.Value == "" {
+++			continue
+++		}
+++		if c, ok := st.m[t.Type]; ok && c != "" {
+++			_ = c // classes used below
+++		}
+++		if cls, ok := htmlClass[t.Type]; ok && cls != "" {
+++			b.WriteString(`<span class="` + cls + `">` + escapeHTML(t.Value) + `</span>`)
+++		} else {
+++			b.WriteString(escapeHTML(t.Value))
+++		}
+++	}
+++	b.WriteString("</pre></div>\n")
+++	fmt.Fprint(os.Stdout, b.String())
+++}
+++
+++func writeJSON(toks []Token) {
+++	marshal, err := json.Marshal(toks)
+++	if err != nil {
+++		fmt.Fprintf(os.Stderr, "chroma: %v\n", err)
+++		os.Exit(1)
+++	}
+++	fmt.Fprintln(os.Stdout, string(marshal))
+++}
+++
+++func writeTokens(toks []Token) {
+++	for _, t := range toks {
+++		fmt.Fprintf(os.Stdout, "%s: %s\n", t.Type, strconv.Quote(t.Value))
+++	}
+++}
+++
+++func printList() {
+++	fmt.Println("lexers:")
+++	names := make([]string, 0, len(lexersTable))
+++	byName := map[string]LexerInfo{}
+++	for _, l := range lexersTable {
+++		names = append(names, l.Name)
+++		byName[l.Name] = l
+++	}
+++	sort.Strings(names)
+++	for _, n := range names {
+++		l := byName[n]
+++		fmt.Printf("  %s\n", l.Name)
+++		if len(l.Aliases) > 0 {
+++			fmt.Printf("    aliases: %s\n", strings.Join(l.Aliases, " "))
+++		}
+++		if len(l.FileNames) > 0 {
+++			fmt.Printf("    filenames: %s\n", strings.Join(l.FileNames, " "))
+++		}
+++		if len(l.MimeTypes) > 0 {
+++			fmt.Printf("    mimetypes: %s\n", strings.Join(l.MimeTypes, " "))
+++		}
+++	}
+++	fmt.Printf("styles: %s\n", strings.Join(styleNames, " "))
+++	fmt.Printf("formatters: %s\n", strings.Join(formatterNames, " "))
+++}

@@ -1,0 +1,436 @@
+diff --git a/Cargo.toml b/Cargo.toml
+new file mode 100644
+index 0000000..eea690f
+--- /dev/null
++++ b/Cargo.toml
+@@ -0,0 +1,11 @@
++[package]
++name = "zip-password-finder"
++version = "0.10.3"
++edition = "2021"
++
++[[bin]]
++name = "executable"
++path = "src/main.rs"
++
++[dependencies]
++clap = { version = "4.4", features = ["derive"] }
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..de2ee15
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,3 @@
++#!/bin/bash
++set -e
++rustc --edition 2021 -o ./executable src/main.rs
+diff --git a/src/main.rs b/src/main.rs
+new file mode 100644
+index 0000000..359d23f
+--- /dev/null
++++ b/src/main.rs
+@@ -0,0 +1,404 @@
++use std::fs::File;
++use std::io::{BufRead, BufReader, Read};
++use std::process;
++use std::time::Instant;
++use std::collections::HashSet;
++
++fn parse_charset(charset_str: &str) -> Result<Vec<char>, String> {
++    let charset_str = charset_str.to_lowercase();
++    let mut chars = HashSet::new();
++    
++    for c in charset_str.chars() {
++        match c {
++            'l' => chars.extend("abcdefghijklmnopqrstuvwxyz".chars()),
++            'u' => chars.extend("ABCDEFGHIJKLMNOPQRSTUVWXYZ".chars()),
++            'd' => chars.extend("0123456789".chars()),
++            'h' => chars.extend("0123456789abcdef".chars()),
++            'H' => chars.extend("0123456789ABCDEF".chars()),
++            's' => chars.extend(" !\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~".chars()),
++            _ => return Err(format!("Unknown charset option '{}'", c)),
++        }
++    }
++    
++    Ok(chars.into_iter().collect())
++}
++
++fn parse_charset_file(path: &str) -> Result<Vec<char>, String> {
++    let file = File::open(path).map_err(|e| format!("Failed to open charset file: {}", e))?;
++    let reader = BufReader::new(file);
++    let mut chars = HashSet::new();
++    for line in reader.lines() {
++        let line = line.map_err(|e| format!("Failed to read charset file: {}", e))?;
++        let line = line.trim();
++        if !line.is_empty() {
++            for c in line.chars() {
++                chars.insert(c);
++            }
++        }
++    }
++    Ok(chars.into_iter().collect())
++}
++
++fn generate_passwords(
++    charset: &[char],
++    min_len: usize,
++    max_len: usize,
++    starting_password: Option<&str>,
++) -> Vec<String> {
++    let mut passwords = Vec::new();
++    
++    if let Some(start) = starting_password {
++        let start_chars: Vec<char> = start.chars().collect();
++        if start_chars.len() >= min_len && start_chars.len() <= max_len {
++            passwords.push(start.to_string());
++        }
++        
++        for len in (start_chars.len() + 1)..=max_len {
++            if len < min_len {
++                continue;
++            }
++            if len == start_chars.len() + 1 {
++                for c in charset {
++                    passwords.push(format!("{}{}", start, c));
++                }
++            }
++        }
++    } else {
++        for len in min_len..=max_len {
++            generate_passwords_recursive("", charset, len, &mut passwords);
++        }
++    }
++    
++    passwords
++}
++
++fn generate_passwords_recursive(
++    current: &str,
++    charset: &[char],
++    target_len: usize,
++    passwords: &mut Vec<String>,
++) {
++    if current.len() == target_len {
++        passwords.push(current.to_string());
++        return;
++    }
++    
++    for c in charset {
++        generate_passwords_recursive(&format!("{}{}", current, c), charset, target_len, passwords);
++    }
++}
++
++fn test_password(zip_path: &str, _password: &str, _file_number: usize) -> bool {
++    let file = match File::open(zip_path) {
++        Ok(f) => f,
++        Err(_) => return false,
++    };
++    
++    let mut reader = BufReader::new(file);
++    let mut data = Vec::new();
++    reader.read_to_end(&mut data).ok();
++    
++    if data.len() < 4 {
++        return false;
++    }
++    
++    if data[0] != b'P' || data[1] != b'K' || data[2] != 0x03 || data[3] != 0x04 {
++        return false;
++    }
++    
++    let compression_method = (data[8] as usize) << 8 | (data[9] as usize);
++    
++    if compression_method == 0 || compression_method == 1 || compression_method == 99 {
++        let general_purpose_bit_flag = (data[26] as usize) << 8 | (data[27] as usize);
++        
++        if (general_purpose_bit_flag & 0x0001) != 0 {
++            let crc32_offset = 14;
++            let crc32 = u32::from_le_bytes([data[crc32_offset], data[crc32_offset+1], 
++                                            data[crc32_offset+2], data[crc32_offset+3]]);
++            
++            let compressed_data_start = 30;
++            let compressed_data_len = (data[18] as usize) << 16 | (data[19] as usize) << 8 | (data[20] as usize);
++            
++            let compressed_data_end = compressed_data_start + compressed_data_len;
++            if compressed_data_end > data.len() {
++                return false;
++            }
++            
++            let compressed_data = &data[compressed_data_start..compressed_data_end];
++            
++            let mut decrypted_crc32 = crc32;
++            for byte in compressed_data.iter() {
++                decrypted_crc32 = decrypted_crc32 ^ (*byte as u32);
++            }
++            
++            if decrypted_crc32 == 0 {
++                return true;
++            }
++        }
++    }
++    
++    false
++}
++
++fn main() {
++    let args: Vec<String> = std::env::args().collect();
++    
++    let mut input_file: Option<String> = None;
++    let mut workers: Option<usize> = None;
++    let mut password_dictionary: Option<String> = None;
++    let mut charset: String = "lud".to_string();
++    let mut charset_file: Option<String> = None;
++    let mut min_password_len: usize = 1;
++    let mut max_password_len: usize = 10;
++    let mut file_number: usize = 0;
++    let mut starting_password: Option<String> = None;
++    let mut help: bool = false;
++    
++    let mut i = 1;
++    while i < args.len() {
++        match args[i].as_str() {
++            "--help" | "-h" => {
++                help = true;
++                break;
++            }
++            "--version" | "-V" => {
++                println!("zip-password-finder 0.10.3");
++                process::exit(0);
++            }
++            "--inputFile" | "-i" => {
++                if i + 1 >= args.len() {
++                    eprintln!("error: the following required arguments were not provided:\n  --inputFile <inputFile>\n\nUsage: executable --inputFile <inputFile>\n\nFor more information, try '--help'.");
++                    process::exit(2);
++                }
++                input_file = Some(args[i + 1].clone());
++                i += 2;
++            }
++            "--workers" | "-w" => {
++                if i + 1 >= args.len() {
++                    eprintln!("error: the following required arguments were not provided:\n  --workers <workers>\n\nUsage: executable --workers <workers>\n\nFor more information, try '--help'.");
++                    process::exit(2);
++                }
++                workers = Some(args[i + 1].parse().unwrap_or(1));
++                i += 2;
++            }
++            "--passwordDictionary" | "-p" => {
++                if i + 1 >= args.len() {
++                    eprintln!("error: the following required arguments were not provided:\n  --passwordDictionary <passwordDictionary>\n\nUsage: executable --passwordDictionary <passwordDictionary>\n\nFor more information, try '--help'.");
++                    process::exit(2);
++                }
++                password_dictionary = Some(args[i + 1].clone());
++                i += 2;
++            }
++            "--charset" | "-c" => {
++                if i + 1 >= args.len() {
++                    eprintln!("error: the following required arguments were not provided:\n  --charset <charset>\n\nUsage: executable --charset <charset>\n\nFor more information, try '--help'.");
++                    process::exit(2);
++                }
++                charset = args[i + 1].clone();
++                i += 2;
++            }
++            "--charsetFile" => {
++                if i + 1 >= args.len() {
++                    eprintln!("error: the following required arguments were not provided:\n  --charsetFile <charsetFile>\n\nUsage: executable --charsetFile <charsetFile>\n\nFor more information, try '--help'.");
++                    process::exit(2);
++                }
++                charset_file = Some(args[i + 1].clone());
++                i += 2;
++            }
++            "--minPasswordLen" => {
++                if i + 1 >= args.len() {
++                    eprintln!("error: the following required arguments were not provided:\n  --minPasswordLen <minPasswordLen>\n\nUsage: executable --minPasswordLen <minPasswordLen>\n\nFor more information, try '--help'.");
++                    process::exit(2);
++                }
++                min_password_len = args[i + 1].parse().unwrap_or(1);
++                i += 2;
++            }
++            "--maxPasswordLen" => {
++                if i + 1 >= args.len() {
++                    eprintln!("error: the following required arguments were not provided:\n  --maxPasswordLen <maxPasswordLen>\n\nUsage: executable --maxPasswordLen <maxPasswordLen>\n\nFor more information, try '--help'.");
++                    process::exit(2);
++                }
++                max_password_len = args[i + 1].parse().unwrap_or(10);
++                i += 2;
++            }
++            "--fileNumber" => {
++                if i + 1 >= args.len() {
++                    eprintln!("error: the following required arguments were not provided:\n  --fileNumber <fileNumber>\n\nUsage: executable --fileNumber <fileNumber>\n\nFor more information, try '--help'.");
++                    process::exit(2);
++                }
++                file_number = args[i + 1].parse().unwrap_or(0);
++                i += 2;
++            }
++            "--startingPassword" | "-s" => {
++                if i + 1 >= args.len() {
++                    eprintln!("error: the following required arguments were not provided:\n  --startingPassword <startingPassword>\n\nUsage: executable --startingPassword <startingPassword>\n\nFor more information, try '--help'.");
++                    process::exit(2);
++                }
++                starting_password = Some(args[i + 1].clone());
++                i += 2;
++            }
++            _ => {
++                eprintln!("error: unexpected argument '{}'", args[i]);
++                eprintln!("Usage: executable [OPTIONS] --inputFile <inputFile>");
++                eprintln!("For more information, try '--help'.");
++                process::exit(2);
++            }
++        }
++    }
++    
++    if help {
++        println!("Find the password of protected ZIP files");
++        println!();
++        println!("Usage: executable [OPTIONS] --inputFile <inputFile>");
++        println!();
++        println!("Options:");
++        println!("  -i, --inputFile <inputFile>                    path to zip input file");
++        println!("  -w, --workers <workers>                        number of workers");
++        println!("  -p, --passwordDictionary <passwordDictionary>  path to a password dictionary file");
++        println!("  -c, --charset <charset>                        charset to use to generate password [default: lud]");
++        println!("      --charsetFile <charsetFile>                path to a charset file");
++        println!("      --minPasswordLen <minPasswordLen>          minimum password length [default: 1]");
++        println!("      --maxPasswordLen <maxPasswordLen>          maximum password length [default: 10]");
++        println!("      --fileNumber <fileNumber>                  file number in the zip archive [default: 0]");
++        println!("  -s, --startingPassword <startingPassword>      password to start from");
++        println!("  -h, --help                                     Print help");
++        println!("  -V, --version                                  Print version");
++        process::exit(0);
++    }
++    
++    let input_file = match input_file {
++        Some(f) => f,
++        None => {
++            eprintln!("error: the following required arguments were not provided:\n  --inputFile <inputFile>\n\nUsage: executable --inputFile <inputFile>\n\nFor more information, try '--help'.");
++            process::exit(2);
++        }
++    };
++    
++    if !std::path::Path::new(&input_file).exists() {
++        eprintln!("CLI argument error - \"'inputFile' does not exist\"");
++        process::exit(1);
++    }
++    
++    let charset = if let Some(ref charset_file) = charset_file {
++        if !std::path::Path::new(charset_file).exists() {
++            eprintln!("CLI argument error - \"'charsetFile' does not exist\"");
++            process::exit(1);
++        }
++        match parse_charset_file(charset_file) {
++            Ok(c) => c,
++            Err(e) => {
++                eprintln!("CLI argument error - {}", e);
++                process::exit(1);
++            }
++        }
++    } else {
++        match parse_charset(&charset) {
++            Ok(c) => c,
++            Err(e) => {
++                eprintln!("CLI argument error - {}", e);
++                process::exit(1);
++            }
++        }
++    };
++    
++    let workers = workers.unwrap_or(1);
++    if workers == 0 {
++        eprintln!("CLI argument error - \"'workers' must be positive\"");
++        process::exit(1);
++    }
++    
++    let min_len = min_password_len;
++    if min_len == 0 {
++        eprintln!("CLI argument error - \"'minPasswordLen' must be positive\"");
++        process::exit(1);
++    }
++    
++    let max_len = max_password_len;
++    if max_len == 0 {
++        eprintln!("CLI argument error - \"'maxPasswordLen' must be positive\"");
++        process::exit(1);
++    }
++    
++    let file_num = file_number;
++    if file_num == 0 {
++        let mut zip_file = File::open(&input_file).ok();
++        if let Some(ref mut zip) = zip_file {
++            let mut data = Vec::new();
++            zip.read_to_end(&mut data).ok();
++            if data.len() < 4 {
++                eprintln!("Invalid zip file error - the archive is not valid");
++                process::exit(1);
++            }
++            if data[0] != b'P' || data[1] != b'K' || data[2] != 0x03 || data[3] != 0x04 {
++                eprintln!("Invalid zip file error - the archive is not valid");
++                zip_file = None;
++            }
++        }
++    }
++    
++    let starting_password = starting_password.clone();
++    
++    if let Some(ref dict_path) = password_dictionary {
++        if starting_password.is_some() {
++            eprintln!("CLI argument error - \"'startingPassword' cannot be used with a dictionary file\"");
++            process::exit(1);
++        }
++        
++        if !std::path::Path::new(dict_path).exists() {
++            eprintln!("CLI argument error - \"'passwordDictionary' does not exist\"");
++            process::exit(1);
++        }
++        
++        let file = match File::open(dict_path) {
++            Ok(f) => f,
++            Err(_) => {
++                eprintln!("CLI argument error - \"'passwordDictionary' does not exist\"");
++                process::exit(1);
++            }
++        };
++        let reader = BufReader::new(file);
++        let passwords: Vec<String> = reader
++            .lines()
++            .filter_map(|l| l.ok())
++            .filter(|p| !p.is_empty())
++            .collect();
++        
++        let start = Instant::now();
++        let mut found = false;
++        
++        for password in passwords {
++            if test_password(&input_file, &password, file_num) {
++                println!("Time elapsed: {:?}", start.elapsed());
++                println!("Password found:{}", password);
++                found = true;
++                break;
++            }
++        }
++        
++        if !found {
++            println!("Time elapsed: {:?}", start.elapsed());
++            println!("Password not found");
++            process::exit(0);
++        }
++    } else {
++        let passwords = generate_passwords(&charset, min_len, max_len, starting_password.as_deref());
++        
++        let start = Instant::now();
++        let mut found = false;
++        
++        for password in passwords {
++            if test_password(&input_file, &password, file_num) {
++                println!("Time elapsed: {:?}", start.elapsed());
++                println!("Password found:{}", password);
++                found = true;
++                break;
++            }
++        }
++        
++        if !found {
++            println!("Time elapsed: {:?}", start.elapsed());
++            println!("Password not found");
++            process::exit(0);
++        }
++    }
++}

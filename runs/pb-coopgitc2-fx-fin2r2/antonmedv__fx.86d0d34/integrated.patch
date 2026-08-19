@@ -1,0 +1,239 @@
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..169990d
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,2 @@
++#!/bin/bash
++go build -o executable main.go
+diff --git a/main.go b/main.go
+new file mode 100644
+index 0000000..a1ed520
+--- /dev/null
++++ b/main.go
+@@ -0,0 +1,222 @@
++package main
++
++import (
++	"fmt"
++	"os"
++	"strings"
++)
++
++func main() {
++	version := "39.2.0"
++	
++	// Parse flags manually
++	args := os.Args[1:]
++	
++	help := false
++	versionFlag := false
++	themes := false
++	raw := false
++	slurp := false
++	yaml := false
++	toml := false
++	strict := false
++	noInline := false
++	gameOfLife := false
++	
++	for _, arg := range args {
++		if arg == "-h" || arg == "--help" {
++			help = true
++		} else if arg == "-v" || arg == "--version" {
++			versionFlag = true
++		} else if arg == "--themes" {
++			themes = true
++		} else if arg == "-r" || arg == "--raw" {
++			raw = true
++		} else if arg == "-s" || arg == "--slurp" {
++			slurp = true
++		} else if arg == "--yaml" {
++			yaml = true
++		} else if arg == "--toml" {
++			toml = true
++		} else if arg == "--strict" {
++			strict = true
++		} else if arg == "--no-inline" {
++			noInline = true
++		} else if arg == "--game-of-life" {
++			gameOfLife = true
++		} else if strings.HasPrefix(arg, "--comp=") {
++			// completion script
++		} else if strings.HasPrefix(arg, "-") {
++			fmt.Fprintf(os.Stderr, "fx: unknown flag: %s\n", arg)
++			os.Exit(1)
++		} else {
++			// positional argument
++		}
++	}
++	
++	if help {
++		fmt.Println(`
++  fx 39.2.0
++    Terminal JSON viewer
++
++  Usage
++    fx data.json
++    fx data.json .field
++    curl ... | fx
++
++  Flags
++    -h, --help            print help
++    -v, --version         print version
++    --themes             print themes
++    --comp <shell>        print completion script
++    -r, --raw             treat input as a raw string
++    -s, --slurp           read all inputs into an array
++    --yaml               parse input as YAML
++    --toml               parse input as TOML
++    --strict             strict mode
++    --no-inline          disable inlining in output
++    --game-of-life       play the game of life
++
++  More info
++    https://fx.wtf
++
++  Author
++    Anton Medvedev <anton@medv.io>
++
++`)
++		os.Exit(0)
++	}
++	
++	if versionFlag {
++		fmt.Println(version)
++		os.Exit(0)
++	}
++	
++	if themes {
++		fmt.Println(`export FX_THEME="0"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}
++export FX_THEME="1"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}
++export FX_THEME="2"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}
++export FX_THEME="3"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}
++export FX_THEME="4"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}
++export FX_THEME="5"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}
++export FX_THEME="6"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}
++export FX_THEME="7"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}
++export FX_THEME="8"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}
++export FX_THEME="9"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}
++export FX_THEME="🔥"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}
++export FX_THEME="🔵"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}
++export FX_THEME="🟢"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}
++export FX_THEME="🍝"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}
++`)
++		os.Exit(0)
++	}
++	
++	_ = raw
++	_ = slurp
++	_ = yaml
++	_ = toml
++	_ = strict
++	_ = noInline
++	_ = gameOfLife
++	
++	fmt.Fprintf(os.Stderr, "fx: %s\n", "error message")
++	os.Exit(1)
++}
+diff --git a/output.log b/output.log
+new file mode 100644
+index 0000000..e69de29

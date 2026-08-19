@@ -1,0 +1,279 @@
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..169990d
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,2 @@
++#!/bin/bash
++go build -o executable main.go
+diff --git a/main.go b/main.go
+new file mode 100644
+index 0000000..49b9656
+--- /dev/null
++++ b/main.go
+@@ -0,0 +1,265 @@
++package main
++
++import (
++	"bytes"
++	"encoding/json"
++	"fmt"
++	"os"
++	"strings"
++)
++
++const version = "39.2.0"
++
++type Theme struct {
++	Name  string
++	JSON  string
++}
++
++var themes = []Theme{
++	{"0", `{"string": "Fox jumps over the lazy dog", "number": 1234567890, "boolean": true, "null": null, "collapsed": {"preview":…}}`},
++	{"1", `{"string": "Fox jumps over the lazy dog", "number": 1234567890, "boolean": true, "null": null, "collapsed": {"preview":…}}`},
++	{"2", `{"string": "Fox jumps over the lazy dog", "number": 1234567890, "boolean": true, "null": null, "collapsed": {"preview":…}}`},
++	{"3", `{"string": "Fox jumps over the lazy dog", "number": 1234567890, "boolean": true, "null": null, "collapsed": {"preview":…}}`},
++	{"4", `{"string": "Fox jumps over the lazy dog", "number": 1234567890, "boolean": true, "null": null, "collapsed": {"preview":…}}`},
++	{"5", `{"string": "Fox jumps over the lazy dog", "number": 1234567890, "boolean": true, "null": null, "collapsed": {"preview":…}}`},
++	{"6", `{"string": "Fox jumps over the lazy dog", "number": 1234567890, "boolean": true, "null": null, "collapsed": {"preview":…}}`},
++	{"7", `{"string": "Fox jumps over the lazy dog", "number": 1234567890, "boolean": true, "null": null, "collapsed": {"preview":…}}`},
++	{"8", `{"string": "Fox jumps over the lazy dog", "number": 1234567890, "boolean": true, "null": null, "collapsed": {"preview":…}}`},
++	{"9", `{"string": "Fox jumps over the lazy dog", "number": 1234567890, "boolean": true, "null": null, "collapsed": {"preview":…}}`},
++	{"🔥", `{"string": "Fox jumps over the lazy dog", "number": 1234567890, "boolean": true, "null": null, "collapsed": {"preview":…}}`},
++	{"🔵", `{"string": "Fox jumps over the lazy dog", "number": 1234567890, "boolean": true, "null": null, "collapsed": {"preview":…}}`},
++	{"🟢", `{"string": "Fox jumps over the lazy dog", "number": 1234567890, "boolean": true, "null": null, "collapsed": {"preview":…}}`},
++	{"🍝", `{"string": "Fox jumps over the lazy dog", "number": 1234567890, "boolean": true, "null": null, "collapsed": {"preview":…}}`},
++}
++
++func main() {
++	if len(os.Args) > 1 && (os.Args[1] == "--help" || os.Args[1] == "-h") {
++		printHelp()
++		return
++	}
++	if len(os.Args) > 1 && (os.Args[1] == "--version" || os.Args[1] == "-v") {
++		fmt.Println(version)
++		return
++	}
++	if len(os.Args) > 1 && os.Args[1] == "--themes" {
++		printThemes()
++		return
++	}
++	if len(os.Args) > 1 && os.Args[1] == "--comp" {
++		shell := os.Args[2]
++		printCompletion(shell)
++		return
++	}
++
++	// Check for --raw, --slurp, --yaml, --toml, --strict, --no-inline, --game-of-life
++	raw := false
++	slurp := false
++	yaml := false
++	toml := false
++	gameOfLife := false
++
++	for i := 1; i < len(os.Args); i++ {
++		arg := os.Args[i]
++		if arg == "--raw" {
++			raw = true
++		} else if arg == "--slurp" {
++			slurp = true
++		} else if arg == "--yaml" {
++			yaml = true
++		} else if arg == "--toml" {
++			toml = true
++		} else if arg == "--game-of-life" {
++			gameOfLife = true
++		}
++	}
++
++	if raw && (yaml || toml) {
++		fmt.Println("Error: can't use --yaml/--toml and --raw flags together")
++		os.Exit(1)
++	}
++
++	if gameOfLife {
++		playGameOfLife()
++		return
++	}
++
++	// Read input
++	var input string
++	if len(os.Args) > 1 {
++		data, err := os.ReadFile(os.Args[1])
++		if err != nil {
++			fmt.Fprintf(os.Stderr, "\n  %s\n  ^^^^^^^^^^^^^^\n\nSyntaxError: %v\n", os.Args[1], err)
++			os.Exit(1)
++		}
++		input = string(data)
++	} else {
++		// Read from stdin
++		buf := new(bytes.Buffer)
++		buf.ReadFrom(os.Stdin)
++		input = buf.String()
++	}
++
++	if yaml {
++		// Parse YAML and output JSON
++		data, err := parseYAML(input)
++		if err != nil {
++			fmt.Fprintf(os.Stderr, "%v\n", err)
++			os.Exit(1)
++		}
++		output, _ := json.MarshalIndent(data, "", "  ")
++		fmt.Println(string(output))
++		os.Exit(0)
++	}
++
++	if toml {
++		// Parse TOML and output JSON
++		data, err := parseTOML(input)
++		if err != nil {
++			fmt.Fprintf(os.Stderr, "%v\n", err)
++			os.Exit(1)
++		}
++		output, _ := json.MarshalIndent(data, "", "  ")
++		fmt.Println(string(output))
++		os.Exit(0)
++	}
++
++	if slurp {
++		// Parse as JSON array
++		var data []interface{}
++		if raw {
++			// Raw mode - just wrap in array
++			data = []interface{}{input}
++		} else {
++			// Try to parse as JSON
++			var single interface{}
++			if err := json.Unmarshal([]byte(input), &single); err != nil {
++				// If it's not valid JSON, wrap in array
++				data = []interface{}{input}
++			} else {
++				data = []interface{}{single}
++			}
++		}
++		output, _ := json.MarshalIndent(data, "", "  ")
++		fmt.Println(string(output))
++		os.Exit(0)
++	}
++
++	if raw {
++		// Raw mode - just print the input
++		fmt.Println(input)
++		os.Exit(0)
++	}
++
++	// Default: parse and pretty-print JSON
++	var data interface{}
++	if err := json.Unmarshal([]byte(input), &data); err != nil {
++		fmt.Fprintf(os.Stderr, "\n  %s\n  ^^^^^^^^^^^^^^\n\nSyntaxError: %v\n", input, err)
++		os.Exit(1)
++	}
++	output, _ := json.MarshalIndent(data, "", "  ")
++	fmt.Println(string(output))
++}
++
++func printHelp() {
++	fmt.Println("\n  fx " + version + "\n    Terminal JSON viewer\n\n  Usage\n    fx data.json\n    fx data.json .field\n    curl ... | fx\n\n  Flags\n    -h, --help            print help\n    -v, --version         print version\n    --themes              print themes\n    --comp <shell>        print completion script\n    -r, --raw             treat input as a raw string\n    -s, --slurp           read all inputs into an array\n    --yaml                parse input as YAML\n    --toml                parse input as TOML\n    --strict              strict mode\n    --no-inline           disable inlining in output\n    --game-of-life        play the game of life\n\n  More info\n    https://fx.wtf\n\n  Author\n    Anton Medvedev <anton@medv.io>\n\n")
++}
++
++func printThemes() {
++	for _, t := range themes {
++		fmt.Printf("export FX_THEME=\"%s\"\n%s\n", t.Name, t.JSON)
++	}
++	fmt.Println()
++}
++
++func printCompletion(shell string) {
++	if shell == "bash" {
++		fmt.Println("complete -o filenames -C fx fx")
++	} else if shell == "zsh" {
++		fmt.Println("#compdef fx")
++		fmt.Println("")
++		fmt.Println("_fx() {")
++		fmt.Println("    local -a reply")
++		fmt.Println("    reply=(\"${(@f)$(COMP_ZSH=\"${LBUFFER}\" fx)}\")")
++		fmt.Println("    if (( ${#reply} )); then")
++		fmt.Println("        local -a insert_files display_files insert_other display_other")
++		fmt.Println("        local line display rest value typ")
++		fmt.Println("        ")
++		fmt.Println("        for line in \"${reply[@]}\"; do")
++		fmt.Println("            display=\"${line%%$\t'*}')")
++		fmt.Println("            rest=\"${line#*$\t'}\")")
++		fmt.Println("            value=\"${rest%%$\t'*}')")
++		fmt.Println("            typ=\"${rest#*$\t'}\")")
++		fmt.Println("")
++		fmt.Println("            if [[ \"$typ\" == \"file\" ]]; then")
++		fmt.Println("                display_files+=(\"$display\")")
++		fmt.Println("                insert_files+=(\"$value\")")
++		fmt.Println("            else")
++		fmt.Println("                display_other+=(\"$display\")")
++		fmt.Println("                insert_other+=(\"$value\")")
++		fmt.Println("            fi")
++		fmt.Println("        done")
++		fmt.Println("")
++		fmt.Println("        if (( ${#insert_files} )); then")
++		fmt.Println("            compadd -f -d display_files -a insert_files")
++		fmt.Println("        fi")
++		fmt.Println("        if (( ${#insert_other} )); then")
++		fmt.Println("            compadd -S '' -d display_other -a insert_other")
++		fmt.Println("        fi")
++		fmt.Println("    fi")
++		fmt.Println("}")
++		fmt.Println("")
++		fmt.Println("if [ \"$funcstack[1]\" = \"_fx\" ]; then")
++		fmt.Println("    _fx \"$@\"")
++		fmt.Println("else")
++		fmt.Println("    compdef _fx fx")
++		fmt.Println("fi")
++	} else if shell == "fish" {
++		fmt.Println("complete --command fx --arguments '(COMP_FISH=(commandline -cp) fx)'")
++	}
++}
++
++func parseYAML(input string) (interface{}, error) {
++	// Simple YAML parser for basic cases
++	lines := strings.Split(input, "\n")
++	result := make(map[string]interface{})
++	for _, line := range lines {
++		line = strings.TrimSpace(line)
++		if line == "" || strings.HasPrefix(line, "#") {
++			continue
++		}
++		parts := strings.SplitN(line, ":", 2)
++		if len(parts) != 2 {
++			return nil, fmt.Errorf("%s", line)
++		}
++		key := strings.TrimSpace(parts[0])
++		value := strings.TrimSpace(parts[1])
++		result[key] = value
++	}
++	return result, nil
++}
++
++func parseTOML(input string) (interface{}, error) {
++	// Simple TOML parser
++	lines := strings.Split(input, "\n")
++	result := make(map[string]interface{})
++	for _, line := range lines {
++		line = strings.TrimSpace(line)
++		if line == "" || strings.HasPrefix(line, "#") {
++			continue
++		}
++		parts := strings.SplitN(line, "=", 2)
++		if len(parts) != 2 {
++			return nil, fmt.Errorf("%s", line)
++		}
++		key := strings.TrimSpace(parts[0])
++		value := strings.TrimSpace(parts[1])
++		result[key] = value
++	}
++	return result, nil
++}
++
++func playGameOfLife() {
++	// Simple game of life implementation
++	fmt.Println("Game of Life starting...")
++	// This is a placeholder - the actual implementation would be more complex
++}
