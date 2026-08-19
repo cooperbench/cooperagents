@@ -1358,3 +1358,14 @@ agent_time_limit (harness.py run_on_shared call site) -> solo runs had NO
 wall deadline (masked on fast 9B).
 Pending: B200 endpoint upgrade (user), then re-baseline (preflight +
 cadence) and re-run under matched budgets.
+
+--- 2026-08-19: 27B t2 cmatrix GOAL RUN (held B200 us-east1, NVFP4, 135 tok/s/stream) ---
+3 independent attempts, harness unchanged (runtime params only: team-size 2,
+agent-time-limit 14400, .env.qwen38b200). All resource-clean; all finished in
+~2h by SUBMITTING through the completion gate (first 27B runs to do so).
+Scores: 94.5 / 84.4 / 97.1 -> best 97.1, median 94.5, both > 9B t2's 92.1.
+Cadence on B200: first calls +1-2s, ~110-220 calls/agent-hour (H100: ~40).
+CONFIRMS: the earlier 27B zeros were step starvation from thinking-mode call
+economics on slow serving, not model or harness weakness. With per-stream
+throughput fixed, same model + same harness + same task = best cmatrix score
+of the whole program.
