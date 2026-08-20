@@ -1,0 +1,720 @@
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..ffa5eb4
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,6 @@
++#!/bin/bash
++set -e
++cd "$(dirname "$0")"
++tmp=$(mktemp)
++rustc -O -o "$tmp" src/main.rs
++mv -f "$tmp" ./executable
+diff --git a/myexe b/myexe
+new file mode 100755
+index 0000000..94ace17
+Binary files /dev/null and b/myexe differ
+diff --git a/src/main.rs b/src/main.rs
+new file mode 100644
+index 0000000..6de2e1c
+--- /dev/null
++++ b/src/main.rs
+@@ -0,0 +1,698 @@
++use std::io::{self, Read};
++
++const VERSION: &str = "4.3.1";
++
++const HELP: &str = "Shellharden: The corrective bash syntax highlighter.\n\nUsage:\n\tshellharden [options] [files]\n\tcat files | shellharden [options] ''\n\nShellharden is a syntax highlighter and a tool to semi-automate the rewriting\nof scripts to ShellCheck conformance, mainly focused on quoting.\n\nThe default mode of operation is like `cat`, but with syntax highlighting in\nforeground colors and suggestive changes in background colors.\n\nOptions:\n\t--suggest         Output a colored diff suggesting changes.\n\t--syntax          Output syntax highlighting with ANSI colors.\n\t--syntax-suggest  Diff with syntax highlighting (default mode).\n\t--transform       Output suggested changes.\n\t--check           No output; exit with 2 if changes are suggested.\n\t--replace         Replace file contents with suggested changes.\n\t--                Don't treat further arguments as options.\n\t-h|--help         Show help text.\n\t--version         Show version.\n\nThe changes suggested by Shellharden inhibits word splitting and indirect\npathname expansion. This will make your script ShellCheck compliant in terms of\nquoting. Whether your script will work afterwards is a different question:\nIf your script was using those features on purpose, it obviously won't anymore!\n\nEvery script is possible to write without using word splitting or indirect\npathname expansion, but it may involve doing things differently.\nSee the accompanying file how_to_do_things_safely_in_bash.md or online:\nhttps://github.com/anordal/shellharden/blob/master/how_to_do_things_safely_in_bash.md\n\n";
++
++const C_CMD: &str = "\x1b[0;38;2;192;0;128m";
++const C_VAR: &str = "\x1b[0;38;2;63;127;207m";
++const C_ASSIGN: &str = "\x1b[0;38;2;0;127;255m";
++const C_DQUOTE: &str = "\x1b[0;38;2;255;0;0m";
++const C_SQUOTE: &str = "\x1b[0;38;2;255;204;85m";
++const C_KEYWORD: &str = "\x1b[0;1m";
++const C_COMMENT: &str = "\x1b[0;1;3;38;2;120;144;96m";
++const C_ARITH: &str = "\x1b[0;38;2;192;0;192m";
++const C_ADD: &str = "\x1b[0;42m";
++const C_DEL: &str = "\x1b[0;41m";
++const RESET: &str = "\x1b[m";
++
++#[derive(Clone, Copy, PartialEq)]
++enum Mode {
++    Syntax,
++    Suggest,
++    SyntaxSuggest,
++    Transform,
++    Check,
++    Replace,
++}
++impl Default for Mode { fn default() -> Mode { Mode::SyntaxSuggest } }
++
++fn main() {
++    let mut mode = Mode::default();
++    let mut files: Vec<String> = Vec::new();
++    let mut read_err = false;
++    let mut changed = false;
++    let mut exit_code = 0;
++
++    let args: Vec<String> = std::env::args().collect();
++    let mut i = 1;
++    while i < args.len() {
++        let a = args[i].clone();
++        if a == "--" {
++            i += 1;
++            while i < args.len() { files.push(args[i].clone()); i += 1; }
++            break;
++        }
++        match a.as_str() {
++            "-h" | "--help" => { print!("{}", HELP); },
++            "--version" => { println!("{}", VERSION); },
++            "--syntax" => { mode = Mode::Syntax; },
++            "--suggest" => { mode = Mode::Suggest; },
++            "--syntax-suggest" => { mode = Mode::SyntaxSuggest; },
++            "--transform" => { mode = Mode::Transform; },
++            "--check" => { mode = Mode::Check; },
++            "--replace" => { mode = Mode::Replace; },
++            "" => { files.push(String::new()); },
++            _ => {
++                if a.starts_with('-') {
++                    eprint!("{}: No such option.\n", a);
++                    std::process::exit(3);
++                }
++                files.push(a);
++            }
++        }
++        i += 1;
++    }
++
++    for f in &files {
++        let data = read_input(f);
++        match data {
++            None => {
++                eprint!("{}: No such file or directory (os error 2)\n", f);
++                read_err = true;
++                continue;
++            }
++            Some(d) => { process_one(&d, f, mode, &mut changed, &mut exit_code); }
++        }
++    }
++    if read_err { std::process::exit(1); }
++    if mode == Mode::Check && changed { std::process::exit(2); }
++    if exit_code != 0 { std::process::exit(exit_code); }
++}
++
++fn read_input(f: &str) -> Option<String> {
++    if f.is_empty() {
++        let mut buf = Vec::new();
++        match io::stdin().read_to_end(&mut buf) {
++            Ok(_) => Some(String::from_utf8_lossy(&buf).to_string()),
++            Err(_) => None,
++        }
++    } else {
++        match std::fs::read(f) {
++            Ok(buf) => Some(String::from_utf8_lossy(&buf).to_string()),
++            Err(_) => None,
++        }
++    }
++}
++
++fn process_one(data: &str, f: &str, mode: Mode, changed: &mut bool, exit_code: &mut i32) {
++    let (transformed, err) = transform(data);
++    *changed |= transformed != *data || err;
++    match mode {
++        Mode::Transform => {
++            if err { eprint!("{}", err_msg(f)); *exit_code = 1; }
++            print!("{}", transformed);
++        }
++        Mode::Check => { /* no output */ }
++        Mode::Replace => {
++            if err { eprint!("{}", err_msg(f)); *exit_code = 1; return; }
++            if f.is_empty() { print!("{}", transformed); }
++            else { let _ = std::fs::write(f, &transformed); }
++        }
++        Mode::Syntax => {
++            if err { eprint!("{}", err_msg(f)); *exit_code = 1; }
++            print!("{}", syntax_color(data));
++        }
++        Mode::Suggest => {
++            if err { eprint!("{}", err_msg(f)); *exit_code = 1; }
++            print!("{}", diff(data, &transformed, false));
++        }
++        Mode::SyntaxSuggest => {
++            if err { eprint!("{}", err_msg(f)); *exit_code = 1; }
++            print!("{}", diff(data, &transformed, true));
++        }
++    }
++}
++
++fn err_msg(_f: &str) -> String {
++    "\n: Unexpected end of file\nThe file's end was reached without closing all sytactic scopes.\nEither, the parser got lost, or the file is truncated or malformed.\n".to_string()
++}
++
++// ============== Character classification ==============
++fn is_name_start(c: char) -> bool { c.is_ascii_alphabetic() || c == '_' }
++fn is_name(c: char) -> bool { c.is_ascii_alphanumeric() || c == '_' }
++fn is_ws(c: char) -> bool { c == ' ' || c == '\t' }
++// separators that end a word (when not in quotes/brackets)
++fn is_word_sep(c: char) -> bool {
++    is_ws(c) || matches!(c, ';' | '|' | '&' | '<' | '>' | '\n')
++}
++
++// ============== Transform engine ==============
++// A var part classification
++#[derive(Clone, Copy, PartialEq)]
++enum VKind {
++    Name,     // $name  (braceable, quote-worthy)
++    Special,   // $@ $* $0-$9 $- (quote-worthy, not braceable; $* -> $@)
++    Other,     // $? $# $! (quote-worthy only if adjacent)
++    CmdSub,    // $(...)  (quote-worthy, recursively transformed)
++    Arith,     // $((...)) (not quote-worthy)
++    BracedOp,  // ${name:op...} (quote-worthy, braces kept)
++}
++
++#[derive(Clone)]
++struct Part {
++    kind: VKind,
++    text: String,    // original text of the part
++    name: String,    // for Name: the variable name (no $, no braces)
++    is_braced: bool, // whether original used ${...}
++    inner_text: String, // for CmdSub: inner content (to recurse)
++    len: usize,        // char length of the part in the source
++    next_is_name: bool, // whether the char after this part (in the word) is a name char
++}
++
++// ============== Syntax color (basic) ==============
++fn syntax_color(s: &str) -> String {
++    let c: Vec<char> = s.chars().collect();
++    let n = c.len();
++    let mut out = String::new();
++    let mut i = 0;
++    let mut single = false;
++    let mut double = false;
++    let mut in_comment = false;
++    let mut at_line_start = true;
++    // simple: color command words, vars, keywords
++    let keywords = ["for","in","do","done","case","esac","if","then","fi","while","until","select","local","return","export","declare","readonly","function","time","else","elif","{","}"];
++    let mut word = String::new();
++    let mut in_word = false;
++    let mut first_cmd = true;
++    fn flush_kw(word: &str, out: &mut String, keywords: &[&str], cmd: bool) {
++        let is_kw = keywords.iter().any(|&k| k == word);
++        if is_kw {
++            out.push_str(C_KEYWORD);
++            out.push_str(word);
++            out.push_str(RESET);
++        } else if cmd {
++            out.push_str(C_CMD);
++            out.push_str(word);
++            out.push_str(RESET);
++        } else {
++            out.push_str(word);
++        }
++    }
++    while i < n {
++        let ch = c[i];
++        if in_comment {
++            out.push(ch);
++            if ch == '\n' { in_comment = false; at_line_start = true; }
++            i += 1;
++            continue;
++        }
++        if single {
++            out.push(ch);
++            if ch == '\'' { single = false; }
++            i += 1;
++            continue;
++        }
++        if double {
++            out.push(ch);
++            if ch == '"' { double = false; }
++            i += 1;
++            continue;
++        }
++        if ch == '\n' { at_line_start = true; first_cmd = true; }
++        // gather word or sep
++        if is_word_sep(ch) {
++            if in_word {
++                flush_kw(&word, &mut out, &keywords, first_cmd);
++                first_cmd = false;
++                in_word = false;
++                word.clear();
++            }
++            if ch == '\n' { /* keep at_line_start handled above */ }
++            out.push(ch);
++            i += 1;
++            continue;
++        }
++        if !in_word { in_word = true; word.clear(); }
++        word.push(ch);
++        i += 1;
++    }
++    if in_word { flush_kw(&word, &mut out, &keywords, first_cmd); }
++    out
++}
++
++// ============== Diff (line based, colored) ==============
++fn diff(orig: &str, new: &str, syntax: bool) -> String {
++    let ol: Vec<&str> = orig.split_inclusive('\n').collect();
++    let nl: Vec<&str> = new.split_inclusive('\n').collect();
++    let mut out = String::new();
++    let len = ol.len().max(nl.len());
++    let mut idx = 0;
++    while idx < len {
++        let o = if idx < ol.len() { Some(ol[idx]) } else { None };
++        let nn = if idx < nl.len() { Some(nl[idx]) } else { None };
++        match (o, nn) {
++            (Some(a), Some(b)) if a == b => {
++                if syntax { out.push_str(&syntax_color(a)); } else { out.push_str(a); }
++            }
++            _ => {
++                // changed: show deletion then addition
++                if let Some(a) = o {
++                    out.push_str(C_DEL);
++                    if syntax { out.push_str(&syntax_color(a)); } else { out.push_str(a); }
++                    out.push_str(RESET);
++                }
++                if let Some(b) = nn {
++                    out.push_str(C_ADD);
++                    if syntax { out.push_str(&syntax_color(b)); } else { out.push_str(b); }
++                    out.push_str(RESET);
++                }
++            }
++        }
++        idx += 1;
++    }
++    out
++}
++
++
++
++// ============== Transform engine ==============
++#[derive(Clone)]
++enum Tok {
++    Literal(String),
++    Var(Part),
++}
++
++// An OPENER starts a quote span.
++fn is_opener(k: VKind) -> bool {
++    matches!(k, VKind::Name | VKind::Special | VKind::CmdSub | VKind::BracedOp)
++}
++// An ABSORBER joins an open span but never opens one.
++fn is_absorber(k: VKind) -> bool {
++    matches!(k, VKind::Arith | VKind::Other)
++}
++
++// ---- main tokenizer: split into words; track for-loop / case context ----
++fn transform(s: &str) -> (String, bool) {
++    let c: Vec<char> = s.chars().collect();
++    let n = c.len();
++    let mut out = String::new();
++    let mut i = 0;
++    let mut err = false;
++    let mut single = false;
++    let mut double = false;
++    let mut open = false;
++    let mut for_mode = false;
++    let mut for_in = false;
++    let mut case_mode = false;
++    let mut word = String::new();
++    let mut in_word = false;
++    let mut ctx = 0u8;
++
++    while i < n {
++        let ch = c[i];
++        if single {
++            out.push(ch);
++            if ch == '\'' { single = false; }
++            i += 1; continue;
++        }
++        if double {
++            out.push(ch);
++            if ch == '"' { double = false; }
++            i += 1; continue;
++        }
++        if ch == '\'' { single = true; out.push(ch); i += 1; continue; }
++        if ch == '"' { double = true; out.push(ch); i += 1; continue; }
++        if ch == '(' || ch == '[' || ch == '{' { open = true; }
++        if ch == ')' || ch == ']' || ch == '}' { if open { open = false; } }
++        if is_word_sep(ch) && !open {
++            if in_word {
++                let (tw, e) = transform_word(&word, false, ctx);
++                out.push_str(&tw);
++                if e { err = true; }
++                // update context after this word
++                if word == "for" { for_mode = true; }
++                if for_mode && word == "in" { for_in = true; }
++                if word == "case" { case_mode = true; }
++                if for_in { ctx = 1; }
++                else if case_mode { ctx = 2; }
++                else { ctx = 0; }
++                in_word = false;
++                word.clear();
++            }
++            out.push(ch);
++            i += 1; continue;
++        }
++        if !in_word { in_word = true; word.clear(); }
++        word.push(ch);
++        i += 1;
++    }
++    if in_word {
++        let (tw, e) = transform_word(&word, true, ctx);
++        out.push_str(&tw);
++        if e { err = true; }
++    }
++    if single || double { err = true; }
++    (out, err)
++}
++
++// parse a word into parts (literals + var parts)
++fn parse_word(w: &str) -> Vec<Tok> {
++    let c: Vec<char> = w.chars().collect();
++    let n = c.len();
++    let mut toks = Vec::new();
++    let mut lit = String::new();
++    let mut i = 0;
++    while i < n {
++        let ch = c[i];
++        if ch == '$' {
++            if !lit.is_empty() { toks.push(Tok::Literal(std::mem::take(&mut lit))); }
++            if let Some(p) = parse_part(&c, i) {
++                let plen = p.len;
++                toks.push(Tok::Var(p));
++                i += plen;
++                continue;
++            }
++            lit.push(ch);
++            i += 1;
++            continue;
++        }
++        lit.push(ch);
++        i += 1;
++    }
++    if !lit.is_empty() { toks.push(Tok::Literal(lit)); }
++    toks
++}
++
++fn parse_part(c: &[char], i: usize) -> Option<Part> {
++    let len = c.len();
++    let next = *c.get(i + 1)?;
++    // next_is_name: the char after this part is a name char
++    let mk = |kind: VKind, text: String, name: String, is_braced: bool, inner: String, l: usize| Part {
++        kind,
++        text,
++        name,
++        is_braced,
++        inner_text: inner,
++        len: l,
++        next_is_name: c.get(i + l).map_or(false, |cc| is_name(*cc)),
++    };
++    match next {
++        '{' => {
++            let mut depth = 1;
++            let mut j = i + 2;
++            while j < len && depth > 0 {
++                if c[j] == '{' { depth += 1; }
++                else if c[j] == '}' { depth -= 1; }
++                j += 1;
++            }
++            if j > len { return None; }
++            let inner: String = c[i+2..j-1].iter().collect();
++            let raw: String = c[i..j].iter().collect();
++            let kind = if is_braced_op(&inner) { VKind::BracedOp } else { VKind::Name };
++            Some(mk(kind, raw, inner, true, String::new(), j - i))
++        }
++        '(' => {
++            if c.get(i + 2) == Some(&'(') {
++                let mut depth = 2;
++                let mut j = i + 3;
++                while j < len && depth > 0 {
++                    if c[j] == '(' { depth += 1; }
++                    else if c[j] == ')' { depth -= 1; }
++                    j += 1;
++                }
++                if j > len { return None; }
++                let raw: String = c[i..j].iter().collect();
++                Some(mk(VKind::Arith, raw, String::new(), false, String::new(), j - i))
++            } else {
++                let mut depth = 1;
++                let mut j = i + 2;
++                while j < len && depth > 0 {
++                    if c[j] == '(' { depth += 1; }
++                    else if c[j] == ')' { depth -= 1; }
++                    j += 1;
++                }
++                if j > len { return None; }
++                let raw: String = c[i..j].iter().collect();
++                let inner: String = c[i+2..j-1].iter().collect();
++                Some(mk(VKind::CmdSub, raw, String::new(), false, inner, j - i))
++            }
++        }
++        c2 @ ('?' | '#' | '!') => {
++            let raw: String = c[i..i+2].iter().collect();
++            Some(mk(VKind::Other, raw, String::new(), false, String::new(), 2))
++        }
++        c2 @ ('@' | '*' | '-') => {
++            let raw: String = c[i..i+2].iter().collect();
++            Some(mk(VKind::Special, raw, String::new(), false, String::new(), 2))
++        }
++        c2 if c2 == '_' || is_name_start(c2) => {
++            let mut j = i + 1;
++            while j < len && is_name(c[j]) { j += 1; }
++            let raw: String = c[i..j].iter().collect();
++            let name: String = c[i+1..j].iter().collect();
++            Some(mk(VKind::Name, raw, name, false, String::new(), j - i))
++        }
++        _ => None,
++    }
++}
++
++fn is_braced_op(inner: &str) -> bool {
++    for ch in inner.chars() {
++        if !is_name(ch) { return true; }
++    }
++    false
++}
++
++// transform a word: assignment handling + span building
++fn transform_word(w: &str, at_eof: bool, ctx: u8) -> (String, bool) {
++    let c: Vec<char> = w.chars().collect();
++    let n = c.len();
++    // assignment: leading name followed by '=' (and not part of a name)
++    let mut j = 0;
++    while j < n && is_name(c[j]) { j += 1; }
++    let is_assign = j > 0 && j < n && c[j] == '=';
++
++    if is_assign {
++        let lhs: String = c[..j].iter().collect();
++        // array assignment arr=(...)
++        if c.get(j+1) == Some(&'(') {
++            let rest: String = c[j+1..].iter().collect();
++            if let Some((content, _)) = split_parens(&rest) {
++                let (tv, e) = transform_array_val(&content);
++                if e { return (w.to_string(), true); }
++                return (format!("{}=({})", lhs, tv), false);
++            }
++        }
++        // scalar assignment
++        let value: String = c[j+1..].iter().collect();
++        let (tv, e) = transform_value(&value);
++        if e { return (w.to_string(), true); }
++        return (format!("{}={}", lhs, tv), false);
++    }
++    // not an assignment: build span
++    build_span(w, at_eof, ctx)
++}
++
++fn split_parens(s: &str) -> Option<(String, bool)> {
++    let c: Vec<char> = s.chars().collect();
++    if c.is_empty() || c[0] != '(' { return None; }
++    let mut depth = 1;
++    let mut j = 1;
++    let len = c.len();
++    while j < len && depth > 0 {
++        if c[j] == '(' { depth += 1; }
++        else if c[j] == ')' { depth -= 1; }
++        j += 1;
++    }
++    if j > len { return None; }
++    let inner: String = c[1..j-1].iter().collect();
++    Some((inner, false))
++}
++
++fn transform_array_val(content: &str) -> (String, bool) {
++    let c: Vec<char> = content.chars().collect();
++    let n = c.len();
++    let mut out = String::new();
++    let mut i = 0;
++    let mut err = false;
++    let mut single = false;
++    let mut double = false;
++    let mut open = false;
++    let mut word = String::new();
++    let mut in_word = false;
++    while i < n {
++        let ch = c[i];
++        if single { out.push(ch); if ch == '\'' { single = false; } i+=1; continue; }
++        if double { out.push(ch); if ch == '"' { double = false; } i+=1; continue; }
++        if ch == '\'' { single = true; out.push(ch); i+=1; continue; }
++        if ch == '"' { double = true; out.push(ch); i+=1; continue; }
++        if ch == '(' || ch == '[' || ch == '{' { open = true; }
++        if ch == ')' || ch == ']' || ch == '}' { if open { open = false; } }
++        if is_word_sep(ch) && !open {
++            if in_word {
++                let (tw, e) = transform_word(&word, false, 0);
++                out.push_str(&tw);
++                if e { err = true; }
++                in_word = false; word.clear();
++            }
++            out.push(ch); i+=1; continue;
++        }
++        if !in_word { in_word = true; word.clear(); }
++        word.push(ch); i+=1;
++    }
++    if in_word { let (tw, e) = transform_word(&word, true, 0); out.push_str(&tw); if e { err = true; } }
++    (out, err)
++}
++
++// transform the value of an assignment (no quote spans; recurse cmdsub; vars as-is)
++fn transform_value(s: &str) -> (String, bool) {
++    let toks = parse_word(s);
++    let mut out = String::new();
++    let mut err = false;
++    for t in &toks {
++        match t {
++            Tok::Literal(s) => out.push_str(s),
++            Tok::Var(p) => match p.kind {
++                VKind::CmdSub => {
++                    let (iv, e) = transform(&p.inner_text);
++                    if e { err = true; }
++                    out.push_str("$(");
++                    out.push_str(&iv);
++                    out.push_str(")");
++                }
++                _ => out.push_str(&p.text),
++            },
++        }
++    }
++    (out, err)
++}
++
++// build a quote span for a (non-assignment) word
++fn build_span(w: &str, at_eof: bool, ctx: u8) -> (String, bool) {
++    let toks = parse_word(w);
++    // for-value single bare Name -> ${name[@]}
++    if ctx == 1 {
++        let single_bare = toks.len() == 1 && matches!(&toks[0], Tok::Var(p) if p.kind == VKind::Name && !p.is_braced);
++        if single_bare {
++            if let Tok::Var(p) = &toks[0] {
++                let mut q = String::new();
++                q.push('"'); q.push('$'); q.push('{');
++                q.push_str(&p.name); q.push_str("[@]"); q.push('}'); q.push('"');
++                return (q, false);
++            }
++        }
++    }
++    // find first opener index
++    let mut first_opener: Option<usize> = None;
++    for (idx, t) in toks.iter().enumerate() {
++        if let Tok::Var(p) = t {
++            if is_opener(p.kind) { first_opener = Some(idx); break; }
++        }
++    }
++    let mut out = String::new();
++    let mut err = false;
++    let emit_part = |p: &Part, out: &mut String, err: &mut bool| {
++        match p.kind {
++            VKind::CmdSub => {
++                let (iv, e) = transform(&p.inner_text);
++                if e { *err = true; }
++                out.push_str("$("); out.push_str(&iv); out.push_str(")");
++            }
++            _ => out.push_str(&p.text),
++        }
++    };
++    match first_opener {
++        None => {
++            for t in &toks {
++                match t {
++                    Tok::Literal(s) => out.push_str(s),
++                    Tok::Var(p) => emit_part(p, &mut out, &mut err),
++                }
++            }
++        }
++        Some(fo) => {
++            // prefix before the span
++            for idx in 0..fo {
++                match &toks[idx] {
++                    Tok::Literal(s) => out.push_str(s),
++                    Tok::Var(p) => emit_part(p, &mut out, &mut err),
++                }
++            }
++            // span from fo until first literal
++            let mut span_end = fo;
++            let mut k = fo;
++            while k < toks.len() {
++                match &toks[k] {
++                    Tok::Literal(_) => break,
++                    Tok::Var(_) => { span_end = k; k += 1; }
++                }
++            }
++            out.push('"');
++            for idx in fo..=span_end {
++                if let Tok::Var(p) = &toks[idx] {
++                    let last = idx == span_end;
++                    let s = part_in_span(p, at_eof, last);
++                    out.push_str(&s);
++                }
++            }
++            out.push('"');
++            // suffix after the span
++            for idx in (span_end+1)..toks.len() {
++                match &toks[idx] {
++                    Tok::Literal(s) => out.push_str(s),
++                    Tok::Var(p) => emit_part(p, &mut out, &mut err),
++                }
++            }
++        }
++    }
++    (out, err)
++}
++
++// part text within a span (Name brace rule; Special $*->$@; CmdSub recurse)
++fn part_in_span(p: &Part, at_eof: bool, last_in_span: bool) -> String {
++    match p.kind {
++        VKind::Name => {
++            let brace = p.is_braced && p.next_is_name;
++            if brace { format!("${{{}}}", p.name) } else { format!("${}", p.name) }
++        }
++        VKind::Special => {
++            if p.text == "$*" { "$@".to_string() } else { p.text.clone() }
++        }
++        VKind::Other => p.text.clone(),
++        VKind::CmdSub => {
++            let (iv, _e) = transform(&p.inner_text);
++            format!("$({})", iv)
++        }
++        VKind::Arith => p.text.clone(),
++        VKind::BracedOp => p.text.clone(),
++    }
++}
++
++// ============== Check ==============
++// Returns 0 (clean) or 2 (issues).
++fn check_one(s: &str) -> u8 {
++    let c: Vec<char> = s.chars().collect();
++    let n = c.len();
++    let mut single = false;
++    let mut double = false;
++    let mut open = false;
++    let mut i = 0;
++    let mut name = 0;
++    while i < n {
++        let ch = c[i];
++        if single {
++            if ch == '\'' { single = false; }
++            i += 1; continue;
++        }
++        if double {
++            if ch == '"' { double = false; }
++            i += 1; continue;
++        }
++        if ch == '\'' { single = true; i += 1; continue; }
++        if ch == '"' { double = true; i += 1; continue; }
++        if ch == '(' || ch == '[' || ch == '{' { open = true; }
++        if ch == ')' || ch == ']' || ch == '}' { if open { open = false; } }
++        if ch == '$' && !single && !double {
++            if let Some(p) = parse_part(&c, i) {
++                if p.kind == VKind::Name { name += 1; }
++                i += p.len; continue;
++            }
++        }
++        i += 1;
++    }
++    if single || double || open { return 2; }
++    if name > 0 { return 2; }
++    0
++}
++

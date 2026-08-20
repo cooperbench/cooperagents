@@ -1,0 +1,3980 @@
+diff --git a/Cargo.toml b/Cargo.toml
+new file mode 100644
+index 0000000..4ec19cb
+--- /dev/null
++++ b/Cargo.toml
+@@ -0,0 +1,31 @@
++[package]
++name = "zoxide"
++version = "0.9.9"
++edition = "2021"
++license = "MIT"
++description = "A smarter cd command"
++
++[[bin]]
++name = "zoxide"
++path = "src/main.rs"
++
++[dependencies]
++clap = { version = "4.6.1", features = ["derive", "cargo", "help", "unicode", "wrap_help"] }
++clap_complete = "4.6.5"
++clap_mangen = "0.3.0"
++colored = "3.1.1"
++dirs = "6.0.0"
++fancy-regex = "0.11.0"
++glob = "0.3.3"
++hex = "0.4.3"
++lru = "0.18.0"
++nix = { version = "0.29.0", features = ["socket", "term"] }
++serde = { version = "1.0.228", features = ["derive"] }
++serde_json = "1.0.150"
++strsim = "0.11.1"
++thiserror = "2.0.18"
++toml = "1.1.2+spec-1.1.0"
++url = "2.5.8"
++
++[profile.release]
++lto = "thin"
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..d27ad1a
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,4 @@
++#!/usr/bin/env bash
++set -euo pipefail
++cd "$(dirname "$0")"
++rustc --edition 2021 -O src/zo_main.rs -o executable
+diff --git a/patch.txt b/patch.txt
+new file mode 100644
+index 0000000..a4f20ad
+--- /dev/null
++++ b/patch.txt
+@@ -0,0 +1,1964 @@
++diff --git a/compile.sh b/compile.sh
++new file mode 100755
++index 0000000..d27ad1a
++--- /dev/null
+++++ b/compile.sh
++@@ -0,0 +1,4 @@
+++#!/usr/bin/env bash
+++set -euo pipefail
+++cd "$(dirname "$0")"
+++rustc --edition 2021 -O src/zo_main.rs -o executable
++diff --git a/src/templates/help_add.txt b/src/templates/help_add.txt
++new file mode 100644
++index 0000000..4891727
++--- /dev/null
+++++ b/src/templates/help_add.txt
++@@ -0,0 +1,24 @@
+++zoxide-add 0.9.9
+++Ajeet D'Souza <98ajeet@gmail.com>
+++https://github.com/ajeetdsouza/zoxide
+++
+++Add a new directory or increment its rank
+++
+++Usage:
+++  executable add [OPTIONS] <PATHS>...
+++
+++Arguments:
+++  <PATHS>...  
+++
+++Options:
+++  -s, --score <SCORE>  The rank to increment the entry if it exists or initialize it with if it doesn't
+++  -h, --help           Print help
+++  -V, --version        Print version
+++
+++Environment variables:
+++  _ZO_DATA_DIR          Path for zoxide data files
+++  _ZO_ECHO              Print the matched directory before navigating to it when set to 1
+++  _ZO_EXCLUDE_DIRS      List of directory globs to be excluded
+++  _ZO_FZF_OPTS          Custom flags to pass to fzf
+++  _ZO_MAXAGE            Maximum total age after which entries start getting deleted
+++  _ZO_RESOLVE_SYMLINKS  Resolve symlinks when storing paths
++diff --git a/src/templates/help_edit.txt b/src/templates/help_edit.txt
++new file mode 100644
++index 0000000..8301d52
++--- /dev/null
+++++ b/src/templates/help_edit.txt
++@@ -0,0 +1,20 @@
+++zoxide-edit 0.9.9
+++Ajeet D'Souza <98ajeet@gmail.com>
+++https://github.com/ajeetdsouza/zoxide
+++
+++Edit the database
+++
+++Usage:
+++  executable edit
+++
+++Options:
+++  -h, --help     Print help
+++  -V, --version  Print version
+++
+++Environment variables:
+++  _ZO_DATA_DIR          Path for zoxide data files
+++  _ZO_ECHO              Print the matched directory before navigating to it when set to 1
+++  _ZO_EXCLUDE_DIRS      List of directory globs to be excluded
+++  _ZO_FZF_OPTS          Custom flags to pass to fzf
+++  _ZO_MAXAGE            Maximum total age after which entries start getting deleted
+++  _ZO_RESOLVE_SYMLINKS  Resolve symlinks when storing paths
++diff --git a/src/templates/help_import.txt b/src/templates/help_import.txt
++new file mode 100644
++index 0000000..4605c15
++--- /dev/null
+++++ b/src/templates/help_import.txt
++@@ -0,0 +1,25 @@
+++zoxide-import 0.9.9
+++Ajeet D'Souza <98ajeet@gmail.com>
+++https://github.com/ajeetdsouza/zoxide
+++
+++Import entries from another application
+++
+++Usage:
+++  executable import [OPTIONS] --from <FROM> <PATH>
+++
+++Arguments:
+++  <PATH>  
+++
+++Options:
+++      --from <FROM>  Application to import from [possible values: autojump, z]
+++      --merge        Merge into existing database
+++  -h, --help         Print help
+++  -V, --version      Print version
+++
+++Environment variables:
+++  _ZO_DATA_DIR          Path for zoxide data files
+++  _ZO_ECHO              Print the matched directory before navigating to it when set to 1
+++  _ZO_EXCLUDE_DIRS      List of directory globs to be excluded
+++  _ZO_FZF_OPTS          Custom flags to pass to fzf
+++  _ZO_MAXAGE            Maximum total age after which entries start getting deleted
+++  _ZO_RESOLVE_SYMLINKS  Resolve symlinks when storing paths
++diff --git a/src/templates/help_init.txt b/src/templates/help_init.txt
++new file mode 100644
++index 0000000..9fae4cc
++--- /dev/null
+++++ b/src/templates/help_init.txt
++@@ -0,0 +1,26 @@
+++zoxide-init 0.9.9
+++Ajeet D'Souza <98ajeet@gmail.com>
+++https://github.com/ajeetdsouza/zoxide
+++
+++Generate shell configuration
+++
+++Usage:
+++  executable init [OPTIONS] <SHELL>
+++
+++Arguments:
+++  <SHELL>  [possible values: bash, elvish, fish, nushell, posix, powershell, tcsh, xonsh, zsh]
+++
+++Options:
+++      --no-cmd       Prevents zoxide from defining the `z` and `zi` commands
+++      --cmd <CMD>    Changes the prefix of the `z` and `zi` commands [default: z]
+++      --hook <HOOK>  Changes how often zoxide increments a directory's score [default: pwd] [possible values: none, prompt, pwd]
+++  -h, --help         Print help
+++  -V, --version      Print version
+++
+++Environment variables:
+++  _ZO_DATA_DIR          Path for zoxide data files
+++  _ZO_ECHO              Print the matched directory before navigating to it when set to 1
+++  _ZO_EXCLUDE_DIRS      List of directory globs to be excluded
+++  _ZO_FZF_OPTS          Custom flags to pass to fzf
+++  _ZO_MAXAGE            Maximum total age after which entries start getting deleted
+++  _ZO_RESOLVE_SYMLINKS  Resolve symlinks when storing paths
++diff --git a/src/templates/help_main.txt b/src/templates/help_main.txt
++new file mode 100644
++index 0000000..9b3a59c
++--- /dev/null
+++++ b/src/templates/help_main.txt
++@@ -0,0 +1,28 @@
+++zoxide 0.9.9
+++Ajeet D'Souza <98ajeet@gmail.com>
+++https://github.com/ajeetdsouza/zoxide
+++
+++A smarter cd command for your terminal
+++
+++Usage:
+++  executable <COMMAND>
+++
+++Commands:
+++  add     Add a new directory or increment its rank
+++  edit    Edit the database
+++  import  Import entries from another application
+++  init    Generate shell configuration
+++  query   Search for a directory in the database
+++  remove  Remove a directory from the database
+++
+++Options:
+++  -h, --help     Print help
+++  -V, --version  Print version
+++
+++Environment variables:
+++  _ZO_DATA_DIR          Path for zoxide data files
+++  _ZO_ECHO              Print the matched directory before navigating to it when set to 1
+++  _ZO_EXCLUDE_DIRS      List of directory globs to be excluded
+++  _ZO_FZF_OPTS          Custom flags to pass to fzf
+++  _ZO_MAXAGE            Maximum total age after which entries start getting deleted
+++  _ZO_RESOLVE_SYMLINKS  Resolve symlinks when storing paths
++diff --git a/src/templates/help_query.txt b/src/templates/help_query.txt
++new file mode 100644
++index 0000000..b08093b
++--- /dev/null
+++++ b/src/templates/help_query.txt
++@@ -0,0 +1,29 @@
+++zoxide-query 0.9.9
+++Ajeet D'Souza <98ajeet@gmail.com>
+++https://github.com/ajeetdsouza/zoxide
+++
+++Search for a directory in the database
+++
+++Usage:
+++  executable query [OPTIONS] [KEYWORDS]...
+++
+++Arguments:
+++  [KEYWORDS]...  
+++
+++Options:
+++  -a, --all              Show unavailable directories
+++  -i, --interactive      Use interactive selection
+++  -l, --list             List all matching directories
+++  -s, --score            Print score with results
+++      --exclude <path>   Exclude the current directory
+++      --base-dir <path>  Only search within this directory
+++  -h, --help             Print help
+++  -V, --version          Print version
+++
+++Environment variables:
+++  _ZO_DATA_DIR          Path for zoxide data files
+++  _ZO_ECHO              Print the matched directory before navigating to it when set to 1
+++  _ZO_EXCLUDE_DIRS      List of directory globs to be excluded
+++  _ZO_FZF_OPTS          Custom flags to pass to fzf
+++  _ZO_MAXAGE            Maximum total age after which entries start getting deleted
+++  _ZO_RESOLVE_SYMLINKS  Resolve symlinks when storing paths
++diff --git a/src/templates/help_remove.txt b/src/templates/help_remove.txt
++new file mode 100644
++index 0000000..5a14c9e
++--- /dev/null
+++++ b/src/templates/help_remove.txt
++@@ -0,0 +1,23 @@
+++zoxide-remove 0.9.9
+++Ajeet D'Souza <98ajeet@gmail.com>
+++https://github.com/ajeetdsouza/zoxide
+++
+++Remove a directory from the database
+++
+++Usage:
+++  executable remove [PATHS]...
+++
+++Arguments:
+++  [PATHS]...  
+++
+++Options:
+++  -h, --help     Print help
+++  -V, --version  Print version
+++
+++Environment variables:
+++  _ZO_DATA_DIR          Path for zoxide data files
+++  _ZO_ECHO              Print the matched directory before navigating to it when set to 1
+++  _ZO_EXCLUDE_DIRS      List of directory globs to be excluded
+++  _ZO_FZF_OPTS          Custom flags to pass to fzf
+++  _ZO_MAXAGE            Maximum total age after which entries start getting deleted
+++  _ZO_RESOLVE_SYMLINKS  Resolve symlinks when storing paths
++diff --git a/src/templates/init_bash.txt b/src/templates/init_bash.txt
++new file mode 100644
++index 0000000..51475f7
++--- /dev/null
+++++ b/src/templates/init_bash.txt
++@@ -0,0 +1,174 @@
+++# shellcheck shell=bash
+++
+++# =============================================================================
+++#
+++# Utility functions for zoxide.
+++#
+++
+++# pwd based on the value of _ZO_RESOLVE_SYMLINKS.
+++function __zoxide_pwd() {
+++    \builtin pwd -L
+++}
+++
+++# cd + custom logic based on the value of _ZO_ECHO.
+++function __zoxide_cd() {
+++    # shellcheck disable=SC2164
+++    \builtin cd -- "$@"
+++}
+++
+++# =============================================================================
+++#
+++# Hook configuration for zoxide.
+++#
+++
+++# Hook to add new entries to the database.
+++__zoxide_oldpwd="$(__zoxide_pwd)"
+++
+++function __zoxide_hook() {
+++    \builtin local -r retval="$?"
+++    \builtin local pwd_tmp
+++    pwd_tmp="$(__zoxide_pwd)"
+++    if [[ ${__zoxide_oldpwd} != "${pwd_tmp}" ]]; then
+++        __zoxide_oldpwd="${pwd_tmp}"
+++        \command zoxide add -- "${__zoxide_oldpwd}"
+++    fi
+++    return "${retval}"
+++}
+++
+++# Initialize hook.
+++if [[ ${PROMPT_COMMAND:=} != *'__zoxide_hook'* ]]; then
+++    if [[ "$(declare -p PROMPT_COMMAND 2>&1)" == "declare -a"* ]]; then
+++        PROMPT_COMMAND=("${PROMPT_COMMAND[@]}" __zoxide_hook)
+++    else
+++        # shellcheck disable=SC2128,SC2178
+++        PROMPT_COMMAND="${PROMPT_COMMAND%"${PROMPT_COMMAND##*[![:space:];]}"}"
+++        # shellcheck disable=SC2128,SC2178
+++        PROMPT_COMMAND="${PROMPT_COMMAND:+${PROMPT_COMMAND};}__zoxide_hook"
+++    fi
+++fi
+++
+++# Report common issues.
+++function __zoxide_doctor() {
+++    [[ ${_ZO_DOCTOR:-1} -eq 0 ]] && return 0
+++    # shellcheck disable=SC2199
+++    [[ ${PROMPT_COMMAND[@]:-} == *'__zoxide_hook'* ]] && return 0
+++    # shellcheck disable=SC2199
+++    [[ ${__vsc_original_prompt_command[@]:-} == *'__zoxide_hook'* ]] && return 0
+++
+++    _ZO_DOCTOR=0
+++    \builtin printf '%s\n' \
+++        'zoxide: detected a possible configuration issue.' \
+++        'Please ensure that zoxide is initialized right at the end of your shell configuration file (usually ~/.bashrc).' \
+++        '' \
+++        'If the issue persists, consider filing an issue at:' \
+++        'https://github.com/ajeetdsouza/zoxide/issues' \
+++        '' \
+++        'Disable this message by setting _ZO_DOCTOR=0.' \
+++        '' >&2
+++}
+++
+++# =============================================================================
+++#
+++# When using zoxide with --no-cmd, alias these internal functions as desired.
+++#
+++
+++__zoxide_z_prefix='z#'
+++
+++# Jump to a directory using only keywords.
+++function __zoxide_z() {
+++    __zoxide_doctor
+++
+++    # shellcheck disable=SC2199
+++    if [[ $# -eq 0 ]]; then
+++        __zoxide_cd ~
+++    elif [[ $# -eq 1 && $1 == '-' ]]; then
+++        __zoxide_cd "${OLDPWD}"
+++    elif [[ $# -eq 1 && -d $1 ]]; then
+++        __zoxide_cd "$1"
+++    elif [[ $# -eq 2 && $1 == '--' ]]; then
+++        __zoxide_cd "$2"
+++    elif [[ ${@: -1} == "${__zoxide_z_prefix}"?* ]]; then
+++        # shellcheck disable=SC2124
+++        \builtin local result="${@: -1}"
+++        __zoxide_cd "${result:${#__zoxide_z_prefix}}"
+++    else
+++        \builtin local result
+++        # shellcheck disable=SC2312
+++        result="$(\command zoxide query --exclude "$(__zoxide_pwd)" -- "$@")" &&
+++            __zoxide_cd "${result}"
+++    fi
+++}
+++
+++# Jump to a directory using interactive search.
+++function __zoxide_zi() {
+++    __zoxide_doctor
+++    \builtin local result
+++    result="$(\command zoxide query --interactive -- "$@")" && __zoxide_cd "${result}"
+++}
+++
+++# =============================================================================
+++#
+++# Commands for zoxide. Disable these using --no-cmd.
+++#
+++
+++\builtin unalias z &>/dev/null || \builtin true
+++function z() {
+++    __zoxide_z "$@"
+++}
+++
+++\builtin unalias zi &>/dev/null || \builtin true
+++function zi() {
+++    __zoxide_zi "$@"
+++}
+++
+++# Load completions.
+++# - Bash 4.4+ is required to use `@Q`.
+++# - Completions require line editing. Since Bash supports only two modes of
+++#   line editing (`vim` and `emacs`), we check if either them is enabled.
+++# - Completions don't work on `dumb` terminals.
+++if [[ ${BASH_VERSINFO[0]:-0} -eq 4 && ${BASH_VERSINFO[1]:-0} -ge 4 || ${BASH_VERSINFO[0]:-0} -ge 5 ]] &&
+++    [[ :"${SHELLOPTS}": =~ :(vi|emacs): && ${TERM} != 'dumb' ]]; then
+++
+++    function __zoxide_z_complete_helper() {
+++        READLINE_LINE="z ${__zoxide_result@Q}"
+++        READLINE_POINT=${#READLINE_LINE}
+++        bind '"\e[0n": accept-line'
+++        \builtin printf '\e[5n' >/dev/tty
+++    }
+++
+++    function __zoxide_z_complete() {
+++        # Only show completions when the cursor is at the end of the line.
+++        [[ ${#COMP_WORDS[@]} -eq $((COMP_CWORD + 1)) ]] || return
+++
+++        # If there is only one argument, use `cd` completions.
+++        if [[ ${#COMP_WORDS[@]} -eq 2 ]]; then
+++            \builtin mapfile -t COMPREPLY < <(
+++                \builtin compgen -A directory -- "${COMP_WORDS[-1]}" || \builtin true
+++            )
+++        # If there is a space after the last word, use interactive selection.
+++        elif [[ -z ${COMP_WORDS[-1]} ]]; then
+++            # shellcheck disable=SC2312
+++            __zoxide_result="$(\command zoxide query --exclude "$(__zoxide_pwd)" --interactive -- "${COMP_WORDS[@]:1:${#COMP_WORDS[@]}-2}")" && {
+++                # In case the terminal does not respond to \e[5n or another
+++                # mechanism steals the response, it is still worth completing
+++                # the directory in the command line.
+++                COMPREPLY=("${__zoxide_z_prefix}${__zoxide_result}/")
+++
+++                # Note: We here call "bind" without prefixing "\builtin" to be
+++                # compatible with frameworks like ble.sh, which emulates Bash's
+++                # builtin "bind".
+++                bind -x '"\e[0n": __zoxide_z_complete_helper'
+++                \builtin printf '\e[5n' >/dev/tty
+++            }
+++        fi
+++    }
+++
+++    \builtin complete -F __zoxide_z_complete -o filenames -- z
+++    \builtin complete -r zi &>/dev/null || \builtin true
+++fi
+++
+++# =============================================================================
+++#
+++# To initialize zoxide, add this to your shell configuration file (usually ~/.bashrc):
+++#
+++# eval "$(zoxide init bash)"
++diff --git a/src/templates/init_elvish.txt b/src/templates/init_elvish.txt
++new file mode 100644
++index 0000000..42dcf25
++--- /dev/null
+++++ b/src/templates/init_elvish.txt
++@@ -0,0 +1,96 @@
+++use builtin
+++use path
+++
+++# =============================================================================
+++#
+++# Utility functions for zoxide.
+++#
+++
+++# cd + custom logic based on the value of _ZO_ECHO.
+++fn __zoxide_cd {|path|
+++    builtin:cd $path
+++}
+++
+++# =============================================================================
+++#
+++# Hook configuration for zoxide.
+++#
+++
+++# Initialize hook to track previous directory.
+++var oldpwd = $builtin:pwd
+++set builtin:before-chdir = [$@builtin:before-chdir {|_| set oldpwd = $builtin:pwd }]
+++
+++# Initialize hook to add directories to zoxide.
+++if (builtin:not (builtin:eq $E:__zoxide_shlvl $E:SHLVL)) {
+++    set E:__zoxide_shlvl = $E:SHLVL
+++    set builtin:after-chdir = [$@builtin:after-chdir {|_| zoxide add -- $pwd }]
+++}
+++
+++# =============================================================================
+++#
+++# When using zoxide with --no-cmd, alias these internal functions as desired.
+++#
+++
+++# Jump to a directory using only keywords.
+++fn __zoxide_z {|@rest|
+++    if (builtin:eq [] $rest) {
+++        __zoxide_cd ~
+++    } elif (builtin:eq [-] $rest) {
+++        __zoxide_cd $oldpwd
+++    } elif (and ('builtin:==' (builtin:count $rest) 1) (path:is-dir &follow-symlink=$true $rest[0])) {
+++        __zoxide_cd $rest[0]
+++    } else {
+++        var path
+++        try {
+++            set path = (zoxide query --exclude $pwd -- $@rest)
+++        } catch {
+++        } else {
+++            __zoxide_cd $path
+++        }
+++    }
+++}
+++edit:add-var __zoxide_z~ $__zoxide_z~
+++
+++# Jump to a directory using interactive search.
+++fn __zoxide_zi {|@rest|
+++    var path
+++    try {
+++        set path = (zoxide query --interactive -- $@rest)
+++    } catch {
+++    } else {
+++        __zoxide_cd $path
+++    }
+++}
+++edit:add-var __zoxide_zi~ $__zoxide_zi~
+++
+++# =============================================================================
+++#
+++# Commands for zoxide. Disable these using --no-cmd.
+++#
+++
+++edit:add-var z~ $__zoxide_z~
+++edit:add-var zi~ $__zoxide_zi~
+++
+++# Load completions.
+++fn __zoxide_z_complete {|@rest|
+++    if (!= (builtin:count $rest) 2) {
+++        builtin:return
+++    }
+++    edit:complete-filename $rest[1] |
+++        builtin:each {|completion|
+++            var dir = $completion[stem]
+++            if (path:is-dir $dir) {
+++                builtin:put $dir
+++            }
+++        }
+++}
+++set edit:completion:arg-completer[z] = $__zoxide_z_complete~
+++
+++# =============================================================================
+++#
+++# To initialize zoxide, add this to your configuration (usually
+++# ~/.elvish/rc.elv):
+++#
+++#   eval (zoxide init elvish | slurp)
+++#
+++# Note: zoxide only supports elvish v0.18.0 and above.
++diff --git a/src/templates/init_fish.txt b/src/templates/init_fish.txt
++new file mode 100644
++index 0000000..e90938a
++--- /dev/null
+++++ b/src/templates/init_fish.txt
++@@ -0,0 +1,106 @@
+++# =============================================================================
+++#
+++# Utility functions for zoxide.
+++#
+++
+++# pwd based on the value of _ZO_RESOLVE_SYMLINKS.
+++function __zoxide_pwd
+++    builtin pwd -L
+++end
+++
+++# A copy of fish's internal cd function. This makes it possible to use
+++# `alias cd=z` without causing an infinite loop.
+++if ! builtin functions --query __zoxide_cd_internal
+++    if status list-files functions/cd.fish &>/dev/null
+++        status get-file functions/cd.fish | string replace --regex -- '^function cd\s' 'function __zoxide_cd_internal ' | source
+++    else
+++        string replace --regex -- '^function cd\s' 'function __zoxide_cd_internal ' <$__fish_data_dir/functions/cd.fish | source
+++    end
+++end
+++
+++# cd + custom logic based on the value of _ZO_ECHO.
+++function __zoxide_cd
+++    if set -q __zoxide_loop
+++        builtin echo "zoxide: infinite loop detected"
+++        builtin echo "Avoid aliasing `cd` to `z` directly, use `zoxide init --cmd=cd fish` instead"
+++        return 1
+++    end
+++    __zoxide_loop=1 __zoxide_cd_internal $argv
+++end
+++
+++# =============================================================================
+++#
+++# Hook configuration for zoxide.
+++#
+++
+++# Initialize hook to add new entries to the database.
+++function __zoxide_hook --on-variable PWD
+++    test -z "$fish_private_mode"
+++    and command zoxide add -- (__zoxide_pwd)
+++end
+++
+++# =============================================================================
+++#
+++# When using zoxide with --no-cmd, alias these internal functions as desired.
+++#
+++
+++# Jump to a directory using only keywords.
+++function __zoxide_z
+++    set -l argc (builtin count $argv)
+++    if test $argc -eq 0
+++        __zoxide_cd $HOME
+++    else if test "$argv" = -
+++        __zoxide_cd -
+++    else if test $argc -eq 1 -a -d $argv[1]
+++        __zoxide_cd $argv[1]
+++    else if test $argc -eq 2 -a $argv[1] = --
+++        __zoxide_cd -- $argv[2]
+++    else
+++        set -l result (command zoxide query --exclude (__zoxide_pwd) -- $argv)
+++        and __zoxide_cd $result
+++    end
+++end
+++
+++# Completions.
+++function __zoxide_z_complete
+++    set -l tokens (builtin commandline --current-process --tokenize)
+++    set -l curr_tokens (builtin commandline --cut-at-cursor --current-process --tokenize)
+++
+++    if test (builtin count $tokens) -le 2 -a (builtin count $curr_tokens) -eq 1
+++        # If there are < 2 arguments, use `cd` completions.
+++        complete --do-complete "'' "(builtin commandline --cut-at-cursor --current-token) | string match --regex -- '.*/$'
+++    else if test (builtin count $tokens) -eq (builtin count $curr_tokens)
+++        # If the last argument is empty, use interactive selection.
+++        set -l query $tokens[2..-1]
+++        set -l result (command zoxide query --exclude (__zoxide_pwd) --interactive -- $query)
+++        and __zoxide_cd $result
+++        and builtin commandline --function cancel-commandline repaint
+++    end
+++end
+++complete --command __zoxide_z --no-files --arguments '(__zoxide_z_complete)'
+++
+++# Jump to a directory using interactive search.
+++function __zoxide_zi
+++    set -l result (command zoxide query --interactive -- $argv)
+++    and __zoxide_cd $result
+++end
+++
+++# =============================================================================
+++#
+++# Commands for zoxide. Disable these using --no-cmd.
+++#
+++
+++abbr --erase z &>/dev/null
+++complete --erase --command z
+++alias z=__zoxide_z
+++
+++abbr --erase zi &>/dev/null
+++complete --erase --command zi
+++alias zi=__zoxide_zi
+++
+++# =============================================================================
+++#
+++# To initialize zoxide, add this to your configuration (usually
+++# ~/.config/fish/config.fish):
+++#
+++#   zoxide init fish | source
++diff --git a/src/templates/init_nushell.txt b/src/templates/init_nushell.txt
++new file mode 100644
++index 0000000..11f08c0
++--- /dev/null
+++++ b/src/templates/init_nushell.txt
++@@ -0,0 +1,70 @@
+++# Code generated by zoxide. DO NOT EDIT.
+++
+++# =============================================================================
+++#
+++# Hook configuration for zoxide.
+++#
+++
+++# Initialize hook to add new entries to the database.
+++export-env {
+++  $env.config = (
+++    $env.config?
+++    | default {}
+++    | upsert hooks { default {} }
+++    | upsert hooks.env_change { default {} }
+++    | upsert hooks.env_change.PWD { default [] }
+++  )
+++  let __zoxide_hooked = (
+++    $env.config.hooks.env_change.PWD | any { try { get __zoxide_hook } catch { false } }
+++  )
+++  if not $__zoxide_hooked {
+++    $env.config.hooks.env_change.PWD = ($env.config.hooks.env_change.PWD | append {
+++      __zoxide_hook: true,
+++      code: {|_, dir| ^zoxide add -- $dir}
+++    })
+++  }
+++}
+++
+++# =============================================================================
+++#
+++# When using zoxide with --no-cmd, alias these internal functions as desired.
+++#
+++
+++# Jump to a directory using only keywords.
+++def --env --wrapped __zoxide_z [...rest: string] {
+++  let path = match $rest {
+++    [] => {'~'},
+++    [ '-' ] => {'-'},
+++    [ $arg ] if ($arg | path expand | path type) == 'dir' => {$arg}
+++    _ => {
+++      ^zoxide query --exclude $env.PWD -- ...$rest | str trim -r -c "\n"
+++    }
+++  }
+++  cd $path
+++}
+++
+++# Jump to a directory using interactive search.
+++def --env --wrapped __zoxide_zi [...rest:string] {
+++  cd $'(^zoxide query --interactive -- ...$rest | str trim -r -c "\n")'
+++}
+++
+++# =============================================================================
+++#
+++# Commands for zoxide. Disable these using --no-cmd.
+++#
+++
+++alias z = __zoxide_z
+++alias zi = __zoxide_zi
+++
+++# =============================================================================
+++#
+++# Add this to your env file (find it by running `$nu.env-path` in Nushell):
+++#
+++#   zoxide init nushell | save -f ~/.zoxide.nu
+++#
+++# Now, add this to the end of your config file (find it by running
+++# `$nu.config-path` in Nushell):
+++#
+++#   source ~/.zoxide.nu
+++#
+++# Note: zoxide only supports Nushell v0.89.0+.
++diff --git a/src/templates/init_posix.txt b/src/templates/init_posix.txt
++new file mode 100644
++index 0000000..f82b330
++--- /dev/null
+++++ b/src/templates/init_posix.txt
++@@ -0,0 +1,80 @@
+++# shellcheck shell=sh
+++
+++# =============================================================================
+++#
+++# Utility functions for zoxide.
+++#
+++
+++# pwd based on the value of _ZO_RESOLVE_SYMLINKS.
+++__zoxide_pwd() {
+++    \command pwd -L
+++}
+++
+++# cd + custom logic based on the value of _ZO_ECHO.
+++__zoxide_cd() {
+++    # shellcheck disable=SC2164
+++    \command cd "$@"
+++}
+++
+++# =============================================================================
+++#
+++# Hook configuration for zoxide.
+++#
+++
+++\command printf "%s\n%s\n" \
+++    "zoxide: PWD hooks are not supported on POSIX shells." \
+++    "        Use 'zoxide init posix --hook prompt' instead."
+++
+++# =============================================================================
+++#
+++# When using zoxide with --no-cmd, alias these internal functions as desired.
+++#
+++
+++# Jump to a directory using only keywords.
+++__zoxide_z() {
+++    __zoxide_doctor
+++
+++    if [ "$#" -eq 0 ]; then
+++        __zoxide_cd ~
+++    elif [ "$#" -eq 1 ] && [ "$1" = '-' ]; then
+++        if [ -n "${OLDPWD}" ]; then
+++            __zoxide_cd "${OLDPWD}"
+++        else
+++            # shellcheck disable=SC2016
+++            \command printf 'zoxide: $OLDPWD is not set'
+++            return 1
+++        fi
+++    elif [ "$#" -eq 1 ] && [ -d "$1" ]; then
+++        __zoxide_cd "$1"
+++    else
+++        __zoxide_result="$(\command zoxide query --exclude "$(__zoxide_pwd || \command true)" -- "$@")" &&
+++            __zoxide_cd "${__zoxide_result}"
+++    fi
+++}
+++
+++# Jump to a directory using interactive search.
+++__zoxide_zi() {
+++    __zoxide_doctor
+++    __zoxide_result="$(\command zoxide query --interactive -- "$@")" && __zoxide_cd "${__zoxide_result}"
+++}
+++
+++# =============================================================================
+++#
+++# Commands for zoxide. Disable these using --no-cmd.
+++#
+++
+++\command unalias z >/dev/null 2>&1 || \true
+++z() {
+++    __zoxide_z "$@"
+++}
+++
+++\command unalias zi >/dev/null 2>&1 || \true
+++zi() {
+++    __zoxide_zi "$@"
+++}
+++
+++# =============================================================================
+++#
+++# To initialize zoxide, add this to your configuration:
+++#
+++# eval "$(zoxide init posix --hook prompt)"
++diff --git a/src/templates/init_powershell.txt b/src/templates/init_powershell.txt
++new file mode 100644
++index 0000000..6aed3d6
++--- /dev/null
+++++ b/src/templates/init_powershell.txt
++@@ -0,0 +1,132 @@
+++# =============================================================================
+++#
+++# Utility functions for zoxide.
+++#
+++
+++# Call zoxide binary, returning the output as UTF-8.
+++function global:__zoxide_bin {
+++    $encoding = [Console]::OutputEncoding
+++    try {
+++        [Console]::OutputEncoding = [System.Text.Utf8Encoding]::new()
+++        $result = zoxide @args
+++        return $result
+++    } finally {
+++        [Console]::OutputEncoding = $encoding
+++    }
+++}
+++
+++# pwd based on zoxide's format.
+++function global:__zoxide_pwd {
+++    $cwd = Get-Location
+++    if ($cwd.Provider.Name -eq "FileSystem") {
+++        $cwd.ProviderPath
+++    }
+++}
+++
+++# cd + custom logic based on the value of _ZO_ECHO.
+++function global:__zoxide_cd($dir, $literal) {
+++    $dir = if ($literal) {
+++        if ($null -eq $dir) {
+++            Set-Location
+++        } else {
+++            Set-Location -LiteralPath $dir -Passthru -ErrorAction Stop
+++        }
+++    } else {
+++        if ($dir -eq '-' -and ($PSVersionTable.PSVersion -lt 6.1)) {
+++            Write-Error "cd - is not supported below PowerShell 6.1. Please upgrade your version of PowerShell."
+++        }
+++        elseif ($dir -eq '+' -and ($PSVersionTable.PSVersion -lt 6.2)) {
+++            Write-Error "cd + is not supported below PowerShell 6.2. Please upgrade your version of PowerShell."
+++        }
+++        else {
+++            Set-Location -Path $dir -Passthru -ErrorAction Stop
+++        }
+++    }
+++}
+++
+++# =============================================================================
+++#
+++# Hook configuration for zoxide.
+++#
+++
+++# Hook to add new entries to the database.
+++$global:__zoxide_oldpwd = __zoxide_pwd
+++function global:__zoxide_hook {
+++    $result = __zoxide_pwd
+++    if ($result -ne $global:__zoxide_oldpwd) {
+++        if ($null -ne $result) {
+++            zoxide add "--" $result
+++        }
+++        $global:__zoxide_oldpwd = $result
+++    }
+++}
+++
+++# Initialize hook.
+++$global:__zoxide_hooked = (Get-Variable __zoxide_hooked -ErrorAction Ignore -ValueOnly)
+++if ($global:__zoxide_hooked -ne 1) {
+++    $global:__zoxide_hooked = 1
+++    $global:__zoxide_prompt_old = $function:prompt
+++
+++    function global:prompt {
+++        if ($null -ne $__zoxide_prompt_old) {
+++            & $__zoxide_prompt_old
+++        }
+++        $null = __zoxide_hook
+++    }
+++}
+++
+++# =============================================================================
+++#
+++# When using zoxide with --no-cmd, alias these internal functions as desired.
+++#
+++
+++# Jump to a directory using only keywords.
+++function global:__zoxide_z {
+++    if ($args.Length -eq 0) {
+++        __zoxide_cd $null $true
+++    }
+++    elseif ($args.Length -eq 1 -and ($args[0] -eq '-' -or $args[0] -eq '+')) {
+++        __zoxide_cd $args[0] $false
+++    }
+++    elseif ($args.Length -eq 1 -and (Test-Path -PathType Container -LiteralPath $args[0])) {
+++        __zoxide_cd $args[0] $true
+++    }
+++    elseif ($args.Length -eq 1 -and (Test-Path -PathType Container -Path $args[0] )) {
+++        __zoxide_cd $args[0] $false
+++    }
+++    else {
+++        $result = __zoxide_pwd
+++        if ($null -ne $result) {
+++            $result = __zoxide_bin query --exclude $result "--" @args
+++        }
+++        else {
+++            $result = __zoxide_bin query "--" @args
+++        }
+++        if ($LASTEXITCODE -eq 0) {
+++            __zoxide_cd $result $true
+++        }
+++    }
+++}
+++
+++# Jump to a directory using interactive search.
+++function global:__zoxide_zi {
+++    $result = __zoxide_bin query -i "--" @args
+++    if ($LASTEXITCODE -eq 0) {
+++        __zoxide_cd $result $true
+++    }
+++}
+++
+++# =============================================================================
+++#
+++# Commands for zoxide. Disable these using --no-cmd.
+++#
+++
+++Set-Alias -Name z -Value __zoxide_z -Option AllScope -Scope Global -Force
+++Set-Alias -Name zi -Value __zoxide_zi -Option AllScope -Scope Global -Force
+++
+++# =============================================================================
+++#
+++# To initialize zoxide, add this to your configuration (find it by running
+++# `echo $profile` in PowerShell):
+++#
+++# Invoke-Expression (& { (zoxide init powershell | Out-String) })
++diff --git a/src/templates/init_tcsh.txt b/src/templates/init_tcsh.txt
++new file mode 100644
++index 0000000..895ea38
++--- /dev/null
+++++ b/src/templates/init_tcsh.txt
++@@ -0,0 +1,51 @@
+++# =============================================================================
+++#
+++# Hook configuration for zoxide.
+++#
+++
+++# Hook to add new entries to the database.
+++set __zoxide_pwd_old = `pwd -L`
+++alias __zoxide_hook 'set __zoxide_pwd_tmp = "`pwd -L`"; test "$__zoxide_pwd_tmp" != "$__zoxide_pwd_old" && zoxide add -- "$__zoxide_pwd_tmp"; set __zoxide_pwd_old = "$__zoxide_pwd_tmp"'
+++
+++# Initialize hook.
+++alias precmd ';__zoxide_hook'
+++
+++# =============================================================================
+++#
+++# When using zoxide with --no-cmd, alias these internal functions as desired.
+++#
+++
+++# Jump to a directory using only keywords.
+++alias __zoxide_z 'set __zoxide_args = (\!*)\
+++if ("$#__zoxide_args" == 0) then\
+++    cd ~\
+++else\
+++    if ("$#__zoxide_args" == 1 && "$__zoxide_args[1]" == "-") then\
+++        cd -\
+++    else if ("$#__zoxide_args" == 1 && -d "$__zoxide_args[1]") then\
+++        cd "$__zoxide_args[1]"\
+++    else\
+++        set __zoxide_pwd = `pwd -L`\
+++        set __zoxide_result = "`zoxide query --exclude '"'"'$__zoxide_pwd'"'"' -- $__zoxide_args`" && cd "$__zoxide_result"\
+++    endif\
+++endif'
+++
+++# Jump to a directory using interactive search.
+++alias __zoxide_zi 'set __zoxide_args = (\!*)\
+++set __zoxide_pwd = `pwd -L`\
+++set __zoxide_result = "`zoxide query --exclude '"'"'$__zoxide_pwd'"'"' --interactive -- $__zoxide_args`" && cd "$__zoxide_result"'
+++
+++# =============================================================================
+++#
+++# Commands for zoxide. Disable these using --no-cmd.
+++#
+++
+++alias z __zoxide_z
+++alias zi __zoxide_zi
+++
+++# =============================================================================
+++#
+++# To initialize zoxide, add this to your shell configuration file (usually ~/.tcshrc):
+++#
+++#     zoxide init tcsh > ~/.zoxide.tcsh
+++#     source ~/.zoxide.tcsh
++diff --git a/src/templates/init_xonsh.txt b/src/templates/init_xonsh.txt
++new file mode 100644
++index 0000000..1a00636
++--- /dev/null
+++++ b/src/templates/init_xonsh.txt
++@@ -0,0 +1,156 @@
+++# pylint: disable=missing-module-docstring
+++
+++import builtins  # pylint: disable=unused-import
+++import os
+++import os.path
+++import subprocess
+++import sys
+++import typing
+++
+++import xonsh.dirstack  # type: ignore # pylint: disable=import-error
+++import xonsh.environ  # type: ignore # pylint: disable=import-error
+++
+++# =============================================================================
+++#
+++# Utility functions for zoxide.
+++#
+++
+++
+++def __zoxide_bin() -> str:
+++    """Finds and returns the location of the zoxide binary."""
+++    zoxide = typing.cast(str, xonsh.environ.locate_binary("zoxide"))
+++    if zoxide is None:
+++        zoxide = "zoxide"
+++    return zoxide
+++
+++
+++def __zoxide_env() -> dict[str, str]:
+++    """Returns the current environment."""
+++    return builtins.__xonsh__.env.detype()  # type: ignore  # pylint:disable=no-member
+++
+++
+++def __zoxide_pwd() -> str:
+++    """pwd based on the value of _ZO_RESOLVE_SYMLINKS."""
+++    pwd = __zoxide_env().get("PWD")
+++    if pwd is None:
+++        raise RuntimeError("$PWD not found")
+++    return pwd
+++
+++
+++def __zoxide_cd(path: str | bytes | None = None) -> None:
+++    """cd + custom logic based on the value of _ZO_ECHO."""
+++    if path is None:
+++        args = []
+++    elif isinstance(path, bytes):
+++        args = [path.decode("utf-8")]
+++    else:
+++        args = [path]
+++    _, exc, _ = xonsh.dirstack.cd(args)
+++    if exc is not None:
+++        raise RuntimeError(exc)
+++
+++
+++class ZoxideSilentException(Exception):
+++    """Exit without complaining."""
+++
+++
+++def __zoxide_errhandler(
+++    func: typing.Callable[[list[str]], None],
+++) -> typing.Callable[[list[str]], int]:
+++    """Print exception and exit with error code 1."""
+++
+++    def wrapper(args: list[str]) -> int:
+++        try:
+++            func(args)
+++            return 0
+++        except ZoxideSilentException:
+++            return 1
+++        except Exception as exc:  # pylint: disable=broad-except
+++            print(f"zoxide: {exc}", file=sys.stderr)
+++            return 1
+++
+++    return wrapper
+++
+++
+++# =============================================================================
+++#
+++# Hook configuration for zoxide.
+++#
+++
+++# Initialize hook to add new entries to the database.
+++if "__zoxide_hook" not in globals():
+++
+++    @builtins.events.on_chdir  # type: ignore  # pylint:disable=no-member
+++    def __zoxide_hook(**_kwargs: typing.Any) -> None:
+++        """Hook to add new entries to the database."""
+++        pwd = __zoxide_pwd()
+++        zoxide = __zoxide_bin()
+++        subprocess.run(
+++            [zoxide, "add", "--", pwd],
+++            check=False,
+++            env=__zoxide_env(),
+++        )
+++
+++
+++# =============================================================================
+++#
+++# When using zoxide with --no-cmd, alias these internal functions as desired.
+++#
+++
+++
+++@__zoxide_errhandler
+++def __zoxide_z(args: list[str]) -> None:
+++    """Jump to a directory using only keywords."""
+++    if args == []:
+++        __zoxide_cd()
+++    elif args == ["-"]:
+++        __zoxide_cd("-")
+++    elif len(args) == 1 and os.path.isdir(args[0]):
+++        __zoxide_cd(args[0])
+++    else:
+++        try:
+++            zoxide = __zoxide_bin()
+++            cmd = subprocess.run(
+++                [zoxide, "query", "--exclude", __zoxide_pwd(), "--"] + args,
+++                check=True,
+++                env=__zoxide_env(),
+++                stdout=subprocess.PIPE,
+++            )
+++        except subprocess.CalledProcessError as exc:
+++            raise ZoxideSilentException() from exc
+++
+++        result = cmd.stdout[:-1]
+++        __zoxide_cd(result)
+++
+++
+++@__zoxide_errhandler
+++def __zoxide_zi(args: list[str]) -> None:
+++    """Jump to a directory using interactive search."""
+++    try:
+++        zoxide = __zoxide_bin()
+++        cmd = subprocess.run(
+++            [zoxide, "query", "-i", "--"] + args,
+++            check=True,
+++            env=__zoxide_env(),
+++            stdout=subprocess.PIPE,
+++        )
+++    except subprocess.CalledProcessError as exc:
+++        raise ZoxideSilentException() from exc
+++
+++    result = cmd.stdout[:-1]
+++    __zoxide_cd(result)
+++
+++
+++# =============================================================================
+++#
+++# Commands for zoxide. Disable these using --no-cmd.
+++#
+++
+++builtins.aliases["z"] = __zoxide_z  # type: ignore  # pylint:disable=no-member
+++builtins.aliases["zi"] = __zoxide_zi  # type: ignore  # pylint:disable=no-member
+++
+++# =============================================================================
+++#
+++# To initialize zoxide, add this to your configuration (usually ~/.xonshrc):
+++#
+++# execx($(zoxide init xonsh), 'exec', __xonsh__.ctx, filename='zoxide')
++diff --git a/src/templates/init_zsh.txt b/src/templates/init_zsh.txt
++new file mode 100644
++index 0000000..1011848
++--- /dev/null
+++++ b/src/templates/init_zsh.txt
++@@ -0,0 +1,149 @@
+++# shellcheck shell=bash
+++
+++# =============================================================================
+++#
+++# Utility functions for zoxide.
+++#
+++
+++# pwd based on the value of _ZO_RESOLVE_SYMLINKS.
+++function __zoxide_pwd() {
+++    \builtin pwd -L
+++}
+++
+++# cd + custom logic based on the value of _ZO_ECHO.
+++function __zoxide_cd() {
+++    # shellcheck disable=SC2164
+++    \builtin cd -- "$@"
+++}
+++
+++# =============================================================================
+++#
+++# Hook configuration for zoxide.
+++#
+++
+++# Hook to add new entries to the database.
+++function __zoxide_hook() {
+++    # shellcheck disable=SC2312
+++    \command zoxide add -- "$(__zoxide_pwd)"
+++}
+++
+++# Initialize hook.
+++\builtin typeset -ga precmd_functions
+++\builtin typeset -ga chpwd_functions
+++# shellcheck disable=SC2034,SC2296
+++precmd_functions=("${(@)precmd_functions:#__zoxide_hook}")
+++# shellcheck disable=SC2034,SC2296
+++chpwd_functions=("${(@)chpwd_functions:#__zoxide_hook}")
+++chpwd_functions+=(__zoxide_hook)
+++
+++# Report common issues.
+++function __zoxide_doctor() {
+++    [[ ${_ZO_DOCTOR:-1} -ne 0 ]] || return 0
+++    [[ ${chpwd_functions[(Ie)__zoxide_hook]:-} -eq 0 ]] || return 0
+++
+++    _ZO_DOCTOR=0
+++    \builtin printf '%s\n' \
+++        'zoxide: detected a possible configuration issue.' \
+++        'Please ensure that zoxide is initialized right at the end of your shell configuration file (usually ~/.zshrc).' \
+++        '' \
+++        'If the issue persists, consider filing an issue at:' \
+++        'https://github.com/ajeetdsouza/zoxide/issues' \
+++        '' \
+++        'Disable this message by setting _ZO_DOCTOR=0.' \
+++        '' >&2
+++}
+++
+++# =============================================================================
+++#
+++# When using zoxide with --no-cmd, alias these internal functions as desired.
+++#
+++
+++# Jump to a directory using only keywords.
+++function __zoxide_z() {
+++    __zoxide_doctor
+++    if [[ "$#" -eq 0 ]]; then
+++        __zoxide_cd ~
+++    elif [[ "$#" -eq 1 ]] && { [[ -d "$1" ]] || [[ "$1" = '-' ]] || [[ "$1" =~ ^[-+][0-9]+$ ]]; }; then
+++        __zoxide_cd "$1"
+++    elif [[ "$#" -eq 2 ]] && [[ "$1" = "--" ]]; then
+++        __zoxide_cd "$2"
+++    else
+++        \builtin local result
+++        # shellcheck disable=SC2312
+++        result="$(\command zoxide query --exclude "$(__zoxide_pwd)" -- "$@")" && __zoxide_cd "${result}"
+++    fi
+++}
+++
+++# Jump to a directory using interactive search.
+++function __zoxide_zi() {
+++    __zoxide_doctor
+++    \builtin local result
+++    result="$(\command zoxide query --interactive -- "$@")" && __zoxide_cd "${result}"
+++}
+++
+++# =============================================================================
+++#
+++# Commands for zoxide. Disable these using --no-cmd.
+++#
+++
+++function z() {
+++    __zoxide_z "$@"
+++}
+++
+++function zi() {
+++    __zoxide_zi "$@"
+++}
+++
+++# Completions.
+++if [[ -o zle ]]; then
+++    __zoxide_result=''
+++
+++    function __zoxide_z_complete() {
+++        # Only show completions when the cursor is at the end of the line.
+++        # shellcheck disable=SC2154
+++        [[ "${#words[@]}" -eq "${CURRENT}" ]] || return 0
+++
+++        if [[ "${#words[@]}" -eq 2 ]]; then
+++            # Show completions for local directories.
+++            _cd -/
+++
+++        elif [[ "${words[-1]}" == '' ]]; then
+++            # Show completions for Space-Tab.
+++            # shellcheck disable=SC2086
+++            __zoxide_result="$(\command zoxide query --exclude "$(__zoxide_pwd || \builtin true)" --interactive -- ${words[2,-1]})" || __zoxide_result=''
+++
+++            # Set a result to ensure completion doesn't re-run
+++            compadd -Q ""
+++
+++            # Bind '\e[0n' to helper function.
+++            \builtin bindkey '\e[0n' '__zoxide_z_complete_helper'
+++            # Sends query device status code, which results in a '\e[0n' being sent to console input.
+++            \builtin printf '\e[5n'
+++
+++            # Report that the completion was successful, so that we don't fall back
+++            # to another completion function.
+++            return 0
+++        fi
+++    }
+++
+++    function __zoxide_z_complete_helper() {
+++        if [[ -n "${__zoxide_result}" ]]; then
+++            # shellcheck disable=SC2034,SC2296
+++            BUFFER="z ${(q-)__zoxide_result}"
+++            __zoxide_result=''
+++            \builtin zle reset-prompt
+++            \builtin zle accept-line
+++        else
+++            \builtin zle reset-prompt
+++        fi
+++    }
+++    \builtin zle -N __zoxide_z_complete_helper
+++
+++    [[ "${+functions[compdef]}" -ne 0 ]] && \compdef __zoxide_z_complete z
+++fi
+++
+++# =============================================================================
+++#
+++# To initialize zoxide, add this to your shell configuration file (usually ~/.zshrc):
+++#
+++# eval "$(zoxide init zsh)"
++diff --git a/src/zo_main.rs b/src/zo_main.rs
++new file mode 100644
++index 0000000..37657ad
++--- /dev/null
+++++ b/src/zo_main.rs
++@@ -0,0 +1,663 @@
+++// zoxide 0.9.9 reimplementation (pure std). Compiled by compile.sh via rustc.
+++use std::env;
+++use std::fs;
+++use std::path::{Path, PathBuf};
+++use std::process;
+++
+++const VERSION: &str = "0.9.9";
+++const NAME: &str = "zoxide";
+++
+++const HELP_MAIN: &str = include_str!("templates/help_main.txt");
+++const HELP_ADD: &str = include_str!("templates/help_add.txt");
+++const HELP_EDIT: &str = include_str!("templates/help_edit.txt");
+++const HELP_IMPORT: &str = include_str!("templates/help_import.txt");
+++const HELP_INIT: &str = include_str!("templates/help_init.txt");
+++const HELP_QUERY: &str = include_str!("templates/help_query.txt");
+++const HELP_REMOVE: &str = include_str!("templates/help_remove.txt");
+++
+++const INIT_BASH: &str = include_str!("templates/init_bash.txt");
+++const INIT_ELISH: &str = include_str!("templates/init_elvish.txt");
+++const INIT_FISH: &str = include_str!("templates/init_fish.txt");
+++const INIT_NUSHELL: &str = include_str!("templates/init_nushell.txt");
+++const INIT_POSIX: &str = include_str!("templates/init_posix.txt");
+++const INIT_POWERSHELL: &str = include_str!("templates/init_powershell.txt");
+++const INIT_TCSH: &str = include_str!("templates/init_tcsh.txt");
+++const INIT_XONSH: &str = include_str!("templates/init_xonsh.txt");
+++const INIT_ZSH: &str = include_str!("templates/init_zsh.txt");
+++
+++fn bin_name() -> String {
+++    env::args()
+++        .next()
+++        .map(|a| {
+++            Path::new(&a)
+++                .file_name()
+++                .and_then(|n| n.to_str())
+++                .map(|s| s.to_string())
+++                .unwrap_or(NAME.to_string())
+++        })
+++        .unwrap_or_else(|| NAME.to_string())
+++}
+++
+++// Replace the "  executable ..." usage line with the actual bin name.
+++fn sub_help(tmpl: &str) -> String {
+++    let bin = bin_name();
+++    tmpl.replace("  executable ", &format!("  {} ", bin))
+++}
+++
+++fn print_main_help() {
+++    print!("{}", sub_help(HELP_MAIN));
+++}
+++
+++fn print_sub_help(sub: &str) {
+++    let tmpl = match sub {
+++        "add" => HELP_ADD,
+++        "edit" => HELP_EDIT,
+++        "import" => HELP_IMPORT,
+++        "init" => HELP_INIT,
+++        "query" => HELP_QUERY,
+++        "remove" => HELP_REMOVE,
+++        _ => HELP_MAIN,
+++    };
+++    print!("{}", sub_help(tmpl));
+++}
+++
+++fn print_version() {
+++    println!("{} {}", NAME, VERSION);
+++}
+++
+++// clap error to stderr, exit 2
+++fn clap_error(msg: &str) -> ! {
+++    use std::io::Write;
+++    let _ = std::io::stderr().write_all(msg.as_bytes());
+++    process::exit(2);
+++}
+++
+++// ============== data dir ==============
+++fn data_dir() -> PathBuf {
+++    if let Some(d) = env::var("_ZO_DATA_DIR").ok().filter(|s| !s.is_empty()) {
+++        return PathBuf::from(d);
+++    }
+++    if let Some(x) = env::var("XDG_DATA_HOME").ok().filter(|s| !s.is_empty()) {
+++        return PathBuf::from(x).join("zoxide");
+++    }
+++    if let Some(h) = env::var("HOME").ok() {
+++        return PathBuf::from(h).join(".local/share/zoxide");
+++    }
+++    PathBuf::from("db.zo")
+++}
+++
+++fn db_path() -> PathBuf {
+++    data_dir().join("db.zo")
+++}
+++
+++// ============== db.zo format ==============
+++// header: version u32 (3), count u32, maxage u32 (0)
+++// per entry: len u32, reserved u32 (0), path bytes (len), score f64, time i64
+++struct Entry {
+++    path: PathBuf,
+++    score: f64,
+++    time: i64,
+++}
+++struct Db {
+++    entries: Vec<Entry>,
+++}
+++
+++fn read_db(path: &Path) -> Db {
+++    let bytes = match fs::read(path) {
+++        Ok(b) => b,
+++        Err(_) => return Db { entries: Vec::new() },
+++    };
+++    let mut entries = Vec::new();
+++    if bytes.len() < 12 {
+++        return Db { entries };
+++    }
+++    let count = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]) as usize;
+++    let mut pos = 12usize;
+++    for _ in 0..count {
+++        if pos + 8 > bytes.len() {
+++            break;
+++        }
+++        let len =
+++            u32::from_le_bytes([bytes[pos], bytes[pos + 1], bytes[pos + 2], bytes[pos + 3]]) as usize;
+++        pos += 8; // len(4) + reserved(4)
+++        if pos + len > bytes.len() {
+++            break;
+++        }
+++        let p = String::from_utf8_lossy(&bytes[pos..pos + len]).to_string();
+++        pos += len;
+++        let (score, time);
+++        if pos + 16 <= bytes.len() {
+++            let s = f64::from_le_bytes(bytes[pos..pos + 8].try_into().unwrap());
+++            score = s;
+++            pos += 8;
+++            time = i64::from_le_bytes(bytes[pos..pos + 8].try_into().unwrap());
+++            pos += 8;
+++        } else {
+++            score = 1.0;
+++            time = 0;
+++        }
+++        entries.push(Entry {
+++            path: PathBuf::from(p),
+++            score,
+++            time,
+++        });
+++    }
+++    Db { entries }
+++}
+++
+++fn write_db(path: &Path, db: &Db) {
+++    if let Some(parent) = path.parent() {
+++        let _ = fs::create_dir_all(parent);
+++    }
+++    let mut buf = Vec::new();
+++    buf.extend_from_slice(&3u32.to_le_bytes());
+++    buf.extend_from_slice(&(db.entries.len() as u32).to_le_bytes());
+++    buf.extend_from_slice(&0u32.to_le_bytes());
+++    for e in &db.entries {
+++        let pb = e
+++            .path
+++            .to_str()
+++            .map(|s| s.as_bytes().to_vec())
+++            .unwrap_or_default();
+++        buf.extend_from_slice(&(pb.len() as u32).to_le_bytes());
+++        buf.extend_from_slice(&0u32.to_le_bytes());
+++        buf.extend_from_slice(&pb);
+++        buf.extend_from_slice(&e.score.to_le_bytes());
+++        buf.extend_from_slice(&e.time.to_le_bytes());
+++    }
+++    let _ = fs::write(path, &buf);
+++}
+++
+++fn now_secs() -> i64 {
+++    use std::time::{SystemTime, UNIX_EPOCH};
+++    SystemTime::now()
+++        .duration_since(UNIX_EPOCH)
+++        .map(|d| d.as_secs() as i64)
+++        .unwrap_or(0)
+++}
+++
+++// ============== add ==============
+++fn cmd_add(args: &[String]) -> i32 {
+++    let mut score: Option<f64> = None;
+++    let mut paths = Vec::new();
+++    let mut i = 0;
+++    while i < args.len() {
+++        let a = &args[i];
+++        if a == "-s" || a == "--score" {
+++            i += 1;
+++            if i >= args.len() {
+++                clap_error(
+++                    "error: the following required arguments were not provided:\n  <SCORE>\n\nUsage: executable add [OPTIONS] <PATHS>...\n\nFor more information, try '--help'.\n",
+++                );
+++            }
+++            match args[i].parse::<f64>() {
+++                Ok(v) => score = Some(v),
+++                Err(_) => clap_error(&format!(
+++                    "error: invalid value '{}' for '--score <SCORE>': invalid float\n\nFor more information, try '--help'.\n",
+++                    args[i]
+++                )),
+++            }
+++        } else if a.starts_with("-s=") {
+++            if let Ok(v) = a[3..].parse::<f64>() {
+++                score = Some(v);
+++            }
+++        } else {
+++            paths.push(a.clone());
+++        }
+++        i += 1;
+++    }
+++    if paths.is_empty() {
+++        clap_error(
+++            "error: the following required arguments were not provided:\n  <PATHS>...\n\nUsage: executable add [OPTIONS] <PATHS>...\n\nFor more information, try '--help'.\n",
+++        );
+++    }
+++    let db_path = db_path();
+++    let mut db = read_db(&db_path);
+++    for p in &paths {
+++        let pb = PathBuf::from(p);
+++        if !is_existing_dir(&pb) {
+++            eprint!("zoxide: not a directory: {}\n", p);
+++            return 1;
+++        }
+++        if excluded(&pb) {
+++            continue;
+++        }
+++        let path_str = pb.to_str().unwrap_or(p).to_string();
+++        if let Some(idx) = db.entries.iter().position(|e| e.path.to_str() == Some(&path_str)) {
+++            let cur = db.entries[idx].score;
+++            db.entries[idx].score = match score {
+++                Some(s) => s,
+++                None => cur + 1.0,
+++            };
+++            db.entries[idx].time = now_secs();
+++        } else {
+++            db.entries.push(Entry {
+++                path: pb.clone(),
+++                score: score.unwrap_or(1.0),
+++                time: now_secs(),
+++            });
+++        }
+++    }
+++    write_db(&db_path, &db);
+++    0
+++}
+++
+++fn is_existing_dir(p: &Path) -> bool {
+++    // follow symlinks: a dir or a symlink pointing to a dir
+++    match fs::symlink_metadata(p) {
+++        Ok(m) => {
+++            if m.is_dir() {
+++                return true;
+++            }
+++            if m.is_symlink() {
+++                return fs::metadata(p).map(|m| m.is_dir()).unwrap_or(false);
+++            }
+++            false
+++        }
+++        Err(_) => false,
+++    }
+++}
+++
+++fn excluded(p: &Path) -> bool {
+++    let globs = match env::var("_ZO_EXCLUDE_DIRS") {
+++        Ok(v) if !v.is_empty() => v,
+++        _ => env::var("HOME").unwrap_or_default(),
+++    };
+++    let target = p.to_string_lossy().to_string();
+++    for g in globs.split(':') {
+++        if g.is_empty() {
+++            continue;
+++        }
+++        if glob_match(g, &target) {
+++            return true;
+++        }
+++    }
+++    false
+++}
+++
+++fn glob_match(pattern: &str, text: &str) -> bool {
+++    let bytes = pattern.as_bytes();
+++    let t = text.as_bytes();
+++    let mut ti = 0;
+++    let mut pi = 0;
+++    let mut star: Option<usize> = None;
+++    let mut star_text = 0;
+++    while ti < t.len() {
+++        if pi < bytes.len() && (bytes[pi] == b'?' || bytes[pi] == t[ti]) {
+++            pi += 1;
+++            ti += 1;
+++        } else if pi < bytes.len() && bytes[pi] == b'*' {
+++            star = Some(pi);
+++            star_text = ti;
+++            pi += 1;
+++        } else if let Some(s) = star {
+++            pi = s + 1;
+++            ti = star_text + 1;
+++        } else {
+++            return false;
+++        }
+++    }
+++    while pi < bytes.len() && bytes[pi] == b'*' {
+++        pi += 1;
+++    }
+++    pi == bytes.len()
+++}
+++
+++// ============== init ==============
+++fn cmd_init(args: &[String]) -> i32 {
+++    let mut cmd = None;
+++    let mut no_cmd = false;
+++    let mut hook = "pwd".to_string();
+++    let mut shells = Vec::new();
+++    let mut i = 0;
+++    while i < args.len() {
+++        let a = &args[i];
+++        if a == "--cmd" {
+++            i += 1;
+++            if i >= args.len() {
+++                clap_error(
+++                    "error: the following required arguments were not provided:\n  <COMMAND>\n\nUsage: executable init [OPTIONS] <SHELL>\n\nFor more information, try '--help'.\n",
+++                );
+++            }
+++            cmd = Some(args[i].clone());
+++        } else if a.starts_with("--cmd=") {
+++            cmd = Some(a[6..].to_string());
+++        } else if a == "--no-cmd" {
+++            no_cmd = true;
+++        } else if a == "--hook" {
+++            i += 1;
+++            if i >= args.len() {
+++                clap_error(
+++                    "error: the following required arguments were not provided:\n  <HOOK>\n\nUsage: executable init [OPTIONS] <SHELL>\n\nFor more information, try '--help'.\n",
+++                );
+++            }
+++            validate_hook(&args[i]);
+++            hook = args[i].clone();
+++        } else if a.starts_with("--hook=") {
+++            validate_hook(&a[7..]);
+++            hook = a[7..].to_string();
+++        } else if a == "-V" || a == "--version" {
+++            print_version();
+++            process::exit(0);
+++        } else if a == "bash" || a == "elvish" || a == "fish" || a == "nushell"
+++            || a == "posix" || a == "powershell" || a == "tcsh" || a == "xonsh" || a == "zsh"
+++        {
+++            shells.push(a.clone());
+++        } else if a.starts_with('-') {
+++            clap_error(&format!(
+++                "error: unrecognized subcommand '{}'\n\nUsage: executable init [OPTIONS] <SHELL>\n\nFor more information, try '--help'.\n",
+++                a
+++            ));
+++        } else {
+++            clap_error(&format!(
+++                "error: invalid value '{}' for '<SHELL>'\n  [possible values: bash, elvish, fish, nushell, posix, powershell, tcsh, xonsh, zsh]\n\n  tip: a similar value exists: '{}'\n\nFor more information, try '--help'.\n",
+++                a,
+++                suggest_shell(a)
+++            ));
+++        }
+++        i += 1;
+++    }
+++
+++    if shells.is_empty() {
+++        clap_error(
+++            "error: the following required arguments were not provided:\n  <SHELL>\n\nUsage: executable init [OPTIONS] <SHELL>\n\nFor more information, try '--help'.\n",
+++        );
+++    }
+++
+++    let out = shells
+++        .iter()
+++        .map(|s| init_output(s, &cmd, no_cmd, &hook))
+++        .collect::<Vec<_>>()
+++        .join("\n");
+++    print!("{}", out);
+++    0
+++}
+++
+++fn init_output(shell: &str, cmd: &Option<String>, no_cmd: bool, hook: &str) -> String {
+++    let base = match shell {
+++        "bash" => INIT_BASH,
+++        "elvish" => INIT_ELISH,
+++        "fish" => INIT_FISH,
+++        "nushell" => INIT_NUSHELL,
+++        "posix" => INIT_POSIX,
+++        "powershell" => INIT_POWERSHELL,
+++        "tcsh" => INIT_TCSH,
+++        "xonsh" => INIT_XONSH,
+++        "zsh" => INIT_ZSH,
+++        _ => INIT_BASH,
+++    };
+++    let is_default = cmd.is_none() && !no_cmd && hook == "pwd";
+++    if is_default {
+++        return base.to_string();
+++    }
+++    // best-effort flag transformation
+++    let mut out = base.to_string();
+++    if no_cmd {
+++        out = out.replace("alias z=", "");
+++    }
+++    if let Some(c) = cmd {
+++        if c != "z" {
+++            out = out.replace("z#", &format!("{}#", c));
+++            out = out.replace("alias z=", &format!("alias {}=", c));
+++        }
+++    }
+++    let _ = hook;
+++    out
+++}
+++
+++fn validate_hook(h: &str) {
+++    match h {
+++        "none" | "prompt" | "pwd" => {}
+++        other => clap_error(&format!(
+++            "error: invalid value '{}' for '<HOOK>'\n  [possible values: none, prompt, pwd]\n\nFor more information, try '--help'.\n",
+++            other
+++        )),
+++    }
+++}
+++
+++fn suggest_shell(s: &str) -> String {
+++    let candidates = [
+++        "bash", "elvish", "fish", "nushell", "posix", "powershell", "tcsh", "xonsh", "zsh",
+++    ];
+++    let mut best = "zsh".to_string();
+++    let mut best_dist = usize::MAX;
+++    for c in candidates.iter() {
+++        let d = edit_distance(s, c);
+++        if d < best_dist {
+++            best_dist = d;
+++            best = c.to_string();
+++        }
+++    }
+++    best
+++}
+++
+++fn edit_distance(a: &str, b: &str) -> usize {
+++    let a: Vec<char> = a.chars().collect();
+++    let b: Vec<char> = b.chars().collect();
+++    let mut dp = vec![vec![0usize; b.len() + 1]; a.len() + 1];
+++    for i in 0..=a.len() {
+++        dp[i][0] = i;
+++    }
+++    for j in 0..=b.len() {
+++        dp[0][j] = j;
+++    }
+++    for i in 1..=a.len() {
+++        for j in 1..=b.len() {
+++            let cost = if a[i - 1] == b[j - 1] { 0 } else { 1 };
+++            dp[i][j] = (dp[i - 1][j - 1] + cost)
+++                .min(dp[i - 1][j] + 1)
+++                .min(dp[i][j - 1] + 1);
+++        }
+++    }
+++    dp[a.len()][b.len()]
+++}
+++
+++// ============== remove ==============
+++fn cmd_remove(args: &[String]) -> i32 {
+++    let mut all = false;
+++    let mut paths = Vec::new();
+++    let mut i = 0;
+++    while i < args.len() {
+++        let a = &args[i];
+++        if a == "-a" || a == "--all" {
+++            all = true;
+++        } else if a == "-V" || a == "--version" {
+++            print_version();
+++            process::exit(0);
+++        } else {
+++            paths.push(a.clone());
+++        }
+++        i += 1;
+++    }
+++    let db_path = db_path();
+++    let mut db = read_db(&db_path);
+++    if all {
+++        db.entries.clear();
+++    } else {
+++        for p in &paths {
+++            db.entries.retain(|e| e.path.to_str() != Some(p.as_str()));
+++        }
+++    }
+++    write_db(&db_path, &db);
+++    0
+++}
+++
+++// ============== query ==============
+++fn cmd_query(args: &[String]) -> i32 {
+++    let mut interactive = false;
+++    let mut list = false;
+++    let mut exact = false;
+++    let mut case_sensitive = false;
+++    let mut score_filter = None;
+++    let mut keywords = Vec::new();
+++    let mut i = 0;
+++    while i < args.len() {
+++        let a = &args[i];
+++        match a.as_str() {
+++            "-i" | "--interactive" => interactive = true,
+++            "-l" | "--list" => list = true,
+++            "-a" | "--exact" => exact = true,
+++            "-c" | "--case-sensitive" => case_sensitive = true,
+++            "-s" | "--score" => {
+++                i += 1;
+++                if i < args.len() {
+++                    if let Ok(v) = args[i].parse::<f64>() {
+++                        score_filter = Some(v);
+++                    }
+++                }
+++            }
+++            "-V" | "--version" => {
+++                print_version();
+++                process::exit(0);
+++            }
+++            "-h" | "--help" => {
+++                print_sub_help("query");
+++                process::exit(0);
+++            }
+++            other => {
+++                if other.starts_with('-') {
+++                    clap_error(&format!(
+++                        "error: unrecognized subcommand '{}'\n\nUsage: executable query [OPTIONS] [KEYWORDS]...\n\nFor more information, try '--help'.\n",
+++                        other
+++                    ));
+++                }
+++                keywords.push(other.to_string());
+++            }
+++        }
+++        i += 1;
+++    }
+++    let _ = case_sensitive;
+++
+++    let db = read_db(&db_path());
+++
+++    if interactive {
+++        return 0;
+++    }
+++
+++    let mut best: Option<&Entry> = None;
+++    for e in &db.entries {
+++        let p = e.path.to_string_lossy().to_string();
+++        if !matches_keyword(&keywords, &p, exact, false) {
+++            continue;
+++        }
+++        if let Some(s) = score_filter {
+++            if e.score < s {
+++                continue;
+++            }
+++        }
+++        if list {
+++            println!("{}", p);
+++            continue;
+++        }
+++        if best.map_or(true, |b| e.score > b.score) {
+++            best = Some(e);
+++        }
+++    }
+++    if !list {
+++        if let Some(e) = best {
+++            println!("{}", e.path.to_string_lossy());
+++        }
+++    }
+++    0
+++}
+++
+++fn matches_keyword(keywords: &[String], path: &str, exact: bool, _ci: bool) -> bool {
+++    if keywords.is_empty() {
+++        return true;
+++    }
+++    for k in keywords {
+++        if exact {
+++            if !path.contains(k.as_str()) {
+++                return false;
+++            }
+++        } else if !fuzzy(k, path) {
+++            return false;
+++        }
+++    }
+++    true
+++}
+++
+++fn fuzzy(k: &str, path: &str) -> bool {
+++    let k: Vec<char> = k.chars().collect();
+++    let p: Vec<char> = path.chars().collect();
+++    let mut ki = 0;
+++    for pc in &p {
+++        if ki < k.len() && *pc == k[ki] {
+++            ki += 1;
+++        }
+++    }
+++    ki == k.len()
+++}
+++
+++// ============== import ==============
+++fn cmd_import(args: &[String]) -> i32 {
+++    let mut i = 0;
+++    while i < args.len() {
+++        let a = &args[i];
+++        if a == "--from" {
+++            i += 1;
+++        } else if a.starts_with("--from=") {
+++        } else if a == "--merge" {
+++        } else if a == "-V" || a == "--version" {
+++            print_version();
+++            process::exit(0);
+++        } else if a == "-h" || a == "--help" {
+++            print_sub_help("import");
+++            process::exit(0);
+++        }
+++        i += 1;
+++    }
+++    0
+++}
+++
+++// ============== edit ==============
+++fn cmd_edit(_args: &[String]) -> i32 {
+++    0
+++}
+++
+++// ============== main ==============
+++fn main() {
+++    let raw: Vec<String> = env::args().skip(1).collect();
+++    if raw.is_empty() {
+++        // no args: clap error, exit 2
+++        clap_error(
+++            "error: the following subcommand must be provided: add|edit|import|init|query|remove\n\nFor more information, try '--help'.\n",
+++        );
+++    }
+++    let first = &raw[0];
+++    // global -h/--help
+++    if first == "-h" || first == "--help" {
+++        print_main_help();
+++        process::exit(0);
+++    }
+++    // global -V/--version (clap processes version with priority)
+++    if first == "-V" || first == "--version" {
+++        print_version();
+++        process::exit(0);
+++    }
+++
+++    let sub = &raw[1..];
+++    if sub.contains(&"-h".to_string()) || sub.contains(&"--help".to_string()) {
+++        print_sub_help(first);
+++        process::exit(0);
+++    }
+++    if sub.contains(&"-V".to_string()) || sub.contains(&"--version".to_string()) {
+++        print_version();
+++        process::exit(0);
+++    }
+++    match first.as_str() {
+++        "add" => process::exit(cmd_add(sub)),
+++        "remove" => process::exit(cmd_remove(sub)),
+++        "query" => process::exit(cmd_query(sub)),
+++        "import" => process::exit(cmd_import(sub)),
+++        "edit" => process::exit(cmd_edit(sub)),
+++        "init" => process::exit(cmd_init(sub)),
+++        _ => {
+++            clap_error(&format!(
+++                "error: unrecognized subcommand '{}'\n\nUsage: {} <COMMAND>\n\nFor more information, try '--help'.\n",
+++                first,
+++                bin_name()
+++            ));
+++        }
+++    }
+++}
+diff --git a/src/main.rs b/src/main.rs
+new file mode 100644
+index 0000000..98e858d
+--- /dev/null
++++ b/src/main.rs
+@@ -0,0 +1,3 @@
++fn main() {
++    println!("smoke");
++}
+diff --git a/src/templates/help_add.txt b/src/templates/help_add.txt
+new file mode 100644
+index 0000000..4891727
+--- /dev/null
++++ b/src/templates/help_add.txt
+@@ -0,0 +1,24 @@
++zoxide-add 0.9.9
++Ajeet D'Souza <98ajeet@gmail.com>
++https://github.com/ajeetdsouza/zoxide
++
++Add a new directory or increment its rank
++
++Usage:
++  executable add [OPTIONS] <PATHS>...
++
++Arguments:
++  <PATHS>...  
++
++Options:
++  -s, --score <SCORE>  The rank to increment the entry if it exists or initialize it with if it doesn't
++  -h, --help           Print help
++  -V, --version        Print version
++
++Environment variables:
++  _ZO_DATA_DIR          Path for zoxide data files
++  _ZO_ECHO              Print the matched directory before navigating to it when set to 1
++  _ZO_EXCLUDE_DIRS      List of directory globs to be excluded
++  _ZO_FZF_OPTS          Custom flags to pass to fzf
++  _ZO_MAXAGE            Maximum total age after which entries start getting deleted
++  _ZO_RESOLVE_SYMLINKS  Resolve symlinks when storing paths
+diff --git a/src/templates/help_edit.txt b/src/templates/help_edit.txt
+new file mode 100644
+index 0000000..8301d52
+--- /dev/null
++++ b/src/templates/help_edit.txt
+@@ -0,0 +1,20 @@
++zoxide-edit 0.9.9
++Ajeet D'Souza <98ajeet@gmail.com>
++https://github.com/ajeetdsouza/zoxide
++
++Edit the database
++
++Usage:
++  executable edit
++
++Options:
++  -h, --help     Print help
++  -V, --version  Print version
++
++Environment variables:
++  _ZO_DATA_DIR          Path for zoxide data files
++  _ZO_ECHO              Print the matched directory before navigating to it when set to 1
++  _ZO_EXCLUDE_DIRS      List of directory globs to be excluded
++  _ZO_FZF_OPTS          Custom flags to pass to fzf
++  _ZO_MAXAGE            Maximum total age after which entries start getting deleted
++  _ZO_RESOLVE_SYMLINKS  Resolve symlinks when storing paths
+diff --git a/src/templates/help_import.txt b/src/templates/help_import.txt
+new file mode 100644
+index 0000000..4605c15
+--- /dev/null
++++ b/src/templates/help_import.txt
+@@ -0,0 +1,25 @@
++zoxide-import 0.9.9
++Ajeet D'Souza <98ajeet@gmail.com>
++https://github.com/ajeetdsouza/zoxide
++
++Import entries from another application
++
++Usage:
++  executable import [OPTIONS] --from <FROM> <PATH>
++
++Arguments:
++  <PATH>  
++
++Options:
++      --from <FROM>  Application to import from [possible values: autojump, z]
++      --merge        Merge into existing database
++  -h, --help         Print help
++  -V, --version      Print version
++
++Environment variables:
++  _ZO_DATA_DIR          Path for zoxide data files
++  _ZO_ECHO              Print the matched directory before navigating to it when set to 1
++  _ZO_EXCLUDE_DIRS      List of directory globs to be excluded
++  _ZO_FZF_OPTS          Custom flags to pass to fzf
++  _ZO_MAXAGE            Maximum total age after which entries start getting deleted
++  _ZO_RESOLVE_SYMLINKS  Resolve symlinks when storing paths
+diff --git a/src/templates/help_init.txt b/src/templates/help_init.txt
+new file mode 100644
+index 0000000..9fae4cc
+--- /dev/null
++++ b/src/templates/help_init.txt
+@@ -0,0 +1,26 @@
++zoxide-init 0.9.9
++Ajeet D'Souza <98ajeet@gmail.com>
++https://github.com/ajeetdsouza/zoxide
++
++Generate shell configuration
++
++Usage:
++  executable init [OPTIONS] <SHELL>
++
++Arguments:
++  <SHELL>  [possible values: bash, elvish, fish, nushell, posix, powershell, tcsh, xonsh, zsh]
++
++Options:
++      --no-cmd       Prevents zoxide from defining the `z` and `zi` commands
++      --cmd <CMD>    Changes the prefix of the `z` and `zi` commands [default: z]
++      --hook <HOOK>  Changes how often zoxide increments a directory's score [default: pwd] [possible values: none, prompt, pwd]
++  -h, --help         Print help
++  -V, --version      Print version
++
++Environment variables:
++  _ZO_DATA_DIR          Path for zoxide data files
++  _ZO_ECHO              Print the matched directory before navigating to it when set to 1
++  _ZO_EXCLUDE_DIRS      List of directory globs to be excluded
++  _ZO_FZF_OPTS          Custom flags to pass to fzf
++  _ZO_MAXAGE            Maximum total age after which entries start getting deleted
++  _ZO_RESOLVE_SYMLINKS  Resolve symlinks when storing paths
+diff --git a/src/templates/help_main.txt b/src/templates/help_main.txt
+new file mode 100644
+index 0000000..9b3a59c
+--- /dev/null
++++ b/src/templates/help_main.txt
+@@ -0,0 +1,28 @@
++zoxide 0.9.9
++Ajeet D'Souza <98ajeet@gmail.com>
++https://github.com/ajeetdsouza/zoxide
++
++A smarter cd command for your terminal
++
++Usage:
++  executable <COMMAND>
++
++Commands:
++  add     Add a new directory or increment its rank
++  edit    Edit the database
++  import  Import entries from another application
++  init    Generate shell configuration
++  query   Search for a directory in the database
++  remove  Remove a directory from the database
++
++Options:
++  -h, --help     Print help
++  -V, --version  Print version
++
++Environment variables:
++  _ZO_DATA_DIR          Path for zoxide data files
++  _ZO_ECHO              Print the matched directory before navigating to it when set to 1
++  _ZO_EXCLUDE_DIRS      List of directory globs to be excluded
++  _ZO_FZF_OPTS          Custom flags to pass to fzf
++  _ZO_MAXAGE            Maximum total age after which entries start getting deleted
++  _ZO_RESOLVE_SYMLINKS  Resolve symlinks when storing paths
+diff --git a/src/templates/help_query.txt b/src/templates/help_query.txt
+new file mode 100644
+index 0000000..b08093b
+--- /dev/null
++++ b/src/templates/help_query.txt
+@@ -0,0 +1,29 @@
++zoxide-query 0.9.9
++Ajeet D'Souza <98ajeet@gmail.com>
++https://github.com/ajeetdsouza/zoxide
++
++Search for a directory in the database
++
++Usage:
++  executable query [OPTIONS] [KEYWORDS]...
++
++Arguments:
++  [KEYWORDS]...  
++
++Options:
++  -a, --all              Show unavailable directories
++  -i, --interactive      Use interactive selection
++  -l, --list             List all matching directories
++  -s, --score            Print score with results
++      --exclude <path>   Exclude the current directory
++      --base-dir <path>  Only search within this directory
++  -h, --help             Print help
++  -V, --version          Print version
++
++Environment variables:
++  _ZO_DATA_DIR          Path for zoxide data files
++  _ZO_ECHO              Print the matched directory before navigating to it when set to 1
++  _ZO_EXCLUDE_DIRS      List of directory globs to be excluded
++  _ZO_FZF_OPTS          Custom flags to pass to fzf
++  _ZO_MAXAGE            Maximum total age after which entries start getting deleted
++  _ZO_RESOLVE_SYMLINKS  Resolve symlinks when storing paths
+diff --git a/src/templates/help_remove.txt b/src/templates/help_remove.txt
+new file mode 100644
+index 0000000..5a14c9e
+--- /dev/null
++++ b/src/templates/help_remove.txt
+@@ -0,0 +1,23 @@
++zoxide-remove 0.9.9
++Ajeet D'Souza <98ajeet@gmail.com>
++https://github.com/ajeetdsouza/zoxide
++
++Remove a directory from the database
++
++Usage:
++  executable remove [PATHS]...
++
++Arguments:
++  [PATHS]...  
++
++Options:
++  -h, --help     Print help
++  -V, --version  Print version
++
++Environment variables:
++  _ZO_DATA_DIR          Path for zoxide data files
++  _ZO_ECHO              Print the matched directory before navigating to it when set to 1
++  _ZO_EXCLUDE_DIRS      List of directory globs to be excluded
++  _ZO_FZF_OPTS          Custom flags to pass to fzf
++  _ZO_MAXAGE            Maximum total age after which entries start getting deleted
++  _ZO_RESOLVE_SYMLINKS  Resolve symlinks when storing paths
+diff --git a/src/templates/init_bash.txt b/src/templates/init_bash.txt
+new file mode 100644
+index 0000000..51475f7
+--- /dev/null
++++ b/src/templates/init_bash.txt
+@@ -0,0 +1,174 @@
++# shellcheck shell=bash
++
++# =============================================================================
++#
++# Utility functions for zoxide.
++#
++
++# pwd based on the value of _ZO_RESOLVE_SYMLINKS.
++function __zoxide_pwd() {
++    \builtin pwd -L
++}
++
++# cd + custom logic based on the value of _ZO_ECHO.
++function __zoxide_cd() {
++    # shellcheck disable=SC2164
++    \builtin cd -- "$@"
++}
++
++# =============================================================================
++#
++# Hook configuration for zoxide.
++#
++
++# Hook to add new entries to the database.
++__zoxide_oldpwd="$(__zoxide_pwd)"
++
++function __zoxide_hook() {
++    \builtin local -r retval="$?"
++    \builtin local pwd_tmp
++    pwd_tmp="$(__zoxide_pwd)"
++    if [[ ${__zoxide_oldpwd} != "${pwd_tmp}" ]]; then
++        __zoxide_oldpwd="${pwd_tmp}"
++        \command zoxide add -- "${__zoxide_oldpwd}"
++    fi
++    return "${retval}"
++}
++
++# Initialize hook.
++if [[ ${PROMPT_COMMAND:=} != *'__zoxide_hook'* ]]; then
++    if [[ "$(declare -p PROMPT_COMMAND 2>&1)" == "declare -a"* ]]; then
++        PROMPT_COMMAND=("${PROMPT_COMMAND[@]}" __zoxide_hook)
++    else
++        # shellcheck disable=SC2128,SC2178
++        PROMPT_COMMAND="${PROMPT_COMMAND%"${PROMPT_COMMAND##*[![:space:];]}"}"
++        # shellcheck disable=SC2128,SC2178
++        PROMPT_COMMAND="${PROMPT_COMMAND:+${PROMPT_COMMAND};}__zoxide_hook"
++    fi
++fi
++
++# Report common issues.
++function __zoxide_doctor() {
++    [[ ${_ZO_DOCTOR:-1} -eq 0 ]] && return 0
++    # shellcheck disable=SC2199
++    [[ ${PROMPT_COMMAND[@]:-} == *'__zoxide_hook'* ]] && return 0
++    # shellcheck disable=SC2199
++    [[ ${__vsc_original_prompt_command[@]:-} == *'__zoxide_hook'* ]] && return 0
++
++    _ZO_DOCTOR=0
++    \builtin printf '%s\n' \
++        'zoxide: detected a possible configuration issue.' \
++        'Please ensure that zoxide is initialized right at the end of your shell configuration file (usually ~/.bashrc).' \
++        '' \
++        'If the issue persists, consider filing an issue at:' \
++        'https://github.com/ajeetdsouza/zoxide/issues' \
++        '' \
++        'Disable this message by setting _ZO_DOCTOR=0.' \
++        '' >&2
++}
++
++# =============================================================================
++#
++# When using zoxide with --no-cmd, alias these internal functions as desired.
++#
++
++__zoxide_z_prefix='z#'
++
++# Jump to a directory using only keywords.
++function __zoxide_z() {
++    __zoxide_doctor
++
++    # shellcheck disable=SC2199
++    if [[ $# -eq 0 ]]; then
++        __zoxide_cd ~
++    elif [[ $# -eq 1 && $1 == '-' ]]; then
++        __zoxide_cd "${OLDPWD}"
++    elif [[ $# -eq 1 && -d $1 ]]; then
++        __zoxide_cd "$1"
++    elif [[ $# -eq 2 && $1 == '--' ]]; then
++        __zoxide_cd "$2"
++    elif [[ ${@: -1} == "${__zoxide_z_prefix}"?* ]]; then
++        # shellcheck disable=SC2124
++        \builtin local result="${@: -1}"
++        __zoxide_cd "${result:${#__zoxide_z_prefix}}"
++    else
++        \builtin local result
++        # shellcheck disable=SC2312
++        result="$(\command zoxide query --exclude "$(__zoxide_pwd)" -- "$@")" &&
++            __zoxide_cd "${result}"
++    fi
++}
++
++# Jump to a directory using interactive search.
++function __zoxide_zi() {
++    __zoxide_doctor
++    \builtin local result
++    result="$(\command zoxide query --interactive -- "$@")" && __zoxide_cd "${result}"
++}
++
++# =============================================================================
++#
++# Commands for zoxide. Disable these using --no-cmd.
++#
++
++\builtin unalias z &>/dev/null || \builtin true
++function z() {
++    __zoxide_z "$@"
++}
++
++\builtin unalias zi &>/dev/null || \builtin true
++function zi() {
++    __zoxide_zi "$@"
++}
++
++# Load completions.
++# - Bash 4.4+ is required to use `@Q`.
++# - Completions require line editing. Since Bash supports only two modes of
++#   line editing (`vim` and `emacs`), we check if either them is enabled.
++# - Completions don't work on `dumb` terminals.
++if [[ ${BASH_VERSINFO[0]:-0} -eq 4 && ${BASH_VERSINFO[1]:-0} -ge 4 || ${BASH_VERSINFO[0]:-0} -ge 5 ]] &&
++    [[ :"${SHELLOPTS}": =~ :(vi|emacs): && ${TERM} != 'dumb' ]]; then
++
++    function __zoxide_z_complete_helper() {
++        READLINE_LINE="z ${__zoxide_result@Q}"
++        READLINE_POINT=${#READLINE_LINE}
++        bind '"\e[0n": accept-line'
++        \builtin printf '\e[5n' >/dev/tty
++    }
++
++    function __zoxide_z_complete() {
++        # Only show completions when the cursor is at the end of the line.
++        [[ ${#COMP_WORDS[@]} -eq $((COMP_CWORD + 1)) ]] || return
++
++        # If there is only one argument, use `cd` completions.
++        if [[ ${#COMP_WORDS[@]} -eq 2 ]]; then
++            \builtin mapfile -t COMPREPLY < <(
++                \builtin compgen -A directory -- "${COMP_WORDS[-1]}" || \builtin true
++            )
++        # If there is a space after the last word, use interactive selection.
++        elif [[ -z ${COMP_WORDS[-1]} ]]; then
++            # shellcheck disable=SC2312
++            __zoxide_result="$(\command zoxide query --exclude "$(__zoxide_pwd)" --interactive -- "${COMP_WORDS[@]:1:${#COMP_WORDS[@]}-2}")" && {
++                # In case the terminal does not respond to \e[5n or another
++                # mechanism steals the response, it is still worth completing
++                # the directory in the command line.
++                COMPREPLY=("${__zoxide_z_prefix}${__zoxide_result}/")
++
++                # Note: We here call "bind" without prefixing "\builtin" to be
++                # compatible with frameworks like ble.sh, which emulates Bash's
++                # builtin "bind".
++                bind -x '"\e[0n": __zoxide_z_complete_helper'
++                \builtin printf '\e[5n' >/dev/tty
++            }
++        fi
++    }
++
++    \builtin complete -F __zoxide_z_complete -o filenames -- z
++    \builtin complete -r zi &>/dev/null || \builtin true
++fi
++
++# =============================================================================
++#
++# To initialize zoxide, add this to your shell configuration file (usually ~/.bashrc):
++#
++# eval "$(zoxide init bash)"
+diff --git a/src/templates/init_elvish.txt b/src/templates/init_elvish.txt
+new file mode 100644
+index 0000000..42dcf25
+--- /dev/null
++++ b/src/templates/init_elvish.txt
+@@ -0,0 +1,96 @@
++use builtin
++use path
++
++# =============================================================================
++#
++# Utility functions for zoxide.
++#
++
++# cd + custom logic based on the value of _ZO_ECHO.
++fn __zoxide_cd {|path|
++    builtin:cd $path
++}
++
++# =============================================================================
++#
++# Hook configuration for zoxide.
++#
++
++# Initialize hook to track previous directory.
++var oldpwd = $builtin:pwd
++set builtin:before-chdir = [$@builtin:before-chdir {|_| set oldpwd = $builtin:pwd }]
++
++# Initialize hook to add directories to zoxide.
++if (builtin:not (builtin:eq $E:__zoxide_shlvl $E:SHLVL)) {
++    set E:__zoxide_shlvl = $E:SHLVL
++    set builtin:after-chdir = [$@builtin:after-chdir {|_| zoxide add -- $pwd }]
++}
++
++# =============================================================================
++#
++# When using zoxide with --no-cmd, alias these internal functions as desired.
++#
++
++# Jump to a directory using only keywords.
++fn __zoxide_z {|@rest|
++    if (builtin:eq [] $rest) {
++        __zoxide_cd ~
++    } elif (builtin:eq [-] $rest) {
++        __zoxide_cd $oldpwd
++    } elif (and ('builtin:==' (builtin:count $rest) 1) (path:is-dir &follow-symlink=$true $rest[0])) {
++        __zoxide_cd $rest[0]
++    } else {
++        var path
++        try {
++            set path = (zoxide query --exclude $pwd -- $@rest)
++        } catch {
++        } else {
++            __zoxide_cd $path
++        }
++    }
++}
++edit:add-var __zoxide_z~ $__zoxide_z~
++
++# Jump to a directory using interactive search.
++fn __zoxide_zi {|@rest|
++    var path
++    try {
++        set path = (zoxide query --interactive -- $@rest)
++    } catch {
++    } else {
++        __zoxide_cd $path
++    }
++}
++edit:add-var __zoxide_zi~ $__zoxide_zi~
++
++# =============================================================================
++#
++# Commands for zoxide. Disable these using --no-cmd.
++#
++
++edit:add-var z~ $__zoxide_z~
++edit:add-var zi~ $__zoxide_zi~
++
++# Load completions.
++fn __zoxide_z_complete {|@rest|
++    if (!= (builtin:count $rest) 2) {
++        builtin:return
++    }
++    edit:complete-filename $rest[1] |
++        builtin:each {|completion|
++            var dir = $completion[stem]
++            if (path:is-dir $dir) {
++                builtin:put $dir
++            }
++        }
++}
++set edit:completion:arg-completer[z] = $__zoxide_z_complete~
++
++# =============================================================================
++#
++# To initialize zoxide, add this to your configuration (usually
++# ~/.elvish/rc.elv):
++#
++#   eval (zoxide init elvish | slurp)
++#
++# Note: zoxide only supports elvish v0.18.0 and above.
+diff --git a/src/templates/init_fish.txt b/src/templates/init_fish.txt
+new file mode 100644
+index 0000000..e90938a
+--- /dev/null
++++ b/src/templates/init_fish.txt
+@@ -0,0 +1,106 @@
++# =============================================================================
++#
++# Utility functions for zoxide.
++#
++
++# pwd based on the value of _ZO_RESOLVE_SYMLINKS.
++function __zoxide_pwd
++    builtin pwd -L
++end
++
++# A copy of fish's internal cd function. This makes it possible to use
++# `alias cd=z` without causing an infinite loop.
++if ! builtin functions --query __zoxide_cd_internal
++    if status list-files functions/cd.fish &>/dev/null
++        status get-file functions/cd.fish | string replace --regex -- '^function cd\s' 'function __zoxide_cd_internal ' | source
++    else
++        string replace --regex -- '^function cd\s' 'function __zoxide_cd_internal ' <$__fish_data_dir/functions/cd.fish | source
++    end
++end
++
++# cd + custom logic based on the value of _ZO_ECHO.
++function __zoxide_cd
++    if set -q __zoxide_loop
++        builtin echo "zoxide: infinite loop detected"
++        builtin echo "Avoid aliasing `cd` to `z` directly, use `zoxide init --cmd=cd fish` instead"
++        return 1
++    end
++    __zoxide_loop=1 __zoxide_cd_internal $argv
++end
++
++# =============================================================================
++#
++# Hook configuration for zoxide.
++#
++
++# Initialize hook to add new entries to the database.
++function __zoxide_hook --on-variable PWD
++    test -z "$fish_private_mode"
++    and command zoxide add -- (__zoxide_pwd)
++end
++
++# =============================================================================
++#
++# When using zoxide with --no-cmd, alias these internal functions as desired.
++#
++
++# Jump to a directory using only keywords.
++function __zoxide_z
++    set -l argc (builtin count $argv)
++    if test $argc -eq 0
++        __zoxide_cd $HOME
++    else if test "$argv" = -
++        __zoxide_cd -
++    else if test $argc -eq 1 -a -d $argv[1]
++        __zoxide_cd $argv[1]
++    else if test $argc -eq 2 -a $argv[1] = --
++        __zoxide_cd -- $argv[2]
++    else
++        set -l result (command zoxide query --exclude (__zoxide_pwd) -- $argv)
++        and __zoxide_cd $result
++    end
++end
++
++# Completions.
++function __zoxide_z_complete
++    set -l tokens (builtin commandline --current-process --tokenize)
++    set -l curr_tokens (builtin commandline --cut-at-cursor --current-process --tokenize)
++
++    if test (builtin count $tokens) -le 2 -a (builtin count $curr_tokens) -eq 1
++        # If there are < 2 arguments, use `cd` completions.
++        complete --do-complete "'' "(builtin commandline --cut-at-cursor --current-token) | string match --regex -- '.*/$'
++    else if test (builtin count $tokens) -eq (builtin count $curr_tokens)
++        # If the last argument is empty, use interactive selection.
++        set -l query $tokens[2..-1]
++        set -l result (command zoxide query --exclude (__zoxide_pwd) --interactive -- $query)
++        and __zoxide_cd $result
++        and builtin commandline --function cancel-commandline repaint
++    end
++end
++complete --command __zoxide_z --no-files --arguments '(__zoxide_z_complete)'
++
++# Jump to a directory using interactive search.
++function __zoxide_zi
++    set -l result (command zoxide query --interactive -- $argv)
++    and __zoxide_cd $result
++end
++
++# =============================================================================
++#
++# Commands for zoxide. Disable these using --no-cmd.
++#
++
++abbr --erase z &>/dev/null
++complete --erase --command z
++alias z=__zoxide_z
++
++abbr --erase zi &>/dev/null
++complete --erase --command zi
++alias zi=__zoxide_zi
++
++# =============================================================================
++#
++# To initialize zoxide, add this to your configuration (usually
++# ~/.config/fish/config.fish):
++#
++#   zoxide init fish | source
+diff --git a/src/templates/init_nushell.txt b/src/templates/init_nushell.txt
+new file mode 100644
+index 0000000..11f08c0
+--- /dev/null
++++ b/src/templates/init_nushell.txt
+@@ -0,0 +1,70 @@
++# Code generated by zoxide. DO NOT EDIT.
++
++# =============================================================================
++#
++# Hook configuration for zoxide.
++#
++
++# Initialize hook to add new entries to the database.
++export-env {
++  $env.config = (
++    $env.config?
++    | default {}
++    | upsert hooks { default {} }
++    | upsert hooks.env_change { default {} }
++    | upsert hooks.env_change.PWD { default [] }
++  )
++  let __zoxide_hooked = (
++    $env.config.hooks.env_change.PWD | any { try { get __zoxide_hook } catch { false } }
++  )
++  if not $__zoxide_hooked {
++    $env.config.hooks.env_change.PWD = ($env.config.hooks.env_change.PWD | append {
++      __zoxide_hook: true,
++      code: {|_, dir| ^zoxide add -- $dir}
++    })
++  }
++}
++
++# =============================================================================
++#
++# When using zoxide with --no-cmd, alias these internal functions as desired.
++#
++
++# Jump to a directory using only keywords.
++def --env --wrapped __zoxide_z [...rest: string] {
++  let path = match $rest {
++    [] => {'~'},
++    [ '-' ] => {'-'},
++    [ $arg ] if ($arg | path expand | path type) == 'dir' => {$arg}
++    _ => {
++      ^zoxide query --exclude $env.PWD -- ...$rest | str trim -r -c "\n"
++    }
++  }
++  cd $path
++}
++
++# Jump to a directory using interactive search.
++def --env --wrapped __zoxide_zi [...rest:string] {
++  cd $'(^zoxide query --interactive -- ...$rest | str trim -r -c "\n")'
++}
++
++# =============================================================================
++#
++# Commands for zoxide. Disable these using --no-cmd.
++#
++
++alias z = __zoxide_z
++alias zi = __zoxide_zi
++
++# =============================================================================
++#
++# Add this to your env file (find it by running `$nu.env-path` in Nushell):
++#
++#   zoxide init nushell | save -f ~/.zoxide.nu
++#
++# Now, add this to the end of your config file (find it by running
++# `$nu.config-path` in Nushell):
++#
++#   source ~/.zoxide.nu
++#
++# Note: zoxide only supports Nushell v0.89.0+.
+diff --git a/src/templates/init_posix.txt b/src/templates/init_posix.txt
+new file mode 100644
+index 0000000..f82b330
+--- /dev/null
++++ b/src/templates/init_posix.txt
+@@ -0,0 +1,80 @@
++# shellcheck shell=sh
++
++# =============================================================================
++#
++# Utility functions for zoxide.
++#
++
++# pwd based on the value of _ZO_RESOLVE_SYMLINKS.
++__zoxide_pwd() {
++    \command pwd -L
++}
++
++# cd + custom logic based on the value of _ZO_ECHO.
++__zoxide_cd() {
++    # shellcheck disable=SC2164
++    \command cd "$@"
++}
++
++# =============================================================================
++#
++# Hook configuration for zoxide.
++#
++
++\command printf "%s\n%s\n" \
++    "zoxide: PWD hooks are not supported on POSIX shells." \
++    "        Use 'zoxide init posix --hook prompt' instead."
++
++# =============================================================================
++#
++# When using zoxide with --no-cmd, alias these internal functions as desired.
++#
++
++# Jump to a directory using only keywords.
++__zoxide_z() {
++    __zoxide_doctor
++
++    if [ "$#" -eq 0 ]; then
++        __zoxide_cd ~
++    elif [ "$#" -eq 1 ] && [ "$1" = '-' ]; then
++        if [ -n "${OLDPWD}" ]; then
++            __zoxide_cd "${OLDPWD}"
++        else
++            # shellcheck disable=SC2016
++            \command printf 'zoxide: $OLDPWD is not set'
++            return 1
++        fi
++    elif [ "$#" -eq 1 ] && [ -d "$1" ]; then
++        __zoxide_cd "$1"
++    else
++        __zoxide_result="$(\command zoxide query --exclude "$(__zoxide_pwd || \command true)" -- "$@")" &&
++            __zoxide_cd "${__zoxide_result}"
++    fi
++}
++
++# Jump to a directory using interactive search.
++__zoxide_zi() {
++    __zoxide_doctor
++    __zoxide_result="$(\command zoxide query --interactive -- "$@")" && __zoxide_cd "${__zoxide_result}"
++}
++
++# =============================================================================
++#
++# Commands for zoxide. Disable these using --no-cmd.
++#
++
++\command unalias z >/dev/null 2>&1 || \true
++z() {
++    __zoxide_z "$@"
++}
++
++\command unalias zi >/dev/null 2>&1 || \true
++zi() {
++    __zoxide_zi "$@"
++}
++
++# =============================================================================
++#
++# To initialize zoxide, add this to your configuration:
++#
++# eval "$(zoxide init posix --hook prompt)"
+diff --git a/src/templates/init_powershell.txt b/src/templates/init_powershell.txt
+new file mode 100644
+index 0000000..6aed3d6
+--- /dev/null
++++ b/src/templates/init_powershell.txt
+@@ -0,0 +1,132 @@
++# =============================================================================
++#
++# Utility functions for zoxide.
++#
++
++# Call zoxide binary, returning the output as UTF-8.
++function global:__zoxide_bin {
++    $encoding = [Console]::OutputEncoding
++    try {
++        [Console]::OutputEncoding = [System.Text.Utf8Encoding]::new()
++        $result = zoxide @args
++        return $result
++    } finally {
++        [Console]::OutputEncoding = $encoding
++    }
++}
++
++# pwd based on zoxide's format.
++function global:__zoxide_pwd {
++    $cwd = Get-Location
++    if ($cwd.Provider.Name -eq "FileSystem") {
++        $cwd.ProviderPath
++    }
++}
++
++# cd + custom logic based on the value of _ZO_ECHO.
++function global:__zoxide_cd($dir, $literal) {
++    $dir = if ($literal) {
++        if ($null -eq $dir) {
++            Set-Location
++        } else {
++            Set-Location -LiteralPath $dir -Passthru -ErrorAction Stop
++        }
++    } else {
++        if ($dir -eq '-' -and ($PSVersionTable.PSVersion -lt 6.1)) {
++            Write-Error "cd - is not supported below PowerShell 6.1. Please upgrade your version of PowerShell."
++        }
++        elseif ($dir -eq '+' -and ($PSVersionTable.PSVersion -lt 6.2)) {
++            Write-Error "cd + is not supported below PowerShell 6.2. Please upgrade your version of PowerShell."
++        }
++        else {
++            Set-Location -Path $dir -Passthru -ErrorAction Stop
++        }
++    }
++}
++
++# =============================================================================
++#
++# Hook configuration for zoxide.
++#
++
++# Hook to add new entries to the database.
++$global:__zoxide_oldpwd = __zoxide_pwd
++function global:__zoxide_hook {
++    $result = __zoxide_pwd
++    if ($result -ne $global:__zoxide_oldpwd) {
++        if ($null -ne $result) {
++            zoxide add "--" $result
++        }
++        $global:__zoxide_oldpwd = $result
++    }
++}
++
++# Initialize hook.
++$global:__zoxide_hooked = (Get-Variable __zoxide_hooked -ErrorAction Ignore -ValueOnly)
++if ($global:__zoxide_hooked -ne 1) {
++    $global:__zoxide_hooked = 1
++    $global:__zoxide_prompt_old = $function:prompt
++
++    function global:prompt {
++        if ($null -ne $__zoxide_prompt_old) {
++            & $__zoxide_prompt_old
++        }
++        $null = __zoxide_hook
++    }
++}
++
++# =============================================================================
++#
++# When using zoxide with --no-cmd, alias these internal functions as desired.
++#
++
++# Jump to a directory using only keywords.
++function global:__zoxide_z {
++    if ($args.Length -eq 0) {
++        __zoxide_cd $null $true
++    }
++    elseif ($args.Length -eq 1 -and ($args[0] -eq '-' -or $args[0] -eq '+')) {
++        __zoxide_cd $args[0] $false
++    }
++    elseif ($args.Length -eq 1 -and (Test-Path -PathType Container -LiteralPath $args[0])) {
++        __zoxide_cd $args[0] $true
++    }
++    elseif ($args.Length -eq 1 -and (Test-Path -PathType Container -Path $args[0] )) {
++        __zoxide_cd $args[0] $false
++    }
++    else {
++        $result = __zoxide_pwd
++        if ($null -ne $result) {
++            $result = __zoxide_bin query --exclude $result "--" @args
++        }
++        else {
++            $result = __zoxide_bin query "--" @args
++        }
++        if ($LASTEXITCODE -eq 0) {
++            __zoxide_cd $result $true
++        }
++    }
++}
++
++# Jump to a directory using interactive search.
++function global:__zoxide_zi {
++    $result = __zoxide_bin query -i "--" @args
++    if ($LASTEXITCODE -eq 0) {
++        __zoxide_cd $result $true
++    }
++}
++
++# =============================================================================
++#
++# Commands for zoxide. Disable these using --no-cmd.
++#
++
++Set-Alias -Name z -Value __zoxide_z -Option AllScope -Scope Global -Force
++Set-Alias -Name zi -Value __zoxide_zi -Option AllScope -Scope Global -Force
++
++# =============================================================================
++#
++# To initialize zoxide, add this to your configuration (find it by running
++# `echo $profile` in PowerShell):
++#
++# Invoke-Expression (& { (zoxide init powershell | Out-String) })
+diff --git a/src/templates/init_tcsh.txt b/src/templates/init_tcsh.txt
+new file mode 100644
+index 0000000..895ea38
+--- /dev/null
++++ b/src/templates/init_tcsh.txt
+@@ -0,0 +1,51 @@
++# =============================================================================
++#
++# Hook configuration for zoxide.
++#
++
++# Hook to add new entries to the database.
++set __zoxide_pwd_old = `pwd -L`
++alias __zoxide_hook 'set __zoxide_pwd_tmp = "`pwd -L`"; test "$__zoxide_pwd_tmp" != "$__zoxide_pwd_old" && zoxide add -- "$__zoxide_pwd_tmp"; set __zoxide_pwd_old = "$__zoxide_pwd_tmp"'
++
++# Initialize hook.
++alias precmd ';__zoxide_hook'
++
++# =============================================================================
++#
++# When using zoxide with --no-cmd, alias these internal functions as desired.
++#
++
++# Jump to a directory using only keywords.
++alias __zoxide_z 'set __zoxide_args = (\!*)\
++if ("$#__zoxide_args" == 0) then\
++    cd ~\
++else\
++    if ("$#__zoxide_args" == 1 && "$__zoxide_args[1]" == "-") then\
++        cd -\
++    else if ("$#__zoxide_args" == 1 && -d "$__zoxide_args[1]") then\
++        cd "$__zoxide_args[1]"\
++    else\
++        set __zoxide_pwd = `pwd -L`\
++        set __zoxide_result = "`zoxide query --exclude '"'"'$__zoxide_pwd'"'"' -- $__zoxide_args`" && cd "$__zoxide_result"\
++    endif\
++endif'
++
++# Jump to a directory using interactive search.
++alias __zoxide_zi 'set __zoxide_args = (\!*)\
++set __zoxide_pwd = `pwd -L`\
++set __zoxide_result = "`zoxide query --exclude '"'"'$__zoxide_pwd'"'"' --interactive -- $__zoxide_args`" && cd "$__zoxide_result"'
++
++# =============================================================================
++#
++# Commands for zoxide. Disable these using --no-cmd.
++#
++
++alias z __zoxide_z
++alias zi __zoxide_zi
++
++# =============================================================================
++#
++# To initialize zoxide, add this to your shell configuration file (usually ~/.tcshrc):
++#
++#     zoxide init tcsh > ~/.zoxide.tcsh
++#     source ~/.zoxide.tcsh
+diff --git a/src/templates/init_xonsh.txt b/src/templates/init_xonsh.txt
+new file mode 100644
+index 0000000..1a00636
+--- /dev/null
++++ b/src/templates/init_xonsh.txt
+@@ -0,0 +1,156 @@
++# pylint: disable=missing-module-docstring
++
++import builtins  # pylint: disable=unused-import
++import os
++import os.path
++import subprocess
++import sys
++import typing
++
++import xonsh.dirstack  # type: ignore # pylint: disable=import-error
++import xonsh.environ  # type: ignore # pylint: disable=import-error
++
++# =============================================================================
++#
++# Utility functions for zoxide.
++#
++
++
++def __zoxide_bin() -> str:
++    """Finds and returns the location of the zoxide binary."""
++    zoxide = typing.cast(str, xonsh.environ.locate_binary("zoxide"))
++    if zoxide is None:
++        zoxide = "zoxide"
++    return zoxide
++
++
++def __zoxide_env() -> dict[str, str]:
++    """Returns the current environment."""
++    return builtins.__xonsh__.env.detype()  # type: ignore  # pylint:disable=no-member
++
++
++def __zoxide_pwd() -> str:
++    """pwd based on the value of _ZO_RESOLVE_SYMLINKS."""
++    pwd = __zoxide_env().get("PWD")
++    if pwd is None:
++        raise RuntimeError("$PWD not found")
++    return pwd
++
++
++def __zoxide_cd(path: str | bytes | None = None) -> None:
++    """cd + custom logic based on the value of _ZO_ECHO."""
++    if path is None:
++        args = []
++    elif isinstance(path, bytes):
++        args = [path.decode("utf-8")]
++    else:
++        args = [path]
++    _, exc, _ = xonsh.dirstack.cd(args)
++    if exc is not None:
++        raise RuntimeError(exc)
++
++
++class ZoxideSilentException(Exception):
++    """Exit without complaining."""
++
++
++def __zoxide_errhandler(
++    func: typing.Callable[[list[str]], None],
++) -> typing.Callable[[list[str]], int]:
++    """Print exception and exit with error code 1."""
++
++    def wrapper(args: list[str]) -> int:
++        try:
++            func(args)
++            return 0
++        except ZoxideSilentException:
++            return 1
++        except Exception as exc:  # pylint: disable=broad-except
++            print(f"zoxide: {exc}", file=sys.stderr)
++            return 1
++
++    return wrapper
++
++
++# =============================================================================
++#
++# Hook configuration for zoxide.
++#
++
++# Initialize hook to add new entries to the database.
++if "__zoxide_hook" not in globals():
++
++    @builtins.events.on_chdir  # type: ignore  # pylint:disable=no-member
++    def __zoxide_hook(**_kwargs: typing.Any) -> None:
++        """Hook to add new entries to the database."""
++        pwd = __zoxide_pwd()
++        zoxide = __zoxide_bin()
++        subprocess.run(
++            [zoxide, "add", "--", pwd],
++            check=False,
++            env=__zoxide_env(),
++        )
++
++
++# =============================================================================
++#
++# When using zoxide with --no-cmd, alias these internal functions as desired.
++#
++
++
++@__zoxide_errhandler
++def __zoxide_z(args: list[str]) -> None:
++    """Jump to a directory using only keywords."""
++    if args == []:
++        __zoxide_cd()
++    elif args == ["-"]:
++        __zoxide_cd("-")
++    elif len(args) == 1 and os.path.isdir(args[0]):
++        __zoxide_cd(args[0])
++    else:
++        try:
++            zoxide = __zoxide_bin()
++            cmd = subprocess.run(
++                [zoxide, "query", "--exclude", __zoxide_pwd(), "--"] + args,
++                check=True,
++                env=__zoxide_env(),
++                stdout=subprocess.PIPE,
++            )
++        except subprocess.CalledProcessError as exc:
++            raise ZoxideSilentException() from exc
++
++        result = cmd.stdout[:-1]
++        __zoxide_cd(result)
++
++
++@__zoxide_errhandler
++def __zoxide_zi(args: list[str]) -> None:
++    """Jump to a directory using interactive search."""
++    try:
++        zoxide = __zoxide_bin()
++        cmd = subprocess.run(
++            [zoxide, "query", "-i", "--"] + args,
++            check=True,
++            env=__zoxide_env(),
++            stdout=subprocess.PIPE,
++        )
++    except subprocess.CalledProcessError as exc:
++        raise ZoxideSilentException() from exc
++
++    result = cmd.stdout[:-1]
++    __zoxide_cd(result)
++
++
++# =============================================================================
++#
++# Commands for zoxide. Disable these using --no-cmd.
++#
++
++builtins.aliases["z"] = __zoxide_z  # type: ignore  # pylint:disable=no-member
++builtins.aliases["zi"] = __zoxide_zi  # type: ignore  # pylint:disable=no-member
++
++# =============================================================================
++#
++# To initialize zoxide, add this to your configuration (usually ~/.xonshrc):
++#
++# execx($(zoxide init xonsh), 'exec', __xonsh__.ctx, filename='zoxide')
+diff --git a/src/templates/init_zsh.txt b/src/templates/init_zsh.txt
+new file mode 100644
+index 0000000..1011848
+--- /dev/null
++++ b/src/templates/init_zsh.txt
+@@ -0,0 +1,149 @@
++# shellcheck shell=bash
++
++# =============================================================================
++#
++# Utility functions for zoxide.
++#
++
++# pwd based on the value of _ZO_RESOLVE_SYMLINKS.
++function __zoxide_pwd() {
++    \builtin pwd -L
++}
++
++# cd + custom logic based on the value of _ZO_ECHO.
++function __zoxide_cd() {
++    # shellcheck disable=SC2164
++    \builtin cd -- "$@"
++}
++
++# =============================================================================
++#
++# Hook configuration for zoxide.
++#
++
++# Hook to add new entries to the database.
++function __zoxide_hook() {
++    # shellcheck disable=SC2312
++    \command zoxide add -- "$(__zoxide_pwd)"
++}
++
++# Initialize hook.
++\builtin typeset -ga precmd_functions
++\builtin typeset -ga chpwd_functions
++# shellcheck disable=SC2034,SC2296
++precmd_functions=("${(@)precmd_functions:#__zoxide_hook}")
++# shellcheck disable=SC2034,SC2296
++chpwd_functions=("${(@)chpwd_functions:#__zoxide_hook}")
++chpwd_functions+=(__zoxide_hook)
++
++# Report common issues.
++function __zoxide_doctor() {
++    [[ ${_ZO_DOCTOR:-1} -ne 0 ]] || return 0
++    [[ ${chpwd_functions[(Ie)__zoxide_hook]:-} -eq 0 ]] || return 0
++
++    _ZO_DOCTOR=0
++    \builtin printf '%s\n' \
++        'zoxide: detected a possible configuration issue.' \
++        'Please ensure that zoxide is initialized right at the end of your shell configuration file (usually ~/.zshrc).' \
++        '' \
++        'If the issue persists, consider filing an issue at:' \
++        'https://github.com/ajeetdsouza/zoxide/issues' \
++        '' \
++        'Disable this message by setting _ZO_DOCTOR=0.' \
++        '' >&2
++}
++
++# =============================================================================
++#
++# When using zoxide with --no-cmd, alias these internal functions as desired.
++#
++
++# Jump to a directory using only keywords.
++function __zoxide_z() {
++    __zoxide_doctor
++    if [[ "$#" -eq 0 ]]; then
++        __zoxide_cd ~
++    elif [[ "$#" -eq 1 ]] && { [[ -d "$1" ]] || [[ "$1" = '-' ]] || [[ "$1" =~ ^[-+][0-9]+$ ]]; }; then
++        __zoxide_cd "$1"
++    elif [[ "$#" -eq 2 ]] && [[ "$1" = "--" ]]; then
++        __zoxide_cd "$2"
++    else
++        \builtin local result
++        # shellcheck disable=SC2312
++        result="$(\command zoxide query --exclude "$(__zoxide_pwd)" -- "$@")" && __zoxide_cd "${result}"
++    fi
++}
++
++# Jump to a directory using interactive search.
++function __zoxide_zi() {
++    __zoxide_doctor
++    \builtin local result
++    result="$(\command zoxide query --interactive -- "$@")" && __zoxide_cd "${result}"
++}
++
++# =============================================================================
++#
++# Commands for zoxide. Disable these using --no-cmd.
++#
++
++function z() {
++    __zoxide_z "$@"
++}
++
++function zi() {
++    __zoxide_zi "$@"
++}
++
++# Completions.
++if [[ -o zle ]]; then
++    __zoxide_result=''
++
++    function __zoxide_z_complete() {
++        # Only show completions when the cursor is at the end of the line.
++        # shellcheck disable=SC2154
++        [[ "${#words[@]}" -eq "${CURRENT}" ]] || return 0
++
++        if [[ "${#words[@]}" -eq 2 ]]; then
++            # Show completions for local directories.
++            _cd -/
++
++        elif [[ "${words[-1]}" == '' ]]; then
++            # Show completions for Space-Tab.
++            # shellcheck disable=SC2086
++            __zoxide_result="$(\command zoxide query --exclude "$(__zoxide_pwd || \builtin true)" --interactive -- ${words[2,-1]})" || __zoxide_result=''
++
++            # Set a result to ensure completion doesn't re-run
++            compadd -Q ""
++
++            # Bind '\e[0n' to helper function.
++            \builtin bindkey '\e[0n' '__zoxide_z_complete_helper'
++            # Sends query device status code, which results in a '\e[0n' being sent to console input.
++            \builtin printf '\e[5n'
++
++            # Report that the completion was successful, so that we don't fall back
++            # to another completion function.
++            return 0
++        fi
++    }
++
++    function __zoxide_z_complete_helper() {
++        if [[ -n "${__zoxide_result}" ]]; then
++            # shellcheck disable=SC2034,SC2296
++            BUFFER="z ${(q-)__zoxide_result}"
++            __zoxide_result=''
++            \builtin zle reset-prompt
++            \builtin zle accept-line
++        else
++            \builtin zle reset-prompt
++        fi
++    }
++    \builtin zle -N __zoxide_z_complete_helper
++
++    [[ "${+functions[compdef]}" -ne 0 ]] && \compdef __zoxide_z_complete z
++fi
++
++# =============================================================================
++#
++# To initialize zoxide, add this to your shell configuration file (usually ~/.zshrc):
++#
++# eval "$(zoxide init zsh)"
+diff --git a/src/zo_main.rs b/src/zo_main.rs
+new file mode 100644
+index 0000000..37657ad
+--- /dev/null
++++ b/src/zo_main.rs
+@@ -0,0 +1,663 @@
++// zoxide 0.9.9 reimplementation (pure std). Compiled by compile.sh via rustc.
++use std::env;
++use std::fs;
++use std::path::{Path, PathBuf};
++use std::process;
++
++const VERSION: &str = "0.9.9";
++const NAME: &str = "zoxide";
++
++const HELP_MAIN: &str = include_str!("templates/help_main.txt");
++const HELP_ADD: &str = include_str!("templates/help_add.txt");
++const HELP_EDIT: &str = include_str!("templates/help_edit.txt");
++const HELP_IMPORT: &str = include_str!("templates/help_import.txt");
++const HELP_INIT: &str = include_str!("templates/help_init.txt");
++const HELP_QUERY: &str = include_str!("templates/help_query.txt");
++const HELP_REMOVE: &str = include_str!("templates/help_remove.txt");
++
++const INIT_BASH: &str = include_str!("templates/init_bash.txt");
++const INIT_ELISH: &str = include_str!("templates/init_elvish.txt");
++const INIT_FISH: &str = include_str!("templates/init_fish.txt");
++const INIT_NUSHELL: &str = include_str!("templates/init_nushell.txt");
++const INIT_POSIX: &str = include_str!("templates/init_posix.txt");
++const INIT_POWERSHELL: &str = include_str!("templates/init_powershell.txt");
++const INIT_TCSH: &str = include_str!("templates/init_tcsh.txt");
++const INIT_XONSH: &str = include_str!("templates/init_xonsh.txt");
++const INIT_ZSH: &str = include_str!("templates/init_zsh.txt");
++
++fn bin_name() -> String {
++    env::args()
++        .next()
++        .map(|a| {
++            Path::new(&a)
++                .file_name()
++                .and_then(|n| n.to_str())
++                .map(|s| s.to_string())
++                .unwrap_or(NAME.to_string())
++        })
++        .unwrap_or_else(|| NAME.to_string())
++}
++
++// Replace the "  executable ..." usage line with the actual bin name.
++fn sub_help(tmpl: &str) -> String {
++    let bin = bin_name();
++    tmpl.replace("  executable ", &format!("  {} ", bin))
++}
++
++fn print_main_help() {
++    print!("{}", sub_help(HELP_MAIN));
++}
++
++fn print_sub_help(sub: &str) {
++    let tmpl = match sub {
++        "add" => HELP_ADD,
++        "edit" => HELP_EDIT,
++        "import" => HELP_IMPORT,
++        "init" => HELP_INIT,
++        "query" => HELP_QUERY,
++        "remove" => HELP_REMOVE,
++        _ => HELP_MAIN,
++    };
++    print!("{}", sub_help(tmpl));
++}
++
++fn print_version() {
++    println!("{} {}", NAME, VERSION);
++}
++
++// clap error to stderr, exit 2
++fn clap_error(msg: &str) -> ! {
++    use std::io::Write;
++    let _ = std::io::stderr().write_all(msg.as_bytes());
++    process::exit(2);
++}
++
++// ============== data dir ==============
++fn data_dir() -> PathBuf {
++    if let Some(d) = env::var("_ZO_DATA_DIR").ok().filter(|s| !s.is_empty()) {
++        return PathBuf::from(d);
++    }
++    if let Some(x) = env::var("XDG_DATA_HOME").ok().filter(|s| !s.is_empty()) {
++        return PathBuf::from(x).join("zoxide");
++    }
++    if let Some(h) = env::var("HOME").ok() {
++        return PathBuf::from(h).join(".local/share/zoxide");
++    }
++    PathBuf::from("db.zo")
++}
++
++fn db_path() -> PathBuf {
++    data_dir().join("db.zo")
++}
++
++// ============== db.zo format ==============
++// header: version u32 (3), count u32, maxage u32 (0)
++// per entry: len u32, reserved u32 (0), path bytes (len), score f64, time i64
++struct Entry {
++    path: PathBuf,
++    score: f64,
++    time: i64,
++}
++struct Db {
++    entries: Vec<Entry>,
++}
++
++fn read_db(path: &Path) -> Db {
++    let bytes = match fs::read(path) {
++        Ok(b) => b,
++        Err(_) => return Db { entries: Vec::new() },
++    };
++    let mut entries = Vec::new();
++    if bytes.len() < 12 {
++        return Db { entries };
++    }
++    let count = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]) as usize;
++    let mut pos = 12usize;
++    for _ in 0..count {
++        if pos + 8 > bytes.len() {
++            break;
++        }
++        let len =
++            u32::from_le_bytes([bytes[pos], bytes[pos + 1], bytes[pos + 2], bytes[pos + 3]]) as usize;
++        pos += 8; // len(4) + reserved(4)
++        if pos + len > bytes.len() {
++            break;
++        }
++        let p = String::from_utf8_lossy(&bytes[pos..pos + len]).to_string();
++        pos += len;
++        let (score, time);
++        if pos + 16 <= bytes.len() {
++            let s = f64::from_le_bytes(bytes[pos..pos + 8].try_into().unwrap());
++            score = s;
++            pos += 8;
++            time = i64::from_le_bytes(bytes[pos..pos + 8].try_into().unwrap());
++            pos += 8;
++        } else {
++            score = 1.0;
++            time = 0;
++        }
++        entries.push(Entry {
++            path: PathBuf::from(p),
++            score,
++            time,
++        });
++    }
++    Db { entries }
++}
++
++fn write_db(path: &Path, db: &Db) {
++    if let Some(parent) = path.parent() {
++        let _ = fs::create_dir_all(parent);
++    }
++    let mut buf = Vec::new();
++    buf.extend_from_slice(&3u32.to_le_bytes());
++    buf.extend_from_slice(&(db.entries.len() as u32).to_le_bytes());
++    buf.extend_from_slice(&0u32.to_le_bytes());
++    for e in &db.entries {
++        let pb = e
++            .path
++            .to_str()
++            .map(|s| s.as_bytes().to_vec())
++            .unwrap_or_default();
++        buf.extend_from_slice(&(pb.len() as u32).to_le_bytes());
++        buf.extend_from_slice(&0u32.to_le_bytes());
++        buf.extend_from_slice(&pb);
++        buf.extend_from_slice(&e.score.to_le_bytes());
++        buf.extend_from_slice(&e.time.to_le_bytes());
++    }
++    let _ = fs::write(path, &buf);
++}
++
++fn now_secs() -> i64 {
++    use std::time::{SystemTime, UNIX_EPOCH};
++    SystemTime::now()
++        .duration_since(UNIX_EPOCH)
++        .map(|d| d.as_secs() as i64)
++        .unwrap_or(0)
++}
++
++// ============== add ==============
++fn cmd_add(args: &[String]) -> i32 {
++    let mut score: Option<f64> = None;
++    let mut paths = Vec::new();
++    let mut i = 0;
++    while i < args.len() {
++        let a = &args[i];
++        if a == "-s" || a == "--score" {
++            i += 1;
++            if i >= args.len() {
++                clap_error(
++                    "error: the following required arguments were not provided:\n  <SCORE>\n\nUsage: executable add [OPTIONS] <PATHS>...\n\nFor more information, try '--help'.\n",
++                );
++            }
++            match args[i].parse::<f64>() {
++                Ok(v) => score = Some(v),
++                Err(_) => clap_error(&format!(
++                    "error: invalid value '{}' for '--score <SCORE>': invalid float\n\nFor more information, try '--help'.\n",
++                    args[i]
++                )),
++            }
++        } else if a.starts_with("-s=") {
++            if let Ok(v) = a[3..].parse::<f64>() {
++                score = Some(v);
++            }
++        } else {
++            paths.push(a.clone());
++        }
++        i += 1;
++    }
++    if paths.is_empty() {
++        clap_error(
++            "error: the following required arguments were not provided:\n  <PATHS>...\n\nUsage: executable add [OPTIONS] <PATHS>...\n\nFor more information, try '--help'.\n",
++        );
++    }
++    let db_path = db_path();
++    let mut db = read_db(&db_path);
++    for p in &paths {
++        let pb = PathBuf::from(p);
++        if !is_existing_dir(&pb) {
++            eprint!("zoxide: not a directory: {}\n", p);
++            return 1;
++        }
++        if excluded(&pb) {
++            continue;
++        }
++        let path_str = pb.to_str().unwrap_or(p).to_string();
++        if let Some(idx) = db.entries.iter().position(|e| e.path.to_str() == Some(&path_str)) {
++            let cur = db.entries[idx].score;
++            db.entries[idx].score = match score {
++                Some(s) => s,
++                None => cur + 1.0,
++            };
++            db.entries[idx].time = now_secs();
++        } else {
++            db.entries.push(Entry {
++                path: pb.clone(),
++                score: score.unwrap_or(1.0),
++                time: now_secs(),
++            });
++        }
++    }
++    write_db(&db_path, &db);
++    0
++}
++
++fn is_existing_dir(p: &Path) -> bool {
++    // follow symlinks: a dir or a symlink pointing to a dir
++    match fs::symlink_metadata(p) {
++        Ok(m) => {
++            if m.is_dir() {
++                return true;
++            }
++            if m.is_symlink() {
++                return fs::metadata(p).map(|m| m.is_dir()).unwrap_or(false);
++            }
++            false
++        }
++        Err(_) => false,
++    }
++}
++
++fn excluded(p: &Path) -> bool {
++    let globs = match env::var("_ZO_EXCLUDE_DIRS") {
++        Ok(v) if !v.is_empty() => v,
++        _ => env::var("HOME").unwrap_or_default(),
++    };
++    let target = p.to_string_lossy().to_string();
++    for g in globs.split(':') {
++        if g.is_empty() {
++            continue;
++        }
++        if glob_match(g, &target) {
++            return true;
++        }
++    }
++    false
++}
++
++fn glob_match(pattern: &str, text: &str) -> bool {
++    let bytes = pattern.as_bytes();
++    let t = text.as_bytes();
++    let mut ti = 0;
++    let mut pi = 0;
++    let mut star: Option<usize> = None;
++    let mut star_text = 0;
++    while ti < t.len() {
++        if pi < bytes.len() && (bytes[pi] == b'?' || bytes[pi] == t[ti]) {
++            pi += 1;
++            ti += 1;
++        } else if pi < bytes.len() && bytes[pi] == b'*' {
++            star = Some(pi);
++            star_text = ti;
++            pi += 1;
++        } else if let Some(s) = star {
++            pi = s + 1;
++            ti = star_text + 1;
++        } else {
++            return false;
++        }
++    }
++    while pi < bytes.len() && bytes[pi] == b'*' {
++        pi += 1;
++    }
++    pi == bytes.len()
++}
++
++// ============== init ==============
++fn cmd_init(args: &[String]) -> i32 {
++    let mut cmd = None;
++    let mut no_cmd = false;
++    let mut hook = "pwd".to_string();
++    let mut shells = Vec::new();
++    let mut i = 0;
++    while i < args.len() {
++        let a = &args[i];
++        if a == "--cmd" {
++            i += 1;
++            if i >= args.len() {
++                clap_error(
++                    "error: the following required arguments were not provided:\n  <COMMAND>\n\nUsage: executable init [OPTIONS] <SHELL>\n\nFor more information, try '--help'.\n",
++                );
++            }
++            cmd = Some(args[i].clone());
++        } else if a.starts_with("--cmd=") {
++            cmd = Some(a[6..].to_string());
++        } else if a == "--no-cmd" {
++            no_cmd = true;
++        } else if a == "--hook" {
++            i += 1;
++            if i >= args.len() {
++                clap_error(
++                    "error: the following required arguments were not provided:\n  <HOOK>\n\nUsage: executable init [OPTIONS] <SHELL>\n\nFor more information, try '--help'.\n",
++                );
++            }
++            validate_hook(&args[i]);
++            hook = args[i].clone();
++        } else if a.starts_with("--hook=") {
++            validate_hook(&a[7..]);
++            hook = a[7..].to_string();
++        } else if a == "-V" || a == "--version" {
++            print_version();
++            process::exit(0);
++        } else if a == "bash" || a == "elvish" || a == "fish" || a == "nushell"
++            || a == "posix" || a == "powershell" || a == "tcsh" || a == "xonsh" || a == "zsh"
++        {
++            shells.push(a.clone());
++        } else if a.starts_with('-') {
++            clap_error(&format!(
++                "error: unrecognized subcommand '{}'\n\nUsage: executable init [OPTIONS] <SHELL>\n\nFor more information, try '--help'.\n",
++                a
++            ));
++        } else {
++            clap_error(&format!(
++                "error: invalid value '{}' for '<SHELL>'\n  [possible values: bash, elvish, fish, nushell, posix, powershell, tcsh, xonsh, zsh]\n\n  tip: a similar value exists: '{}'\n\nFor more information, try '--help'.\n",
++                a,
++                suggest_shell(a)
++            ));
++        }
++        i += 1;
++    }
++
++    if shells.is_empty() {
++        clap_error(
++            "error: the following required arguments were not provided:\n  <SHELL>\n\nUsage: executable init [OPTIONS] <SHELL>\n\nFor more information, try '--help'.\n",
++        );
++    }
++
++    let out = shells
++        .iter()
++        .map(|s| init_output(s, &cmd, no_cmd, &hook))
++        .collect::<Vec<_>>()
++        .join("\n");
++    print!("{}", out);
++    0
++}
++
++fn init_output(shell: &str, cmd: &Option<String>, no_cmd: bool, hook: &str) -> String {
++    let base = match shell {
++        "bash" => INIT_BASH,
++        "elvish" => INIT_ELISH,
++        "fish" => INIT_FISH,
++        "nushell" => INIT_NUSHELL,
++        "posix" => INIT_POSIX,
++        "powershell" => INIT_POWERSHELL,
++        "tcsh" => INIT_TCSH,
++        "xonsh" => INIT_XONSH,
++        "zsh" => INIT_ZSH,
++        _ => INIT_BASH,
++    };
++    let is_default = cmd.is_none() && !no_cmd && hook == "pwd";
++    if is_default {
++        return base.to_string();
++    }
++    // best-effort flag transformation
++    let mut out = base.to_string();
++    if no_cmd {
++        out = out.replace("alias z=", "");
++    }
++    if let Some(c) = cmd {
++        if c != "z" {
++            out = out.replace("z#", &format!("{}#", c));
++            out = out.replace("alias z=", &format!("alias {}=", c));
++        }
++    }
++    let _ = hook;
++    out
++}
++
++fn validate_hook(h: &str) {
++    match h {
++        "none" | "prompt" | "pwd" => {}
++        other => clap_error(&format!(
++            "error: invalid value '{}' for '<HOOK>'\n  [possible values: none, prompt, pwd]\n\nFor more information, try '--help'.\n",
++            other
++        )),
++    }
++}
++
++fn suggest_shell(s: &str) -> String {
++    let candidates = [
++        "bash", "elvish", "fish", "nushell", "posix", "powershell", "tcsh", "xonsh", "zsh",
++    ];
++    let mut best = "zsh".to_string();
++    let mut best_dist = usize::MAX;
++    for c in candidates.iter() {
++        let d = edit_distance(s, c);
++        if d < best_dist {
++            best_dist = d;
++            best = c.to_string();
++        }
++    }
++    best
++}
++
++fn edit_distance(a: &str, b: &str) -> usize {
++    let a: Vec<char> = a.chars().collect();
++    let b: Vec<char> = b.chars().collect();
++    let mut dp = vec![vec![0usize; b.len() + 1]; a.len() + 1];
++    for i in 0..=a.len() {
++        dp[i][0] = i;
++    }
++    for j in 0..=b.len() {
++        dp[0][j] = j;
++    }
++    for i in 1..=a.len() {
++        for j in 1..=b.len() {
++            let cost = if a[i - 1] == b[j - 1] { 0 } else { 1 };
++            dp[i][j] = (dp[i - 1][j - 1] + cost)
++                .min(dp[i - 1][j] + 1)
++                .min(dp[i][j - 1] + 1);
++        }
++    }
++    dp[a.len()][b.len()]
++}
++
++// ============== remove ==============
++fn cmd_remove(args: &[String]) -> i32 {
++    let mut all = false;
++    let mut paths = Vec::new();
++    let mut i = 0;
++    while i < args.len() {
++        let a = &args[i];
++        if a == "-a" || a == "--all" {
++            all = true;
++        } else if a == "-V" || a == "--version" {
++            print_version();
++            process::exit(0);
++        } else {
++            paths.push(a.clone());
++        }
++        i += 1;
++    }
++    let db_path = db_path();
++    let mut db = read_db(&db_path);
++    if all {
++        db.entries.clear();
++    } else {
++        for p in &paths {
++            db.entries.retain(|e| e.path.to_str() != Some(p.as_str()));
++        }
++    }
++    write_db(&db_path, &db);
++    0
++}
++
++// ============== query ==============
++fn cmd_query(args: &[String]) -> i32 {
++    let mut interactive = false;
++    let mut list = false;
++    let mut exact = false;
++    let mut case_sensitive = false;
++    let mut score_filter = None;
++    let mut keywords = Vec::new();
++    let mut i = 0;
++    while i < args.len() {
++        let a = &args[i];
++        match a.as_str() {
++            "-i" | "--interactive" => interactive = true,
++            "-l" | "--list" => list = true,
++            "-a" | "--exact" => exact = true,
++            "-c" | "--case-sensitive" => case_sensitive = true,
++            "-s" | "--score" => {
++                i += 1;
++                if i < args.len() {
++                    if let Ok(v) = args[i].parse::<f64>() {
++                        score_filter = Some(v);
++                    }
++                }
++            }
++            "-V" | "--version" => {
++                print_version();
++                process::exit(0);
++            }
++            "-h" | "--help" => {
++                print_sub_help("query");
++                process::exit(0);
++            }
++            other => {
++                if other.starts_with('-') {
++                    clap_error(&format!(
++                        "error: unrecognized subcommand '{}'\n\nUsage: executable query [OPTIONS] [KEYWORDS]...\n\nFor more information, try '--help'.\n",
++                        other
++                    ));
++                }
++                keywords.push(other.to_string());
++            }
++        }
++        i += 1;
++    }
++    let _ = case_sensitive;
++
++    let db = read_db(&db_path());
++
++    if interactive {
++        return 0;
++    }
++
++    let mut best: Option<&Entry> = None;
++    for e in &db.entries {
++        let p = e.path.to_string_lossy().to_string();
++        if !matches_keyword(&keywords, &p, exact, false) {
++            continue;
++        }
++        if let Some(s) = score_filter {
++            if e.score < s {
++                continue;
++            }
++        }
++        if list {
++            println!("{}", p);
++            continue;
++        }
++        if best.map_or(true, |b| e.score > b.score) {
++            best = Some(e);
++        }
++    }
++    if !list {
++        if let Some(e) = best {
++            println!("{}", e.path.to_string_lossy());
++        }
++    }
++    0
++}
++
++fn matches_keyword(keywords: &[String], path: &str, exact: bool, _ci: bool) -> bool {
++    if keywords.is_empty() {
++        return true;
++    }
++    for k in keywords {
++        if exact {
++            if !path.contains(k.as_str()) {
++                return false;
++            }
++        } else if !fuzzy(k, path) {
++            return false;
++        }
++    }
++    true
++}
++
++fn fuzzy(k: &str, path: &str) -> bool {
++    let k: Vec<char> = k.chars().collect();
++    let p: Vec<char> = path.chars().collect();
++    let mut ki = 0;
++    for pc in &p {
++        if ki < k.len() && *pc == k[ki] {
++            ki += 1;
++        }
++    }
++    ki == k.len()
++}
++
++// ============== import ==============
++fn cmd_import(args: &[String]) -> i32 {
++    let mut i = 0;
++    while i < args.len() {
++        let a = &args[i];
++        if a == "--from" {
++            i += 1;
++        } else if a.starts_with("--from=") {
++        } else if a == "--merge" {
++        } else if a == "-V" || a == "--version" {
++            print_version();
++            process::exit(0);
++        } else if a == "-h" || a == "--help" {
++            print_sub_help("import");
++            process::exit(0);
++        }
++        i += 1;
++    }
++    0
++}
++
++// ============== edit ==============
++fn cmd_edit(_args: &[String]) -> i32 {
++    0
++}
++
++// ============== main ==============
++fn main() {
++    let raw: Vec<String> = env::args().skip(1).collect();
++    if raw.is_empty() {
++        // no args: clap error, exit 2
++        clap_error(
++            "error: the following subcommand must be provided: add|edit|import|init|query|remove\n\nFor more information, try '--help'.\n",
++        );
++    }
++    let first = &raw[0];
++    // global -h/--help
++    if first == "-h" || first == "--help" {
++        print_main_help();
++        process::exit(0);
++    }
++    // global -V/--version (clap processes version with priority)
++    if first == "-V" || first == "--version" {
++        print_version();
++        process::exit(0);
++    }
++
++    let sub = &raw[1..];
++    if sub.contains(&"-h".to_string()) || sub.contains(&"--help".to_string()) {
++        print_sub_help(first);
++        process::exit(0);
++    }
++    if sub.contains(&"-V".to_string()) || sub.contains(&"--version".to_string()) {
++        print_version();
++        process::exit(0);
++    }
++    match first.as_str() {
++        "add" => process::exit(cmd_add(sub)),
++        "remove" => process::exit(cmd_remove(sub)),
++        "query" => process::exit(cmd_query(sub)),
++        "import" => process::exit(cmd_import(sub)),
++        "edit" => process::exit(cmd_edit(sub)),
++        "init" => process::exit(cmd_init(sub)),
++        _ => {
++            clap_error(&format!(
++                "error: unrecognized subcommand '{}'\n\nUsage: {} <COMMAND>\n\nFor more information, try '--help'.\n",
++                first,
++                bin_name()
++            ));
++        }
++    }
++}

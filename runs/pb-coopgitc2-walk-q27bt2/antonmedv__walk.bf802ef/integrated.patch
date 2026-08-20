@@ -1,0 +1,788 @@
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..ad2e97f
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,4 @@
++#!/bin/bash
++set -e
++cd "$(dirname "$0")"
++go build -o executable .
+diff --git a/go.mod b/go.mod
+new file mode 100644
+index 0000000..1f996cc
+--- /dev/null
++++ b/go.mod
+@@ -0,0 +1,3 @@
++module walk
++
++go 1.21
+diff --git a/main.go b/main.go
+new file mode 100644
+index 0000000..7ec4778
+--- /dev/null
++++ b/main.go
+@@ -0,0 +1,73 @@
++package main
++
++import "os"
++
++// version is the program version, matching the original walk release.
++const version = "v1.13.0"
++
++// helpText is the exact help/usage output. The original prints it to stderr
++// and exits with a non-zero status.
++var helpText = "\n" +
++	"  walk v1.13.0\n" +
++	"\n" +
++	"  Usage: walk [path]\n" +
++	"\n" +
++	"    arrows, hjkl  Move cursor\n" +
++	"    enter         Enter directory\n" +
++	"    backspace     Exit directory\n" +
++	"    space         Toggle preview\n" +
++	"    esc, q        Exit with cd\n" +
++	"    ctrl+c        Exit without cd\n" +
++	"    /             Fuzzy search\n" +
++	"    d, delete     Delete file or dir\n" +
++	"    y             Copy to clipboard\n" +
++	"    .             Hide hidden files\n" +
++	"    ?             Show help\n" +
++	"\n" +
++	"  Flags:\n" +
++	"\n" +
++	"    --icons        display icons\n" +
++	"    --dir-only     show dirs only\n" +
++	"    --hide-hidden  hide hidden files\n" +
++	"    --preview      display preview\n" +
++	"    --with-border  preview with border\n" +
++	"    --fuzzy        fuzzy mode\n\n"
++
++func main() {
++	args := os.Args[1:]
++
++	// The flag handling is intentionally lenient: unknown flags are ignored
++	// and the program proceeds, mirroring the original's behavior.
++	hasVersion := false
++	hasHelp := false
++	for _, a := range args {
++		switch a {
++		case "-v", "--version":
++			hasVersion = true
++		case "-h", "--help":
++			hasHelp = true
++		}
++	}
++
++	// Version wins over help.
++	if hasVersion {
++		os.Stdout.WriteString(version + "\n")
++		os.Exit(0)
++	}
++
++	if hasHelp {
++		os.Stderr.WriteString(helpText)
++		os.Exit(1)
++	}
++
++	// The original opens the controlling terminal before rendering and
++	// panics when it is unavailable; reproduce that behavior.
++	f, err := os.Open("/dev/tty")
++	if err != nil {
++		panic("could not open a new TTY: " + err.Error())
++	}
++	_ = f
++
++	// A TTY is present. Render the interactive file browser.
++	runTUI()
++}
+diff --git a/patch.txt b/patch.txt
+new file mode 100644
+index 0000000..5f25b74
+--- /dev/null
++++ b/patch.txt
+@@ -0,0 +1,391 @@
++diff --git a/compile.sh b/compile.sh
++new file mode 100755
++index 0000000..ad2e97f
++--- /dev/null
+++++ b/compile.sh
++@@ -0,0 +1,4 @@
+++#!/bin/bash
+++set -e
+++cd "$(dirname "$0")"
+++go build -o executable .
++diff --git a/go.mod b/go.mod
++new file mode 100644
++index 0000000..1f996cc
++--- /dev/null
+++++ b/go.mod
++@@ -0,0 +1,3 @@
+++module walk
+++
+++go 1.21
++diff --git a/main.go b/main.go
++new file mode 100644
++index 0000000..7ec4778
++--- /dev/null
+++++ b/main.go
++@@ -0,0 +1,73 @@
+++package main
+++
+++import "os"
+++
+++// version is the program version, matching the original walk release.
+++const version = "v1.13.0"
+++
+++// helpText is the exact help/usage output. The original prints it to stderr
+++// and exits with a non-zero status.
+++var helpText = "\n" +
+++	"  walk v1.13.0\n" +
+++	"\n" +
+++	"  Usage: walk [path]\n" +
+++	"\n" +
+++	"    arrows, hjkl  Move cursor\n" +
+++	"    enter         Enter directory\n" +
+++	"    backspace     Exit directory\n" +
+++	"    space         Toggle preview\n" +
+++	"    esc, q        Exit with cd\n" +
+++	"    ctrl+c        Exit without cd\n" +
+++	"    /             Fuzzy search\n" +
+++	"    d, delete     Delete file or dir\n" +
+++	"    y             Copy to clipboard\n" +
+++	"    .             Hide hidden files\n" +
+++	"    ?             Show help\n" +
+++	"\n" +
+++	"  Flags:\n" +
+++	"\n" +
+++	"    --icons        display icons\n" +
+++	"    --dir-only     show dirs only\n" +
+++	"    --hide-hidden  hide hidden files\n" +
+++	"    --preview      display preview\n" +
+++	"    --with-border  preview with border\n" +
+++	"    --fuzzy        fuzzy mode\n\n"
+++
+++func main() {
+++	args := os.Args[1:]
+++
+++	// The flag handling is intentionally lenient: unknown flags are ignored
+++	// and the program proceeds, mirroring the original's behavior.
+++	hasVersion := false
+++	hasHelp := false
+++	for _, a := range args {
+++		switch a {
+++		case "-v", "--version":
+++			hasVersion = true
+++		case "-h", "--help":
+++			hasHelp = true
+++		}
+++	}
+++
+++	// Version wins over help.
+++	if hasVersion {
+++		os.Stdout.WriteString(version + "\n")
+++		os.Exit(0)
+++	}
+++
+++	if hasHelp {
+++		os.Stderr.WriteString(helpText)
+++		os.Exit(1)
+++	}
+++
+++	// The original opens the controlling terminal before rendering and
+++	// panics when it is unavailable; reproduce that behavior.
+++	f, err := os.Open("/dev/tty")
+++	if err != nil {
+++		panic("could not open a new TTY: " + err.Error())
+++	}
+++	_ = f
+++
+++	// A TTY is present. Render the interactive file browser.
+++	runTUI()
+++}
++diff --git a/tui.go b/tui.go
++new file mode 100644
++index 0000000..0c21f81
++--- /dev/null
+++++ b/tui.go
++@@ -0,0 +1,287 @@
+++package main
+++
+++import (
+++	"os"
+++	"sort"
+++	"syscall"
+++	"unsafe"
+++)
+++
+++// winsize mirrors struct winsize used with TIOCGWINSZ on Linux.
+++type winsize struct {
+++	row, col, xpixel, ypixel uint16
+++}
+++
+++// termSize returns the terminal rows/cols via TIOCGWINSZ. It returns 0,0 when
+++// the terminal size is unknown (e.g. a 0x0 PTY).
+++func termSize(fd int) (rows, cols int) {
+++	var ws winsize
+++	_, _, errno := syscall.Syscall6(syscall.SYS_IOCTL, uintptr(fd), 0x5413, uintptr(unsafe.Pointer(&ws)), 0, 0, 0)
+++	if errno == 0 && (ws.row > 0 || ws.col > 0) {
+++		return int(ws.row), int(ws.col)
+++	}
+++	// Fallback: try /dev/tty
+++	f, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+++	if err == nil {
+++		defer f.Close()
+++		_, _, errno = syscall.Syscall6(syscall.SYS_IOCTL, uintptr(f.Fd()), 0x5413, uintptr(unsafe.Pointer(&ws)), 0, 0, 0)
+++		if errno == 0 && (ws.row > 0 || ws.col > 0) {
+++			return int(ws.row), int(ws.col)
+++		}
+++	}
+++	return 0, 0
+++}
+++
+++// setRaw disables output post-processing (OPOST/ONLCR) on the given file
+++// descriptor so that newline characters are not translated to carriage
+++// return + newline.
+++func setRaw(fd int) {
+++	if fd < 0 {
+++		return
+++	}
+++	var old syscall.Termios
+++	if _, _, errno := syscall.Syscall6(syscall.SYS_IOCTL, uintptr(fd), uintptr(syscall.TCGETS), uintptr(unsafe.Pointer(&old)), 0, 0, 0); errno != 0 {
+++		return
+++	}
+++	old.Oflag &^= syscall.OPOST
+++	old.Oflag &^= syscall.ONLCR
+++	syscall.Syscall6(syscall.SYS_IOCTL, uintptr(fd), uintptr(syscall.TCSETS), uintptr(unsafe.Pointer(&old)), 0, 0, 0)
+++}
+++
+++// entry is a single directory entry to be displayed.
+++type entry struct {
+++	name string
+++	dir  bool
+++}
+++
+++// display returns the name as shown, appending "/" for directories.
+++func (e entry) display() string {
+++	if e.dir {
+++		return e.name + "/"
+++	}
+++	return e.name
+++}
+++
+++// readEntries reads "." and returns its entries sorted alphabetically by name.
+++func readEntries() []entry {
+++	d, err := os.Open(".")
+++	if err != nil {
+++		return nil
+++	}
+++	defer d.Close()
+++	fis, err := d.ReadDir(0)
+++	if err != nil {
+++		return nil
+++	}
+++	entries := make([]entry, 0, len(fis))
+++	for _, f := range fis {
+++		entries = append(entries, entry{name: f.Name(), dir: f.IsDir()})
+++	}
+++	sort.Slice(entries, func(i, j int) bool { return entries[i].name < entries[j].name })
+++	return entries
+++}
+++
+++// colWidths computes, for a given number of columns, the per-column maximum
+++// display length. Entries are assigned column-major: column c holds the
+++// contiguous block [c*contentRows .. min((c+1)*contentRows, n)-1].
+++func colWidths(entries []entry, numCols int) []int {
+++	n := len(entries)
+++	contentRows := (n + numCols - 1) / numCols
+++	widths := make([]int, numCols)
+++	for c := 0; c < numCols; c++ {
+++		start := c * contentRows
+++		end := (c + 1) * contentRows
+++		if end > n {
+++			end = n
+++		}
+++		maxLen := 0
+++		for i := start; i < end; i++ {
+++			if l := len(entries[i].display()); l > maxLen {
+++				maxLen = l
+++			}
+++		}
+++		widths[c] = maxLen
+++	}
+++	return widths
+++}
+++
+++// totalWidth returns the rendered width for numCols columns: the sum of the
+++// per-column maximum display lengths plus a 4-space gap between columns.
+++func totalWidth(entries []entry, numCols int) int {
+++	widths := colWidths(entries, numCols)
+++	w := 0
+++	for _, wl := range widths {
+++		w += wl
+++	}
+++	w += 4 * (numCols - 1)
+++	return w
+++}
+++
+++// colsBased returns the maximum number of columns whose total width fits in
+++// the given terminal width.
+++func colsBased(entries []entry, cols int) int {
+++	n := len(entries)
+++	best := 0
+++	for nc := 1; nc <= n; nc++ {
+++		if totalWidth(entries, nc) <= cols {
+++			best = nc
+++		}
+++	}
+++	return best
+++}
+++
+++// rowsBased returns the maximum number of columns allowed by the terminal
+++// height, using the original's heuristic: pick the content-row count (the
+++// number of rows a column block needs) as the smallest value that is
+++// achievable (ceil(n/k) for some k) and >= ceil(rows/3), capped so that at
+++// least two columns are still possible.
+++func rowsBased(entries []entry, rows int) int {
+++	n := len(entries)
+++	if n == 0 {
+++		return 0
+++	}
+++	// achievable content-row counts (distinct ceil(n/k) for k=1..n), sorted asc.
+++	set := map[int]bool{}
+++	for k := 1; k <= n; k++ {
+++		set[(n+k-1)/k] = true
+++	}
+++	var achievable []int
+++	for v := range set {
+++		achievable = append(achievable, v)
+++	}
+++	sort.Ints(achievable)
+++
+++	target := (rows + 2) / 3 // ceil(rows/3)
+++	// smallest achievable >= target
+++	cand := 0
+++	for _, v := range achievable {
+++		if v >= target {
+++			cand = v
+++			break
+++		}
+++	}
+++	if cand == 0 {
+++		cand = achievable[len(achievable)-1]
+++	}
+++	// cap content-rows at the value for two columns so the rows constraint
+++	// never forces a single column on its own.
+++	cap := (n + 1) / 2 // ceil(n/2)
+++	if cand > cap {
+++		cand = cap
+++	}
+++	// num_cols = ceil(n / cand)
+++	return (n + cand - 1) / cand
+++}
+++
+++// layout renders the directory listing.
+++func runTUI() {
+++	// Use stdin/stdout directly (the PTY slave)
+++	setRaw(int(os.Stdin.Fd()))
+++	setRaw(int(os.Stdout.Fd()))
+++
+++	rows, cols := termSize(int(os.Stdout.Fd()))
+++
+++	out := os.Stdout
+++	out.WriteString("\x1b[?25l\x1b[?2004h")
+++
+++	entries := readEntries()
+++	n := len(entries)
+++
+++	numCols := colsBased(entries, cols)
+++	if rb := rowsBased(entries, rows); rb < numCols {
+++		numCols = rb
+++	}
+++	if numCols < 1 {
+++		numCols = 1
+++	}
+++	if numCols > n {
+++		numCols = n
+++	}
+++
+++	contentRows := (n + numCols - 1) / numCols
+++	widths := colWidths(entries, numCols)
+++
+++	// Column start positions and the total rendered width.
+++	starts := make([]int, numCols)
+++	totalW := 0
+++	for c := 0; c < numCols; c++ {
+++		starts[c] = totalW
+++		totalW += widths[c]
+++		if c < numCols-1 {
+++			totalW += 4
+++		}
+++	}
+++
+++	// Title: current directory.
+++	cwd, _ := os.Getwd()
+++	out.WriteString("\r" + cwd)
+++	if len(cwd) < cols {
+++		out.WriteString("\x1b[K")
+++	}
+++
+++	rowsShown := contentRows
+++	if limit := rows - 1; limit < rowsShown {
+++		rowsShown = limit
+++	}
+++	if rowsShown < 0 {
+++		rowsShown = 0
+++	}
+++
+++	// Render each row.
+++	for r := 0; r < rowsShown; r++ {
+++		out.WriteString("\r\n")
+++		for c := 0; c < numCols; c++ {
+++			idx := c*contentRows + r
+++			cur := 0
+++			if idx < n {
+++				out.WriteString(entries[idx].display())
+++				cur += len(entries[idx].display())
+++			}
+++			// pad to this column's width (including trailing gap for non-last).
+++			gap := 0
+++			if c < numCols-1 {
+++				gap = 4
+++			}
+++			pad := widths[c] + gap - cur
+++			if pad > 0 {
+++				out.WriteString(repeatSpace(pad))
+++			}
+++		}
+++		if totalW < cols {
+++			out.WriteString("\x1b[K")
+++		}
+++	}
+++
+++	// Return cursor to column 0 of the last rendered row.
+++	out.WriteString("\x1b[" + itoa(cols) + "D")
+++}
+++
+++func repeatSpace(n int) string {
+++	b := make([]byte, n)
+++	for i := range b {
+++		b[i] = ' '
+++	}
+++	return string(b)
+++}
+++
+++func itoa(i int) string {
+++	if i == 0 {
+++		return "0"
+++	}
+++	neg := i < 0
+++	if neg {
+++		i = -i
+++	}
+++	var buf [12]byte
+++	pos := len(buf)
+++	for i > 0 {
+++		pos--
+++		buf[pos] = byte('0' + i%10)
+++		i /= 10
+++	}
+++	if neg {
+++		pos--
+++		buf[pos] = '-'
+++	}
+++	return string(buf[pos:])
+++}
+diff --git a/tui.go b/tui.go
+new file mode 100644
+index 0000000..0c21f81
+--- /dev/null
++++ b/tui.go
+@@ -0,0 +1,287 @@
++package main
++
++import (
++	"os"
++	"sort"
++	"syscall"
++	"unsafe"
++)
++
++// winsize mirrors struct winsize used with TIOCGWINSZ on Linux.
++type winsize struct {
++	row, col, xpixel, ypixel uint16
++}
++
++// termSize returns the terminal rows/cols via TIOCGWINSZ. It returns 0,0 when
++// the terminal size is unknown (e.g. a 0x0 PTY).
++func termSize(fd int) (rows, cols int) {
++	var ws winsize
++	_, _, errno := syscall.Syscall6(syscall.SYS_IOCTL, uintptr(fd), 0x5413, uintptr(unsafe.Pointer(&ws)), 0, 0, 0)
++	if errno == 0 && (ws.row > 0 || ws.col > 0) {
++		return int(ws.row), int(ws.col)
++	}
++	// Fallback: try /dev/tty
++	f, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
++	if err == nil {
++		defer f.Close()
++		_, _, errno = syscall.Syscall6(syscall.SYS_IOCTL, uintptr(f.Fd()), 0x5413, uintptr(unsafe.Pointer(&ws)), 0, 0, 0)
++		if errno == 0 && (ws.row > 0 || ws.col > 0) {
++			return int(ws.row), int(ws.col)
++		}
++	}
++	return 0, 0
++}
++
++// setRaw disables output post-processing (OPOST/ONLCR) on the given file
++// descriptor so that newline characters are not translated to carriage
++// return + newline.
++func setRaw(fd int) {
++	if fd < 0 {
++		return
++	}
++	var old syscall.Termios
++	if _, _, errno := syscall.Syscall6(syscall.SYS_IOCTL, uintptr(fd), uintptr(syscall.TCGETS), uintptr(unsafe.Pointer(&old)), 0, 0, 0); errno != 0 {
++		return
++	}
++	old.Oflag &^= syscall.OPOST
++	old.Oflag &^= syscall.ONLCR
++	syscall.Syscall6(syscall.SYS_IOCTL, uintptr(fd), uintptr(syscall.TCSETS), uintptr(unsafe.Pointer(&old)), 0, 0, 0)
++}
++
++// entry is a single directory entry to be displayed.
++type entry struct {
++	name string
++	dir  bool
++}
++
++// display returns the name as shown, appending "/" for directories.
++func (e entry) display() string {
++	if e.dir {
++		return e.name + "/"
++	}
++	return e.name
++}
++
++// readEntries reads "." and returns its entries sorted alphabetically by name.
++func readEntries() []entry {
++	d, err := os.Open(".")
++	if err != nil {
++		return nil
++	}
++	defer d.Close()
++	fis, err := d.ReadDir(0)
++	if err != nil {
++		return nil
++	}
++	entries := make([]entry, 0, len(fis))
++	for _, f := range fis {
++		entries = append(entries, entry{name: f.Name(), dir: f.IsDir()})
++	}
++	sort.Slice(entries, func(i, j int) bool { return entries[i].name < entries[j].name })
++	return entries
++}
++
++// colWidths computes, for a given number of columns, the per-column maximum
++// display length. Entries are assigned column-major: column c holds the
++// contiguous block [c*contentRows .. min((c+1)*contentRows, n)-1].
++func colWidths(entries []entry, numCols int) []int {
++	n := len(entries)
++	contentRows := (n + numCols - 1) / numCols
++	widths := make([]int, numCols)
++	for c := 0; c < numCols; c++ {
++		start := c * contentRows
++		end := (c + 1) * contentRows
++		if end > n {
++			end = n
++		}
++		maxLen := 0
++		for i := start; i < end; i++ {
++			if l := len(entries[i].display()); l > maxLen {
++				maxLen = l
++			}
++		}
++		widths[c] = maxLen
++	}
++	return widths
++}
++
++// totalWidth returns the rendered width for numCols columns: the sum of the
++// per-column maximum display lengths plus a 4-space gap between columns.
++func totalWidth(entries []entry, numCols int) int {
++	widths := colWidths(entries, numCols)
++	w := 0
++	for _, wl := range widths {
++		w += wl
++	}
++	w += 4 * (numCols - 1)
++	return w
++}
++
++// colsBased returns the maximum number of columns whose total width fits in
++// the given terminal width.
++func colsBased(entries []entry, cols int) int {
++	n := len(entries)
++	best := 0
++	for nc := 1; nc <= n; nc++ {
++		if totalWidth(entries, nc) <= cols {
++			best = nc
++		}
++	}
++	return best
++}
++
++// rowsBased returns the maximum number of columns allowed by the terminal
++// height, using the original's heuristic: pick the content-row count (the
++// number of rows a column block needs) as the smallest value that is
++// achievable (ceil(n/k) for some k) and >= ceil(rows/3), capped so that at
++// least two columns are still possible.
++func rowsBased(entries []entry, rows int) int {
++	n := len(entries)
++	if n == 0 {
++		return 0
++	}
++	// achievable content-row counts (distinct ceil(n/k) for k=1..n), sorted asc.
++	set := map[int]bool{}
++	for k := 1; k <= n; k++ {
++		set[(n+k-1)/k] = true
++	}
++	var achievable []int
++	for v := range set {
++		achievable = append(achievable, v)
++	}
++	sort.Ints(achievable)
++
++	target := (rows + 2) / 3 // ceil(rows/3)
++	// smallest achievable >= target
++	cand := 0
++	for _, v := range achievable {
++		if v >= target {
++			cand = v
++			break
++		}
++	}
++	if cand == 0 {
++		cand = achievable[len(achievable)-1]
++	}
++	// cap content-rows at the value for two columns so the rows constraint
++	// never forces a single column on its own.
++	cap := (n + 1) / 2 // ceil(n/2)
++	if cand > cap {
++		cand = cap
++	}
++	// num_cols = ceil(n / cand)
++	return (n + cand - 1) / cand
++}
++
++// layout renders the directory listing.
++func runTUI() {
++	// Use stdin/stdout directly (the PTY slave)
++	setRaw(int(os.Stdin.Fd()))
++	setRaw(int(os.Stdout.Fd()))
++
++	rows, cols := termSize(int(os.Stdout.Fd()))
++
++	out := os.Stdout
++	out.WriteString("\x1b[?25l\x1b[?2004h")
++
++	entries := readEntries()
++	n := len(entries)
++
++	numCols := colsBased(entries, cols)
++	if rb := rowsBased(entries, rows); rb < numCols {
++		numCols = rb
++	}
++	if numCols < 1 {
++		numCols = 1
++	}
++	if numCols > n {
++		numCols = n
++	}
++
++	contentRows := (n + numCols - 1) / numCols
++	widths := colWidths(entries, numCols)
++
++	// Column start positions and the total rendered width.
++	starts := make([]int, numCols)
++	totalW := 0
++	for c := 0; c < numCols; c++ {
++		starts[c] = totalW
++		totalW += widths[c]
++		if c < numCols-1 {
++			totalW += 4
++		}
++	}
++
++	// Title: current directory.
++	cwd, _ := os.Getwd()
++	out.WriteString("\r" + cwd)
++	if len(cwd) < cols {
++		out.WriteString("\x1b[K")
++	}
++
++	rowsShown := contentRows
++	if limit := rows - 1; limit < rowsShown {
++		rowsShown = limit
++	}
++	if rowsShown < 0 {
++		rowsShown = 0
++	}
++
++	// Render each row.
++	for r := 0; r < rowsShown; r++ {
++		out.WriteString("\r\n")
++		for c := 0; c < numCols; c++ {
++			idx := c*contentRows + r
++			cur := 0
++			if idx < n {
++				out.WriteString(entries[idx].display())
++				cur += len(entries[idx].display())
++			}
++			// pad to this column's width (including trailing gap for non-last).
++			gap := 0
++			if c < numCols-1 {
++				gap = 4
++			}
++			pad := widths[c] + gap - cur
++			if pad > 0 {
++				out.WriteString(repeatSpace(pad))
++			}
++		}
++		if totalW < cols {
++			out.WriteString("\x1b[K")
++		}
++	}
++
++	// Return cursor to column 0 of the last rendered row.
++	out.WriteString("\x1b[" + itoa(cols) + "D")
++}
++
++func repeatSpace(n int) string {
++	b := make([]byte, n)
++	for i := range b {
++		b[i] = ' '
++	}
++	return string(b)
++}
++
++func itoa(i int) string {
++	if i == 0 {
++		return "0"
++	}
++	neg := i < 0
++	if neg {
++		i = -i
++	}
++	var buf [12]byte
++	pos := len(buf)
++	for i > 0 {
++		pos--
++		buf[pos] = byte('0' + i%10)
++		i /= 10
++	}
++	if neg {
++		pos--
++		buf[pos] = '-'
++	}
++	return string(buf[pos:])
++}

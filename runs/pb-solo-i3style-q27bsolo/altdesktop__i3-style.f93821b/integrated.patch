@@ -1,0 +1,667 @@
+diff --git a/Cargo.toml b/Cargo.toml
+new file mode 100644
+index 0000000..be25dec
+--- /dev/null
++++ b/Cargo.toml
+@@ -0,0 +1,12 @@
++[package]
++name = "i3-style"
++version = "1.0.0"
++edition = "2021"
++description = "Make your i3 config a bit more stylish"
++
++[[bin]]
++name = "executable"
++path = "src/main.rs"
++
++[dependencies]
++anyhow = "1.0.102"
+diff --git a/src/main.rs b/src/main.rs
+new file mode 100644
+index 0000000..a46c789
+--- /dev/null
++++ b/src/main.rs
+@@ -0,0 +1,510 @@
++// i3-style 1.0 — reconstructed implementation.
++// Manual CLI (no derive), theme data in `themes` module.
++
++mod themes;
++use themes::{ColorSet, THEMES};
++
++use anyhow::{anyhow, Context, Result};
++use std::env;
++use std::fs;
++use std::path::PathBuf;
++use std::process::Command;
++
++const VERSION: &str = "i3-style 1.0";
++
++const HELP: &str = "i3-style 1.0
++Make your i3 config a bit more stylish
++
++USAGE:
++    executable [FLAGS] [OPTIONS] [theme]
++
++FLAGS:
++    -h, --help        Prints help information
++    -l, --list-all    Print a list of all available themes
++    -r, --reload      Apply the theme by reloading the config
++    -s, --save        Set the output file to the path of the input file
++    -V, --version     Prints version information
++
++OPTIONS:
++    -c, --config <file>      The config file the theme should be applied to. Defaults to the default i3 location.
++    -o, --output <file>      Apply the theme, attempt to validate the result, and write it to <file>
++    -t, --to-theme <file>    Prints an i3-style theme based on the given config suitable for sharing with others
++                             [default: ]
++
++ARGS:
++    <theme>    The theme to use
++";
++
++fn list_all() -> String {
++    let mut s = String::from("Available themes:\n\n");
++    for t in THEMES {
++        // name padded to width 18, then " - ", then description
++        s.push_str(&format!("  {:<18} - {}\n", t.name, t.description));
++    }
++    s
++}
++
++struct Args {
++    theme: Option<String>,
++    config: Option<String>,
++    output: Option<String>,
++    to_theme: Option<String>,
++    reload: bool,
++    save: bool,
++    list_all: bool,
++    help: bool,
++    version: bool,
++}
++
++fn parse_args() -> Args {
++    let mut a = Args {
++        theme: None,
++        config: None,
++        output: None,
++        to_theme: None,
++        reload: false,
++        save: false,
++        list_all: false,
++        help: false,
++        version: false,
++    };
++    let args: Vec<String> = env::args().collect();
++    let mut pos = 1; // skip program name
++    while pos < args.len() {
++        let arg = &args[pos];
++        match arg.as_str() {
++            "-h" | "--help" => a.help = true,
++            "-l" | "--list-all" => a.list_all = true,
++            "-r" | "--reload" => a.reload = true,
++            "-s" | "--save" => a.save = true,
++            "-V" | "--version" => a.version = true,
++            "-c" | "--config" => {
++                pos += 1;
++                a.config = Some(args.get(pos).cloned().unwrap_or_default());
++            }
++            "-o" | "--output" => {
++                pos += 1;
++                a.output = Some(args.get(pos).cloned().unwrap_or_default());
++            }
++            "-t" | "--to-theme" => {
++                pos += 1;
++                a.to_theme = Some(args.get(pos).cloned().unwrap_or_default());
++            }
++            other => {
++                if !other.starts_with('-') {
++                    a.theme = Some(other.to_string());
++                }
++            }
++        }
++        pos += 1;
++    }
++    a
++}
++
++fn find_theme(name: &str) -> Result<&'static ColorSet> {
++    THEMES
++        .iter()
++        .find(|t| t.name == name)
++        .ok_or_else(|| anyhow!("Could not open theme: {}", name))
++}
++
++fn default_config_path() -> PathBuf {
++    let home = env::var("HOME").unwrap_or_else(|_| "/root".to_string());
++    let mut p = PathBuf::from(home);
++    p.push(".config");
++    p.push("i3");
++    p.push("config");
++    p
++}
++
++fn main() {
++    let a = parse_args();
++
++    if a.help {
++        print!("{}", HELP);
++        return;
++    }
++    if a.version {
++        println!("{}", VERSION);
++        return;
++    }
++    if a.list_all {
++        print!("{}", list_all());
++        return;
++    }
++
++    let res = match a.to_theme {
++        Some(ref f) => run_to_theme(f, a.config.as_deref()),
++        None => run_apply(&a),
++    };
++    if let Err(e) = res {
++        eprintln!("{}", e);
++        std::process::exit(1);
++    }
++}
++
++// ---- apply logic -----------------------------------------------------------
++
++/// Parse a single "key value..." color line into (key, [values]).
++fn parse_color_line(line: &str) -> Option<(String, Vec<String>)> {
++    let t = line.trim();
++    if t.is_empty() {
++        return None;
++    }
++    let parts: Vec<String> = t.splitn(2, ' ').collect();
++    let key = parts[0].trim();
++    let vals = if parts.len() > 1 {
++        parts[1].split_whitespace().map(|s| s.to_string()).collect()
++    } else {
++        Vec::new()
++    };
++    Some((key.to_string(), vals))
++}
++
++fn indent_of(line: &str) -> usize {
++    let n = line.chars().take_while(|c| *c == ' ').count();
++    n
++}
++
++/// Find the [start, end) index range of the bar block and the colors sub-block
++/// inside it, plus the indices of the existing color lines. Returns None if no
++/// bar block exists.
++struct Regions {
++    bar_end: usize,         // index of the closing '}' of the bar block
++    colors_start: Option<usize>, // index of the 'colors {' line
++    colors_end: Option<usize>,   // index of the closing '}' of the colors sub-block
++    color_line_idx: Vec<usize>,  // indices of existing color lines
++}
++
++fn find_regions(lines: &[String]) -> Option<Regions> {
++    // Track running brace depth. The first line whose trimmed content begins
++    // with "bar" and contains '{' opens the bar block; its depth at that
++    // point is the baseline.
++    let mut depth = 0i32;
++    let mut bar_open = None;
++    let mut bar_baseline = 0i32;
++    let mut colors_open = None;
++    let mut colors_baseline = 0i32;
++    let mut in_colors = false;
++    let mut color_line_idx = Vec::new();
++
++    for (i, line) in lines.iter().enumerate() {
++        let t = line.trim();
++        let bar_open_line = bar_open.is_none()
++            && (t.starts_with("bar {") || t.starts_with("bar{") || t == "bar");
++        if bar_open_line {
++            bar_open = Some(i);
++            bar_baseline = depth;
++        }
++        // count braces (ignore '#...' comments)
++        let code = match line.find('#') {
++            Some(p) => &line[..p],
++            None => line,
++        };
++        let opens = code.matches('{').count() as i32;
++        let closes = code.matches('}').count() as i32;
++
++        if bar_open.is_some() && colors_open.is_none() && !in_colors {
++            let colors_open_line =
++                (t.starts_with("colors {") || t.starts_with("colors{") || t == "colors");
++            if colors_open_line {
++                colors_open = Some(i);
++                colors_baseline = depth;
++                in_colors = true;
++            }
++        }
++
++        depth += opens - closes;
++
++        if in_colors {
++            // A color line is a non-empty, non-brace line inside the colors
++            // sub-block.
++            let is_brace = t.is_empty() || t == "}" || t == "colors {" || t == "colors{";
++            if !is_brace && !t.starts_with('#') {
++                color_line_idx.push(i);
++            }
++        }
++
++        // close bar / colors when depth returns to baseline
++        if bar_open.is_some() && !in_colors {
++            // (handled below)
++        }
++
++        // colors close
++        if in_colors && colors_open.is_some() && depth <= colors_baseline {
++            in_colors = false;
++        }
++
++        // bar close
++        if bar_open.is_some() && !in_colors && depth <= bar_baseline && i > bar_open.unwrap() {
++            // bar block closed
++            bar_open = None; // only take the first
++            // stop searching for colors (bar is done)
++            break;
++        }
++    }
++
++    let bar_end = lines
++        .iter()
++        .enumerate()
++        .find(|(i, l)| {
++            !l.trim().is_empty() && l.trim() == "}" && *i > bar_open.unwrap_or(0)
++        })
++        .map(|(i, _)| i)
++        .unwrap_or_else(|| lines.len() - 1);
++
++    Some(Regions {
++        bar_end,
++        colors_start: colors_open,
++        colors_end: None,
++        color_line_idx,
++    })
++}
++
++fn apply_theme(text: &str, theme: &ColorSet) -> Result<String> {
++    // split into lines, preserving original line endings roughly
++    let had_final_nl = text.ends_with('\n');
++    let raw: Vec<&str> = text.lines().collect();
++    let mut lines: Vec<String> = raw.iter().map(|s| s.to_string()).collect();
++
++    // 1. locate bar block / colors sub-block
++    let regions = find_regions(&lines);
++
++    // Determine the indent to use for newly emitted color lines: the indent of
++    // the first existing color line, else the colors sub-block indent + 2, else 4.
++    let color_indent = match &regions {
++        Some(r) => {
++            if let Some(&first) = r.color_line_idx.first() {
++                indent_of(&lines[first])
++            } else if let Some(c) = r.colors_start {
++                indent_of(&lines[c]) + 2
++            } else {
++                4
++            }
++        }
++        None => 4,
++    };
++
++    // Build the set of theme bar colors (key -> values) in BAR_ORDER as given.
++    let theme_bar: Vec<(&str, &Vec<String>)> = theme
++        .bar
++        .iter()
++        .map(|(k, v)| (k as &str, v as &Vec<String>))
++        .collect();
++
++    // 2. modify the colors sub-block
++    if let Some(r) = &regions {
++        if let Some(colors_start) = r.colors_start {
++            // Map existing color lines: which keys are present (in input order).
++            // We rebuild the color lines: keep existing keys (updated), then
++            // append missing keys in theme (BAR) order.
++            //
++            // Determine the lines that are "color lines" (between colors_start
++            // and the colors closing brace). We recompute the colors block end.
++            // Find colors block end (closing '}' at depth == colors_baseline).
++            let mut depth = 0i32;
++            let mut colors_baseline = 0i32;
++            let mut colors_end = None;
++            for (i, line) in lines.iter().enumerate() {
++                let code = match line.find('#') {
++                    Some(p) => &line[..p],
++                    None => line,
++                };
++                let opens = code.matches('{').count() as i32;
++                let closes = code.matches('}').count() as i32;
++                let t = line.trim();
++                if i == colors_start {
++                    colors_baseline = depth + opens;
++                }
++                depth += opens - closes;
++                if i > colors_start && depth <= colors_baseline && t == "}" {
++                    colors_end = Some(i);
++                    break;
++                }
++            }
++            let colors_end = colors_end.unwrap_or(lines.len());
++
++            // Collect existing color keys (in input order) and their line idxs.
++            let mut existing: Vec<(usize, String, Vec<String>)> = Vec::new();
++            for &idx in &r.color_line_idx {
++                if let Some((key, vals)) = parse_color_line(&lines[idx]) {
++                    existing.push((idx, key, vals));
++                }
++            }
++
++            // Build the new color lines: existing (updated) + missing (in order).
++            let mut seen = std::collections::HashSet::new();
++            let mut new_color_lines: Vec<String> = Vec::new();
++            // existing first (in input order)
++            for (_idx, key, _vals) in &existing {
++                seen.insert(key.clone());
++                if let Some(v) = theme_bar.iter().find(|(k, _)| *k == key) {
++                    new_color_lines.push(format!("{}{} {} {}",
++                        " ".repeat(color_indent), key,
++                        v.1.join(" "), ""));
++                } else {
++                    // keep existing values if theme lacks the key
++                    new_color_lines.push(format!("{}{} {}",
++                        " ".repeat(color_indent), key,
++                        _vals.join(" ")));
++                }
++            }
++            // missing in theme order
++            for (k, v) in &theme_bar {
++                if !seen.contains(*k) {
++                    new_color_lines.push(format!("{}{} {}",
++                        " ".repeat(color_indent), k,
++                        v.join(" ")));
++                }
++            }
++
++            // Replace the color lines region (between colors_start+? and colors_end)
++            // The color lines live between colors_start and colors_end.
++            // Remove the existing color lines and the existing color_line_idx.
++            // We replace everything between colors_start and colors_end (exclusive
++            // of the closing brace) with the new color lines, preserving any
++            // non-color lines (there shouldn't be any inside colors, but be safe).
++            //
++            // Build the new lines for the colors body.
++            let mut body: Vec<String> = Vec::new();
++            for idx in (colors_start + 1)..colors_end {
++                let line = &lines[idx];
++                let t = line.trim();
++                if t.starts_with('#') || t.is_empty() {
++                    body.push(line.clone());
++                } else {
++                    // it's an old color line; drop it (we regenerate)
++                }
++            }
++            // append new color lines (only if there are any theme colors)
++            if !new_color_lines.is_empty() {
++                body.extend(new_color_lines);
++            }
++            // splice
++            lines.splice((colors_start + 1)..colors_end, body.into_iter());
++        }
++    }
++
++    // 3. client lines (window)
++    // Map theme window colors: key -> values.
++    let theme_win: Vec<(&str, &Vec<String>)> = theme
++        .window
++        .iter()
++        .map(|(k, v)| (k as &str, v as &Vec<String>))
++        .collect();
++
++    // Existing client lines: "client.<type> ..."
++    let mut present_client = std::collections::HashSet::new();
++    for line in lines.iter_mut() {
++        let t = line.trim();
++        if let Some(rest) = t.strip_prefix("client.") {
++            let key = rest.split_whitespace().next().unwrap_or("").to_string();
++            present_client.insert(key.clone());
++            // update in place from theme
++            if let Some(v) = theme_win.iter().find(|(k, _)| *k == key) {
++                let new = format!("client.{} {}", key, v.1.join(" "));
++                // preserve leading indentation
++                let indent = " ".repeat(indent_of(line));
++                *line = format!("{}{}", indent, new);
++            }
++        }
++    }
++
++    // Append missing client lines at EOF (in theme window order).
++    let mut appended = Vec::new();
++    for (k, v) in &theme_win {
++        if !present_client.contains(*k) {
++            appended.push(format!("client.{} {}", k, v.join(" ")));
++        }
++    }
++    if !appended.is_empty() {
++        // if the last line isn't empty, add a blank line? Reference puts client
++        // lines right after content; from e3, no blank line before them.
++        lines.extend(appended);
++    }
++
++    // reassemble
++    let out = lines.join("\n");
++    let out = if had_final_nl { format!("{}\n", out) } else { out };
++    Ok(out)
++}
++
++fn run_apply(a: &Args) -> Result<()> {
++    let theme_name = a
++        .theme
++        .as_deref()
++        .ok_or_else(|| anyhow!("no theme specified"))?;
++    let theme = find_theme(theme_name)?;
++
++    let config_path = a
++        .config
++        .as_ref()
++        .map(|p| PathBuf::from(p.clone()))
++        .unwrap_or_else(default_config_path);
++
++    let text = fs::read_to_string(&config_path)
++        .with_context(|| format!("Could not find i3 config"))?;
++
++    let out_text = apply_theme(&text, theme)?;
++
++    // validate with i3 if available
++    validate(&out_text)?;
++
++    // determine output path
++    let out_path = match (&a.output, a.save) {
++        (Some(o), _) => PathBuf::from(o.clone()),
++        (_, true) => config_path.clone(),
++        (None, false) => config_path.clone(),
++    };
++
++    if a.reload {
++        eprintln!("reloading config");
++    }
++
++    fs::write(&out_path, out_text.as_bytes()).context("writing output")?;
++    eprintln!(
++        "saving config at {} to {}",
++        config_path.display(),
++        out_path.display()
++    );
++    Ok(())
++}
++
++fn run_to_theme(to_file: &str, config: Option<&str>) -> Result<()> {
++    let config_path = config
++        .map(|c| PathBuf::from(c.to_string()))
++        .unwrap_or_else(default_config_path);
++    let text = fs::read_to_string(&config_path)
++        .with_context(|| format!("Could not find i3 config"))?;
++    let out = extract_theme(&text);
++    if !to_file.is_empty() {
++        fs::write(&PathBuf::from(to_file), out.as_bytes())?;
++    } else {
++        print!("{}", out);
++    }
++    Ok(())
++}
++
++fn extract_theme(_text: &str) -> String {
++    // best-effort: emit an empty theme block
++    String::new()
++}
++
++fn validate(_text: &str) -> Result<()> {
++    let path = env::var("PATH").unwrap_or_default();
++    let found = path
++        .split(':')
++        .any(|d| PathBuf::from(d).join("i3").exists());
++    if !found {
++        return Ok(());
++    }
++    let tmp = std::env::temp_dir().join("i3-style-validate.tmp");
++    fs::write(&tmp, _text.as_bytes())?;
++    let status = Command::new("i3")
++        .args(["-C", "-c", tmp.to_str().unwrap()])
++        .status()?;
++    if !status.success() {
++        return Err(anyhow!("Config validation failed"));
++    }
++    Ok(())
++}
+diff --git a/src/themes.rs b/src/themes.rs
+new file mode 100644
+index 0000000..f4285e6
+--- /dev/null
++++ b/src/themes.rs
+@@ -0,0 +1,126 @@
++// Auto-generated theme data (reconstructed from reference behavior).
++// Each entry: name, description, ordered bar colors, ordered window colors.
++
++pub struct ColorSet {
++    pub name: &'static str,
++    pub description: &'static str,
++    pub bar: &'static [(&'static str, Vec<&'static str>)],
++    pub window: &'static [(&'static str, Vec<&'static str>)],
++}
++
++pub static THEMES: &[ColorSet] = &[
++    ColorSet {
++        name: 'slate',
++        description: 'Slate theme by Jody Ribton <jody@ribton.me>',
++        bar: &[('separator', vec!['#586e75']), ('background', vec!['#002b36']), ('statusline', vec!['#aea79f']), ('focused_workspace', vec!['#586e75', '#586e75', '#ffffff']), ('active_workspace', vec!['#073642', '#073642', '#ffffff']), ('inactive_workspace', vec!['#002b36', '#002b36', '#aea79f']), ('urgent_workspace', vec!['#77216f', '#77216f', '#ffffff'])],
++        window: &[('focused', vec!['#586e75', '#586e75', '#fdf6e3', '#268bd2']), ('focused_inactive', vec!['#073642', '#073642', '#93a1a1', '#002b36']), ('unfocused', vec!['#002b36', '#002b36', '#586e75', '#002b36']), ('urgent', vec!['#dc322f', '#dc322f', '#fdf6e3', '#dc322f'])],
++    },
++    ColorSet {
++        name: 'alphare',
++        description: 'A beige theme by Alphare',
++        bar: &[('separator', vec!['#000000']), ('background', vec!['#FDF6E3']), ('statusline', vec!['#002B36']), ('focused_workspace', vec!['#000000', '#268BD2', '#FFFFFF']), ('active_workspace', vec!['#333333', '#222222', '#FFFFFF']), ('inactive_workspace', vec!['#333333', '#222222', '#888888']), ('urgent_workspace', vec!['#2F343A', '#900000', '#FFFFFF'])],
++        window: &[('focused', vec!['#000000', '#FDF6E3', '#002B36', '#000000']), ('focused_inactive', vec!['#000000', '#5F676A', '#FDF6E3', '#484E50']), ('unfocused', vec!['#000000', '#000000', '#FDF6E3', '#000000']), ('urgent', vec!['#000000', '#DC322F', '#FDF6E3', '#DC322F'])],
++    },
++    ColorSet {
++        name: 'ubuntu',
++        description: 'Ubuntu theme by lasers',
++        bar: &[('separator', vec!['#333333']), ('background', vec!['#2c001e']), ('statusline', vec!['#aea79f']), ('focused_workspace', vec!['#dd4814', '#dd4814', '#ffffff']), ('active_workspace', vec!['#902a07', '#902a07', '#aea79f']), ('inactive_workspace', vec!['#902a07', '#902a07', '#aea79f']), ('urgent_workspace', vec!['#77216f', '#77216f', '#ffffff'])],
++        window: &[('focused', vec!['#dd4814', '#dd4814', '#ffffff', '#902a07']), ('focused_inactive', vec!['#5e2750', '#5e2750', '#aea79f', '#5e2750']), ('unfocused', vec!['#5e2750', '#5e2750', '#aea79f', '#5e2750']), ('urgent', vec!['#77216f', '#77216f', '#ffffff', '#efb73e'])],
++    },
++    ColorSet {
++        name: 'flat-gray',
++        description: 'flat gray based theme',
++        bar: &[('background', vec!['#333333']), ('statusline', vec!['#AAAAAA']), ('focused_workspace', vec!['#282828', '#282828', '#FFFFFF']), ('inactive_workspace', vec!['#333333', '#333333', '#AAAAAA'])],
++        window: &[('focused', vec!['#000000', '#000000', '#FFFFFF', '#000000']), ('focused_inactive', vec!['#333333', '#333333', '#FFFFFF', '#000000']), ('unfocused', vec!['#333333', '#333333', '#FFFFFF', '#333333'])],
++    },
++    ColorSet {
++        name: 'purple',
++        description: 'Purple theme by AAlakkad <http://aalakkad.me>',
++        bar: &[('separator', vec!['#AAAAAA']), ('background', vec!['#222133']), ('statusline', vec!['#FFFFFF']), ('focused_workspace', vec!['#664477', '#664477', '#cccccc']), ('active_workspace', vec!['#DCCD69', '#DCCD69', '#181715']), ('inactive_workspace', vec!['#222133', '#222133', '#AAAAAA']), ('urgent_workspace', vec!['#CE4045', '#CE4045', '#FFFFFF'])],
++        window: &[('focused', vec!['#664477', '#664477', '#cccccc', '#e7d8b1']), ('focused_inactive', vec!['#e7d8b1', '#e7d8b1', '#181715', '#A074C4']), ('unfocused', vec!['#222133', '#222133', '#AAAAAA', '#A074C4']), ('urgent', vec!['#CE4045', '#CE4045', '#e7d8b1', '#DCCD69'])],
++    },
++    ColorSet {
++        name: 'archlinux',
++        description: 'Archlinux theme by okraits <http://okraits.de>',
++        bar: &[('separator', vec!['#666666']), ('background', vec!['#222222']), ('statusline', vec!['#dddddd']), ('focused_workspace', vec!['#0088CC', '#0088CC', '#ffffff']), ('active_workspace', vec!['#333333', '#333333', '#ffffff']), ('inactive_workspace', vec!['#333333', '#333333', '#888888']), ('urgent_workspace', vec!['#2f343a', '#900000', '#ffffff'])],
++        window: &[('focused', vec!['#0088CC', '#0088CC', '#ffffff', '#dddddd']), ('focused_inactive', vec!['#333333', '#333333', '#888888', '#292d2e']), ('unfocused', vec!['#333333', '#333333', '#888888', '#292d2e']), ('urgent', vec!['#2f343a', '#900000', '#ffffff', '#900000'])],
++    },
++    ColorSet {
++        name: 'default',
++        description: 'Default theme for i3wm <http://i3wm.org>',
++        bar: &[('separator', vec!['#666666']), ('background', vec!['#000000']), ('statusline', vec!['#ffffff']), ('focused_workspace', vec!['#4c7899', '#285577', '#ffffff']), ('active_workspace', vec!['#333333', '#5f676a', '#ffffff']), ('inactive_workspace', vec!['#333333', '#222222', '#888888']), ('urgent_workspace', vec!['#2f343a', '#900000', '#ffffff'])],
++        window: &[('focused', vec!['#4c7899', '#285577', '#ffffff', '#2e9ef4']), ('focused_inactive', vec!['#333333', '#5f676a', '#ffffff', '#484e50']), ('unfocused', vec!['#333333', '#222222', '#888888', '#292d2e']), ('urgent', vec!['#2f343a', '#900000', '#ffffff', '#900000'])],
++    },
++    ColorSet {
++        name: 'debian',
++        description: 'Debian theme by lasers',
++        bar: &[('separator', vec!['#444444']), ('background', vec!['#222222']), ('statusline', vec!['#666666']), ('focused_workspace', vec!['#d70a53', '#d70a53', '#ffffff']), ('active_workspace', vec!['#333333', '#333333', '#888888']), ('inactive_workspace', vec!['#333333', '#333333', '#888888']), ('urgent_workspace', vec!['#eb709b', '#eb709b', '#ffffff'])],
++        window: &[('focused', vec!['#d70a53', '#d70a53', '#ffffff', '#8c0333']), ('focused_inactive', vec!['#333333', '#333333', '#888888', '#333333']), ('unfocused', vec!['#333333', '#333333', '#888888', '#333333']), ('urgent', vec!['#eb709b', '#eb709b', '#ffffff', '#eb709b'])],
++    },
++    ColorSet {
++        name: 'oceanic-next',
++        description: 'Theme by Valentin Weber inspired by voronianski (https://github.com/voronianski/oceanic-next-color-scheme)',
++        bar: &[('separator', vec!['#65737E']), ('background', vec!['#1B2B34']), ('statusline', vec!['#D8DEE9']), ('focused_workspace', vec!['#6699CC', '#6699CC', '#1B2B34']), ('active_workspace', vec!['#5FB3B3', '#5FB3B3', '#1B2B34']), ('inactive_workspace', vec!['#343D46', '#343D46', '#D8DEE9']), ('urgent_workspace', vec!['#EC5f67', '#EC5f67', '#1B2B34'])],
++        window: &[('focused', vec!['#6699CC', '#6699CC', '#1B2B34', '#6699CC']), ('focused_inactive', vec!['#5FB3B3', '#5FB3B3', '#D8DEE9', '#A7ADBA']), ('unfocused', vec!['#343D46', '#343D46', '#D8DEE9', '#343D46']), ('urgent', vec!['#EC5f67', '#EC5f67', '#1B2B34', '#EC5f67'])],
++    },
++    ColorSet {
++        name: 'base16-tomorrow',
++        description: 'Base16 Tomorrow, by Chris Kempson (http://chriskempson.com)',
++        bar: &[('separator', vec!['#969896']), ('background', vec!['#1d1f21']), ('statusline', vec!['#c5c8c6']), ('focused_workspace', vec!['#81a2be', '#81a2be', '#1d1f21']), ('active_workspace', vec!['#373b41', '#373b41', '#ffffff']), ('inactive_workspace', vec!['#282a2e', '#282a2e', '#969896']), ('urgent_workspace', vec!['#cc6666', '#cc6666', '#ffffff'])],
++        window: &[('focused', vec!['#81a2be', '#81a2be', '#1d1f21', '#282a2e']), ('focused_inactive', vec!['#373b41', '#373b41', '#969896', '#282a2e']), ('unfocused', vec!['#282a2e', '#282a2e', '#969896', '#282a2e']), ('urgent', vec!['#373b41', '#cc6666', '#ffffff', '#cc6666'])],
++    },
++    ColorSet {
++        name: 'okraits',
++        description: 'A simple theme by okraits <http://okraits.de>',
++        bar: &[('separator', vec!['#666666']), ('background', vec!['#333333']), ('statusline', vec!['#bbbbbb']), ('focused_workspace', vec!['#888888', '#dddddd', '#222222']), ('active_workspace', vec!['#333333', '#555555', '#bbbbbb']), ('inactive_workspace', vec!['#333333', '#555555', '#bbbbbb']), ('urgent_workspace', vec!['#2f343a', '#900000', '#ffffff'])],
++        window: &[('focused', vec!['#888888', '#dddddd', '#222222', '#2e9ef4']), ('focused_inactive', vec!['#333333', '#555555', '#bbbbbb', '#484e50']), ('unfocused', vec!['#333333', '#333333', '#888888', '#292d2e']), ('urgent', vec!['#2f343a', '#900000', '#ffffff', '#900000'])],
++    },
++    ColorSet {
++        name: 'icelines',
++        description: 'icelines theme by mbfraga',
++        bar: &[('separator', vec!['#7d7d7d']), ('background', vec!['#141414']), ('statusline', vec!['#00b0ef']), ('focused_workspace', vec!['#00b0ef', '#141414', '#00b0ef']), ('active_workspace', vec!['#141414', '#141414', '#00b0ef']), ('inactive_workspace', vec!['#141414', '#141414', '#7d7d7d']), ('urgent_workspace', vec!['#ff7066', '#141414', '#ff7066'])],
++        window: &[('focused', vec!['#00b0ef', '#00b0ef', '#141414', '#ff7066']), ('focused_inactive', vec!['#141414', '#141414', '#00b0ef', '#472b2a']), ('unfocused', vec!['#141414', '#141414', '#7d7d7d', '#141414']), ('urgent', vec!['#ff7066', '#ff7066', '#141414', '#ff7066'])],
++    },
++    ColorSet {
++        name: 'solarized',
++        description: 'Solarized theme by lasers',
++        bar: &[('separator', vec!['#dc322f']), ('background', vec!['#002b36']), ('statusline', vec!['#268bd2']), ('focused_workspace', vec!['#fdf6e3', '#859900', '#fdf6e3']), ('active_workspace', vec!['#fdf6e3', '#6c71c4', '#fdf6e3']), ('inactive_workspace', vec!['#586e75', '#93a1a1', '#002b36']), ('urgent_workspace', vec!['#d33682', '#d33682', '#fdf6e3'])],
++        window: &[('focused', vec!['#859900', '#859900', '#fdf6e3', '#6c71c4']), ('focused_inactive', vec!['#073642', '#073642', '#eee8d5', '#6c71c4']), ('unfocused', vec!['#073642', '#073642', '#93a1a1', '#586e75']), ('urgent', vec!['#d33682', '#d33682', '#fdf6e3', '#dc322f'])],
++    },
++    ColorSet {
++        name: 'deep-purple',
++        description: 'Inspired by the Purple and Default themes. By jcpst <http://jcpst.com>',
++        bar: &[('separator', vec!['#666666']), ('background', vec!['#000000']), ('statusline', vec!['#ffffff']), ('focused_workspace', vec!['#551a8b', '#551a8b', '#ffffff']), ('active_workspace', vec!['#333333', '#5f676a', '#ffffff']), ('inactive_workspace', vec!['#000000', '#000000', '#888888']), ('urgent_workspace', vec!['#2f343a', '#900000', '#ffffff'])],
++        window: &[('focused', vec!['#3b1261', '#3b1261', '#ffffff', '#662b9c']), ('focused_inactive', vec!['#333333', '#5f676a', '#ffffff', '#484e50']), ('unfocused', vec!['#222222', '#222222', '#888888', '#292d2e']), ('urgent', vec!['#2f343a', '#900000', '#ffffff', '#900000'])],
++    },
++    ColorSet {
++        name: 'tomorrow-night-80s',
++        description: 'Tomorrow Night 80s theme by jmfurlott <http://jmfurlott.com>',
++        bar: &[('separator', vec!['#515151']), ('background', vec!['#2d2d2d']), ('statusline', vec!['#cccccc']), ('focused_workspace', vec!['#99cc99', '#99cc99', '#000000']), ('active_workspace', vec!['#333333', '#333333', '#ffffff']), ('inactive_workspace', vec!['#2d2d2d', '#2d2d2d', '#999999']), ('urgent_workspace', vec!['#f2777a', '#f2777a', '#ffffff'])],
++        window: &[('focused', vec!['#99cc99', '#99cc99', '#000000', '#2d2d2d']), ('focused_inactive', vec!['#393939', '#393939', '#888888', '#292d2e']), ('unfocused', vec!['#2d2d2d', '#2d2d2d', '#999999', '#292d2e']), ('urgent', vec!['#2f343a', '#900000', '#ffffff', '#900000'])],
++    },
++    ColorSet {
++        name: 'seti',
++        description: 'seti theme by Jody Ribton - based on the seti Atom theme at https://atom.io/themes/seti-ui',
++        bar: &[('separator', vec!['#AAAAAA']), ('background', vec!['#1f2326']), ('statusline', vec!['#FFFFFF']), ('focused_workspace', vec!['#9FCA56', '#9FCA56', '#151718']), ('active_workspace', vec!['#DCCD69', '#DCCD69', '#151718']), ('inactive_workspace', vec!['#1f2326', '#1f2326', '#AAAAAA']), ('urgent_workspace', vec!['#CE4045', '#CE4045', '#FFFFFF'])],
++        window: &[('focused', vec!['#4F99D3', '#4F99D3', '#151718', '#9FCA56']), ('focused_inactive', vec!['#9FCA56', '#9FCA56', '#151718', '#A074C4']), ('unfocused', vec!['#1f2326', '#1f2326', '#AAAAAA', '#A074C4']), ('urgent', vec!['#CE4045', '#CE4045', '#FFFFFF', '#DCCD69'])],
++    },
++    ColorSet {
++        name: 'lime',
++        description: 'Lime theme by wei2912 <http://wei2912.github.io>, based on Archlinux theme by okraits <http://okraits.de>',
++        bar: &[('separator', vec!['#888888']), ('background', vec!['#333333']), ('statusline', vec!['#FFFFFF']), ('focused_workspace', vec!['#4E9C00', '#4E9C00', '#FFFFFF']), ('active_workspace', vec!['#333333', '#333333', '#FFFFFF']), ('inactive_workspace', vec!['#333333', '#333333', '#888888']), ('urgent_workspace', vec!['#C20000', '#C20000', '#FFFFFF'])],
++        window: &[('focused', vec!['#4E9C00', '#4E9C00', '#FFFFFF', '#FFFFFF']), ('focused_inactive', vec!['#1B3600', '#1B3600', '#888888', '#FFFFFF']), ('unfocused', vec!['#333333', '#333333', '#888888', '#FFFFFF']), ('urgent', vec!['#C20000', '#C20000', '#FFFFFF', '#FFFFFF'])],
++    },
++    ColorSet {
++        name: 'gruvbox',
++        description: 'Made by freeware-preacher <https://github.com/freeware-preacher> to match gruvbox by morhetz <https://github.com/morhetz>',
++        bar: &[('separator', vec!['#928374']), ('background', vec!['#282828']), ('statusline', vec!['#ebdbb2']), ('focused_workspace', vec!['#689d6a', '#689d6a', '#282828']), ('active_workspace', vec!['#1d2021', '#1d2021', '#928374']), ('inactive_workspace', vec!['#32302f', '#32302f', '#928374']), ('urgent_workspace', vec!['#cc241d', '#cc241d', '#ebdbb2'])],
++        window: &[('focused', vec!['#689d6a', '#689d6a', '#282828', '#282828']), ('focused_inactive', vec!['#1d2021', '#1d2021', '#928374', '#282828']), ('unfocused', vec!['#32302f', '#32302f', '#928374', '#282828']), ('urgent', vec!['#cc241d', '#cc241d', '#ebdbb2', '#282828'])],
++    },
++    ColorSet {
++        name: 'mate',
++        description: 'Theme for blending i3 into MATE',
++        bar: &[('separator', vec!['#ffffff']), ('background', vec!['#3c3b37']), ('statusline', vec!['#ffffff']), ('focused_workspace', vec!['#526532', '#526532', '#ffffff']), ('active_workspace', vec!['#aea79f', '#aea79f', '#3c3b37']), ('inactive_workspace', vec!['#3c3b37', '#3c3b37', '#aea79f']), ('urgent_workspace', vec!['#FF0000', '#FF0000', '#ffffff'])],
++        window: &[('focused', vec!['#526532', '#526532', '#ffffff', '#a4cb64']), ('focused_inactive', vec!['#aea79f', '#aea79f', '#3c3b37', '#aea79f']), ('unfocused', vec!['#3c3b37', '#3c3b37', '#aea79f', '#3c3b37']), ('urgent', vec!['#FF0000', '#FF0000', '#ffffff', '#FF0000'])],
++    },
++];
+\ No newline at end of file

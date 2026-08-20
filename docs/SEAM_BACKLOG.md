@@ -1369,3 +1369,21 @@ CONFIRMS: the earlier 27B zeros were step starvation from thinking-mode call
 economics on slow serving, not model or harness weakness. With per-stream
 throughput fixed, same model + same harness + same task = best cmatrix score
 of the whole program.
+
+--- 2026-08-20: 27B FULL SCALING SERIES COMPLETE (held B200, all 40 cells valid) ---
+| task        | solo |  t2  |  t3  |  t4  |   9B: 13.3 -> 23.7 -> 28.3 -> 30.0 (monotonic)
+| cmatrix       93.9  94.5  96.1  96.7 |  27B: 37.9 -> 51.3 -> 45.3 -> 50.0 (saturates at t2)
+| tuijournal    68.4  61.4  58.1  62.8 |
+| walk          64.0  64.6  78.2  64.0 |  CROSS-MODEL ANSWER: team scaling holds in sign and
+| zoxide        51.3  24.3  23.6  12.7 |  magnitude (+13.4 solo->t2 at 27B vs +10.4 at 9B) but
+| zipfinder      0.0  49.1   0.0  51.5 |  its SOURCE shifts: at 27B all team value comes from
+| fx            16.5  23.2  22.9  15.4 |  unlock tasks (zipfinder 0->49, i3style 0->47/65,
+| i3style        0.0  47.3  44.4  65.3 |  chroma 0->9, shellharden 23->75); on solo-strong
+| srgn          62.4  64.6  59.3  62.4 |  tasks teams are flat or harmful (zoxide 51->24,
+| chroma         0.0   9.0   3.2   0.0 |  tuijournal 68->61). Size beyond t2 stops paying.
+| shellharden   22.8  74.6  66.8  69.0 |  Consistent with the separability finding at 9B.
+cmatrix-t2 = median of 3 replicates (94.5; spread 84.4-97.1 calibrates
+single-cell noise ~±6). srgn-t2 = valid r2 rerun (64.6). One NUL-byte agent
+crash (fixed in worker) and one 272-team-size shepherd bug (caught at
+dispatch, node cleaned) were the only incidents; zero starvation across all
+40 cells (heartbeat-verified first calls +1-20s).

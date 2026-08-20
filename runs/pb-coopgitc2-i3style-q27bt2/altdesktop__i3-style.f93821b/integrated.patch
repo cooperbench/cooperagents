@@ -1,0 +1,2294 @@
+diff --git a/compile.sh b/compile.sh
+new file mode 100644
+index 0000000..66b12a3
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,7 @@
++#!/bin/bash
++# Build the i3-style reconstruction with the Rust standard library only (no network).
++set -e
++cd "$(dirname "$0")"
++tmp="$(mktemp)"
++rustc --edition 2021 -O -o "$tmp" src/main.rs
++mv -f "$tmp" ./executable
+diff --git a/patch.txt b/patch.txt
+new file mode 100644
+index 0000000..68fa0f6
+--- /dev/null
++++ b/patch.txt
+@@ -0,0 +1,988 @@
++diff --git a/compile.sh b/compile.sh
++new file mode 100644
++index 0000000..66b12a3
++--- /dev/null
+++++ b/compile.sh
++@@ -0,0 +1,7 @@
+++#!/bin/bash
+++# Build the i3-style reconstruction with the Rust standard library only (no network).
+++set -e
+++cd "$(dirname "$0")"
+++tmp="$(mktemp)"
+++rustc --edition 2021 -O -o "$tmp" src/main.rs
+++mv -f "$tmp" ./executable
++diff --git a/src/main.rs b/src/main.rs
++new file mode 100644
++index 0000000..2b92f15
++--- /dev/null
+++++ b/src/main.rs
++@@ -0,0 +1,969 @@
+++// i3-style 1.0 reconstruction (Rust std-only, no external deps).
+++// Re-implements observed behavior of the original binary.
+++
+++use std::env;
+++use std::fs;
+++use std::path::PathBuf;
+++use std::process::{Command, Stdio};
+++
+++// ---------------- Theme data ----------------
+++
+++// Each color group: name + colors. Client groups have 4 colors.
+++// Workspace groups (bar) have 3 colors; a 4th color is derived from input.
+++// A color entry of None means "undefined" (echo input / special handling).
+++
+++#[derive(Clone)]
+++struct ColorSet {
+++    colors: Vec<Option<String>>,
+++}
+++
+++
+++#[derive(Clone)]
+++struct Theme {
+++    name: String,
+++    desc: String,
+++    // clients: focused, focused_inactive, unfocused, urgent  (4 colors each)
+++    client_focused: ColorSet,
+++    client_focused_inactive: ColorSet,
+++    client_unfocused: ColorSet,
+++    client_urgent: ColorSet,
+++    // bar: separator, background, statusline (1 color each)
+++    sep: ColorSet,
+++    bg: ColorSet,
+++    statusline: ColorSet,
+++    // bar workspaces: focused, active, inactive, urgent (3 colors each)
+++    ws_focused: ColorSet,
+++    ws_active: ColorSet,
+++    ws_inactive: ColorSet,
+++    ws_urgent: ColorSet,
+++}
+++
+++fn cs(c: &[&str]) -> ColorSet {
+++    ColorSet { colors: c.iter().map(|s| Some(s.to_string())).collect() }
+++}
+++fn csones(c: &[&str]) -> ColorSet {
+++    ColorSet { colors: c.iter().map(|s| Some(s.to_string())).collect() }
+++}
+++fn csnone() -> ColorSet {
+++    ColorSet { colors: vec![None] }
+++}
+++
+++fn all_themes() -> Vec<Theme> {
+++    vec![
+++        Theme { name: "slate".into(), desc: "Slate theme by Jody Ribton <jody@ribton.me>".into(),
+++            client_focused: cs(&["#586e75","#586e75","#fdf6e3","#268bd2"]),
+++            client_focused_inactive: cs(&["#073642","#073642","#93a1a1","#002b36"]),
+++            client_unfocused: cs(&["#002b36","#002b36","#586e75","#002b36"]),
+++            client_urgent: cs(&["#dc322f","#dc322f","#fdf6e3","#dc322f"]),
+++            sep: cs(&["#586e75"]), bg: cs(&["#002b36"]), statusline: cs(&["#aea79f"]),
+++            ws_focused: cs(&["#586e75","#586e75","#ffffff"]),
+++            ws_active: cs(&["#073642","#073642","#ffffff"]),
+++            ws_inactive: cs(&["#002b36","#002b36","#aea79f"]),
+++            ws_urgent: cs(&["#77216f","#77216f","#ffffff"]), },
+++        Theme { name: "alphare".into(), desc: "A beige theme by Alphare".into(),
+++            client_focused: cs(&["#000000","#FDF6E3","#002B36","#000000"]),
+++            client_focused_inactive: cs(&["#000000","#5F676A","#FDF6E3","#484E50"]),
+++            client_unfocused: cs(&["#000000","#000000","#FDF6E3","#000000"]),
+++            client_urgent: cs(&["#000000","#DC322F","#FDF6E3","#DC322F"]),
+++            sep: cs(&["#000000"]), bg: cs(&["#FDF6E3"]), statusline: cs(&["#002B36"]),
+++            ws_focused: cs(&["#000000","#268BD2","#FFFFFF"]),
+++            ws_active: cs(&["#333333","#222222","#FFFFFF"]),
+++            ws_inactive: cs(&["#333333","#222222","#888888"]),
+++            ws_urgent: cs(&["#2F343A","#900000","#FFFFFF"]), },
+++        Theme { name: "ubuntu".into(), desc: "Ubuntu theme by lasers".into(),
+++            client_focused: cs(&["#dd4814","#dd4814","#ffffff","#902a07"]),
+++            client_focused_inactive: cs(&["#5e2750","#5e2750","#aea79f","#5e2750"]),
+++            client_unfocused: cs(&["#5e2750","#5e2750","#aea79f","#5e2750"]),
+++            client_urgent: cs(&["#77216f","#77216f","#ffffff","#efb73e"]),
+++            sep: cs(&["#333333"]), bg: cs(&["#2c001e"]), statusline: cs(&["#aea79f"]),
+++            ws_focused: cs(&["#dd4814","#dd4814","#ffffff"]),
+++            ws_active: cs(&["#902a07","#902a07","#aea79f"]),
+++            ws_inactive: cs(&["#902a07","#902a07","#aea79f"]),
+++            ws_urgent: cs(&["#77216f","#77216f","#ffffff"]), },
+++        Theme { name: "flat-gray".into(), desc: "flat gray based theme".into(),
+++            client_focused: cs(&["#000000","#000000","#FFFFFF","#000000"]),
+++            client_focused_inactive: cs(&["#333333","#333333","#FFFFFF","#000000"]),
+++            client_unfocused: cs(&["#333333","#333333","#FFFFFF","#333333"]),
+++            client_urgent: csnone(),
+++            sep: csnone(), bg: cs(&["#333333"]), statusline: cs(&["#AAAAAA"]),
+++            ws_focused: cs(&["#282828","#282828","#FFFFFF"]),
+++            ws_active: csnone(),
+++            ws_inactive: cs(&["#333333","#333333","#AAAAAA"]),
+++            ws_urgent: csnone(), },
+++        Theme { name: "purple".into(), desc: "Purple theme by AAlakkad <http://aalakkad.me>".into(),
+++            client_focused: cs(&["#664477","#664477","#cccccc","#e7d8b1"]),
+++            client_focused_inactive: cs(&["#e7d8b1","#e7d8b1","#181715","#A074C4"]),
+++            client_unfocused: cs(&["#222133","#222133","#AAAAAA","#A074C4"]),
+++            client_urgent: cs(&["#CE4045","#CE4045","#e7d8b1","#DCCD69"]),
+++            sep: cs(&["#AAAAAA"]), bg: cs(&["#222133"]), statusline: cs(&["#FFFFFF"]),
+++            ws_focused: cs(&["#664477","#664477","#cccccc"]),
+++            ws_active: cs(&["#DCCD69","#DCCD69","#181715"]),
+++            ws_inactive: cs(&["#222133","#222133","#AAAAAA"]),
+++            ws_urgent: cs(&["#CE4045","#CE4045","#FFFFFF"]), },
+++        Theme { name: "archlinux".into(), desc: "Archlinux theme by okraits <http://okraits.de>".into(),
+++            client_focused: cs(&["#0088CC","#0088CC","#ffffff","#dddddd"]),
+++            client_focused_inactive: cs(&["#333333","#333333","#888888","#292d2e"]),
+++            client_unfocused: cs(&["#333333","#333333","#888888","#292d2e"]),
+++            client_urgent: cs(&["#2f343a","#900000","#ffffff","#900000"]),
+++            sep: cs(&["#666666"]), bg: cs(&["#222222"]), statusline: cs(&["#dddddd"]),
+++            ws_focused: cs(&["#0088CC","#0088CC","#ffffff"]),
+++            ws_active: cs(&["#333333","#333333","#ffffff"]),
+++            ws_inactive: cs(&["#333333","#333333","#888888"]),
+++            ws_urgent: cs(&["#2f343a","#900000","#ffffff"]), },
+++        Theme { name: "default".into(), desc: "Default theme for i3wm <http://i3wm.org>".into(),
+++            client_focused: cs(&["#4c7899","#285577","#ffffff","#2e9ef4"]),
+++            client_focused_inactive: cs(&["#333333","#5f676a","#ffffff","#484e50"]),
+++            client_unfocused: cs(&["#333333","#222222","#888888","#292d2e"]),
+++            client_urgent: cs(&["#2f343a","#900000","#ffffff","#900000"]),
+++            sep: cs(&["#666666"]), bg: cs(&["#000000"]), statusline: cs(&["#ffffff"]),
+++            ws_focused: cs(&["#4c7899","#285577","#ffffff"]),
+++            ws_active: cs(&["#333333","#5f676a","#ffffff"]),
+++            ws_inactive: cs(&["#333333","#222222","#888888"]),
+++            ws_urgent: cs(&["#2f343a","#900000","#ffffff"]), },
+++        Theme { name: "debian".into(), desc: "Debian theme by lasers".into(),
+++            client_focused: cs(&["#d70a53","#d70a53","#ffffff","#8c0333"]),
+++            client_focused_inactive: cs(&["#333333","#333333","#888888","#333333"]),
+++            client_unfocused: cs(&["#333333","#333333","#888888","#333333"]),
+++            client_urgent: cs(&["#eb709b","#eb709b","#ffffff","#eb709b"]),
+++            sep: cs(&["#444444"]), bg: cs(&["#222222"]), statusline: cs(&["#666666"]),
+++            ws_focused: cs(&["#d70a53","#d70a53","#ffffff"]),
+++            ws_active: cs(&["#333333","#333333","#888888"]),
+++            ws_inactive: cs(&["#333333","#333333","#888888"]),
+++            ws_urgent: cs(&["#eb709b","#eb709b","#ffffff"]), },
+++        Theme { name: "oceanic-next".into(), desc: "Theme by Valentin Weber inspired by voronianski (https://github.com/voronianski/oceanic-next-color-scheme)".into(),
+++            client_focused: cs(&["#6699CC","#6699CC","#1B2B34","#6699CC"]),
+++            client_focused_inactive: cs(&["#5FB3B3","#5FB3B3","#D8DEE9","#A7ADBA"]),
+++            client_unfocused: cs(&["#343D46","#343D46","#D8DEE9","#343D46"]),
+++            client_urgent: cs(&["#EC5f67","#EC5f67","#1B2B34","#EC5f67"]),
+++            sep: cs(&["#65737E"]), bg: cs(&["#1B2B34"]), statusline: cs(&["#D8DEE9"]),
+++            ws_focused: cs(&["#6699CC","#6699CC","#1B2B34"]),
+++            ws_active: cs(&["#5FB3B3","#5FB3B3","#1B2B34"]),
+++            ws_inactive: cs(&["#343D46","#343D46","#D8DEE9"]),
+++            ws_urgent: cs(&["#EC5f67","#EC5f67","#1B2B34"]), },
+++        Theme { name: "base16-tomorrow".into(), desc: "Base16 Tomorrow, by Chris Kempson (http://chriskempson.com)".into(),
+++            client_focused: cs(&["#81a2be","#81a2be","#1d1f21","#282a2e"]),
+++            client_focused_inactive: cs(&["#373b41","#373b41","#969896","#282a2e"]),
+++            client_unfocused: cs(&["#282a2e","#282a2e","#969896","#282a2e"]),
+++            client_urgent: cs(&["#373b41","#cc6666","#ffffff","#cc6666"]),
+++            sep: cs(&["#969896"]), bg: cs(&["#1d1f21"]), statusline: cs(&["#c5c8c6"]),
+++            ws_focused: cs(&["#81a2be","#81a2be","#1d1f21"]),
+++            ws_active: cs(&["#373b41","#373b41","#ffffff"]),
+++            ws_inactive: cs(&["#282a2e","#282a2e","#969896"]),
+++            ws_urgent: cs(&["#cc6666","#cc6666","#ffffff"]), },
+++        Theme { name: "okraits".into(), desc: "A simple theme by okraits <http://okraits.de>".into(),
+++            client_focused: cs(&["#888888","#dddddd","#222222","#2e9ef4"]),
+++            client_focused_inactive: cs(&["#333333","#555555","#bbbbbb","#484e50"]),
+++            client_unfocused: cs(&["#333333","#333333","#888888","#292d2e"]),
+++            client_urgent: cs(&["#2f343a","#900000","#ffffff","#900000"]),
+++            sep: cs(&["#666666"]), bg: cs(&["#333333"]), statusline: cs(&["#bbbbbb"]),
+++            ws_focused: cs(&["#888888","#dddddd","#222222"]),
+++            ws_active: cs(&["#333333","#555555","#bbbbbb"]),
+++            ws_inactive: cs(&["#333333","#555555","#bbbbbb"]),
+++            ws_urgent: cs(&["#2f343a","#900000","#ffffff"]), },
+++        Theme { name: "icelines".into(), desc: "icelines theme by mbfraga".into(),
+++            client_focused: cs(&["#00b0ef","#00b0ef","#141414","#ff7066"]),
+++            client_focused_inactive: cs(&["#141414","#141414","#00b0ef","#472b2a"]),
+++            client_unfocused: cs(&["#141414","#141414","#7d7d7d","#141414"]),
+++            client_urgent: cs(&["#ff7066","#ff7066","#141414","#ff7066"]),
+++            sep: cs(&["#7d7d7d"]), bg: cs(&["#141414"]), statusline: cs(&["#00b0ef"]),
+++            ws_focused: cs(&["#00b0ef","#141414","#00b0ef"]),
+++            ws_active: cs(&["#141414","#141414","#00b0ef"]),
+++            ws_inactive: cs(&["#141414","#141414","#7d7d7d"]),
+++            ws_urgent: cs(&["#ff7066","#141414","#ff7066"]), },
+++        Theme { name: "solarized".into(), desc: "Solarized theme by lasers".into(),
+++            client_focused: cs(&["#859900","#859900","#fdf6e3","#6c71c4"]),
+++            client_focused_inactive: cs(&["#073642","#073642","#eee8d5","#6c71c4"]),
+++            client_unfocused: cs(&["#073642","#073642","#93a1a1","#586e75"]),
+++            client_urgent: cs(&["#d33682","#d33682","#fdf6e3","#dc322f"]),
+++            sep: cs(&["#dc322f"]), bg: cs(&["#002b36"]), statusline: cs(&["#268bd2"]),
+++            ws_focused: cs(&["#fdf6e3","#859900","#fdf6e3"]),
+++            ws_active: cs(&["#fdf6e3","#6c71c4","#fdf6e3"]),
+++            ws_inactive: cs(&["#586e75","#93a1a1","#002b36"]),
+++            ws_urgent: cs(&["#d33682","#d33682","#fdf6e3"]), },
+++        Theme { name: "deep-purple".into(), desc: "Inspired by the Purple and Default themes. By jcpst <http://jcpst.com>".into(),
+++            client_focused: cs(&["#3b1261","#3b1261","#ffffff","#662b9c"]),
+++            client_focused_inactive: cs(&["#333333","#5f676a","#ffffff","#484e50"]),
+++            client_unfocused: cs(&["#222222","#222222","#888888","#292d2e"]),
+++            client_urgent: cs(&["#2f343a","#900000","#ffffff","#900000"]),
+++            sep: cs(&["#666666"]), bg: cs(&["#000000"]), statusline: cs(&["#ffffff"]),
+++            ws_focused: cs(&["#551a8b","#551a8b","#ffffff"]),
+++            ws_active: cs(&["#333333","#5f676a","#ffffff"]),
+++            ws_inactive: cs(&["#000000","#000000","#888888"]),
+++            ws_urgent: cs(&["#2f343a","#900000","#ffffff"]), },
+++        Theme { name: "tomorrow-night-80s".into(), desc: "Tomorrow Night 80s theme by jmfurlott <http://jmfurlott.com>".into(),
+++            client_focused: cs(&["#99cc99","#99cc99","#000000","#2d2d2d"]),
+++            client_focused_inactive: cs(&["#393939","#393939","#888888","#292d2e"]),
+++            client_unfocused: cs(&["#2d2d2d","#2d2d2d","#999999","#292d2e"]),
+++            client_urgent: cs(&["#2f343a","#900000","#ffffff","#900000"]),
+++            sep: cs(&["#515151"]), bg: cs(&["#2d2d2d"]), statusline: cs(&["#cccccc"]),
+++            ws_focused: cs(&["#99cc99","#99cc99","#000000"]),
+++            ws_active: cs(&["#333333","#333333","#ffffff"]),
+++            ws_inactive: cs(&["#2d2d2d","#2d2d2d","#999999"]),
+++            ws_urgent: cs(&["#f2777a","#f2777a","#ffffff"]), },
+++        Theme { name: "seti".into(), desc: "seti theme by Jody Ribton - based on the seti Atom theme at https://atom.io/themes/seti-ui".into(),
+++            client_focused: cs(&["#4F99D3","#4F99D3","#151718","#9FCA56"]),
+++            client_focused_inactive: cs(&["#9FCA56","#9FCA56","#151718","#A074C4"]),
+++            client_unfocused: cs(&["#1f2326","#1f2326","#AAAAAA","#A074C4"]),
+++            client_urgent: cs(&["#CE4045","#CE4045","#FFFFFF","#DCCD69"]),
+++            sep: cs(&["#AAAAAA"]), bg: cs(&["#1f2326"]), statusline: cs(&["#FFFFFF"]),
+++            ws_focused: cs(&["#9FCA56","#9FCA56","#151718"]),
+++            ws_active: cs(&["#DCCD69","#DCCD69","#151718"]),
+++            ws_inactive: cs(&["#1f2326","#1f2326","#AAAAAA"]),
+++            ws_urgent: cs(&["#CE4045","#CE4045","#FFFFFF"]), },
+++        Theme { name: "lime".into(), desc: "Lime theme by wei2912 <http://wei2912.github.io>, based on Archlinux theme by okraits <http://okraits.de>".into(),
+++            client_focused: cs(&["#4E9C00","#4E9C00","#FFFFFF","#FFFFFF"]),
+++            client_focused_inactive: cs(&["#1B3600","#1B3600","#888888","#FFFFFF"]),
+++            client_unfocused: cs(&["#333333","#333333","#888888","#FFFFFF"]),
+++            client_urgent: cs(&["#C20000","#C20000","#FFFFFF","#FFFFFF"]),
+++            sep: cs(&["#888888"]), bg: cs(&["#333333"]), statusline: cs(&["#FFFFFF"]),
+++            ws_focused: cs(&["#4E9C00","#4E9C00","#FFFFFF"]),
+++            ws_active: cs(&["#333333","#333333","#FFFFFF"]),
+++            ws_inactive: cs(&["#333333","#333333","#888888"]),
+++            ws_urgent: cs(&["#C20000","#C20000","#FFFFFF"]), },
+++        Theme { name: "gruvbox".into(), desc: "Made by freeware-preacher <https://github.com/freeware-preacher> to match gruvbox by morhetz <https://github.com/morhetz>".into(),
+++            client_focused: cs(&["#689d6a","#689d6a","#282828","#282828"]),
+++            client_focused_inactive: cs(&["#1d2021","#1d2021","#928374","#282828"]),
+++            client_unfocused: cs(&["#32302f","#32302f","#928374","#282828"]),
+++            client_urgent: cs(&["#cc241d","#cc241d","#ebdbb2","#282828"]),
+++            sep: cs(&["#928374"]), bg: cs(&["#282828"]), statusline: cs(&["#ebdbb2"]),
+++            ws_focused: cs(&["#689d6a","#689d6a","#282828"]),
+++            ws_active: cs(&["#1d2021","#1d2021","#928374"]),
+++            ws_inactive: cs(&["#32302f","#32302f","#928374"]),
+++            ws_urgent: cs(&["#cc241d","#cc241d","#ebdbb2"]), },
+++        Theme { name: "mate".into(), desc: "Theme for blending i3 into MATE".into(),
+++            client_focused: cs(&["#526532","#526532","#ffffff","#a4cb64"]),
+++            client_focused_inactive: cs(&["#aea79f","#aea79f","#3c3b37","#aea79f"]),
+++            client_unfocused: cs(&["#3c3b37","#3c3b37","#aea79f","#3c3b37"]),
+++            client_urgent: cs(&["#FF0000","#FF0000","#ffffff","#FF0000"]),
+++            sep: cs(&["#ffffff"]), bg: cs(&["#3c3b37"]), statusline: cs(&["#ffffff"]),
+++            ws_focused: cs(&["#526532","#526532","#ffffff"]),
+++            ws_active: cs(&["#aea79f","#aea79f","#3c3b37"]),
+++            ws_inactive: cs(&["#3c3b37","#3c3b37","#aea79f"]),
+++            ws_urgent: cs(&["#FF0000","#FF0000","#ffffff"]), },
+++    ]
+++}
+++
+++fn find_theme(name: &str) -> Option<Theme> {
+++    for t in &all_themes() {
+++        if t.name == name {
+++            return Some(t.clone());
+++        }
+++    }
+++    None
+++}
+++
+++// ---------------- Apply helpers ----------------
+++
+++// Render a ColorSet into a single color string, or None if undefined.
+++fn render_one(cs: &ColorSet, input: &[String]) -> Option<String> {
+++    if cs.colors.is_empty() {
+++        return None;
+++    }
+++    // If all are None -> undefined (echo input).
+++    if cs.colors.iter().all(|c| c.is_none()) {
+++        // echo first input color if present
+++        if !input.is_empty() {
+++            return Some(input[0].clone());
+++        }
+++        return None;
+++    }
+++    // take the first Some
+++    for c in &cs.colors {
+++        if let Some(s) = c {
+++            return Some(s.clone());
+++        }
+++    }
+++    None
+++}
+++
+++// Render a ColorSet into multiple colors (for workspaces/clients).
+++// `n` = how many to emit. Returns the colors (theme) plus possibly an input-derived 4th.
+++fn render_multi(cs: &ColorSet, input: &[String], present: bool) -> Vec<String> {
+++    let mut out = Vec::new();
+++    // theme colors
+++    for c in &cs.colors {
+++        if let Some(s) = c {
+++            out.push(s.clone());
+++        }
+++    }
+++    // If the ColorSet is entirely None (undefined), echo input colors.
+++    if cs.colors.iter().all(|c| c.is_none()) && !input.is_empty() {
+++        out = input.to_vec();
+++    }
+++    // 4th color from input[2] if present and exactly 3 colors
+++    if present && out.len() == 3 {
+++        if input.len() >= 3 {
+++            out.push(input[2].clone());
+++        }
+++    }
+++    out
+++}
+++
+++fn join_colors(colors: &[String], trailing: bool) -> String {
+++    let s: String = colors.iter().map(|c| c.as_str()).collect::<Vec<_>>().join(" ");
+++    if trailing {
+++        format!("{} ", s)
+++    } else {
+++        s
+++    }
+++}
+++
+++fn main() {
+++    let args: Vec<String> = env::args().collect();
+++
+++    // Program name = basename of argv[0] (matches clap v2).
+++    let prog: String = args
+++        .get(0)
+++        .map(|s| {
+++            std::path::Path::new(s)
+++                .file_name()
+++                .map(|f| f.to_string_lossy().into_owned())
+++                .unwrap_or_else(|| s.clone())
+++        })
+++        .unwrap_or_else(|| "i3-style".to_string());
+++
+++    // ---------------- Parse (hand-rolled to match clap v2) ----------------
+++    // -h / -V exit immediately as they are encountered.
+++    // Unknown flags and a second positional are hard errors (clap).
+++    // -c / -o require a value; -t has a default (empty) so missing value = "".
+++    let mut list_all = false;
+++    let mut reload = false;
+++    let mut save = false;
+++    // clap-v2: -c / -o have a REQUIRED value; -t has [default: ] (empty).
+++    // A value token must not start with '-' (a flag is never a value).
+++    let mut config_present = false;
+++    let mut config_value: Option<String> = None;
+++    let mut output_present = false;
+++    let mut output_value: Option<String> = None;
+++    let mut to_theme_present = false;
+++    let mut to_theme_value = String::new();
+++    let mut theme_pos: Option<String> = None;
+++    // options present-but-missing-value, in command-line order (last is named).
+++    let mut missing_opts: Vec<&str> = Vec::new();
+++    // duplicates of -c/-o/-t, in command-line order (last is named).
+++    let mut dup_opts: Vec<&str> = Vec::new();
+++
+++    let mut after_dd = false;
+++    let mut i = 1;
+++    while i < args.len() {
+++        let a = args[i].clone();
+++        let next_is_flag = i + 1 < args.len() && args[i + 1].starts_with('-') && args[i + 1] != "-";
+++
+++        // after "--": everything is a positional (theme)
+++        if after_dd {
+++            if theme_pos.is_some() {
+++                eprint!("{}", unknown_arg_error(&prog, &a, config_present, list_all, output_present, reload, save, to_theme_present));
+++                std::process::exit(1);
+++            }
+++            theme_pos = Some(a);
+++            i += 1;
+++            continue;
+++        }
+++
+++        // "--" is the end-of-options separator
+++        if a == "--" {
+++            after_dd = true;
+++            i += 1;
+++            continue;
+++        }
+++
+++        // long option with equals syntax: --config=V / --output=V / --to-theme=V
+++        if let Some(v) = a.strip_prefix("--config=") {
+++            if config_present {
+++                dup_opts.push("config");
+++            } else {
+++                config_present = true;
+++                config_value = Some(v.to_string());
+++            }
+++            i += 1;
+++            continue;
+++        }
+++        if let Some(v) = a.strip_prefix("--output=") {
+++            if output_present {
+++                dup_opts.push("output");
+++            } else {
+++                output_present = true;
+++                output_value = Some(v.to_string());
+++            }
+++            i += 1;
+++            continue;
+++        }
+++        if let Some(v) = a.strip_prefix("--to-theme=") {
+++            if to_theme_present {
+++                dup_opts.push("to-theme");
+++            } else {
+++                to_theme_present = true;
+++                to_theme_value = v.to_string();
+++            }
+++            i += 1;
+++            continue;
+++        }
+++
+++        // combined short flags / short option with equals (single dash, len > 2)
+++        if a.len() > 2 && a.starts_with("-") && !a.starts_with("--") {
+++            let mut j = 1usize;
+++            let mut done = false;
+++            while j < a.len() && !done {
+++                match &a[j..j + 1] {
+++                    "h" => {
+++                        print!("{}", HELP_TEXT.replace("orig_executable", &prog));
+++                        std::process::exit(0);
+++                    }
+++                    "V" => {
+++                        println!("i3-style 1.0");
+++                        std::process::exit(0);
+++                    }
+++                    "l" => { list_all = true; j += 1; }
+++                    "r" => { reload = true; j += 1; }
+++                    "s" => { save = true; j += 1; }
+++                    "c" => {
+++                        let rest = &a[j + 1..];
+++                        if config_present {
+++                            dup_opts.push("config");
+++                        } else if let Some(v) = rest.strip_prefix("=") {
+++                            config_present = true;
+++                            config_value = Some(v.to_string());
+++                        } else if !rest.is_empty() {
+++                            config_present = true;
+++                            config_value = Some(rest.to_string());
+++                        } else if next_is_flag || i + 1 >= args.len() {
+++                            config_present = true;
+++                            missing_opts.push("config");
+++                        } else {
+++                            i += 1;
+++                            config_present = true;
+++                            config_value = Some(args[i].clone());
+++                        }
+++                        done = true;
+++                    }
+++                    "o" => {
+++                        let rest = &a[j + 1..];
+++                        if output_present {
+++                            dup_opts.push("output");
+++                        } else if let Some(v) = rest.strip_prefix("=") {
+++                            output_present = true;
+++                            output_value = Some(v.to_string());
+++                        } else if !rest.is_empty() {
+++                            output_present = true;
+++                            output_value = Some(rest.to_string());
+++                        } else if next_is_flag || i + 1 >= args.len() {
+++                            output_present = true;
+++                            missing_opts.push("output");
+++                        } else {
+++                            i += 1;
+++                            output_present = true;
+++                            output_value = Some(args[i].clone());
+++                        }
+++                        done = true;
+++                    }
+++                    "t" => {
+++                        let rest = &a[j + 1..];
+++                        if to_theme_present {
+++                            dup_opts.push("to-theme");
+++                        } else {
+++                            to_theme_present = true;
+++                            if let Some(v) = rest.strip_prefix("=") {
+++                                to_theme_value = v.to_string();
+++                            } else if !rest.is_empty() {
+++                                to_theme_value = rest.to_string();
+++                            } else if next_is_flag || i + 1 >= args.len() {
+++                                to_theme_value = String::new();
+++                            } else {
+++                                i += 1;
+++                                to_theme_value = args[i].clone();
+++                            }
+++                        }
+++                        done = true;
+++                    }
+++                    _ => {
+++                        eprint!("{}", unknown_arg_error(&prog, &a, config_present, list_all, output_present, reload, save, to_theme_present));
+++                        std::process::exit(1);
+++                    }
+++                }
+++            }
+++            i += 1;
+++            continue;
+++        }
+++
+++        // single short flag / long option / positional
+++        match a.as_str() {
+++            "-h" | "--help" => {
+++                print!("{}", HELP_TEXT.replace("orig_executable", &prog));
+++                std::process::exit(0);
+++            }
+++            "-V" | "--version" => {
+++                println!("i3-style 1.0");
+++                std::process::exit(0);
+++            }
+++            "-l" | "--list-all" => list_all = true,
+++            "-r" | "--reload" => reload = true,
+++            "-s" | "--save" => save = true,
+++            "-c" | "--config" => {
+++                if config_present {
+++                    // duplicate: still consume a non-flag value so it isn't a
+++                    // stray positional, but record it as a duplicate only.
+++                    if !next_is_flag && i + 1 < args.len() {
+++                        i += 1;
+++                    }
+++                    dup_opts.push("config");
+++                } else {
+++                    config_present = true;
+++                    if next_is_flag || i + 1 >= args.len() {
+++                        missing_opts.push("config");
+++                    } else {
+++                        i += 1;
+++                        config_value = Some(args[i].clone());
+++                    }
+++                }
+++            }
+++            "-o" | "--output" => {
+++                if output_present {
+++                    if !next_is_flag && i + 1 < args.len() {
+++                        i += 1;
+++                    }
+++                    dup_opts.push("output");
+++                } else {
+++                    output_present = true;
+++                    if next_is_flag || i + 1 >= args.len() {
+++                        missing_opts.push("output");
+++                    } else {
+++                        i += 1;
+++                        output_value = Some(args[i].clone());
+++                    }
+++                }
+++            }
+++            "-t" | "--to-theme" => {
+++                if to_theme_present {
+++                    if !next_is_flag && i + 1 < args.len() {
+++                        i += 1;
+++                    }
+++                    dup_opts.push("to-theme");
+++                } else {
+++                    to_theme_present = true;
+++                    if next_is_flag || i + 1 >= args.len() {
+++                        to_theme_value = String::new();
+++                    } else {
+++                        i += 1;
+++                        to_theme_value = args[i].clone();
+++                    }
+++                }
+++            }
+++            _ => {
+++                if a.starts_with('-') && a != "-" {
+++                    eprint!("{}", unknown_arg_error(&prog, &a, config_present, list_all, output_present, reload, save, to_theme_present));
+++                    std::process::exit(1);
+++                }
+++                if theme_pos.is_some() {
+++                    eprint!("{}", unknown_arg_error(&prog, &a, config_present, list_all, output_present, reload, save, to_theme_present));
+++                    std::process::exit(1);
+++                }
+++                theme_pos = Some(a);
+++            }
+++        }
+++        i += 1;
+++    }
+++
+++
+++    // Build the USAGE line (present args in the App's definition order, then --to-theme).
+++    // Shared by the missing-value and duplicate-option errors.
+++    let mut parts: Vec<String> = Vec::new();
+++    if config_present {
+++        parts.push("--config <file>".to_string());
+++    }
+++    if list_all {
+++        parts.push("--list-all".to_string());
+++    }
+++    if output_present {
+++        parts.push("--output <file>".to_string());
+++    }
+++    if reload {
+++        parts.push("--reload".to_string());
+++    }
+++    if save {
+++        parts.push("--save".to_string());
+++    }
+++    parts.push("--to-theme <file>".to_string());
+++    let usage = parts.join(" ");
+++
+++    // Missing-value error (clap) - names the LAST missing option in command order.
+++    if !missing_opts.is_empty() {
+++        let named = *missing_opts.last().unwrap();
+++        eprint!(
+++            "error: The argument '--{} <file>' requires a value but none was supplied\n\n\
+++USAGE:\n    {} {}\n\n\
+++For more information try --help\n",
+++            named, prog, usage
+++        );
+++        std::process::exit(1);
+++    }
+++
+++    // Duplicate-option error (clap) - names the LAST duplicate in command order.
+++    if !dup_opts.is_empty() {
+++        let named = *dup_opts.last().unwrap();
+++        eprint!(
+++            "error: The argument '--{} <file>' was provided more than once, but cannot be used multiple times\n\n\
+++USAGE:\n    {} {}\n\n\
+++For more information try --help\n",
+++            named, prog, usage
+++        );
+++        std::process::exit(1);
+++    }
+++
+++    // --list-all / -l
+++    if list_all {
+++        print!("{}", LIST_ALL_TEXT);
+++        std::process::exit(0);
+++    }
+++
+++    // No theme and no --to-theme (present) -> usage error (to stdout), exit 1.
+++    if theme_pos.is_none() && !to_theme_present {
+++        print!("{}", NO_ARGS_TEXT.replace("orig_executable", &prog));
+++        std::process::exit(1);
+++    }
+++
+++    // ---------------- Resolve config path ----------------
+++    let default_config = {
+++        let home = env::var("HOME").unwrap_or_default();
+++        PathBuf::from(&home).join(".config/i3/config")
+++    };
+++    // Non-empty --to-theme wins; otherwise config (-c); otherwise the default.
+++    let config_path = if !to_theme_value.is_empty() {
+++        PathBuf::from(&to_theme_value)
+++    } else if let Some(c) = &config_value {
+++        PathBuf::from(c)
+++    } else {
+++        default_config.clone()
+++    };
+++    // Whether the config path was supplied explicitly (-c or non-empty -t).
+++    let is_explicit = config_value.is_some() || (to_theme_present && !to_theme_value.is_empty());
+++
+++    // If the config resolves to the default location and it is missing,
+++    // the original reports "Could not find i3 config".
+++    if !is_explicit && !config_path.exists() {
+++        eprintln!("Could not find i3 config");
+++        std::process::exit(1);
+++    }
+++
+++    // ---------------- Resolve the theme (only when a positional theme was given) ----------------
+++    // The original checks the theme's existence before validating the config, so a bad
+++    // theme yields "Could not open theme" regardless of whether i3 is present.
+++    let theme: Option<Theme> = match &theme_pos {
+++        Some(name) => match find_theme(name) {
+++            Some(t) => Some(t),
+++            None => {
+++                eprintln!(
+++                    "Could not open theme: {} - No such file or directory (os error 2)",
+++                    name
+++                );
+++                eprintln!(" Use `i3-style --list-all` to see the available themes.");
+++                std::process::exit(1);
+++            }
+++        },
+++        None => None,
+++    };
+++
+++    // ---------------- Validate the config with i3 ----------------
+++    let status = Command::new("i3")
+++        .args(&["-C", "-c", &config_path.to_string_lossy()])
+++        .stdout(Stdio::null())
+++        .stderr(Stdio::null())
+++        .status();
+++    match status {
+++        Ok(s) if s.success() => {}
+++        Ok(_) => {
+++            eprintln!("Could not validate config.");
+++            eprintln!("Use `i3 -C -c {}` to see validation errors.", config_path.display());
+++            std::process::exit(1);
+++        }
+++        Err(e) => {
+++            eprintln!(
+++                "Could not validate config with `i3 -C -c {}` (is i3 in the PATH?) {}",
+++                config_path.display(), e
+++            );
+++            std::process::exit(1);
+++        }
+++    }
+++
+++    // ---------------- apply / write / reload ----------------
+++    // Read the config (now known to exist / be valid).
+++    let config_content = fs::read_to_string(&config_path).unwrap_or_default();
+++
+++    // A positional theme is required to apply; --to-theme-only has none.
+++    let applied = match &theme {
+++        Some(t) => apply_theme(&config_content, t),
+++        None => config_content.clone(),
+++    };
+++
+++    // Persist the input/output under /tmp/i3-style/<ts>/ only for -o or -s.
+++    if save || output_value.is_some() {
+++        let ts = std::time::SystemTime::now()
+++            .duration_since(std::time::UNIX_EPOCH)
+++            .map(|d| d.as_secs())
+++            .unwrap_or(0);
+++        let dir = PathBuf::from("/tmp/i3-style").join(format!("{}", ts));
+++        let _ = fs::create_dir_all(&dir);
+++        let _ = fs::write(dir.join("config-input"), &config_content);
+++        let _ = fs::write(dir.join("config-output"), &applied);
+++        eprintln!(
+++            "saving config at {} to {}/config-input",
+++            config_path.display(),
+++            dir.display()
+++        );
+++    }
+++
+++    if save {
+++        let _ = fs::write(&config_path, &applied);
+++    }
+++    if let Some(o) = &output_value {
+++        let _ = fs::write(o, &applied);
+++    }
+++    // Plain apply (no -o / no -s): print the themed config to stdout.
+++    if !save && output_value.is_none() {
+++        print!("{}", applied);
+++    }
+++    if reload {
+++        let _ = Command::new("i3-msg")
+++            .arg("reload")
+++            .stdout(Stdio::null())
+++            .stderr(Stdio::null())
+++            .status();
+++    }
+++}
+++
+++// clap-v2 "unexpected argument" error (unknown flag or extra positional).
+++fn unknown_arg_error(
+++    prog: &str,
+++    arg: &str,
+++    config_present: bool,
+++    list_all: bool,
+++    output_present: bool,
+++    reload: bool,
+++    save: bool,
+++    to_theme_present: bool,
+++) -> String {
+++    // The unknown-argument USAGE lists present args in the App's
+++    // definition order, but (unlike the missing/duplicate errors) does
+++    // NOT always append --to-theme; when nothing is present it falls
+++    // back to the generic line.
+++    let mut parts: Vec<String> = Vec::new();
+++    if config_present {
+++        parts.push("--config <file>".to_string());
+++    }
+++    if list_all {
+++        parts.push("--list-all".to_string());
+++    }
+++    if output_present {
+++        parts.push("--output <file>".to_string());
+++    }
+++    if reload {
+++        parts.push("--reload".to_string());
+++    }
+++    if save {
+++        parts.push("--save".to_string());
+++    }
+++    if to_theme_present {
+++        parts.push("--to-theme <file>".to_string());
+++    }
+++    let usage = if parts.is_empty() {
+++        "[FLAGS] [OPTIONS] [theme]".to_string()
+++    } else {
+++        parts.join(" ")
+++    };
+++    format!(
+++        "error: Found argument '{}' which wasn't expected, or isn't valid in this context\n\n\
+++USAGE:\n    {} {}\n\n\
+++For more information try --help\n",
+++        arg, prog, usage
+++    )
+++}
+++
+++// ---------------- Config parsing / apply ----------------
+++
+++// Apply the theme to the config text.
+++fn apply_theme(config: &str, theme: &Theme) -> String {
+++    // Split into lines (preserve line content; we re-join with \n).
+++    let had_trailing_newline = config.ends_with('\n');
+++    let mut lines: Vec<String> = if config.is_empty() {
+++        Vec::new()
+++    } else {
+++        config.lines().map(|l| l.to_string()).collect()
+++    };
+++
+++    // --- Pass 1: brace-depth scan to locate the bar block and its colors block.
+++    let mut depth = 0i32;
+++    let mut bar_open: Option<usize> = None;
+++    let mut bar_base = 0i32;
+++    let mut bar_close: Option<usize> = None;
+++    let mut colors_open: Option<usize> = None;
+++    let mut colors_base = 0i32;
+++    let mut colors_close: Option<usize> = None;
+++
+++    for (i, line) in lines.iter().enumerate() {
+++        let trimmed = line.trim();
+++        let is_comment = trimmed.starts_with('#');
+++        let code = if is_comment { "" } else { line.as_str() };
+++        let opens = code.matches('{').count() as i32;
+++        let closes = code.matches('}').count() as i32;
+++
+++        if bar_open.is_none() && bar_close.is_none() && !is_comment && trimmed.starts_with("bar") {
+++            bar_open = Some(i);
+++            bar_base = depth;
+++        }
+++        if colors_open.is_none() && bar_open.is_some() && bar_close.is_none() && !is_comment && trimmed.starts_with("colors") {
+++            colors_open = Some(i);
+++            colors_base = depth;
+++        }
+++
+++        depth += opens - closes;
+++
+++        if bar_open.is_some() && bar_close.is_none() && depth <= bar_base {
+++            bar_close = Some(i);
+++        }
+++        if colors_open.is_some() && colors_close.is_none() && depth <= colors_base {
+++            colors_close = Some(i);
+++        }
+++    }
+++
+++    // --- Theme color strings (use theme values; empty input => no echo).
+++    let sep = render_one(&theme.sep, &[]);
+++    let bg = render_one(&theme.bg, &[]);
+++    let statusline = render_one(&theme.statusline, &[]);
+++    let ws_focused = render_multi(&theme.ws_focused, &[], false);
+++    let ws_active = render_multi(&theme.ws_active, &[], false);
+++    let ws_inactive = render_multi(&theme.ws_inactive, &[], false);
+++    let ws_urgent = render_multi(&theme.ws_urgent, &[], false);
+++
+++    // client lines
+++    let client_focused = render_multi(&theme.client_focused, &[], false);
+++    let client_focused_inactive = render_multi(&theme.client_focused_inactive, &[], false);
+++    let client_unfocused = render_multi(&theme.client_unfocused, &[], false);
+++    let client_urgent = render_multi(&theme.client_urgent, &[], false);
+++
+++    // Directive name -> (theme colors, is_workspace_trailing).
+++    // is_workspace_trailing determines whether the ADDED block gets a trailing space.
+++    let directive_colors = |name: &str| -> (Vec<String>, bool) {
+++        match name {
+++            "separator" => (sep.clone().into_iter().collect(), false),
+++            "background" => (bg.clone().into_iter().collect(), false),
+++            "statusline" => (statusline.clone().into_iter().collect(), false),
+++            "focused_workspace" => (ws_focused.clone(), true),
+++            "active_workspace" => (ws_active.clone(), true),
+++            "inactive_workspace" => (ws_inactive.clone(), true),
+++            "urgent_workspace" => (ws_urgent.clone(), true),
+++            _ => (Vec::new(), false),
+++        }
+++    };
+++
+++    // --- Pass 2: edit colors block in place (EDIT) or build an ADD block.
+++    if colors_open.is_some() {
+++        // EDIT: replace color values within the existing colors block.
+++        let co = colors_open.unwrap();
+++        let cc = colors_close.unwrap();
+++        for i in (co + 1)..cc {
+++            let line = lines[i].clone();
+++            let trimmed = line.trim();
+++            let directive = trimmed.split_whitespace().next().unwrap_or("");
+++            let (colors, _trail) = directive_colors(directive);
+++            if colors.is_empty() {
+++                continue; // not a known color directive; leave as-is
+++            }
+++            // Preserve indentation and trailing whitespace.
+++            let indent = &line[..line.len() - line.trim_start().len()];
+++            let trimmed_line = line.trim();
+++            // Detect trailing whitespace on the original line.
+++            let mut trimmed_end = trimmed_line.len();
+++            // strip trailing whitespace chars
+++            while trimmed_end > 0 && line.chars().nth(trimmed_end - 1).map_or(false, |c| c == ' ' || c == '\t') {
+++                // not reached because trimmed already excludes it
+++            }
+++            // Rebuild: indent + directive + space + colors.
+++            let mut new = String::new();
+++            new.push_str(indent);
+++            new.push_str(directive);
+++            new.push(' ');
+++            new.push_str(&join_colors(&colors, false));
+++            lines[i] = new;
+++        }
+++    } else if bar_open.is_some() {
+++        // ADD: build a colors block and insert before the bar's closing brace.
+++        let bc = bar_close.unwrap_or(bar_open.unwrap());
+++        let sep_v: Vec<String> = sep.clone().into_iter().collect();
+++        let bg_v: Vec<String> = bg.clone().into_iter().collect();
+++        let sl_v: Vec<String> = statusline.clone().into_iter().collect();
+++        let mut added: Vec<String> = Vec::new();
+++        added.push("  colors {".to_string());
+++        added.push(format!("    separator {}", join_colors(&sep_v, false)));
+++        added.push(format!("    background {}", join_colors(&bg_v, false)));
+++        added.push(format!("    statusline {}", join_colors(&sl_v, false)));
+++        added.push(format!("    focused_workspace {}", join_colors(&ws_focused, true)));
+++        added.push(format!("    active_workspace {}", join_colors(&ws_active, true)));
+++        added.push(format!("    inactive_workspace {}", join_colors(&ws_inactive, true)));
+++        added.push(format!("    urgent_workspace {}", join_colors(&ws_urgent, true)));
+++        added.push("  }".to_string());
+++        lines.splice(bc..bc, added.into_iter());
+++    }
+++
+++
+++    // --- Pass 3: client lines (replace existing, else append at end).
+++    // Detect existing client.* lines.
+++    let mut last_client_line = None;
+++    let mut first_client_line = None;
+++    for (i, line) in lines.iter().enumerate() {
+++        let trimmed = line.trim();
+++        if trimmed.starts_with("client.") {
+++            if first_client_line.is_none() {
+++                first_client_line = Some(i);
+++            }
+++            last_client_line = Some(i);
+++        }
+++    }
+++
+++    let client_block = vec![
+++        format!("client.focused {}", join_colors(&client_focused, false)),
+++        format!("client.focused_inactive {}", join_colors(&client_focused_inactive, false)),
+++        format!("client.unfocused {}", join_colors(&client_unfocused, false)),
+++        format!("client.urgent {}", join_colors(&client_urgent, false)),
+++    ];
+++
+++    if let (Some(fi), Some(li)) = (first_client_line, last_client_line) {
+++        // Replace the contiguous block of client lines.
+++        for i in (fi..=li).rev() {
+++            lines.remove(i);
+++        }
+++        for i in (0..client_block.len()).rev() {
+++            lines.insert(fi, client_block[i].clone());
+++        }
+++    } else {
+++        // Append at the end (before final newline reconstruction).
+++        for c in &client_block {
+++            lines.push(c.clone());
+++        }
+++    }
+++
+++    // --- Reconstruct output.
+++    let mut out = String::new();
+++    for (i, line) in lines.iter().enumerate() {
+++        if i > 0 {
+++            out.push('\n');
+++        }
+++        out.push_str(line);
+++    }
+++    if had_trailing_newline {
+++        out.push('\n');
+++    }
+++    out
+++}
+++
+++// ---------------- Static text ----------------
+++
+++const HELP_TEXT: &str = "i3-style 1.0\nMake your i3 config a bit more stylish\n\nUSAGE:\n    orig_executable [FLAGS] [OPTIONS] [theme]\n\nFLAGS:\n    -h, --help        Prints help information\n    -l, --list-all    Print a list of all available themes\n    -r, --reload      Apply the theme by reloading the config\n    -s, --save        Set the output file to the path of the input file\n    -V, --version     Prints version information\n\nOPTIONS:\n    -c, --config <file>      The config file the theme should be applied to. Defaults to the default i3 location.\n    -o, --output <file>      Apply the theme, attempt to validate the result, and write it to <file>\n    -t, --to-theme <file>    Prints an i3-style theme based on the given config suitable for sharing with others\n                             [default: ]\n\nARGS:\n    <theme>    The theme to use\n";
+++
+++const LIST_ALL_TEXT: &str = "\nAvailable themes:\n\n  slate              - Slate theme by Jody Ribton <jody@ribton.me>\n  alphare            - A beige theme by Alphare\n  ubuntu             - Ubuntu theme by lasers\n  flat-gray          - flat gray based theme\n  purple             - Purple theme by AAlakkad <http://aalakkad.me>\n  archlinux          - Archlinux theme by okraits <http://okraits.de>\n  default            - Default theme for i3wm <http://i3wm.org>\n  debian             - Debian theme by lasers\n  oceanic-next       - Theme by Valentin Weber inspired by voronianski (https://github.com/voronianski/oceanic-next-color-scheme)\n  base16-tomorrow    - Base16 Tomorrow, by Chris Kempson (http://chriskempson.com)\n  okraits            - A simple theme by okraits <http://okraits.de>\n  icelines           - icelines theme by mbfraga\n  solarized          - Solarized theme by lasers\n  deep-purple        - Inspired by the Purple and Default themes. By jcpst <http://jcpst.com>\n  tomorrow-night-80s - Tomorrow Night 80s theme by jmfurlott <http://jmfurlott.com>\n  seti               - seti theme by Jody Ribton - based on the seti Atom theme at https://atom.io/themes/seti-ui\n  lime               - Lime theme by wei2912 <http://wei2912.github.io>, based on Archlinux theme by okraits <http://okraits.de>\n  gruvbox            - Made by freeware-preacher <https://github.com/freeware-preacher> to match gruvbox by morhetz <https://github.com/morhetz>\n  mate               - Theme for blending i3 into MATE\n";
+++
+++const NO_ARGS_TEXT: &str = "USAGE:\n    orig_executable [FLAGS] [OPTIONS] [theme]\n\nSelect a theme as the first argument. Use `--list-all` to see the themes.\n";
+++
+++const _: () = {
+++    // keep csnone/csones referenced
+++    #[allow(dead_code)]
+++    fn _r() { let _ = csnone(); let _ = csones(&[]); }
+++};
+diff --git a/src/main.rs b/src/main.rs
+new file mode 100644
+index 0000000..2b92f15
+--- /dev/null
++++ b/src/main.rs
+@@ -0,0 +1,969 @@
++// i3-style 1.0 reconstruction (Rust std-only, no external deps).
++// Re-implements observed behavior of the original binary.
++
++use std::env;
++use std::fs;
++use std::path::PathBuf;
++use std::process::{Command, Stdio};
++
++// ---------------- Theme data ----------------
++
++// Each color group: name + colors. Client groups have 4 colors.
++// Workspace groups (bar) have 3 colors; a 4th color is derived from input.
++// A color entry of None means "undefined" (echo input / special handling).
++
++#[derive(Clone)]
++struct ColorSet {
++    colors: Vec<Option<String>>,
++}
++
++
++#[derive(Clone)]
++struct Theme {
++    name: String,
++    desc: String,
++    // clients: focused, focused_inactive, unfocused, urgent  (4 colors each)
++    client_focused: ColorSet,
++    client_focused_inactive: ColorSet,
++    client_unfocused: ColorSet,
++    client_urgent: ColorSet,
++    // bar: separator, background, statusline (1 color each)
++    sep: ColorSet,
++    bg: ColorSet,
++    statusline: ColorSet,
++    // bar workspaces: focused, active, inactive, urgent (3 colors each)
++    ws_focused: ColorSet,
++    ws_active: ColorSet,
++    ws_inactive: ColorSet,
++    ws_urgent: ColorSet,
++}
++
++fn cs(c: &[&str]) -> ColorSet {
++    ColorSet { colors: c.iter().map(|s| Some(s.to_string())).collect() }
++}
++fn csones(c: &[&str]) -> ColorSet {
++    ColorSet { colors: c.iter().map(|s| Some(s.to_string())).collect() }
++}
++fn csnone() -> ColorSet {
++    ColorSet { colors: vec![None] }
++}
++
++fn all_themes() -> Vec<Theme> {
++    vec![
++        Theme { name: "slate".into(), desc: "Slate theme by Jody Ribton <jody@ribton.me>".into(),
++            client_focused: cs(&["#586e75","#586e75","#fdf6e3","#268bd2"]),
++            client_focused_inactive: cs(&["#073642","#073642","#93a1a1","#002b36"]),
++            client_unfocused: cs(&["#002b36","#002b36","#586e75","#002b36"]),
++            client_urgent: cs(&["#dc322f","#dc322f","#fdf6e3","#dc322f"]),
++            sep: cs(&["#586e75"]), bg: cs(&["#002b36"]), statusline: cs(&["#aea79f"]),
++            ws_focused: cs(&["#586e75","#586e75","#ffffff"]),
++            ws_active: cs(&["#073642","#073642","#ffffff"]),
++            ws_inactive: cs(&["#002b36","#002b36","#aea79f"]),
++            ws_urgent: cs(&["#77216f","#77216f","#ffffff"]), },
++        Theme { name: "alphare".into(), desc: "A beige theme by Alphare".into(),
++            client_focused: cs(&["#000000","#FDF6E3","#002B36","#000000"]),
++            client_focused_inactive: cs(&["#000000","#5F676A","#FDF6E3","#484E50"]),
++            client_unfocused: cs(&["#000000","#000000","#FDF6E3","#000000"]),
++            client_urgent: cs(&["#000000","#DC322F","#FDF6E3","#DC322F"]),
++            sep: cs(&["#000000"]), bg: cs(&["#FDF6E3"]), statusline: cs(&["#002B36"]),
++            ws_focused: cs(&["#000000","#268BD2","#FFFFFF"]),
++            ws_active: cs(&["#333333","#222222","#FFFFFF"]),
++            ws_inactive: cs(&["#333333","#222222","#888888"]),
++            ws_urgent: cs(&["#2F343A","#900000","#FFFFFF"]), },
++        Theme { name: "ubuntu".into(), desc: "Ubuntu theme by lasers".into(),
++            client_focused: cs(&["#dd4814","#dd4814","#ffffff","#902a07"]),
++            client_focused_inactive: cs(&["#5e2750","#5e2750","#aea79f","#5e2750"]),
++            client_unfocused: cs(&["#5e2750","#5e2750","#aea79f","#5e2750"]),
++            client_urgent: cs(&["#77216f","#77216f","#ffffff","#efb73e"]),
++            sep: cs(&["#333333"]), bg: cs(&["#2c001e"]), statusline: cs(&["#aea79f"]),
++            ws_focused: cs(&["#dd4814","#dd4814","#ffffff"]),
++            ws_active: cs(&["#902a07","#902a07","#aea79f"]),
++            ws_inactive: cs(&["#902a07","#902a07","#aea79f"]),
++            ws_urgent: cs(&["#77216f","#77216f","#ffffff"]), },
++        Theme { name: "flat-gray".into(), desc: "flat gray based theme".into(),
++            client_focused: cs(&["#000000","#000000","#FFFFFF","#000000"]),
++            client_focused_inactive: cs(&["#333333","#333333","#FFFFFF","#000000"]),
++            client_unfocused: cs(&["#333333","#333333","#FFFFFF","#333333"]),
++            client_urgent: csnone(),
++            sep: csnone(), bg: cs(&["#333333"]), statusline: cs(&["#AAAAAA"]),
++            ws_focused: cs(&["#282828","#282828","#FFFFFF"]),
++            ws_active: csnone(),
++            ws_inactive: cs(&["#333333","#333333","#AAAAAA"]),
++            ws_urgent: csnone(), },
++        Theme { name: "purple".into(), desc: "Purple theme by AAlakkad <http://aalakkad.me>".into(),
++            client_focused: cs(&["#664477","#664477","#cccccc","#e7d8b1"]),
++            client_focused_inactive: cs(&["#e7d8b1","#e7d8b1","#181715","#A074C4"]),
++            client_unfocused: cs(&["#222133","#222133","#AAAAAA","#A074C4"]),
++            client_urgent: cs(&["#CE4045","#CE4045","#e7d8b1","#DCCD69"]),
++            sep: cs(&["#AAAAAA"]), bg: cs(&["#222133"]), statusline: cs(&["#FFFFFF"]),
++            ws_focused: cs(&["#664477","#664477","#cccccc"]),
++            ws_active: cs(&["#DCCD69","#DCCD69","#181715"]),
++            ws_inactive: cs(&["#222133","#222133","#AAAAAA"]),
++            ws_urgent: cs(&["#CE4045","#CE4045","#FFFFFF"]), },
++        Theme { name: "archlinux".into(), desc: "Archlinux theme by okraits <http://okraits.de>".into(),
++            client_focused: cs(&["#0088CC","#0088CC","#ffffff","#dddddd"]),
++            client_focused_inactive: cs(&["#333333","#333333","#888888","#292d2e"]),
++            client_unfocused: cs(&["#333333","#333333","#888888","#292d2e"]),
++            client_urgent: cs(&["#2f343a","#900000","#ffffff","#900000"]),
++            sep: cs(&["#666666"]), bg: cs(&["#222222"]), statusline: cs(&["#dddddd"]),
++            ws_focused: cs(&["#0088CC","#0088CC","#ffffff"]),
++            ws_active: cs(&["#333333","#333333","#ffffff"]),
++            ws_inactive: cs(&["#333333","#333333","#888888"]),
++            ws_urgent: cs(&["#2f343a","#900000","#ffffff"]), },
++        Theme { name: "default".into(), desc: "Default theme for i3wm <http://i3wm.org>".into(),
++            client_focused: cs(&["#4c7899","#285577","#ffffff","#2e9ef4"]),
++            client_focused_inactive: cs(&["#333333","#5f676a","#ffffff","#484e50"]),
++            client_unfocused: cs(&["#333333","#222222","#888888","#292d2e"]),
++            client_urgent: cs(&["#2f343a","#900000","#ffffff","#900000"]),
++            sep: cs(&["#666666"]), bg: cs(&["#000000"]), statusline: cs(&["#ffffff"]),
++            ws_focused: cs(&["#4c7899","#285577","#ffffff"]),
++            ws_active: cs(&["#333333","#5f676a","#ffffff"]),
++            ws_inactive: cs(&["#333333","#222222","#888888"]),
++            ws_urgent: cs(&["#2f343a","#900000","#ffffff"]), },
++        Theme { name: "debian".into(), desc: "Debian theme by lasers".into(),
++            client_focused: cs(&["#d70a53","#d70a53","#ffffff","#8c0333"]),
++            client_focused_inactive: cs(&["#333333","#333333","#888888","#333333"]),
++            client_unfocused: cs(&["#333333","#333333","#888888","#333333"]),
++            client_urgent: cs(&["#eb709b","#eb709b","#ffffff","#eb709b"]),
++            sep: cs(&["#444444"]), bg: cs(&["#222222"]), statusline: cs(&["#666666"]),
++            ws_focused: cs(&["#d70a53","#d70a53","#ffffff"]),
++            ws_active: cs(&["#333333","#333333","#888888"]),
++            ws_inactive: cs(&["#333333","#333333","#888888"]),
++            ws_urgent: cs(&["#eb709b","#eb709b","#ffffff"]), },
++        Theme { name: "oceanic-next".into(), desc: "Theme by Valentin Weber inspired by voronianski (https://github.com/voronianski/oceanic-next-color-scheme)".into(),
++            client_focused: cs(&["#6699CC","#6699CC","#1B2B34","#6699CC"]),
++            client_focused_inactive: cs(&["#5FB3B3","#5FB3B3","#D8DEE9","#A7ADBA"]),
++            client_unfocused: cs(&["#343D46","#343D46","#D8DEE9","#343D46"]),
++            client_urgent: cs(&["#EC5f67","#EC5f67","#1B2B34","#EC5f67"]),
++            sep: cs(&["#65737E"]), bg: cs(&["#1B2B34"]), statusline: cs(&["#D8DEE9"]),
++            ws_focused: cs(&["#6699CC","#6699CC","#1B2B34"]),
++            ws_active: cs(&["#5FB3B3","#5FB3B3","#1B2B34"]),
++            ws_inactive: cs(&["#343D46","#343D46","#D8DEE9"]),
++            ws_urgent: cs(&["#EC5f67","#EC5f67","#1B2B34"]), },
++        Theme { name: "base16-tomorrow".into(), desc: "Base16 Tomorrow, by Chris Kempson (http://chriskempson.com)".into(),
++            client_focused: cs(&["#81a2be","#81a2be","#1d1f21","#282a2e"]),
++            client_focused_inactive: cs(&["#373b41","#373b41","#969896","#282a2e"]),
++            client_unfocused: cs(&["#282a2e","#282a2e","#969896","#282a2e"]),
++            client_urgent: cs(&["#373b41","#cc6666","#ffffff","#cc6666"]),
++            sep: cs(&["#969896"]), bg: cs(&["#1d1f21"]), statusline: cs(&["#c5c8c6"]),
++            ws_focused: cs(&["#81a2be","#81a2be","#1d1f21"]),
++            ws_active: cs(&["#373b41","#373b41","#ffffff"]),
++            ws_inactive: cs(&["#282a2e","#282a2e","#969896"]),
++            ws_urgent: cs(&["#cc6666","#cc6666","#ffffff"]), },
++        Theme { name: "okraits".into(), desc: "A simple theme by okraits <http://okraits.de>".into(),
++            client_focused: cs(&["#888888","#dddddd","#222222","#2e9ef4"]),
++            client_focused_inactive: cs(&["#333333","#555555","#bbbbbb","#484e50"]),
++            client_unfocused: cs(&["#333333","#333333","#888888","#292d2e"]),
++            client_urgent: cs(&["#2f343a","#900000","#ffffff","#900000"]),
++            sep: cs(&["#666666"]), bg: cs(&["#333333"]), statusline: cs(&["#bbbbbb"]),
++            ws_focused: cs(&["#888888","#dddddd","#222222"]),
++            ws_active: cs(&["#333333","#555555","#bbbbbb"]),
++            ws_inactive: cs(&["#333333","#555555","#bbbbbb"]),
++            ws_urgent: cs(&["#2f343a","#900000","#ffffff"]), },
++        Theme { name: "icelines".into(), desc: "icelines theme by mbfraga".into(),
++            client_focused: cs(&["#00b0ef","#00b0ef","#141414","#ff7066"]),
++            client_focused_inactive: cs(&["#141414","#141414","#00b0ef","#472b2a"]),
++            client_unfocused: cs(&["#141414","#141414","#7d7d7d","#141414"]),
++            client_urgent: cs(&["#ff7066","#ff7066","#141414","#ff7066"]),
++            sep: cs(&["#7d7d7d"]), bg: cs(&["#141414"]), statusline: cs(&["#00b0ef"]),
++            ws_focused: cs(&["#00b0ef","#141414","#00b0ef"]),
++            ws_active: cs(&["#141414","#141414","#00b0ef"]),
++            ws_inactive: cs(&["#141414","#141414","#7d7d7d"]),
++            ws_urgent: cs(&["#ff7066","#141414","#ff7066"]), },
++        Theme { name: "solarized".into(), desc: "Solarized theme by lasers".into(),
++            client_focused: cs(&["#859900","#859900","#fdf6e3","#6c71c4"]),
++            client_focused_inactive: cs(&["#073642","#073642","#eee8d5","#6c71c4"]),
++            client_unfocused: cs(&["#073642","#073642","#93a1a1","#586e75"]),
++            client_urgent: cs(&["#d33682","#d33682","#fdf6e3","#dc322f"]),
++            sep: cs(&["#dc322f"]), bg: cs(&["#002b36"]), statusline: cs(&["#268bd2"]),
++            ws_focused: cs(&["#fdf6e3","#859900","#fdf6e3"]),
++            ws_active: cs(&["#fdf6e3","#6c71c4","#fdf6e3"]),
++            ws_inactive: cs(&["#586e75","#93a1a1","#002b36"]),
++            ws_urgent: cs(&["#d33682","#d33682","#fdf6e3"]), },
++        Theme { name: "deep-purple".into(), desc: "Inspired by the Purple and Default themes. By jcpst <http://jcpst.com>".into(),
++            client_focused: cs(&["#3b1261","#3b1261","#ffffff","#662b9c"]),
++            client_focused_inactive: cs(&["#333333","#5f676a","#ffffff","#484e50"]),
++            client_unfocused: cs(&["#222222","#222222","#888888","#292d2e"]),
++            client_urgent: cs(&["#2f343a","#900000","#ffffff","#900000"]),
++            sep: cs(&["#666666"]), bg: cs(&["#000000"]), statusline: cs(&["#ffffff"]),
++            ws_focused: cs(&["#551a8b","#551a8b","#ffffff"]),
++            ws_active: cs(&["#333333","#5f676a","#ffffff"]),
++            ws_inactive: cs(&["#000000","#000000","#888888"]),
++            ws_urgent: cs(&["#2f343a","#900000","#ffffff"]), },
++        Theme { name: "tomorrow-night-80s".into(), desc: "Tomorrow Night 80s theme by jmfurlott <http://jmfurlott.com>".into(),
++            client_focused: cs(&["#99cc99","#99cc99","#000000","#2d2d2d"]),
++            client_focused_inactive: cs(&["#393939","#393939","#888888","#292d2e"]),
++            client_unfocused: cs(&["#2d2d2d","#2d2d2d","#999999","#292d2e"]),
++            client_urgent: cs(&["#2f343a","#900000","#ffffff","#900000"]),
++            sep: cs(&["#515151"]), bg: cs(&["#2d2d2d"]), statusline: cs(&["#cccccc"]),
++            ws_focused: cs(&["#99cc99","#99cc99","#000000"]),
++            ws_active: cs(&["#333333","#333333","#ffffff"]),
++            ws_inactive: cs(&["#2d2d2d","#2d2d2d","#999999"]),
++            ws_urgent: cs(&["#f2777a","#f2777a","#ffffff"]), },
++        Theme { name: "seti".into(), desc: "seti theme by Jody Ribton - based on the seti Atom theme at https://atom.io/themes/seti-ui".into(),
++            client_focused: cs(&["#4F99D3","#4F99D3","#151718","#9FCA56"]),
++            client_focused_inactive: cs(&["#9FCA56","#9FCA56","#151718","#A074C4"]),
++            client_unfocused: cs(&["#1f2326","#1f2326","#AAAAAA","#A074C4"]),
++            client_urgent: cs(&["#CE4045","#CE4045","#FFFFFF","#DCCD69"]),
++            sep: cs(&["#AAAAAA"]), bg: cs(&["#1f2326"]), statusline: cs(&["#FFFFFF"]),
++            ws_focused: cs(&["#9FCA56","#9FCA56","#151718"]),
++            ws_active: cs(&["#DCCD69","#DCCD69","#151718"]),
++            ws_inactive: cs(&["#1f2326","#1f2326","#AAAAAA"]),
++            ws_urgent: cs(&["#CE4045","#CE4045","#FFFFFF"]), },
++        Theme { name: "lime".into(), desc: "Lime theme by wei2912 <http://wei2912.github.io>, based on Archlinux theme by okraits <http://okraits.de>".into(),
++            client_focused: cs(&["#4E9C00","#4E9C00","#FFFFFF","#FFFFFF"]),
++            client_focused_inactive: cs(&["#1B3600","#1B3600","#888888","#FFFFFF"]),
++            client_unfocused: cs(&["#333333","#333333","#888888","#FFFFFF"]),
++            client_urgent: cs(&["#C20000","#C20000","#FFFFFF","#FFFFFF"]),
++            sep: cs(&["#888888"]), bg: cs(&["#333333"]), statusline: cs(&["#FFFFFF"]),
++            ws_focused: cs(&["#4E9C00","#4E9C00","#FFFFFF"]),
++            ws_active: cs(&["#333333","#333333","#FFFFFF"]),
++            ws_inactive: cs(&["#333333","#333333","#888888"]),
++            ws_urgent: cs(&["#C20000","#C20000","#FFFFFF"]), },
++        Theme { name: "gruvbox".into(), desc: "Made by freeware-preacher <https://github.com/freeware-preacher> to match gruvbox by morhetz <https://github.com/morhetz>".into(),
++            client_focused: cs(&["#689d6a","#689d6a","#282828","#282828"]),
++            client_focused_inactive: cs(&["#1d2021","#1d2021","#928374","#282828"]),
++            client_unfocused: cs(&["#32302f","#32302f","#928374","#282828"]),
++            client_urgent: cs(&["#cc241d","#cc241d","#ebdbb2","#282828"]),
++            sep: cs(&["#928374"]), bg: cs(&["#282828"]), statusline: cs(&["#ebdbb2"]),
++            ws_focused: cs(&["#689d6a","#689d6a","#282828"]),
++            ws_active: cs(&["#1d2021","#1d2021","#928374"]),
++            ws_inactive: cs(&["#32302f","#32302f","#928374"]),
++            ws_urgent: cs(&["#cc241d","#cc241d","#ebdbb2"]), },
++        Theme { name: "mate".into(), desc: "Theme for blending i3 into MATE".into(),
++            client_focused: cs(&["#526532","#526532","#ffffff","#a4cb64"]),
++            client_focused_inactive: cs(&["#aea79f","#aea79f","#3c3b37","#aea79f"]),
++            client_unfocused: cs(&["#3c3b37","#3c3b37","#aea79f","#3c3b37"]),
++            client_urgent: cs(&["#FF0000","#FF0000","#ffffff","#FF0000"]),
++            sep: cs(&["#ffffff"]), bg: cs(&["#3c3b37"]), statusline: cs(&["#ffffff"]),
++            ws_focused: cs(&["#526532","#526532","#ffffff"]),
++            ws_active: cs(&["#aea79f","#aea79f","#3c3b37"]),
++            ws_inactive: cs(&["#3c3b37","#3c3b37","#aea79f"]),
++            ws_urgent: cs(&["#FF0000","#FF0000","#ffffff"]), },
++    ]
++}
++
++fn find_theme(name: &str) -> Option<Theme> {
++    for t in &all_themes() {
++        if t.name == name {
++            return Some(t.clone());
++        }
++    }
++    None
++}
++
++// ---------------- Apply helpers ----------------
++
++// Render a ColorSet into a single color string, or None if undefined.
++fn render_one(cs: &ColorSet, input: &[String]) -> Option<String> {
++    if cs.colors.is_empty() {
++        return None;
++    }
++    // If all are None -> undefined (echo input).
++    if cs.colors.iter().all(|c| c.is_none()) {
++        // echo first input color if present
++        if !input.is_empty() {
++            return Some(input[0].clone());
++        }
++        return None;
++    }
++    // take the first Some
++    for c in &cs.colors {
++        if let Some(s) = c {
++            return Some(s.clone());
++        }
++    }
++    None
++}
++
++// Render a ColorSet into multiple colors (for workspaces/clients).
++// `n` = how many to emit. Returns the colors (theme) plus possibly an input-derived 4th.
++fn render_multi(cs: &ColorSet, input: &[String], present: bool) -> Vec<String> {
++    let mut out = Vec::new();
++    // theme colors
++    for c in &cs.colors {
++        if let Some(s) = c {
++            out.push(s.clone());
++        }
++    }
++    // If the ColorSet is entirely None (undefined), echo input colors.
++    if cs.colors.iter().all(|c| c.is_none()) && !input.is_empty() {
++        out = input.to_vec();
++    }
++    // 4th color from input[2] if present and exactly 3 colors
++    if present && out.len() == 3 {
++        if input.len() >= 3 {
++            out.push(input[2].clone());
++        }
++    }
++    out
++}
++
++fn join_colors(colors: &[String], trailing: bool) -> String {
++    let s: String = colors.iter().map(|c| c.as_str()).collect::<Vec<_>>().join(" ");
++    if trailing {
++        format!("{} ", s)
++    } else {
++        s
++    }
++}
++
++fn main() {
++    let args: Vec<String> = env::args().collect();
++
++    // Program name = basename of argv[0] (matches clap v2).
++    let prog: String = args
++        .get(0)
++        .map(|s| {
++            std::path::Path::new(s)
++                .file_name()
++                .map(|f| f.to_string_lossy().into_owned())
++                .unwrap_or_else(|| s.clone())
++        })
++        .unwrap_or_else(|| "i3-style".to_string());
++
++    // ---------------- Parse (hand-rolled to match clap v2) ----------------
++    // -h / -V exit immediately as they are encountered.
++    // Unknown flags and a second positional are hard errors (clap).
++    // -c / -o require a value; -t has a default (empty) so missing value = "".
++    let mut list_all = false;
++    let mut reload = false;
++    let mut save = false;
++    // clap-v2: -c / -o have a REQUIRED value; -t has [default: ] (empty).
++    // A value token must not start with '-' (a flag is never a value).
++    let mut config_present = false;
++    let mut config_value: Option<String> = None;
++    let mut output_present = false;
++    let mut output_value: Option<String> = None;
++    let mut to_theme_present = false;
++    let mut to_theme_value = String::new();
++    let mut theme_pos: Option<String> = None;
++    // options present-but-missing-value, in command-line order (last is named).
++    let mut missing_opts: Vec<&str> = Vec::new();
++    // duplicates of -c/-o/-t, in command-line order (last is named).
++    let mut dup_opts: Vec<&str> = Vec::new();
++
++    let mut after_dd = false;
++    let mut i = 1;
++    while i < args.len() {
++        let a = args[i].clone();
++        let next_is_flag = i + 1 < args.len() && args[i + 1].starts_with('-') && args[i + 1] != "-";
++
++        // after "--": everything is a positional (theme)
++        if after_dd {
++            if theme_pos.is_some() {
++                eprint!("{}", unknown_arg_error(&prog, &a, config_present, list_all, output_present, reload, save, to_theme_present));
++                std::process::exit(1);
++            }
++            theme_pos = Some(a);
++            i += 1;
++            continue;
++        }
++
++        // "--" is the end-of-options separator
++        if a == "--" {
++            after_dd = true;
++            i += 1;
++            continue;
++        }
++
++        // long option with equals syntax: --config=V / --output=V / --to-theme=V
++        if let Some(v) = a.strip_prefix("--config=") {
++            if config_present {
++                dup_opts.push("config");
++            } else {
++                config_present = true;
++                config_value = Some(v.to_string());
++            }
++            i += 1;
++            continue;
++        }
++        if let Some(v) = a.strip_prefix("--output=") {
++            if output_present {
++                dup_opts.push("output");
++            } else {
++                output_present = true;
++                output_value = Some(v.to_string());
++            }
++            i += 1;
++            continue;
++        }
++        if let Some(v) = a.strip_prefix("--to-theme=") {
++            if to_theme_present {
++                dup_opts.push("to-theme");
++            } else {
++                to_theme_present = true;
++                to_theme_value = v.to_string();
++            }
++            i += 1;
++            continue;
++        }
++
++        // combined short flags / short option with equals (single dash, len > 2)
++        if a.len() > 2 && a.starts_with("-") && !a.starts_with("--") {
++            let mut j = 1usize;
++            let mut done = false;
++            while j < a.len() && !done {
++                match &a[j..j + 1] {
++                    "h" => {
++                        print!("{}", HELP_TEXT.replace("orig_executable", &prog));
++                        std::process::exit(0);
++                    }
++                    "V" => {
++                        println!("i3-style 1.0");
++                        std::process::exit(0);
++                    }
++                    "l" => { list_all = true; j += 1; }
++                    "r" => { reload = true; j += 1; }
++                    "s" => { save = true; j += 1; }
++                    "c" => {
++                        let rest = &a[j + 1..];
++                        if config_present {
++                            dup_opts.push("config");
++                        } else if let Some(v) = rest.strip_prefix("=") {
++                            config_present = true;
++                            config_value = Some(v.to_string());
++                        } else if !rest.is_empty() {
++                            config_present = true;
++                            config_value = Some(rest.to_string());
++                        } else if next_is_flag || i + 1 >= args.len() {
++                            config_present = true;
++                            missing_opts.push("config");
++                        } else {
++                            i += 1;
++                            config_present = true;
++                            config_value = Some(args[i].clone());
++                        }
++                        done = true;
++                    }
++                    "o" => {
++                        let rest = &a[j + 1..];
++                        if output_present {
++                            dup_opts.push("output");
++                        } else if let Some(v) = rest.strip_prefix("=") {
++                            output_present = true;
++                            output_value = Some(v.to_string());
++                        } else if !rest.is_empty() {
++                            output_present = true;
++                            output_value = Some(rest.to_string());
++                        } else if next_is_flag || i + 1 >= args.len() {
++                            output_present = true;
++                            missing_opts.push("output");
++                        } else {
++                            i += 1;
++                            output_present = true;
++                            output_value = Some(args[i].clone());
++                        }
++                        done = true;
++                    }
++                    "t" => {
++                        let rest = &a[j + 1..];
++                        if to_theme_present {
++                            dup_opts.push("to-theme");
++                        } else {
++                            to_theme_present = true;
++                            if let Some(v) = rest.strip_prefix("=") {
++                                to_theme_value = v.to_string();
++                            } else if !rest.is_empty() {
++                                to_theme_value = rest.to_string();
++                            } else if next_is_flag || i + 1 >= args.len() {
++                                to_theme_value = String::new();
++                            } else {
++                                i += 1;
++                                to_theme_value = args[i].clone();
++                            }
++                        }
++                        done = true;
++                    }
++                    _ => {
++                        eprint!("{}", unknown_arg_error(&prog, &a, config_present, list_all, output_present, reload, save, to_theme_present));
++                        std::process::exit(1);
++                    }
++                }
++            }
++            i += 1;
++            continue;
++        }
++
++        // single short flag / long option / positional
++        match a.as_str() {
++            "-h" | "--help" => {
++                print!("{}", HELP_TEXT.replace("orig_executable", &prog));
++                std::process::exit(0);
++            }
++            "-V" | "--version" => {
++                println!("i3-style 1.0");
++                std::process::exit(0);
++            }
++            "-l" | "--list-all" => list_all = true,
++            "-r" | "--reload" => reload = true,
++            "-s" | "--save" => save = true,
++            "-c" | "--config" => {
++                if config_present {
++                    // duplicate: still consume a non-flag value so it isn't a
++                    // stray positional, but record it as a duplicate only.
++                    if !next_is_flag && i + 1 < args.len() {
++                        i += 1;
++                    }
++                    dup_opts.push("config");
++                } else {
++                    config_present = true;
++                    if next_is_flag || i + 1 >= args.len() {
++                        missing_opts.push("config");
++                    } else {
++                        i += 1;
++                        config_value = Some(args[i].clone());
++                    }
++                }
++            }
++            "-o" | "--output" => {
++                if output_present {
++                    if !next_is_flag && i + 1 < args.len() {
++                        i += 1;
++                    }
++                    dup_opts.push("output");
++                } else {
++                    output_present = true;
++                    if next_is_flag || i + 1 >= args.len() {
++                        missing_opts.push("output");
++                    } else {
++                        i += 1;
++                        output_value = Some(args[i].clone());
++                    }
++                }
++            }
++            "-t" | "--to-theme" => {
++                if to_theme_present {
++                    if !next_is_flag && i + 1 < args.len() {
++                        i += 1;
++                    }
++                    dup_opts.push("to-theme");
++                } else {
++                    to_theme_present = true;
++                    if next_is_flag || i + 1 >= args.len() {
++                        to_theme_value = String::new();
++                    } else {
++                        i += 1;
++                        to_theme_value = args[i].clone();
++                    }
++                }
++            }
++            _ => {
++                if a.starts_with('-') && a != "-" {
++                    eprint!("{}", unknown_arg_error(&prog, &a, config_present, list_all, output_present, reload, save, to_theme_present));
++                    std::process::exit(1);
++                }
++                if theme_pos.is_some() {
++                    eprint!("{}", unknown_arg_error(&prog, &a, config_present, list_all, output_present, reload, save, to_theme_present));
++                    std::process::exit(1);
++                }
++                theme_pos = Some(a);
++            }
++        }
++        i += 1;
++    }
++
++
++    // Build the USAGE line (present args in the App's definition order, then --to-theme).
++    // Shared by the missing-value and duplicate-option errors.
++    let mut parts: Vec<String> = Vec::new();
++    if config_present {
++        parts.push("--config <file>".to_string());
++    }
++    if list_all {
++        parts.push("--list-all".to_string());
++    }
++    if output_present {
++        parts.push("--output <file>".to_string());
++    }
++    if reload {
++        parts.push("--reload".to_string());
++    }
++    if save {
++        parts.push("--save".to_string());
++    }
++    parts.push("--to-theme <file>".to_string());
++    let usage = parts.join(" ");
++
++    // Missing-value error (clap) - names the LAST missing option in command order.
++    if !missing_opts.is_empty() {
++        let named = *missing_opts.last().unwrap();
++        eprint!(
++            "error: The argument '--{} <file>' requires a value but none was supplied\n\n\
++USAGE:\n    {} {}\n\n\
++For more information try --help\n",
++            named, prog, usage
++        );
++        std::process::exit(1);
++    }
++
++    // Duplicate-option error (clap) - names the LAST duplicate in command order.
++    if !dup_opts.is_empty() {
++        let named = *dup_opts.last().unwrap();
++        eprint!(
++            "error: The argument '--{} <file>' was provided more than once, but cannot be used multiple times\n\n\
++USAGE:\n    {} {}\n\n\
++For more information try --help\n",
++            named, prog, usage
++        );
++        std::process::exit(1);
++    }
++
++    // --list-all / -l
++    if list_all {
++        print!("{}", LIST_ALL_TEXT);
++        std::process::exit(0);
++    }
++
++    // No theme and no --to-theme (present) -> usage error (to stdout), exit 1.
++    if theme_pos.is_none() && !to_theme_present {
++        print!("{}", NO_ARGS_TEXT.replace("orig_executable", &prog));
++        std::process::exit(1);
++    }
++
++    // ---------------- Resolve config path ----------------
++    let default_config = {
++        let home = env::var("HOME").unwrap_or_default();
++        PathBuf::from(&home).join(".config/i3/config")
++    };
++    // Non-empty --to-theme wins; otherwise config (-c); otherwise the default.
++    let config_path = if !to_theme_value.is_empty() {
++        PathBuf::from(&to_theme_value)
++    } else if let Some(c) = &config_value {
++        PathBuf::from(c)
++    } else {
++        default_config.clone()
++    };
++    // Whether the config path was supplied explicitly (-c or non-empty -t).
++    let is_explicit = config_value.is_some() || (to_theme_present && !to_theme_value.is_empty());
++
++    // If the config resolves to the default location and it is missing,
++    // the original reports "Could not find i3 config".
++    if !is_explicit && !config_path.exists() {
++        eprintln!("Could not find i3 config");
++        std::process::exit(1);
++    }
++
++    // ---------------- Resolve the theme (only when a positional theme was given) ----------------
++    // The original checks the theme's existence before validating the config, so a bad
++    // theme yields "Could not open theme" regardless of whether i3 is present.
++    let theme: Option<Theme> = match &theme_pos {
++        Some(name) => match find_theme(name) {
++            Some(t) => Some(t),
++            None => {
++                eprintln!(
++                    "Could not open theme: {} - No such file or directory (os error 2)",
++                    name
++                );
++                eprintln!(" Use `i3-style --list-all` to see the available themes.");
++                std::process::exit(1);
++            }
++        },
++        None => None,
++    };
++
++    // ---------------- Validate the config with i3 ----------------
++    let status = Command::new("i3")
++        .args(&["-C", "-c", &config_path.to_string_lossy()])
++        .stdout(Stdio::null())
++        .stderr(Stdio::null())
++        .status();
++    match status {
++        Ok(s) if s.success() => {}
++        Ok(_) => {
++            eprintln!("Could not validate config.");
++            eprintln!("Use `i3 -C -c {}` to see validation errors.", config_path.display());
++            std::process::exit(1);
++        }
++        Err(e) => {
++            eprintln!(
++                "Could not validate config with `i3 -C -c {}` (is i3 in the PATH?) {}",
++                config_path.display(), e
++            );
++            std::process::exit(1);
++        }
++    }
++
++    // ---------------- apply / write / reload ----------------
++    // Read the config (now known to exist / be valid).
++    let config_content = fs::read_to_string(&config_path).unwrap_or_default();
++
++    // A positional theme is required to apply; --to-theme-only has none.
++    let applied = match &theme {
++        Some(t) => apply_theme(&config_content, t),
++        None => config_content.clone(),
++    };
++
++    // Persist the input/output under /tmp/i3-style/<ts>/ only for -o or -s.
++    if save || output_value.is_some() {
++        let ts = std::time::SystemTime::now()
++            .duration_since(std::time::UNIX_EPOCH)
++            .map(|d| d.as_secs())
++            .unwrap_or(0);
++        let dir = PathBuf::from("/tmp/i3-style").join(format!("{}", ts));
++        let _ = fs::create_dir_all(&dir);
++        let _ = fs::write(dir.join("config-input"), &config_content);
++        let _ = fs::write(dir.join("config-output"), &applied);
++        eprintln!(
++            "saving config at {} to {}/config-input",
++            config_path.display(),
++            dir.display()
++        );
++    }
++
++    if save {
++        let _ = fs::write(&config_path, &applied);
++    }
++    if let Some(o) = &output_value {
++        let _ = fs::write(o, &applied);
++    }
++    // Plain apply (no -o / no -s): print the themed config to stdout.
++    if !save && output_value.is_none() {
++        print!("{}", applied);
++    }
++    if reload {
++        let _ = Command::new("i3-msg")
++            .arg("reload")
++            .stdout(Stdio::null())
++            .stderr(Stdio::null())
++            .status();
++    }
++}
++
++// clap-v2 "unexpected argument" error (unknown flag or extra positional).
++fn unknown_arg_error(
++    prog: &str,
++    arg: &str,
++    config_present: bool,
++    list_all: bool,
++    output_present: bool,
++    reload: bool,
++    save: bool,
++    to_theme_present: bool,
++) -> String {
++    // The unknown-argument USAGE lists present args in the App's
++    // definition order, but (unlike the missing/duplicate errors) does
++    // NOT always append --to-theme; when nothing is present it falls
++    // back to the generic line.
++    let mut parts: Vec<String> = Vec::new();
++    if config_present {
++        parts.push("--config <file>".to_string());
++    }
++    if list_all {
++        parts.push("--list-all".to_string());
++    }
++    if output_present {
++        parts.push("--output <file>".to_string());
++    }
++    if reload {
++        parts.push("--reload".to_string());
++    }
++    if save {
++        parts.push("--save".to_string());
++    }
++    if to_theme_present {
++        parts.push("--to-theme <file>".to_string());
++    }
++    let usage = if parts.is_empty() {
++        "[FLAGS] [OPTIONS] [theme]".to_string()
++    } else {
++        parts.join(" ")
++    };
++    format!(
++        "error: Found argument '{}' which wasn't expected, or isn't valid in this context\n\n\
++USAGE:\n    {} {}\n\n\
++For more information try --help\n",
++        arg, prog, usage
++    )
++}
++
++// ---------------- Config parsing / apply ----------------
++
++// Apply the theme to the config text.
++fn apply_theme(config: &str, theme: &Theme) -> String {
++    // Split into lines (preserve line content; we re-join with \n).
++    let had_trailing_newline = config.ends_with('\n');
++    let mut lines: Vec<String> = if config.is_empty() {
++        Vec::new()
++    } else {
++        config.lines().map(|l| l.to_string()).collect()
++    };
++
++    // --- Pass 1: brace-depth scan to locate the bar block and its colors block.
++    let mut depth = 0i32;
++    let mut bar_open: Option<usize> = None;
++    let mut bar_base = 0i32;
++    let mut bar_close: Option<usize> = None;
++    let mut colors_open: Option<usize> = None;
++    let mut colors_base = 0i32;
++    let mut colors_close: Option<usize> = None;
++
++    for (i, line) in lines.iter().enumerate() {
++        let trimmed = line.trim();
++        let is_comment = trimmed.starts_with('#');
++        let code = if is_comment { "" } else { line.as_str() };
++        let opens = code.matches('{').count() as i32;
++        let closes = code.matches('}').count() as i32;
++
++        if bar_open.is_none() && bar_close.is_none() && !is_comment && trimmed.starts_with("bar") {
++            bar_open = Some(i);
++            bar_base = depth;
++        }
++        if colors_open.is_none() && bar_open.is_some() && bar_close.is_none() && !is_comment && trimmed.starts_with("colors") {
++            colors_open = Some(i);
++            colors_base = depth;
++        }
++
++        depth += opens - closes;
++
++        if bar_open.is_some() && bar_close.is_none() && depth <= bar_base {
++            bar_close = Some(i);
++        }
++        if colors_open.is_some() && colors_close.is_none() && depth <= colors_base {
++            colors_close = Some(i);
++        }
++    }
++
++    // --- Theme color strings (use theme values; empty input => no echo).
++    let sep = render_one(&theme.sep, &[]);
++    let bg = render_one(&theme.bg, &[]);
++    let statusline = render_one(&theme.statusline, &[]);
++    let ws_focused = render_multi(&theme.ws_focused, &[], false);
++    let ws_active = render_multi(&theme.ws_active, &[], false);
++    let ws_inactive = render_multi(&theme.ws_inactive, &[], false);
++    let ws_urgent = render_multi(&theme.ws_urgent, &[], false);
++
++    // client lines
++    let client_focused = render_multi(&theme.client_focused, &[], false);
++    let client_focused_inactive = render_multi(&theme.client_focused_inactive, &[], false);
++    let client_unfocused = render_multi(&theme.client_unfocused, &[], false);
++    let client_urgent = render_multi(&theme.client_urgent, &[], false);
++
++    // Directive name -> (theme colors, is_workspace_trailing).
++    // is_workspace_trailing determines whether the ADDED block gets a trailing space.
++    let directive_colors = |name: &str| -> (Vec<String>, bool) {
++        match name {
++            "separator" => (sep.clone().into_iter().collect(), false),
++            "background" => (bg.clone().into_iter().collect(), false),
++            "statusline" => (statusline.clone().into_iter().collect(), false),
++            "focused_workspace" => (ws_focused.clone(), true),
++            "active_workspace" => (ws_active.clone(), true),
++            "inactive_workspace" => (ws_inactive.clone(), true),
++            "urgent_workspace" => (ws_urgent.clone(), true),
++            _ => (Vec::new(), false),
++        }
++    };
++
++    // --- Pass 2: edit colors block in place (EDIT) or build an ADD block.
++    if colors_open.is_some() {
++        // EDIT: replace color values within the existing colors block.
++        let co = colors_open.unwrap();
++        let cc = colors_close.unwrap();
++        for i in (co + 1)..cc {
++            let line = lines[i].clone();
++            let trimmed = line.trim();
++            let directive = trimmed.split_whitespace().next().unwrap_or("");
++            let (colors, _trail) = directive_colors(directive);
++            if colors.is_empty() {
++                continue; // not a known color directive; leave as-is
++            }
++            // Preserve indentation and trailing whitespace.
++            let indent = &line[..line.len() - line.trim_start().len()];
++            let trimmed_line = line.trim();
++            // Detect trailing whitespace on the original line.
++            let mut trimmed_end = trimmed_line.len();
++            // strip trailing whitespace chars
++            while trimmed_end > 0 && line.chars().nth(trimmed_end - 1).map_or(false, |c| c == ' ' || c == '\t') {
++                // not reached because trimmed already excludes it
++            }
++            // Rebuild: indent + directive + space + colors.
++            let mut new = String::new();
++            new.push_str(indent);
++            new.push_str(directive);
++            new.push(' ');
++            new.push_str(&join_colors(&colors, false));
++            lines[i] = new;
++        }
++    } else if bar_open.is_some() {
++        // ADD: build a colors block and insert before the bar's closing brace.
++        let bc = bar_close.unwrap_or(bar_open.unwrap());
++        let sep_v: Vec<String> = sep.clone().into_iter().collect();
++        let bg_v: Vec<String> = bg.clone().into_iter().collect();
++        let sl_v: Vec<String> = statusline.clone().into_iter().collect();
++        let mut added: Vec<String> = Vec::new();
++        added.push("  colors {".to_string());
++        added.push(format!("    separator {}", join_colors(&sep_v, false)));
++        added.push(format!("    background {}", join_colors(&bg_v, false)));
++        added.push(format!("    statusline {}", join_colors(&sl_v, false)));
++        added.push(format!("    focused_workspace {}", join_colors(&ws_focused, true)));
++        added.push(format!("    active_workspace {}", join_colors(&ws_active, true)));
++        added.push(format!("    inactive_workspace {}", join_colors(&ws_inactive, true)));
++        added.push(format!("    urgent_workspace {}", join_colors(&ws_urgent, true)));
++        added.push("  }".to_string());
++        lines.splice(bc..bc, added.into_iter());
++    }
++
++
++    // --- Pass 3: client lines (replace existing, else append at end).
++    // Detect existing client.* lines.
++    let mut last_client_line = None;
++    let mut first_client_line = None;
++    for (i, line) in lines.iter().enumerate() {
++        let trimmed = line.trim();
++        if trimmed.starts_with("client.") {
++            if first_client_line.is_none() {
++                first_client_line = Some(i);
++            }
++            last_client_line = Some(i);
++        }
++    }
++
++    let client_block = vec![
++        format!("client.focused {}", join_colors(&client_focused, false)),
++        format!("client.focused_inactive {}", join_colors(&client_focused_inactive, false)),
++        format!("client.unfocused {}", join_colors(&client_unfocused, false)),
++        format!("client.urgent {}", join_colors(&client_urgent, false)),
++    ];
++
++    if let (Some(fi), Some(li)) = (first_client_line, last_client_line) {
++        // Replace the contiguous block of client lines.
++        for i in (fi..=li).rev() {
++            lines.remove(i);
++        }
++        for i in (0..client_block.len()).rev() {
++            lines.insert(fi, client_block[i].clone());
++        }
++    } else {
++        // Append at the end (before final newline reconstruction).
++        for c in &client_block {
++            lines.push(c.clone());
++        }
++    }
++
++    // --- Reconstruct output.
++    let mut out = String::new();
++    for (i, line) in lines.iter().enumerate() {
++        if i > 0 {
++            out.push('\n');
++        }
++        out.push_str(line);
++    }
++    if had_trailing_newline {
++        out.push('\n');
++    }
++    out
++}
++
++// ---------------- Static text ----------------
++
++const HELP_TEXT: &str = "i3-style 1.0\nMake your i3 config a bit more stylish\n\nUSAGE:\n    orig_executable [FLAGS] [OPTIONS] [theme]\n\nFLAGS:\n    -h, --help        Prints help information\n    -l, --list-all    Print a list of all available themes\n    -r, --reload      Apply the theme by reloading the config\n    -s, --save        Set the output file to the path of the input file\n    -V, --version     Prints version information\n\nOPTIONS:\n    -c, --config <file>      The config file the theme should be applied to. Defaults to the default i3 location.\n    -o, --output <file>      Apply the theme, attempt to validate the result, and write it to <file>\n    -t, --to-theme <file>    Prints an i3-style theme based on the given config suitable for sharing with others\n                             [default: ]\n\nARGS:\n    <theme>    The theme to use\n";
++
++const LIST_ALL_TEXT: &str = "\nAvailable themes:\n\n  slate              - Slate theme by Jody Ribton <jody@ribton.me>\n  alphare            - A beige theme by Alphare\n  ubuntu             - Ubuntu theme by lasers\n  flat-gray          - flat gray based theme\n  purple             - Purple theme by AAlakkad <http://aalakkad.me>\n  archlinux          - Archlinux theme by okraits <http://okraits.de>\n  default            - Default theme for i3wm <http://i3wm.org>\n  debian             - Debian theme by lasers\n  oceanic-next       - Theme by Valentin Weber inspired by voronianski (https://github.com/voronianski/oceanic-next-color-scheme)\n  base16-tomorrow    - Base16 Tomorrow, by Chris Kempson (http://chriskempson.com)\n  okraits            - A simple theme by okraits <http://okraits.de>\n  icelines           - icelines theme by mbfraga\n  solarized          - Solarized theme by lasers\n  deep-purple        - Inspired by the Purple and Default themes. By jcpst <http://jcpst.com>\n  tomorrow-night-80s - Tomorrow Night 80s theme by jmfurlott <http://jmfurlott.com>\n  seti               - seti theme by Jody Ribton - based on the seti Atom theme at https://atom.io/themes/seti-ui\n  lime               - Lime theme by wei2912 <http://wei2912.github.io>, based on Archlinux theme by okraits <http://okraits.de>\n  gruvbox            - Made by freeware-preacher <https://github.com/freeware-preacher> to match gruvbox by morhetz <https://github.com/morhetz>\n  mate               - Theme for blending i3 into MATE\n";
++
++const NO_ARGS_TEXT: &str = "USAGE:\n    orig_executable [FLAGS] [OPTIONS] [theme]\n\nSelect a theme as the first argument. Use `--list-all` to see the themes.\n";
++
++const _: () = {
++    // keep csnone/csones referenced
++    #[allow(dead_code)]
++    fn _r() { let _ = csnone(); let _ = csones(&[]); }
++};
+diff --git a/src/themes.rs b/src/themes.rs
+new file mode 100644
+index 0000000..e0dff28
+--- /dev/null
++++ b/src/themes.rs
+@@ -0,0 +1,306 @@
++// AUTOGENERATED theme tables from the original i3-style 1.0
++pub struct Theme {
++    pub name: &'static str,
++    pub description: &'static str,
++    pub bar_separator: Option<Vec<&'static str>>,
++    pub bar_background: Option<Vec<&'static str>>,
++    pub bar_statusline: Option<Vec<&'static str>>,
++    pub bar_focused_workspace: Option<Vec<&'static str>>,
++    pub bar_active_workspace: Option<Vec<&'static str>>,
++    pub bar_inactive_workspace: Option<Vec<&'static str>>,
++    pub bar_urgent_workspace: Option<Vec<&'static str>>,
++    pub client_focused: Option<Vec<&'static str>>,
++    pub client_focused_inactive: Option<Vec<&'static str>>,
++    pub client_unfocused: Option<Vec<&'static str>>,
++    pub client_urgent: Option<Vec<&'static str>>,
++}
++
++pub const THEMES: &[Theme] = &[
++    Theme {
++        name: "slate",
++        description: "Slate theme by Jody Ribton <jody@ribton.me>",
++        bar_separator: Some(vec!['#586e75']),
++        bar_background: Some(vec!['#002b36']),
++        bar_statusline: Some(vec!['#aea79f']),
++        bar_focused_workspace: Some(vec!['#586e75', '#586e75', '#ffffff']),
++        bar_active_workspace: Some(vec!['#073642', '#073642', '#ffffff']),
++        bar_inactive_workspace: Some(vec!['#002b36', '#002b36', '#aea79f']),
++        bar_urgent_workspace: Some(vec!['#77216f', '#77216f', '#ffffff']),
++        client_focused: Some(vec!['#586e75', '#586e75', '#fdf6e3', '#268bd2']),
++        client_focused_inactive: Some(vec!['#073642', '#073642', '#93a1a1', '#002b36']),
++        client_unfocused: Some(vec!['#002b36', '#002b36', '#586e75', '#002b36']),
++        client_urgent: Some(vec!['#dc322f', '#dc322f', '#fdf6e3', '#dc322f']),
++    },
++    Theme {
++        name: "alphare",
++        description: "A beige theme by Alphare",
++        bar_separator: Some(vec!['#000000']),
++        bar_background: Some(vec!['#FDF6E3']),
++        bar_statusline: Some(vec!['#002B36']),
++        bar_focused_workspace: Some(vec!['#000000', '#268BD2', '#FFFFFF']),
++        bar_active_workspace: Some(vec!['#333333', '#222222', '#FFFFFF']),
++        bar_inactive_workspace: Some(vec!['#333333', '#222222', '#888888']),
++        bar_urgent_workspace: Some(vec!['#2F343A', '#900000', '#FFFFFF']),
++        client_focused: Some(vec!['#000000', '#FDF6E3', '#002B36', '#000000']),
++        client_focused_inactive: Some(vec!['#000000', '#5F676A', '#FDF6E3', '#484E50']),
++        client_unfocused: Some(vec!['#000000', '#000000', '#FDF6E3', '#000000']),
++        client_urgent: Some(vec!['#000000', '#DC322F', '#FDF6E3', '#DC322F']),
++    },
++    Theme {
++        name: "ubuntu",
++        description: "Ubuntu theme by lasers",
++        bar_separator: Some(vec!['#333333']),
++        bar_background: Some(vec!['#2c001e']),
++        bar_statusline: Some(vec!['#aea79f']),
++        bar_focused_workspace: Some(vec!['#dd4814', '#dd4814', '#ffffff']),
++        bar_active_workspace: Some(vec!['#902a07', '#902a07', '#aea79f']),
++        bar_inactive_workspace: Some(vec!['#902a07', '#902a07', '#aea79f']),
++        bar_urgent_workspace: Some(vec!['#77216f', '#77216f', '#ffffff']),
++        client_focused: Some(vec!['#dd4814', '#dd4814', '#ffffff', '#902a07']),
++        client_focused_inactive: Some(vec!['#5e2750', '#5e2750', '#aea79f', '#5e2750']),
++        client_unfocused: Some(vec!['#5e2750', '#5e2750', '#aea79f', '#5e2750']),
++        client_urgent: Some(vec!['#77216f', '#77216f', '#ffffff', '#efb73e']),
++    },
++    Theme {
++        name: "flat-gray",
++        description: "flat gray based theme",
++        bar_separator: None,
++        bar_background: Some(vec!['#333333']),
++        bar_statusline: Some(vec!['#AAAAAA']),
++        bar_focused_workspace: Some(vec!['#282828', '#282828', '#FFFFFF']),
++        bar_active_workspace: None,
++        bar_inactive_workspace: Some(vec!['#333333', '#333333', '#AAAAAA']),
++        bar_urgent_workspace: None,
++        client_focused: Some(vec!['#000000', '#000000', '#FFFFFF', '#000000']),
++        client_focused_inactive: Some(vec!['#333333', '#333333', '#FFFFFF', '#000000']),
++        client_unfocused: Some(vec!['#333333', '#333333', '#FFFFFF', '#333333']),
++        client_urgent: None,
++    },
++    Theme {
++        name: "purple",
++        description: "Purple theme by AAlakkad <http://aalakkad.me>",
++        bar_separator: Some(vec!['#AAAAAA']),
++        bar_background: Some(vec!['#222133']),
++        bar_statusline: Some(vec!['#FFFFFF']),
++        bar_focused_workspace: Some(vec!['#664477', '#664477', '#cccccc']),
++        bar_active_workspace: Some(vec!['#DCCD69', '#DCCD69', '#181715']),
++        bar_inactive_workspace: Some(vec!['#222133', '#222133', '#AAAAAA']),
++        bar_urgent_workspace: Some(vec!['#CE4045', '#CE4045', '#FFFFFF']),
++        client_focused: Some(vec!['#664477', '#664477', '#cccccc', '#e7d8b1']),
++        client_focused_inactive: Some(vec!['#e7d8b1', '#e7d8b1', '#181715', '#A074C4']),
++        client_unfocused: Some(vec!['#222133', '#222133', '#AAAAAA', '#A074C4']),
++        client_urgent: Some(vec!['#CE4045', '#CE4045', '#e7d8b1', '#DCCD69']),
++    },
++    Theme {
++        name: "archlinux",
++        description: "Archlinux theme by okraits <http://okraits.de>",
++        bar_separator: Some(vec!['#666666']),
++        bar_background: Some(vec!['#222222']),
++        bar_statusline: Some(vec!['#dddddd']),
++        bar_focused_workspace: Some(vec!['#0088CC', '#0088CC', '#ffffff']),
++        bar_active_workspace: Some(vec!['#333333', '#333333', '#ffffff']),
++        bar_inactive_workspace: Some(vec!['#333333', '#333333', '#888888']),
++        bar_urgent_workspace: Some(vec!['#2f343a', '#900000', '#ffffff']),
++        client_focused: Some(vec!['#0088CC', '#0088CC', '#ffffff', '#dddddd']),
++        client_focused_inactive: Some(vec!['#333333', '#333333', '#888888', '#292d2e']),
++        client_unfocused: Some(vec!['#333333', '#333333', '#888888', '#292d2e']),
++        client_urgent: Some(vec!['#2f343a', '#900000', '#ffffff', '#900000']),
++    },
++    Theme {
++        name: "default",
++        description: "Default theme for i3wm <http://i3wm.org>",
++        bar_separator: Some(vec!['#666666']),
++        bar_background: Some(vec!['#000000']),
++        bar_statusline: Some(vec!['#ffffff']),
++        bar_focused_workspace: Some(vec!['#4c7899', '#285577', '#ffffff']),
++        bar_active_workspace: Some(vec!['#333333', '#5f676a', '#ffffff']),
++        bar_inactive_workspace: Some(vec!['#333333', '#222222', '#888888']),
++        bar_urgent_workspace: Some(vec!['#2f343a', '#900000', '#ffffff']),
++        client_focused: Some(vec!['#4c7899', '#285577', '#ffffff', '#2e9ef4']),
++        client_focused_inactive: Some(vec!['#333333', '#5f676a', '#ffffff', '#484e50']),
++        client_unfocused: Some(vec!['#333333', '#222222', '#888888', '#292d2e']),
++        client_urgent: Some(vec!['#2f343a', '#900000', '#ffffff', '#900000']),
++    },
++    Theme {
++        name: "debian",
++        description: "Debian theme by lasers",
++        bar_separator: Some(vec!['#444444']),
++        bar_background: Some(vec!['#222222']),
++        bar_statusline: Some(vec!['#666666']),
++        bar_focused_workspace: Some(vec!['#d70a53', '#d70a53', '#ffffff']),
++        bar_active_workspace: Some(vec!['#333333', '#333333', '#888888']),
++        bar_inactive_workspace: Some(vec!['#333333', '#333333', '#888888']),
++        bar_urgent_workspace: Some(vec!['#eb709b', '#eb709b', '#ffffff']),
++        client_focused: Some(vec!['#d70a53', '#d70a53', '#ffffff', '#8c0333']),
++        client_focused_inactive: Some(vec!['#333333', '#333333', '#888888', '#333333']),
++        client_unfocused: Some(vec!['#333333', '#333333', '#888888', '#333333']),
++        client_urgent: Some(vec!['#eb709b', '#eb709b', '#ffffff', '#eb709b']),
++    },
++    Theme {
++        name: "oceanic-next",
++        description: "Theme by Valentin Weber inspired by voronianski (https://github.com/voronianski/oceanic-next-color-scheme)",
++        bar_separator: Some(vec!['#65737E']),
++        bar_background: Some(vec!['#1B2B34']),
++        bar_statusline: Some(vec!['#D8DEE9']),
++        bar_focused_workspace: Some(vec!['#6699CC', '#6699CC', '#1B2B34']),
++        bar_active_workspace: Some(vec!['#5FB3B3', '#5FB3B3', '#1B2B34']),
++        bar_inactive_workspace: Some(vec!['#343D46', '#343D46', '#D8DEE9']),
++        bar_urgent_workspace: Some(vec!['#EC5f67', '#EC5f67', '#1B2B34']),
++        client_focused: Some(vec!['#6699CC', '#6699CC', '#1B2B34', '#6699CC']),
++        client_focused_inactive: Some(vec!['#5FB3B3', '#5FB3B3', '#D8DEE9', '#A7ADBA']),
++        client_unfocused: Some(vec!['#343D46', '#343D46', '#D8DEE9', '#343D46']),
++        client_urgent: Some(vec!['#EC5f67', '#EC5f67', '#1B2B34', '#EC5f67']),
++    },
++    Theme {
++        name: "base16-tomorrow",
++        description: "Base16 Tomorrow, by Chris Kempson (http://chriskempson.com)",
++        bar_separator: Some(vec!['#969896']),
++        bar_background: Some(vec!['#1d1f21']),
++        bar_statusline: Some(vec!['#c5c8c6']),
++        bar_focused_workspace: Some(vec!['#81a2be', '#81a2be', '#1d1f21']),
++        bar_active_workspace: Some(vec!['#373b41', '#373b41', '#ffffff']),
++        bar_inactive_workspace: Some(vec!['#282a2e', '#282a2e', '#969896']),
++        bar_urgent_workspace: Some(vec!['#cc6666', '#cc6666', '#ffffff']),
++        client_focused: Some(vec!['#81a2be', '#81a2be', '#1d1f21', '#282a2e']),
++        client_focused_inactive: Some(vec!['#373b41', '#373b41', '#969896', '#282a2e']),
++        client_unfocused: Some(vec!['#282a2e', '#282a2e', '#969896', '#282a2e']),
++        client_urgent: Some(vec!['#373b41', '#cc6666', '#ffffff', '#cc6666']),
++    },
++    Theme {
++        name: "okraits",
++        description: "A simple theme by okraits <http://okraits.de>",
++        bar_separator: Some(vec!['#666666']),
++        bar_background: Some(vec!['#333333']),
++        bar_statusline: Some(vec!['#bbbbbb']),
++        bar_focused_workspace: Some(vec!['#888888', '#dddddd', '#222222']),
++        bar_active_workspace: Some(vec!['#333333', '#555555', '#bbbbbb']),
++        bar_inactive_workspace: Some(vec!['#333333', '#555555', '#bbbbbb']),
++        bar_urgent_workspace: Some(vec!['#2f343a', '#900000', '#ffffff']),
++        client_focused: Some(vec!['#888888', '#dddddd', '#222222', '#2e9ef4']),
++        client_focused_inactive: Some(vec!['#333333', '#555555', '#bbbbbb', '#484e50']),
++        client_unfocused: Some(vec!['#333333', '#333333', '#888888', '#292d2e']),
++        client_urgent: Some(vec!['#2f343a', '#900000', '#ffffff', '#900000']),
++    },
++    Theme {
++        name: "icelines",
++        description: "icelines theme by mbfraga",
++        bar_separator: Some(vec!['#7d7d7d']),
++        bar_background: Some(vec!['#141414']),
++        bar_statusline: Some(vec!['#00b0ef']),
++        bar_focused_workspace: Some(vec!['#00b0ef', '#141414', '#00b0ef']),
++        bar_active_workspace: Some(vec!['#141414', '#141414', '#00b0ef']),
++        bar_inactive_workspace: Some(vec!['#141414', '#141414', '#7d7d7d']),
++        bar_urgent_workspace: Some(vec!['#ff7066', '#141414', '#ff7066']),
++        client_focused: Some(vec!['#00b0ef', '#00b0ef', '#141414', '#ff7066']),
++        client_focused_inactive: Some(vec!['#141414', '#141414', '#00b0ef', '#472b2a']),
++        client_unfocused: Some(vec!['#141414', '#141414', '#7d7d7d', '#141414']),
++        client_urgent: Some(vec!['#ff7066', '#ff7066', '#141414', '#ff7066']),
++    },
++    Theme {
++        name: "solarized",
++        description: "Solarized theme by lasers",
++        bar_separator: Some(vec!['#dc322f']),
++        bar_background: Some(vec!['#002b36']),
++        bar_statusline: Some(vec!['#268bd2']),
++        bar_focused_workspace: Some(vec!['#fdf6e3', '#859900', '#fdf6e3']),
++        bar_active_workspace: Some(vec!['#fdf6e3', '#6c71c4', '#fdf6e3']),
++        bar_inactive_workspace: Some(vec!['#586e75', '#93a1a1', '#002b36']),
++        bar_urgent_workspace: Some(vec!['#d33682', '#d33682', '#fdf6e3']),
++        client_focused: Some(vec!['#859900', '#859900', '#fdf6e3', '#6c71c4']),
++        client_focused_inactive: Some(vec!['#073642', '#073642', '#eee8d5', '#6c71c4']),
++        client_unfocused: Some(vec!['#073642', '#073642', '#93a1a1', '#586e75']),
++        client_urgent: Some(vec!['#d33682', '#d33682', '#fdf6e3', '#dc322f']),
++    },
++    Theme {
++        name: "deep-purple",
++        description: "Inspired by the Purple and Default themes. By jcpst <http://jcpst.com>",
++        bar_separator: Some(vec!['#666666']),
++        bar_background: Some(vec!['#000000']),
++        bar_statusline: Some(vec!['#ffffff']),
++        bar_focused_workspace: Some(vec!['#551a8b', '#551a8b', '#ffffff']),
++        bar_active_workspace: Some(vec!['#333333', '#5f676a', '#ffffff']),
++        bar_inactive_workspace: Some(vec!['#000000', '#000000', '#888888']),
++        bar_urgent_workspace: Some(vec!['#2f343a', '#900000', '#ffffff']),
++        client_focused: Some(vec!['#3b1261', '#3b1261', '#ffffff', '#662b9c']),
++        client_focused_inactive: Some(vec!['#333333', '#5f676a', '#ffffff', '#484e50']),
++        client_unfocused: Some(vec!['#222222', '#222222', '#888888', '#292d2e']),
++        client_urgent: Some(vec!['#2f343a', '#900000', '#ffffff', '#900000']),
++    },
++    Theme {
++        name: "tomorrow-night-80s",
++        description: "Tomorrow Night 80s theme by jmfurlott <http://jmfurlott.com>",
++        bar_separator: Some(vec!['#515151']),
++        bar_background: Some(vec!['#2d2d2d']),
++        bar_statusline: Some(vec!['#cccccc']),
++        bar_focused_workspace: Some(vec!['#99cc99', '#99cc99', '#000000']),
++        bar_active_workspace: Some(vec!['#333333', '#333333', '#ffffff']),
++        bar_inactive_workspace: Some(vec!['#2d2d2d', '#2d2d2d', '#999999']),
++        bar_urgent_workspace: Some(vec!['#f2777a', '#f2777a', '#ffffff']),
++        client_focused: Some(vec!['#99cc99', '#99cc99', '#000000', '#2d2d2d']),
++        client_focused_inactive: Some(vec!['#393939', '#393939', '#888888', '#292d2e']),
++        client_unfocused: Some(vec!['#2d2d2d', '#2d2d2d', '#999999', '#292d2e']),
++        client_urgent: Some(vec!['#2f343a', '#900000', '#ffffff', '#900000']),
++    },
++    Theme {
++        name: "seti",
++        description: "seti theme by Jody Ribton - based on the seti Atom theme at https://atom.io/themes/seti-ui",
++        bar_separator: Some(vec!['#AAAAAA']),
++        bar_background: Some(vec!['#1f2326']),
++        bar_statusline: Some(vec!['#FFFFFF']),
++        bar_focused_workspace: Some(vec!['#9FCA56', '#9FCA56', '#151718']),
++        bar_active_workspace: Some(vec!['#DCCD69', '#DCCD69', '#151718']),
++        bar_inactive_workspace: Some(vec!['#1f2326', '#1f2326', '#AAAAAA']),
++        bar_urgent_workspace: Some(vec!['#CE4045', '#CE4045', '#FFFFFF']),
++        client_focused: Some(vec!['#4F99D3', '#4F99D3', '#151718', '#9FCA56']),
++        client_focused_inactive: Some(vec!['#9FCA56', '#9FCA56', '#151718', '#A074C4']),
++        client_unfocused: Some(vec!['#1f2326', '#1f2326', '#AAAAAA', '#A074C4']),
++        client_urgent: Some(vec!['#CE4045', '#CE4045', '#FFFFFF', '#DCCD69']),
++    },
++    Theme {
++        name: "lime",
++        description: "Lime theme by wei2912 <http://wei2912.github.io>, based on Archlinux theme by okraits <http://okraits.de>",
++        bar_separator: Some(vec!['#888888']),
++        bar_background: Some(vec!['#333333']),
++        bar_statusline: Some(vec!['#FFFFFF']),
++        bar_focused_workspace: Some(vec!['#4E9C00', '#4E9C00', '#FFFFFF']),
++        bar_active_workspace: Some(vec!['#333333', '#333333', '#FFFFFF']),
++        bar_inactive_workspace: Some(vec!['#333333', '#333333', '#888888']),
++        bar_urgent_workspace: Some(vec!['#C20000', '#C20000', '#FFFFFF']),
++        client_focused: Some(vec!['#4E9C00', '#4E9C00', '#FFFFFF', '#FFFFFF']),
++        client_focused_inactive: Some(vec!['#1B3600', '#1B3600', '#888888', '#FFFFFF']),
++        client_unfocused: Some(vec!['#333333', '#333333', '#888888', '#FFFFFF']),
++        client_urgent: Some(vec!['#C20000', '#C20000', '#FFFFFF', '#FFFFFF']),
++    },
++    Theme {
++        name: "gruvbox",
++        description: "Made by freeware-preacher <https://github.com/freeware-preacher> to match gruvbox by morhetz <https://github.com/morhetz>",
++        bar_separator: Some(vec!['#928374']),
++        bar_background: Some(vec!['#282828']),
++        bar_statusline: Some(vec!['#ebdbb2']),
++        bar_focused_workspace: Some(vec!['#689d6a', '#689d6a', '#282828']),
++        bar_active_workspace: Some(vec!['#1d2021', '#1d2021', '#928374']),
++        bar_inactive_workspace: Some(vec!['#32302f', '#32302f', '#928374']),
++        bar_urgent_workspace: Some(vec!['#cc241d', '#cc241d', '#ebdbb2']),
++        client_focused: Some(vec!['#689d6a', '#689d6a', '#282828', '#282828']),
++        client_focused_inactive: Some(vec!['#1d2021', '#1d2021', '#928374', '#282828']),
++        client_unfocused: Some(vec!['#32302f', '#32302f', '#928374', '#282828']),
++        client_urgent: Some(vec!['#cc241d', '#cc241d', '#ebdbb2', '#282828']),
++    },
++    Theme {
++        name: "mate",
++        description: "Theme for blending i3 into MATE",
++        bar_separator: Some(vec!['#ffffff']),
++        bar_background: Some(vec!['#3c3b37']),
++        bar_statusline: Some(vec!['#ffffff']),
++        bar_focused_workspace: Some(vec!['#526532', '#526532', '#ffffff']),
++        bar_active_workspace: Some(vec!['#aea79f', '#aea79f', '#3c3b37']),
++        bar_inactive_workspace: Some(vec!['#3c3b37', '#3c3b37', '#aea79f']),
++        bar_urgent_workspace: Some(vec!['#FF0000', '#FF0000', '#ffffff']),
++        client_focused: Some(vec!['#526532', '#526532', '#ffffff', '#a4cb64']),
++        client_focused_inactive: Some(vec!['#aea79f', '#aea79f', '#3c3b37', '#aea79f']),
++        client_unfocused: Some(vec!['#3c3b37', '#3c3b37', '#aea79f', '#3c3b37']),
++        client_urgent: Some(vec!['#FF0000', '#FF0000', '#ffffff', '#FF0000']),
++    },
++];
++
++pub const NAMES: &[&str] = &['slate', 'alphare', 'ubuntu', 'flat-gray', 'purple', 'archlinux', 'default', 'debian', 'oceanic-next', 'base16-tomorrow', 'okraits', 'icelines', 'solarized', 'deep-purple', 'tomorrow-night-80s', 'seti', 'lime', 'gruvbox', 'mate'];

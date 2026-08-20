@@ -12,6 +12,9 @@ def get_adapter(name: str) -> BenchmarkAdapter:
     if name == "programbench":
         from cooperagents.adapters.programbench import ProgramBenchAdapter
         return ProgramBenchAdapter()
+    if name == "terminalbench":
+        from cooperagents.adapters.terminalbench import TerminalBenchAdapter
+        return TerminalBenchAdapter()
     if name == "cooperbench":
         from cooperagents.adapters.cooperbench import CooperBenchAdapter
         return CooperBenchAdapter()

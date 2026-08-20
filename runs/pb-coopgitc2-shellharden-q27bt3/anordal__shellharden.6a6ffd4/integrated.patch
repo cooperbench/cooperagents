@@ -1,0 +1,638 @@
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..8be42af
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,5 @@
++#!/usr/bin/env bash
++set -euo pipefail
++cd "$(dirname "$0")"
++rm -f executable
++rustc --edition 2021 -O shh.rs -o executable
+diff --git a/help.txt b/help.txt
+new file mode 100644
+index 0000000..8503a14
+--- /dev/null
++++ b/help.txt
+@@ -0,0 +1,33 @@
++Shellharden: The corrective bash syntax highlighter.
++
++Usage:
++	shellharden [options] [files]
++	cat files | shellharden [options] ''
++
++Shellharden is a syntax highlighter and a tool to semi-automate the rewriting
++of scripts to ShellCheck conformance, mainly focused on quoting.
++
++The default mode of operation is like `cat`, but with syntax highlighting in
++foreground colors and suggestive changes in background colors.
++
++Options:
++	--suggest         Output a colored diff suggesting changes.
++	--syntax          Output syntax highlighting with ANSI colors.
++	--syntax-suggest  Diff with syntax highlighting (default mode).
++	--transform       Output suggested changes.
++	--check           No output; exit with 2 if changes are suggested.
++	--replace         Replace file contents with suggested changes.
++	--                Don't treat further arguments as options.
++	-h|--help         Show help text.
++	--version         Show version.
++
++The changes suggested by Shellharden inhibits word splitting and indirect
++pathname expansion. This will make your script ShellCheck compliant in terms of
++quoting. Whether your script will work afterwards is a different question:
++If your script was using those features on purpose, it obviously won't anymore!
++
++Every script is possible to write without using word splitting or indirect
++pathname expansion, but it may involve doing things differently.
++See the accompanying file how_to_do_things_safely_in_bash.md or online:
++https://github.com/anordal/shellharden/blob/master/how_to_do_things_safely_in_bash.md
++
+diff --git a/shh.rs b/shh.rs
+new file mode 100644
+index 0000000..86dc3e7
+--- /dev/null
++++ b/shh.rs
+@@ -0,0 +1,582 @@
++// shellharden 4.3.1 clone (rustc, std only)
++use std::env;
++use std::io::{self, Read};
++use std::fs;
++
++const VERSION: &str = "4.3.1";
++#[derive(Clone, Copy, PartialEq, Eq)]
++enum Mode { Transform, Suggest, Syntax, SyntaxSuggest, Check, Replace }
++struct Ctx { mode: Mode, files: Vec<String>, help_printed: bool, version_printed: bool }
++
++fn is_ident_start(c: char) -> bool { c.is_ascii_alphabetic() || c == '_' }
++fn is_ident(c: char) -> bool { c.is_ascii_alphanumeric() || c == '_' }
++
++fn main() {
++    let args: Vec<String> = env::args().collect();
++    let mut ctx = Ctx { mode: Mode::SyntaxSuggest, files: Vec::new(),
++        help_printed: false, version_printed: false };
++    let mut after_dd = false;
++    let mut i = 1;
++    while i < args.len() {
++        let a = &args[i];
++        if !after_dd && a == "--" { after_dd = true; i += 1; continue; }
++        if !after_dd && (a == "--help" || a == "-h") { print_help(); ctx.help_printed = true; i += 1; continue; }
++        if !after_dd && a == "--version" { print!("{}\n", VERSION); ctx.version_printed = true; i += 1; continue; }
++        let m = match a.as_str() {
++            "--suggest" => Some(Mode::Suggest),
++            "--syntax" => Some(Mode::Syntax),
++            "--syntax-suggest" => Some(Mode::SyntaxSuggest),
++            "--transform" => Some(Mode::Transform),
++            "--check" => Some(Mode::Check),
++            "--replace" => Some(Mode::Replace),
++            _ => None,
++        };
++        if !after_dd { if let Some(mm) = m { ctx.mode = mm; i += 1; continue; } }
++        if a.starts_with('-') && a != "-" {
++            eprintln!("{}: No such option.", a);
++            std::process::exit(3);
++        }
++        ctx.files.push(a.clone());
++        i += 1;
++    }
++    if ctx.help_printed || ctx.version_printed { std::process::exit(0); }
++
++    let mut resolved: Vec<String> = Vec::new();
++    let mut input_is_stdin = false;
++    let mut file_err: Option<String> = None;
++    for f in &ctx.files {
++        if f == "" { input_is_stdin = true; continue; }
++        match fs::metadata(f) {
++            Ok(_) => resolved.push(f.clone()),
++            Err(_) => { if file_err.is_none() { file_err = Some(f.clone()); } }
++        }
++    }
++    if let Some(f) = file_err {
++        eprintln!("{}: No such file or directory (os error 2)", f);
++        std::process::exit(1);
++    }
++
++    let mut lines: Vec<(String, bool)> = Vec::new();
++    for f in &resolved {
++        let content = fs::read_to_string(f).unwrap_or_default();
++        lines.extend(split_input(&content));
++    }
++    if input_is_stdin {
++        let mut buf = Vec::new();
++        io::stdin().read_to_end(&mut buf).ok();
++        let text = String::from_utf8_lossy(&buf);
++        lines.extend(split_input(&text));
++    }
++
++    match ctx.mode {
++        Mode::Check => {
++            let mut dirty = false;
++            for (line, had) in &lines {
++                if transform(line, *had) != *line { dirty = true; }
++            }
++            std::process::exit(if dirty { 2 } else { 0 });
++        }
++        Mode::Replace => {
++            if !input_is_stdin {
++                for f in &resolved {
++                    let content = fs::read_to_string(f).unwrap_or_default();
++                    let parts = split_input(&content);
++                    let mut s = String::new();
++                    for (l, h) in &parts {
++                        s.push_str(&transform(l, *h));
++                        if *h { s.push('\n'); }
++                    }
++                    fs::write(f, &s).unwrap();
++                }
++            } else {
++                for (l, h) in &lines {
++                    print!("{}", transform(l, *h));
++                    if *h { print!("\n"); }
++                }
++            }
++            std::process::exit(0);
++        }
++        _ => {}
++    }
++
++    let mut out = String::new();
++    for (line, had) in &lines {
++        let t = transform(line, *had);
++        match ctx.mode {
++            Mode::Transform => out.push_str(&t),
++            Mode::Suggest => out.push_str(&render_suggest(line, &t)),
++            Mode::Syntax => out.push_str(&syntax_highlight(line)),
++            Mode::SyntaxSuggest => out.push_str(&render_syntax_suggest(line, &t)),
++            _ => {}
++        }
++        if *had { out.push('\n'); }
++    }
++    print!("{}", out);
++    std::process::exit(0);
++}
++
++fn split_input(content: &str) -> Vec<(String, bool)> {
++    let mut out = Vec::new();
++    let mut cur = Vec::new();
++    for &b in content.as_bytes() {
++        if b == b'\n' {
++            out.push((String::from_utf8_lossy(&cur).into_owned(), true));
++            cur.clear();
++        } else { cur.push(b); }
++    }
++    if !cur.is_empty() {
++        out.push((String::from_utf8_lossy(&cur).into_owned(), false));
++    }
++    out
++}
++
++fn print_help() { print!("{}", include_str!("help.txt")); }
++
++// ===================== transform =====================
++// Tokenize a line into a sequence of atoms.
++enum Tok {
++    Plain(String),        // run of plain chars (no $, no quotes, no separator)
++    Sep(char),           // a single separator char
++    DQ(String),          // double-quoted content (without the surrounding quotes)
++    SQ(String),          // single-quoted content
++    Var(String),         // $name (name = identifier)
++    Brace(String),       // ${...} (full text incl braces)
++    Cmd(String),         // $(...) (full text)
++    Special(String),     // $? $! $# $_ $@ (full text)
++    SpecialStar,         // $*
++    Comment,             // # to end
++}
++
++fn is_sep(c: char) -> bool {
++    matches!(c, ' ' | '\t' | '|' | '&' | ';' | '>' | '<' | '(' | ')' | '{' | '}' | '=' | '[' | ']' | '"' | '\'' | '`')
++}
++
++fn tokenize(line: &str) -> Vec<Tok> {
++    let ch: Vec<char> = line.chars().collect();
++    let n = ch.len();
++    let mut toks = Vec::new();
++    let mut i = 0;
++    let mut plain = String::new();
++    let mut flush_plain = |p: &mut String, toks: &mut Vec<Tok>| {
++        if !p.is_empty() { toks.push(Tok::Plain(p.clone())); p.clear(); }
++    };
++    while i < n {
++        let c = ch[i];
++        if c == '#' {
++            flush_plain(&mut plain, &mut toks);
++            toks.push(Tok::Comment);
++            return toks;
++        }
++        if c == '"' {
++            flush_plain(&mut plain, &mut toks);
++            let mut j = i + 1;
++            let mut content = String::new();
++            while j < n && ch[j] != '"' {
++                // handle $ inside double quotes? shellharden treats them...
++                content.push(ch[j]);
++                j += 1;
++            }
++            toks.push(Tok::DQ(content));
++            i = j + 1;
++            continue;
++        }
++        if c == '\'' {
++            flush_plain(&mut plain, &mut toks);
++            let mut j = i + 1;
++            let mut content = String::new();
++            while j < n && ch[j] != '\'' {
++                content.push(ch[j]);
++                j += 1;
++            }
++            toks.push(Tok::SQ(content));
++            i = j + 1;
++            continue;
++        }
++        if c == '`' {
++            flush_plain(&mut plain, &mut toks);
++            let mut j = i + 1;
++            let mut content = String::new();
++            while j < n && ch[j] != '`' {
++                content.push(ch[j]);
++                j += 1;
++            }
++            toks.push(Tok::Cmd(format!("`{}`", content))); // store as backtick; transform rewrites to $(...)
++            i = j + 1;
++            continue;
++        }
++        if is_sep(c) {
++            flush_plain(&mut plain, &mut toks);
++            toks.push(Tok::Sep(c));
++            i += 1;
++            continue;
++        }
++        if c == '$' {
++            flush_plain(&mut plain, &mut toks);
++            let e = parse_exp(&ch, i);
++            match e.kind {
++                "var" => toks.push(Tok::Var(e.text)),
++                "brace" => toks.push(Tok::Brace(e.text)),
++                "cmd" => toks.push(Tok::Cmd(e.text)),
++                "special" => toks.push(Tok::Special(e.text)),
++                "specialstar" => toks.push(Tok::SpecialStar),
++                "pos" => toks.push(Tok::Var(e.text)), // treat $1 as var-like (quoted)
++                _ => { toks.push(Tok::Plain("$".to_string())); }
++            }
++            i += e.len;
++            continue;
++        }
++        // plain char
++        plain.push(c);
++        i += 1;
++    }
++    flush_plain(&mut plain, &mut toks);
++    toks
++}
++
++struct Exp { kind: &'static str, text: String, len: usize }
++fn parse_exp(ch: &[char], i: usize) -> Exp {
++    let n = ch.len();
++    let mut j = i + 1;
++    if j < n {
++        let c = ch[j];
++        if c == '(' {
++            let mut depth = 1usize; let mut k = j + 1;
++            while k < n && depth > 0 {
++                if ch[k] == '(' { depth += 1; } else if ch[k] == ')' { depth -= 1; }
++                k += 1;
++            }
++            return Exp { kind: "cmd", text: ch[i..k].iter().collect(), len: k - i };
++        }
++        if c == '{' {
++            let mut depth = 1usize; let mut k = j + 1;
++            while k < n && depth > 0 {
++                if ch[k] == '{' { depth += 1; } else if ch[k] == '}' { depth -= 1; }
++                k += 1;
++            }
++            return Exp { kind: "brace", text: ch[i..k].iter().collect(), len: k - i };
++        }
++        if matches!(c, '?' | '!' | '#' | '_' | '@') {
++            return Exp { kind: "special", text: ch[i..j+1].iter().collect(), len: 2 };
++        }
++        if c == '*' {
++            return Exp { kind: "specialstar", text: "$*".to_string(), len: 2 };
++        }
++        if c.is_ascii_digit() {
++            let mut k = j; while k < n && ch[k].is_ascii_digit() { k += 1; }
++            return Exp { kind: "pos", text: ch[i..k].iter().collect(), len: k - i };
++        }
++        if is_ident_start(c) {
++            let mut k = j; while k < n && is_ident(ch[k]) { k += 1; }
++            return Exp { kind: "var", text: ch[i..k].iter().collect(), len: k - i };
++        }
++    }
++    Exp { kind: "plain", text: "$".to_string(), len: 1 }
++}
++
++// is the brace content a simple variable name (letters/digits/underscore, starts with letter/_)?
++fn is_simple_var(brace_text: &str) -> bool {
++    // brace_text = "${name}"
++    let inner = &brace_text[2..brace_text.len()-1]; // strip ${ and }
++    if inner.is_empty() { return false; }
++    let ch: Vec<char> = inner.chars().collect();
++    // must start with letter or underscore
++    if !is_ident_start(ch[0]) { return false; }
++    for &c in &ch { if !is_ident(c) { return false; } }
++    true
++}
++
++
++fn transform(line: &str, had_nl: bool) -> String {
++    let toks = tokenize(line);
++    let mut out = String::new();
++
++    // has_exp_after[i]: is there an expansion strictly after token i in the same word?
++    let has_exp_after: Vec<bool> = (0..toks.len()).map(|i| is_exp_after(&toks, i)).collect();
++
++    let mut synth = false;
++    let mut assignment = false;
++    let mut prev_was_plain = false;
++
++    for (i, t) in toks.iter().enumerate() {
++        match t {
++            Tok::Sep(c) => {
++                // Assignment detection: name= (the '=' immediately follows a plain name).
++                if *c == '=' && prev_was_plain {
++                    assignment = true;
++                } else {
++                    assignment = false;
++                }
++                if synth { out.push('"'); synth = false; }
++                out.push(*c);
++                prev_was_plain = false;
++            }
++            Tok::Comment => {
++                // Append the original line from the '#' position verbatim.
++                if let Some(bpos) = comment_byte_pos(line) {
++                    out.push_str(&line[bpos..]);
++                }
++                break;
++            }
++            Tok::Plain(p) => {
++                if synth && !assignment && has_exp_after[i] {
++                    // absorb into the synthetic quote (between two expansions)
++                    out.push_str(&p);
++                } else {
++                    if synth { out.push('"'); synth = false; }
++                    out.push_str(&p);
++                }
++                prev_was_plain = true;
++            }
++            Tok::DQ(content) => {
++                if synth { out.push('"'); synth = false; }
++                // Simplify a lone simple brace var: "${x}" -> "$x".
++                if let Some(name) = dq_simplify(content) {
++                    out.push('"');
++                    out.push('$');
++                    out.push_str(&name);
++                    out.push('"');
++                } else {
++                    out.push('"');
++                    out.push_str(&content);
++                    out.push('"');
++                }
++                prev_was_plain = false;
++            }
++            Tok::SQ(content) => {
++                if synth { out.push('"'); synth = false; }
++                out.push('\'');
++                out.push_str(&content);
++                out.push('\'');
++                prev_was_plain = false;
++            }
++            Tok::Var(name) => {
++                // name already includes the leading '$' (e.g. "$x").
++                if assignment {
++                    out.push_str(&name);
++                } else {
++                    if !synth { out.push('"'); synth = true; }
++                    out.push_str(&name);
++                }
++                prev_was_plain = false;
++            }
++            Tok::Brace(btext) => {
++                // btext already includes the leading '$' (e.g. "${x}").
++                if assignment {
++                    out.push_str(&btext);
++                } else {
++                    if !synth { out.push('"'); synth = true; }
++                    // Drop the braces when the brace is a simple var and the next
++                    // character cannot be an identifier char (or it is line-end).
++                    if is_simple_var(btext) && had_nl && should_drop(&toks, i) {
++                        let inner = &btext[2..btext.len()-1]; // strip "${" and "}"
++                        out.push('$');
++                        out.push_str(inner);
++                    } else {
++                        out.push_str(&btext);
++                    }
++                }
++                prev_was_plain = false;
++            }
++            Tok::Cmd(ctext) => {
++                let rewritten = rewrite_cmd(ctext, had_nl);
++                if assignment {
++                    out.push_str(&rewritten);
++                } else {
++                    if !synth { out.push('"'); synth = true; }
++                    out.push_str(&rewritten);
++                }
++                prev_was_plain = false;
++            }
++            Tok::Special(s) => {
++                if s == "$_" {
++                    // $_ is quoted (treat like a var); the rest ($? $! $# $@) are not.
++                    if !assignment {
++                        if !synth { out.push('"'); synth = true; }
++                    }
++                    out.push_str(&s);
++                } else {
++                    if synth { out.push('"'); synth = false; }
++                    out.push_str(&s);
++                }
++                prev_was_plain = false;
++            }
++            Tok::SpecialStar => {
++                // $* -> $@
++                if assignment {
++                    out.push('$'); out.push('@');
++                } else {
++                    if !synth { out.push('"'); synth = true; }
++                    out.push('$'); out.push('@');
++                }
++                prev_was_plain = false;
++            }
++        }
++    }
++    if synth { out.push('"'); }
++    out
++}
++
++// If the DQ content is exactly a simple brace var "${name}", return the name.
++fn dq_simplify(content: &str) -> Option<String> {
++    if content.starts_with("${") && content.ends_with('}') && content.len() >= 3 && is_simple_var(content) {
++        let inner = &content[2..content.len()-1];
++        return Some(inner.to_string());
++    }
++    None
++}
++
++
++fn is_this_exp(t: &Tok) -> bool {
++    matches!(t, Tok::Var(_) | Tok::Brace(_) | Tok::Cmd(_) | Tok::Special(_) | Tok::SpecialStar)
++}
++
++fn is_exp_after(toks: &[Tok], idx: usize) -> bool {
++    for j in (idx+1)..toks.len() {
++        match &toks[j] {
++            Tok::Sep(_) | Tok::Comment => return false,
++            _ => { if is_this_exp(&toks[j]) { return true; } }
++        }
++    }
++    false
++}
++
++fn comment_byte_pos(line: &str) -> Option<usize> {
++    // Find the byte position of the first '#' that starts a comment (not in quotes).
++    let mut in_dq = false;
++    let mut in_sq = false;
++    let mut i = 0;
++    while i < line.len() {
++        let c = line.as_bytes()[i];
++        // only handle ASCII here for comment detection (good enough for these cases)
++        if in_sq {
++            if c == b'\'' { in_sq = false; }
++            i += 1; continue;
++        }
++        if in_dq {
++            if c == b'"' { in_dq = false; }
++            i += 1; continue;
++        }
++        if c == b'"' { in_dq = true; i += 1; continue; }
++        if c == b'\'' { in_sq = true; i += 1; continue; }
++        if c == b'#' { return Some(i); }
++        i += 1;
++    }
++    None
++}
++
++fn should_drop(toks: &[Tok], i: usize) -> bool {
++    if i + 1 >= toks.len() { return true; }
++    match &toks[i+1] {
++        Tok::Sep(_) => true,
++        Tok::Comment => true,
++        Tok::Plain(p) => !is_ident(p.chars().next().unwrap_or(' ')),
++        _ => false,
++    }
++}
++
++fn rewrite_cmd(ctext: &str, had_nl: bool) -> String {
++    if ctext.starts_with('`') {
++        let inner = &ctext[1..ctext.len()-1];
++        format!("$({})", inner)
++    } else {
++        if ctext == "$(pwd)" && had_nl {
++            "$PWD".to_string()
++        } else {
++            ctext.to_string()
++        }
++    }
++}
++
++// ===================== rendering =====================
++// Character-level diff between original (a) and suggested (b), exactly matching
++// the `diff` crate (jorgecarleitao/diff v0.1.13) algorithm: leading/trailing
++// equals are stripped, an LCS table is built for the middle, and the
++// reconstruction prefers an insert (right) before a delete (left) on ties.
++// Ops: 0 = common, 1 = insert (char from b), 2 = delete (char from a).
++fn lcs_diff(a: &[char], b: &[char]) -> Vec<(u8, char)> {
++    let n = a.len();
++    let m = b.len();
++    let mut leading = 0;
++    while leading < n.min(m) && a[leading] == b[leading] { leading += 1; }
++    let mut trailing = 0;
++    while trailing < n.min(m) - leading
++        && a[n - 1 - trailing] == b[m - 1 - trailing] {
++        trailing += 1;
++    }
++    let left_diff = n - leading - trailing;
++    let right_diff = m - leading - trailing;
++
++    // LCS table over the middle (indices 1..=left_diff / 1..=right_diff).
++    let mut table = vec![vec![0usize; right_diff + 1]; left_diff + 1];
++    for i in 0..left_diff {
++        for j in 0..right_diff {
++            if a[leading + i] == b[leading + j] {
++                table[i + 1][j + 1] = table[i][j] + 1;
++            } else {
++                table[i + 1][j + 1] = table[i][j + 1].max(table[i + 1][j]);
++            }
++        }
++    }
++
++    let mut out = Vec::new();
++    // leading equals
++    for k in 0..leading {
++        out.push((0, a[k]));
++    }
++    // middle, reconstructed back-to-front then reversed
++    let mut i = left_diff;
++    let mut j = right_diff;
++    let mut mid = Vec::new();
++    loop {
++        if j > 0 && (i == 0 || table[i][j] == table[i][j - 1]) {
++            j -= 1;
++            mid.push((1, b[leading + j])); // insert from b
++        } else if i > 0 && (j == 0 || table[i][j] == table[i - 1][j]) {
++            i -= 1;
++            mid.push((2, a[leading + i])); // delete from a
++        } else if i > 0 && j > 0 {
++            i -= 1;
++            j -= 1;
++            mid.push((0, a[leading + i])); // common
++        } else {
++            break;
++        }
++    }
++    mid.reverse();
++    out.extend(mid);
++    // trailing equals
++    for k in 0..trailing {
++        out.push((0, a[n - trailing + k]));
++    }
++    out
++}
++
++fn render_suggest(l: &str, t: &str) -> String {
++    let a: Vec<char> = l.chars().collect();
++    let b: Vec<char> = t.chars().collect();
++    let ops = lcs_diff(&a, &b);
++    let mut out = String::new();
++    let mut cur = 0u8;
++    let mut i = 0;
++    while i < ops.len() {
++        let kind = ops[i].0;
++        let mut run = String::new();
++        while i < ops.len() && ops[i].0 == kind {
++            run.push(ops[i].1);
++            i += 1;
++        }
++        if kind == 0 {
++            if cur != 0 { out.push_str("\x1b[m"); cur = 0; }
++            out.push_str(&run);
++        } else {
++            let code = if kind == 1 { "\x1b[0;42m" } else { "\x1b[0;41m" };
++            if cur != kind { out.push_str(code); cur = kind; }
++            out.push_str(&run);
++        }
++    }
++    if cur != 0 { out.push_str("\x1b[m"); }
++    out
++}
++
++fn render_syntax_suggest(_l: &str, _t: &str) -> String { unimplemented!() }
++fn syntax_highlight(_l: &str) -> String { unimplemented!() }

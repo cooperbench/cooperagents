@@ -85,6 +85,10 @@ class MiniSweEnvAdapter:
                     {"role": "exit", "content": "LimitsExceeded", "extra": {"exit_status": "LimitsExceeded", "submission": ""}}
                 )
         command = action.get("command", "")
+        # models occasionally emit literal NUL bytes; subprocess raises
+        # ValueError("embedded null byte") and kills the agent thread
+        if "\x00" in command:
+            command = command.replace("\x00", "")
         if self._guard_git and _DESTRUCTIVE_GIT.search(command):
             return {
                 "output": "BLOCKED: destructive git on the shared team tree is not allowed "

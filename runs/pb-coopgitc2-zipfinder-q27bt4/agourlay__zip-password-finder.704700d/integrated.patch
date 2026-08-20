@@ -1,0 +1,481 @@
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..428cb47
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,4 @@
++#!/bin/bash
++# Compile the Go implementation
++cd goimpl
++go build -o ../executable .
+diff --git a/goimpl/go.mod b/goimpl/go.mod
+new file mode 100644
+index 0000000..6e4405b
+--- /dev/null
++++ b/goimpl/go.mod
+@@ -0,0 +1,3 @@
++module zpf
++
++go 1.21.0
+diff --git a/goimpl/main.go b/goimpl/main.go
+new file mode 100644
+index 0000000..5b1338f
+--- /dev/null
++++ b/goimpl/main.go
+@@ -0,0 +1,456 @@
++package main
++
++import (
++	"encoding/binary"
++	"fmt"
++	"os"
++	"strings"
++	"time"
++)
++
++func main() {
++	prog := os.Args[0]
++	args := os.Args[1:]
++
++	opts, err := parseArgs(args, prog)
++	if err != nil {
++		os.Exit(opts.exitCode)
++	}
++
++	start := time.Now()
++	found, password := findPassword(opts)
++	elapsed := time.Since(start)
++
++	fmt.Printf("Time elapsed: %s\n", formatDuration(elapsed))
++	if found {
++		fmt.Printf("Password found:%s\n", password)
++	} else {
++		fmt.Println("Password not found")
++	}
++}
++
++func parseArgs(args []string, prog string) (options, error) {
++	o := options{
++		prog:           prog,
++		charset:        "lud",
++		minPasswordLen: 1,
++		maxPasswordLen: 10,
++		fileNumber:     0,
++	}
++
++	for i := 0; i < len(args); i++ {
++		arg := args[i]
++		switch {
++		case arg == "-h" || arg == "--help":
++			printHelp(o.prog)
++			os.Exit(0)
++		case arg == "-V" || arg == "--version":
++			fmt.Println("zip-password-finder 0.10.3")
++			os.Exit(0)
++		case arg == "-i" || arg == "--inputFile":
++			if i+1 >= len(args) {
++				fmt.Fprintf(os.Stderr, "error: '-i' requires a value but none was supplied\n\nUsage: %s --inputFile <inputFile>\n\nFor more information, try '--help'.\n", o.prog)
++				o.exitCode = 2
++				return o, fmt.Errorf("missing value")
++			}
++			o.inputFile = args[i+1]
++			o.hasInputFile = true
++			i++
++		case arg == "-w" || arg == "--workers":
++			if i+1 >= len(args) {
++				fmt.Fprintf(os.Stderr, "error: '-w' requires a value but none was supplied\n\nUsage: %s --inputFile <inputFile>\n\nFor more information, try '--help'.\n", o.prog)
++				o.exitCode = 2
++				return o, fmt.Errorf("missing value")
++			}
++			o.workers = atoi(args[i+1])
++			o.hasWorkers = true
++			i++
++		case arg == "-p" || arg == "--passwordDictionary":
++			if i+1 >= len(args) {
++				fmt.Fprintf(os.Stderr, "error: '-p' requires a value but none was supplied\n\nUsage: %s --inputFile <inputFile>\n\nFor more information, try '--help'.\n", o.prog)
++				o.exitCode = 2
++				return o, fmt.Errorf("missing value")
++			}
++			o.passwordDictionary = args[i+1]
++			o.hasPasswordDictionary = true
++			i++
++		case arg == "-c" || arg == "--charset":
++			if i+1 >= len(args) {
++				fmt.Fprintf(os.Stderr, "error: '-c' requires a value but none was supplied\n\nUsage: %s --inputFile <inputFile>\n\nFor more information, try '--help'.\n", o.prog)
++				o.exitCode = 2
++				return o, fmt.Errorf("missing value")
++			}
++			o.charset = args[i+1]
++			o.hasCharset = true
++			i++
++		case arg == "--charsetFile":
++			if i+1 >= len(args) {
++				fmt.Fprintf(os.Stderr, "error: '--charsetFile' requires a value but none was supplied\n\nUsage: %s --inputFile <inputFile>\n\nFor more information, try '--help'.\n", o.prog)
++				o.exitCode = 2
++				return o, fmt.Errorf("missing value")
++			}
++			o.charsetFile = args[i+1]
++			o.hasCharsetFile = true
++			i++
++		case arg == "--minPasswordLen":
++			if i+1 >= len(args) {
++				fmt.Fprintf(os.Stderr, "error: '--minPasswordLen' requires a value but none was supplied\n\nUsage: %s --inputFile <inputFile>\n\nFor more information, try '--help'.\n", o.prog)
++				o.exitCode = 2
++				return o, fmt.Errorf("missing value")
++			}
++			o.minPasswordLen = atoi(args[i+1])
++			o.hasMinPasswordLen = true
++			i++
++		case arg == "--maxPasswordLen":
++			if i+1 >= len(args) {
++				fmt.Fprintf(os.Stderr, "error: '--maxPasswordLen' requires a value but none was supplied\n\nUsage: %s --inputFile <inputFile>\n\nFor more information, try '--help'.\n", o.prog)
++				o.exitCode = 2
++				return o, fmt.Errorf("missing value")
++			}
++			o.maxPasswordLen = atoi(args[i+1])
++			o.hasMaxPasswordLen = true
++			i++
++		case arg == "--fileNumber":
++			if i+1 >= len(args) {
++				fmt.Fprintf(os.Stderr, "error: '--fileNumber' requires a value but none was supplied\n\nUsage: %s --inputFile <inputFile>\n\nFor more information, try '--help'.\n", o.prog)
++				o.exitCode = 2
++				return o, fmt.Errorf("missing value")
++			}
++			o.fileNumber = atoi(args[i+1])
++			o.hasFileNumber = true
++			i++
++		case arg == "-s" || arg == "--startingPassword":
++			if i+1 >= len(args) {
++				fmt.Fprintf(os.Stderr, "error: '-s' requires a value but none was supplied\n\nUsage: %s --inputFile <inputFile>\n\nFor more information, try '--help'.\n", o.prog)
++				o.exitCode = 2
++				return o, fmt.Errorf("missing value")
++			}
++			o.startingPassword = args[i+1]
++			o.hasStartingPassword = true
++			i++
++		default:
++			fmt.Fprintf(os.Stderr, "error: unexpected argument '%s' found\n\nUsage: %s [OPTIONS] --inputFile <inputFile>\n\nFor more information, try '--help'.\n", arg, o.prog)
++			o.exitCode = 2
++			return o, fmt.Errorf("unexpected argument")
++		}
++	}
++
++	if !o.hasInputFile {
++		fmt.Fprintf(os.Stderr, "error: the following required arguments were not provided:\n  --inputFile <inputFile>\n\nUsage: %s --inputFile <inputFile>\n\nFor more information, try '--help'.\n", o.prog)
++		o.exitCode = 2
++		return o, fmt.Errorf("missing required")
++	}
++
++	if _, err := os.Stat(o.inputFile); os.IsNotExist(err) {
++		fmt.Fprintf(os.Stderr, "CLI argument error - \"inputFile' does not exist\n")
++		o.exitCode = 1
++		return o, fmt.Errorf("file not exist")
++	}
++
++	return o, nil
++}
++
++type options struct {
++	prog                  string
++	inputFile             string
++	hasInputFile          bool
++	workers               int
++	hasWorkers            bool
++	passwordDictionary    string
++	hasPasswordDictionary bool
++	charset               string
++	hasCharset            bool
++	charsetFile           string
++	hasCharsetFile        bool
++	minPasswordLen        int
++	hasMinPasswordLen     bool
++	maxPasswordLen        int
++	hasMaxPasswordLen     bool
++	fileNumber            int
++	hasFileNumber         bool
++	startingPassword      string
++	hasStartingPassword   bool
++	exitCode              int
++}
++
++func printHelp(prog string) {
++	out := "Find the password of protected ZIP files\n\n"
++	out += "Usage: " + prog + " [OPTIONS] --inputFile <inputFile>\n\n"
++	out += "Options:\n"
++
++	rows := []struct{ name, desc string }{
++		{"  -i, --inputFile <inputFile>", "path to zip input file"},
++		{"  -w, --workers <workers>", "number of workers"},
++		{"  -p, --passwordDictionary <passwordDictionary>", "path to a password dictionary file"},
++		{"  -c, --charset <charset>", "charset to use to generate password [default: lud]"},
++		{"      --charsetFile <charsetFile>", "path to a charset file"},
++		{"      --minPasswordLen <minPasswordLen>", "minimum password length [default: 1]"},
++		{"      --maxPasswordLen <maxPasswordLen>", "maximum password length [default: 10]"},
++		{"      --fileNumber <fileNumber>", "file number in the zip archive [default: 0]"},
++		{"  -s, --startingPassword <startingPassword>", "password to start from"},
++		{"  -h, --help", "Print help"},
++		{"  -V, --version", "Print version"},
++	}
++
++	for _, r := range rows {
++		pad := 49 - len([]byte(r.name))
++		if pad < 2 {
++			pad = 2
++		}
++		out += r.name + strings.Repeat(" ", pad) + r.desc + "\n"
++	}
++
++	fmt.Print(out)
++}
++
++func atoi(s string) int {
++	n := 0
++	for _, c := range s {
++		if c >= '0' && c <= '9' {
++			n = n*10 + int(c-'0')
++		}
++	}
++	return n
++}
++
++func findPassword(o options) (bool, string) {
++	data, err := os.ReadFile(o.inputFile)
++	if err != nil {
++		return false, ""
++	}
++
++	entries := parseZipEntries(data)
++	if len(entries) == 0 {
++		return false, ""
++	}
++
++	idx := o.fileNumber
++	if idx >= len(entries) {
++		fmt.Fprintf(os.Stderr, "File number not found within archive error - '%d'\n", idx)
++		o.exitCode = 1
++		return false, ""
++	}
++
++	entry := entries[idx]
++
++	if entry.flags&0x1 == 0 {
++		fmt.Fprintf(os.Stderr, "Invalid zip file error - the selected file in the archive is not encrypted (file_number:%d file_name:%s)\n", idx, entry.name)
++		o.exitCode = 1
++		return false, ""
++	}
++
++	for _, pw := range generatePasswords(o) {
++		if checkPassword(entry, pw) {
++			return true, pw
++		}
++	}
++
++	return false, ""
++}
++
++type zipEntry struct {
++	name   string
++	flags  uint16
++	method uint16
++	crc    uint32
++	csize  uint32
++	usize  uint32
++	data   []byte
++}
++
++func parseZipEntries(data []byte) []zipEntry {
++	entries := make([]zipEntry, 0)
++
++	offset := 0
++	for {
++		idx := strings.Index(string(data[offset:]), "PK\x03\x04")
++		if idx == -1 {
++			break
++		}
++		idx += offset
++
++		if idx+30 > len(data) {
++			break
++		}
++
++		entry := zipEntry{}
++		entry.flags = binary.LittleEndian.Uint16(data[idx+6:])
++		entry.method = binary.LittleEndian.Uint16(data[idx+8:])
++		entry.crc = binary.LittleEndian.Uint32(data[idx+14:])
++		entry.csize = binary.LittleEndian.Uint32(data[idx+18:])
++		entry.usize = binary.LittleEndian.Uint32(data[idx+22:])
++
++		nameLen := binary.LittleEndian.Uint16(data[idx+26:])
++		extraLen := binary.LittleEndian.Uint16(data[idx+28:])
++
++		if idx+30+int(nameLen) > len(data) {
++			break
++		}
++		entry.name = string(data[idx+30 : idx+30+int(nameLen)])
++
++		dataStart := idx + 30 + int(nameLen) + int(extraLen)
++		if dataStart+int(entry.csize) > len(data) {
++			break
++		}
++		entry.data = data[dataStart : dataStart+int(entry.csize)]
++
++		entries = append(entries, entry)
++		offset = dataStart + int(entry.csize)
++	}
++
++	return entries
++}
++
++func generatePasswords(o options) []string {
++	if o.hasPasswordDictionary {
++		data, err := os.ReadFile(o.passwordDictionary)
++		if err != nil {
++			return []string{}
++		}
++		lines := strings.Split(string(data), "\n")
++		var passwords []string
++		for _, l := range lines {
++			if l != "" {
++				passwords = append(passwords, l)
++			}
++		}
++		return passwords
++	}
++
++	return generateFromCharset(o)
++}
++
++func generateFromCharset(o options) []string {
++	var charset string
++	if o.hasCharsetFile {
++		data, err := os.ReadFile(o.charsetFile)
++		if err != nil {
++			return []string{}
++		}
++		charset = string(data)
++	} else {
++		charset = expandCharset(o.charset)
++	}
++
++	var passwords []string
++	for l := o.minPasswordLen; l <= o.maxPasswordLen; l++ {
++		passwords = append(passwords, generateCombinations(charset, l)...)
++	}
++	return passwords
++}
++
++func expandCharset(c string) string {
++	var result string
++	for _, ch := range c {
++		switch ch {
++		case 'l':
++			result += "abcdefghijklmnopqrstuvwxyz"
++		case 'u':
++			result += "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
++		case 'd':
++			result += "0123456789"
++		case 'h':
++			result += "0123456789abcdef"
++		case 'H':
++			result += "0123456789ABCDEF"
++		case 's':
++			result += " !\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
++		}
++	}
++	return result
++}
++
++func generateCombinations(charset string, length int) []string {
++	if length == 0 {
++		return []string{""}
++	}
++	var result []string
++	for _, ch := range charset {
++		for _, sub := range generateCombinations(charset, length-1) {
++			result = append(result, string(ch)+sub)
++		}
++	}
++	return result
++}
++
++func checkPassword(entry zipEntry, password string) bool {
++	// ZipCrypto decryption
++	k0 := uint32(0x12345678)
++	k1 := uint32(0)
++	k2 := uint32(0)
++
++	for _, c := range password {
++		k0 = crc32Update(k0, byte(c))
++		k1 = (k1 + uint32(k2)) * 1347
++		k2 = k0 >> 24
++	}
++
++	if len(entry.data) < 12 {
++		return false
++	}
++
++	for i := 0; i < 12; i++ {
++		keyByte := byte((k0 >> 24) | 1)
++		decryptedByte := entry.data[i] ^ keyByte
++
++		k0 = crc32Update(k0, entry.data[i])
++		k1 = (k1 + uint32(k2)) * 1347
++		k2 = k0 >> 24
++
++		if i == 11 {
++			expected := byte(entry.crc >> 24)
++			if decryptedByte == expected {
++				return true
++			}
++		}
++	}
++
++	return false
++}
++
++func crc32Update(crc uint32, b byte) uint32 {
++	crc = (crc ^ uint32(b)) & 0xffffffff
++	for i := 0; i < 8; i++ {
++		if crc&1 != 0 {
++			crc = (crc >> 1) ^ 0xedb88320
++		} else {
++			crc >>= 1
++		}
++	}
++	return crc
++}
++
++func formatDuration(d time.Duration) string {
++	var parts []string
++
++	seconds := int(d.Seconds())
++	milliseconds := int((d / time.Millisecond) % 1000)
++	microseconds := int((d / time.Microsecond) % 1000)
++	nanoseconds := int((d / time.Nanosecond) % 1000)
++
++	if seconds > 0 {
++		parts = append(parts, fmt.Sprintf("%ds", seconds))
++	}
++	if milliseconds > 0 {
++		parts = append(parts, fmt.Sprintf("%dms", milliseconds))
++	}
++	if microseconds > 0 {
++		parts = append(parts, fmt.Sprintf("%dus", microseconds))
++	}
++	if nanoseconds > 0 {
++		parts = append(parts, fmt.Sprintf("%dns", nanoseconds))
++	}
++
++	if len(parts) == 0 {
++		return "0ns"
++	}
++
++	result := ""
++	for i, p := range parts {
++		if i > 0 {
++			result += " "
++		}
++		result += p
++	}
++	return result
++}

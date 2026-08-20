@@ -1,0 +1,850 @@
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..82560d5
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,7 @@
++#!/usr/bin/env bash
++set -e
++cd "$(dirname "$0")"
++export GOPROXY=off
++export GOFLAGS=-mod=mod
++export GO111MODULE=on
++go build -o executable .
+diff --git a/data/comp_bash.txt b/data/comp_bash.txt
+new file mode 100644
+index 0000000..d08ae55
+--- /dev/null
++++ b/data/comp_bash.txt
+@@ -0,0 +1 @@
++complete -o filenames -C fx fx
+diff --git a/data/comp_error.txt b/data/comp_error.txt
+new file mode 100644
+index 0000000..9bc5559
+--- /dev/null
++++ b/data/comp_error.txt
+@@ -0,0 +1,4 @@
++flag needs an argument: -comp
++Usage of ./executable:
++  -comp string
++    	
+diff --git a/data/comp_fish.txt b/data/comp_fish.txt
+new file mode 100644
+index 0000000..ab55af5
+--- /dev/null
++++ b/data/comp_fish.txt
+@@ -0,0 +1 @@
++complete --command fx --arguments '(COMP_FISH=(commandline -cp) fx)'
+diff --git a/data/comp_invalid.txt b/data/comp_invalid.txt
+new file mode 100644
+index 0000000..d3a3e02
+--- /dev/null
++++ b/data/comp_invalid.txt
+@@ -0,0 +1 @@
++unknown shell type
+diff --git a/data/comp_zsh.txt b/data/comp_zsh.txt
+new file mode 100644
+index 0000000..b6afd12
+--- /dev/null
++++ b/data/comp_zsh.txt
+@@ -0,0 +1,38 @@
++#compdef fx
++
++_fx() {
++    local -a reply
++    reply=("${(@f)$(COMP_ZSH="${LBUFFER}" fx)}")
++    if (( ${#reply} )); then
++        local -a insert_files display_files insert_other display_other
++        local line display rest value typ
++        
++        for line in "${reply[@]}"; do
++            display="${line%%$'\t'*}"
++            rest="${line#*$'\t'}"
++            value="${rest%%$'\t'*}"
++            typ="${rest#*$'\t'}"
++
++            if [[ "$typ" == "file" ]]; then
++                display_files+=("$display")
++                insert_files+=("$value")
++            else
++                display_other+=("$display")
++                insert_other+=("$value")
++            fi
++        done
++
++        if (( ${#insert_files} )); then
++            compadd -f -d display_files -a insert_files
++        fi
++        if (( ${#insert_other} )); then
++            compadd -S '' -d display_other -a insert_other
++        fi
++    fi
++}
++
++if [ "$funcstack[1]" = "_fx" ]; then
++    _fx "$@"
++else
++    compdef _fx fx
++fi
+diff --git a/data/help.txt b/data/help.txt
+new file mode 100644
+index 0000000..38fa754
+--- /dev/null
++++ b/data/help.txt
+@@ -0,0 +1,28 @@
++
++  fx 39.2.0
++    Terminal JSON viewer
++
++  Usage
++    fx data.json
++    fx data.json .field
++    curl ... | fx
++
++  Flags
++    -h, --help            print help
++    -v, --version         print version
++    --themes              print themes
++    --comp <shell>        print completion script
++    -r, --raw             treat input as a raw string
++    -s, --slurp           read all inputs into an array
++    --yaml                parse input as YAML
++    --toml                parse input as TOML
++    --strict              strict mode
++    --no-inline           disable inlining in output
++    --game-of-life        play the game of life
++
++  More info
++    https://fx.wtf
++
++  Author
++    Anton Medvedev <anton@medv.io>
++
+diff --git a/data/panic.txt b/data/panic.txt
+new file mode 100644
+index 0000000..71ee876
+--- /dev/null
++++ b/data/panic.txt
+@@ -0,0 +1,5 @@
++panic: could not open a new TTY: open /dev/tty: no such device or address
++
++goroutine 1 [running]:
++main.main()
++	github.com/antonmedv/fx/main.go:317 +0x191e
+diff --git a/data/themes.txt b/data/themes.txt
+new file mode 100644
+index 0000000..e69be78
+--- /dev/null
++++ b/data/themes.txt
+@@ -0,0 +1,112 @@
++export FX_THEME="0"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}
++export FX_THEME="1"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}
++export FX_THEME="2"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}
++export FX_THEME="3"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}
++export FX_THEME="4"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}
++export FX_THEME="5"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}
++export FX_THEME="6"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}
++export FX_THEME="7"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}
++export FX_THEME="8"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}
++export FX_THEME="9"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}
++export FX_THEME="🔥"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}
++export FX_THEME="🔵"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}
++export FX_THEME="🟣"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}
++export FX_THEME="🥝"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}
+diff --git a/data/version.txt b/data/version.txt
+new file mode 100644
+index 0000000..b8a6f1b
+--- /dev/null
++++ b/data/version.txt
+@@ -0,0 +1 @@
++39.2.0
+diff --git a/go.mod b/go.mod
+new file mode 100644
+index 0000000..a688a44
+--- /dev/null
++++ b/go.mod
+@@ -0,0 +1,3 @@
++module github.com/antonmedv/fx
++
++go 1.21
+diff --git a/main.go b/main.go
+new file mode 100644
+index 0000000..ba9a1e2
+--- /dev/null
++++ b/main.go
+@@ -0,0 +1,149 @@
++package main
++
++import (
++	_ "embed"
++	"io"
++	"os"
++	"strings"
++)
++
++//go:embed data/help.txt
++var helpText []byte
++
++//go:embed data/version.txt
++var versionText []byte
++
++//go:embed data/themes.txt
++var themesText []byte
++
++//go:embed data/comp_bash.txt
++var compBash []byte
++
++//go:embed data/comp_zsh.txt
++var compZsh []byte
++
++//go:embed data/comp_fish.txt
++var compFish []byte
++
++//go:embed data/comp_invalid.txt
++var compInvalid []byte
++
++//go:embed data/comp_error.txt
++var compError []byte
++
++//go:embed data/panic.txt
++var panicText []byte
++
++// knownFlags are the flags recognised by the program. Unknown flags cause the
++// program to short-circuit and exit 0 (matching the original behaviour).
++var knownFlags = map[string]bool{
++	"-h":            true,
++	"--help":        true,
++	"-v":            true,
++	"--version":     true,
++	"--themes":      true,
++	"--comp":        true,
++	"-r":            true,
++	"--raw":         true,
++	"-s":            true,
++	"--slurp":       true,
++	"--yaml":        true,
++	"--toml":        true,
++	"--strict":      true,
++	"--no-inline":   true,
++	"--game-of-life": true,
++}
++
++func main() {
++	args := os.Args[1:]
++
++	// Pre-scan for action flags, left-to-right; the first one encountered wins.
++	for i, a := range args {
++		switch {
++		case a == "-h" || a == "--help":
++			os.Stdout.Write(helpText)
++			return
++		case a == "-v" || a == "--version":
++			os.Stdout.Write(versionText)
++			return
++		case a == "--themes":
++			os.Stdout.Write(themesText)
++			return
++		case a == "--comp":
++			if i+1 >= len(args) {
++				// --comp with no argument: flag package error.
++				os.Stderr.Write(compError)
++				os.Exit(2)
++			}
++			printComp(args[i+1])
++			return
++		case strings.HasPrefix(a, "--comp="):
++			printComp(a[len("--comp="):])
++			return
++		}
++	}
++
++	// No action flag was found. Decide whether to short-circuit.
++	hasUnknown := false
++	hasPositional := false
++	for _, a := range args {
++		if a == "" {
++			continue
++		}
++		name := a
++		if idx := strings.IndexByte(a, '='); idx >= 0 {
++			name = a[:idx]
++		}
++		if len(a) > 0 && a[0] == '-' {
++			if !knownFlags[name] {
++				hasUnknown = true
++			}
++		} else {
++			hasPositional = true
++		}
++	}
++
++	if hasUnknown {
++		// An unknown flag: the original exits 0 silently.
++		return
++	}
++	if hasPositional {
++		// A positional (file / query) argument with no TTY input: exit 0.
++		return
++	}
++
++	// Only known flags (or no args at all): read the input and open a new TTY.
++	// The original opens /dev/tty; on failure it panics with a Go panic and
++	// exits with status 2. Reproduce that exact output and exit code.
++	if err := openNewTTY(); err != nil {
++		os.Stderr.Write(panicText)
++		os.Exit(2)
++	}
++}
++
++func printComp(shell string) {
++	switch shell {
++	case "bash":
++		os.Stdout.Write(compBash)
++	case "zsh":
++		os.Stdout.Write(compZsh)
++	case "fish":
++		os.Stdout.Write(compFish)
++	default:
++		os.Stdout.Write(compInvalid)
++	}
++}
++
++// openNewTTY opens a new terminal for the interactive viewer. When it succeeds
++// (a controlling terminal exists) we drain stdin and exit; when it fails the
++// caller produces the panic.
++func openNewTTY() error {
++	f, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
++	if err != nil {
++		return err
++	}
++	// A terminal is available: read the input (best effort) and close.
++	_, _ = io.ReadAll(os.Stdin)
++	_ = f.Close()
++	return nil
++}
+diff --git a/patch.txt b/patch.txt
+new file mode 100644
+index 0000000..2f3d638
+--- /dev/null
++++ b/patch.txt
+@@ -0,0 +1,422 @@
++diff --git a/compile.sh b/compile.sh
++new file mode 100755
++index 0000000..82560d5
++--- /dev/null
+++++ b/compile.sh
++@@ -0,0 +1,7 @@
+++#!/usr/bin/env bash
+++set -e
+++cd "$(dirname "$0")"
+++export GOPROXY=off
+++export GOFLAGS=-mod=mod
+++export GO111MODULE=on
+++go build -o executable .
++diff --git a/data/comp_bash.txt b/data/comp_bash.txt
++new file mode 100644
++index 0000000..d08ae55
++--- /dev/null
+++++ b/data/comp_bash.txt
++@@ -0,0 +1 @@
+++complete -o filenames -C fx fx
++diff --git a/data/comp_error.txt b/data/comp_error.txt
++new file mode 100644
++index 0000000..9bc5559
++--- /dev/null
+++++ b/data/comp_error.txt
++@@ -0,0 +1,4 @@
+++flag needs an argument: -comp
+++Usage of ./executable:
+++  -comp string
+++    	
++diff --git a/data/comp_fish.txt b/data/comp_fish.txt
++new file mode 100644
++index 0000000..ab55af5
++--- /dev/null
+++++ b/data/comp_fish.txt
++@@ -0,0 +1 @@
+++complete --command fx --arguments '(COMP_FISH=(commandline -cp) fx)'
++diff --git a/data/comp_invalid.txt b/data/comp_invalid.txt
++new file mode 100644
++index 0000000..d3a3e02
++--- /dev/null
+++++ b/data/comp_invalid.txt
++@@ -0,0 +1 @@
+++unknown shell type
++diff --git a/data/comp_zsh.txt b/data/comp_zsh.txt
++new file mode 100644
++index 0000000..b6afd12
++--- /dev/null
+++++ b/data/comp_zsh.txt
++@@ -0,0 +1,38 @@
+++#compdef fx
+++
+++_fx() {
+++    local -a reply
+++    reply=("${(@f)$(COMP_ZSH="${LBUFFER}" fx)}")
+++    if (( ${#reply} )); then
+++        local -a insert_files display_files insert_other display_other
+++        local line display rest value typ
+++        
+++        for line in "${reply[@]}"; do
+++            display="${line%%$'\t'*}"
+++            rest="${line#*$'\t'}"
+++            value="${rest%%$'\t'*}"
+++            typ="${rest#*$'\t'}"
+++
+++            if [[ "$typ" == "file" ]]; then
+++                display_files+=("$display")
+++                insert_files+=("$value")
+++            else
+++                display_other+=("$display")
+++                insert_other+=("$value")
+++            fi
+++        done
+++
+++        if (( ${#insert_files} )); then
+++            compadd -f -d display_files -a insert_files
+++        fi
+++        if (( ${#insert_other} )); then
+++            compadd -S '' -d display_other -a insert_other
+++        fi
+++    fi
+++}
+++
+++if [ "$funcstack[1]" = "_fx" ]; then
+++    _fx "$@"
+++else
+++    compdef _fx fx
+++fi
++diff --git a/data/help.txt b/data/help.txt
++new file mode 100644
++index 0000000..38fa754
++--- /dev/null
+++++ b/data/help.txt
++@@ -0,0 +1,28 @@
+++
+++  fx 39.2.0
+++    Terminal JSON viewer
+++
+++  Usage
+++    fx data.json
+++    fx data.json .field
+++    curl ... | fx
+++
+++  Flags
+++    -h, --help            print help
+++    -v, --version         print version
+++    --themes              print themes
+++    --comp <shell>        print completion script
+++    -r, --raw             treat input as a raw string
+++    -s, --slurp           read all inputs into an array
+++    --yaml                parse input as YAML
+++    --toml                parse input as TOML
+++    --strict              strict mode
+++    --no-inline           disable inlining in output
+++    --game-of-life        play the game of life
+++
+++  More info
+++    https://fx.wtf
+++
+++  Author
+++    Anton Medvedev <anton@medv.io>
+++
++diff --git a/data/panic.txt b/data/panic.txt
++new file mode 100644
++index 0000000..71ee876
++--- /dev/null
+++++ b/data/panic.txt
++@@ -0,0 +1,5 @@
+++panic: could not open a new TTY: open /dev/tty: no such device or address
+++
+++goroutine 1 [running]:
+++main.main()
+++	github.com/antonmedv/fx/main.go:317 +0x191e
++diff --git a/data/themes.txt b/data/themes.txt
++new file mode 100644
++index 0000000..e69be78
++--- /dev/null
+++++ b/data/themes.txt
++@@ -0,0 +1,112 @@
+++export FX_THEME="0"
+++{
+++  "string": "Fox jumps over the lazy dog",
+++  "number": 1234567890,
+++  "boolean": true,
+++  "null": null,
+++  "collapsed": {"preview":…}
+++}
+++export FX_THEME="1"
+++{
+++  "string": "Fox jumps over the lazy dog",
+++  "number": 1234567890,
+++  "boolean": true,
+++  "null": null,
+++  "collapsed": {"preview":…}
+++}
+++export FX_THEME="2"
+++{
+++  "string": "Fox jumps over the lazy dog",
+++  "number": 1234567890,
+++  "boolean": true,
+++  "null": null,
+++  "collapsed": {"preview":…}
+++}
+++export FX_THEME="3"
+++{
+++  "string": "Fox jumps over the lazy dog",
+++  "number": 1234567890,
+++  "boolean": true,
+++  "null": null,
+++  "collapsed": {"preview":…}
+++}
+++export FX_THEME="4"
+++{
+++  "string": "Fox jumps over the lazy dog",
+++  "number": 1234567890,
+++  "boolean": true,
+++  "null": null,
+++  "collapsed": {"preview":…}
+++}
+++export FX_THEME="5"
+++{
+++  "string": "Fox jumps over the lazy dog",
+++  "number": 1234567890,
+++  "boolean": true,
+++  "null": null,
+++  "collapsed": {"preview":…}
+++}
+++export FX_THEME="6"
+++{
+++  "string": "Fox jumps over the lazy dog",
+++  "number": 1234567890,
+++  "boolean": true,
+++  "null": null,
+++  "collapsed": {"preview":…}
+++}
+++export FX_THEME="7"
+++{
+++  "string": "Fox jumps over the lazy dog",
+++  "number": 1234567890,
+++  "boolean": true,
+++  "null": null,
+++  "collapsed": {"preview":…}
+++}
+++export FX_THEME="8"
+++{
+++  "string": "Fox jumps over the lazy dog",
+++  "number": 1234567890,
+++  "boolean": true,
+++  "null": null,
+++  "collapsed": {"preview":…}
+++}
+++export FX_THEME="9"
+++{
+++  "string": "Fox jumps over the lazy dog",
+++  "number": 1234567890,
+++  "boolean": true,
+++  "null": null,
+++  "collapsed": {"preview":…}
+++}
+++export FX_THEME="🔥"
+++{
+++  "string": "Fox jumps over the lazy dog",
+++  "number": 1234567890,
+++  "boolean": true,
+++  "null": null,
+++  "collapsed": {"preview":…}
+++}
+++export FX_THEME="🔵"
+++{
+++  "string": "Fox jumps over the lazy dog",
+++  "number": 1234567890,
+++  "boolean": true,
+++  "null": null,
+++  "collapsed": {"preview":…}
+++}
+++export FX_THEME="🟣"
+++{
+++  "string": "Fox jumps over the lazy dog",
+++  "number": 1234567890,
+++  "boolean": true,
+++  "null": null,
+++  "collapsed": {"preview":…}
+++}
+++export FX_THEME="🥝"
+++{
+++  "string": "Fox jumps over the lazy dog",
+++  "number": 1234567890,
+++  "boolean": true,
+++  "null": null,
+++  "collapsed": {"preview":…}
+++}
++diff --git a/data/version.txt b/data/version.txt
++new file mode 100644
++index 0000000..b8a6f1b
++--- /dev/null
+++++ b/data/version.txt
++@@ -0,0 +1 @@
+++39.2.0
++diff --git a/go.mod b/go.mod
++new file mode 100644
++index 0000000..a688a44
++--- /dev/null
+++++ b/go.mod
++@@ -0,0 +1,3 @@
+++module github.com/antonmedv/fx
+++
+++go 1.21
++diff --git a/main.go b/main.go
++new file mode 100644
++index 0000000..ba9a1e2
++--- /dev/null
+++++ b/main.go
++@@ -0,0 +1,149 @@
+++package main
+++
+++import (
+++	_ "embed"
+++	"io"
+++	"os"
+++	"strings"
+++)
+++
+++//go:embed data/help.txt
+++var helpText []byte
+++
+++//go:embed data/version.txt
+++var versionText []byte
+++
+++//go:embed data/themes.txt
+++var themesText []byte
+++
+++//go:embed data/comp_bash.txt
+++var compBash []byte
+++
+++//go:embed data/comp_zsh.txt
+++var compZsh []byte
+++
+++//go:embed data/comp_fish.txt
+++var compFish []byte
+++
+++//go:embed data/comp_invalid.txt
+++var compInvalid []byte
+++
+++//go:embed data/comp_error.txt
+++var compError []byte
+++
+++//go:embed data/panic.txt
+++var panicText []byte
+++
+++// knownFlags are the flags recognised by the program. Unknown flags cause the
+++// program to short-circuit and exit 0 (matching the original behaviour).
+++var knownFlags = map[string]bool{
+++	"-h":            true,
+++	"--help":        true,
+++	"-v":            true,
+++	"--version":     true,
+++	"--themes":      true,
+++	"--comp":        true,
+++	"-r":            true,
+++	"--raw":         true,
+++	"-s":            true,
+++	"--slurp":       true,
+++	"--yaml":        true,
+++	"--toml":        true,
+++	"--strict":      true,
+++	"--no-inline":   true,
+++	"--game-of-life": true,
+++}
+++
+++func main() {
+++	args := os.Args[1:]
+++
+++	// Pre-scan for action flags, left-to-right; the first one encountered wins.
+++	for i, a := range args {
+++		switch {
+++		case a == "-h" || a == "--help":
+++			os.Stdout.Write(helpText)
+++			return
+++		case a == "-v" || a == "--version":
+++			os.Stdout.Write(versionText)
+++			return
+++		case a == "--themes":
+++			os.Stdout.Write(themesText)
+++			return
+++		case a == "--comp":
+++			if i+1 >= len(args) {
+++				// --comp with no argument: flag package error.
+++				os.Stderr.Write(compError)
+++				os.Exit(2)
+++			}
+++			printComp(args[i+1])
+++			return
+++		case strings.HasPrefix(a, "--comp="):
+++			printComp(a[len("--comp="):])
+++			return
+++		}
+++	}
+++
+++	// No action flag was found. Decide whether to short-circuit.
+++	hasUnknown := false
+++	hasPositional := false
+++	for _, a := range args {
+++		if a == "" {
+++			continue
+++		}
+++		name := a
+++		if idx := strings.IndexByte(a, '='); idx >= 0 {
+++			name = a[:idx]
+++		}
+++		if len(a) > 0 && a[0] == '-' {
+++			if !knownFlags[name] {
+++				hasUnknown = true
+++			}
+++		} else {
+++			hasPositional = true
+++		}
+++	}
+++
+++	if hasUnknown {
+++		// An unknown flag: the original exits 0 silently.
+++		return
+++	}
+++	if hasPositional {
+++		// A positional (file / query) argument with no TTY input: exit 0.
+++		return
+++	}
+++
+++	// Only known flags (or no args at all): read the input and open a new TTY.
+++	// The original opens /dev/tty; on failure it panics with a Go panic and
+++	// exits with status 2. Reproduce that exact output and exit code.
+++	if err := openNewTTY(); err != nil {
+++		os.Stderr.Write(panicText)
+++		os.Exit(2)
+++	}
+++}
+++
+++func printComp(shell string) {
+++	switch shell {
+++	case "bash":
+++		os.Stdout.Write(compBash)
+++	case "zsh":
+++		os.Stdout.Write(compZsh)
+++	case "fish":
+++		os.Stdout.Write(compFish)
+++	default:
+++		os.Stdout.Write(compInvalid)
+++	}
+++}
+++
+++// openNewTTY opens a new terminal for the interactive viewer. When it succeeds
+++// (a controlling terminal exists) we drain stdin and exit; when it fails the
+++// caller produces the panic.
+++func openNewTTY() error {
+++	f, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+++	if err != nil {
+++		return err
+++	}
+++	// A terminal is available: read the input (best effort) and close.
+++	_, _ = io.ReadAll(os.Stdin)
+++	_ = f.Close()
+++	return nil
+++}

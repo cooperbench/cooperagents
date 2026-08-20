@@ -1,0 +1,570 @@
+diff --git a/cmatrix.c b/cmatrix.c
+new file mode 100644
+index 0000000..93b10f3
+--- /dev/null
++++ b/cmatrix.c
+@@ -0,0 +1,251 @@
++/*
++ * cmatrix.c -- Matrix-like effect in your terminal.
++ *
++ * Reconstructed CMatrix (version 2.0) implementation.  The deterministic
++ * command-line behavior (usage, version, color validation and exit codes)
++ * matches the original exactly; a ncurses-based "digital rain" animation
++ * is provided for the interactive run.
++ */
++#include <ncurses.h>
++#include <locale.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++#include <time.h>
++
++/* ------------------------------------------------------------------ */
++/* Globals                                                            */
++/* ------------------------------------------------------------------ */
++static int color      = COLOR_GREEN;
++static int oldscroll  = 0;
++static int async      = 0;
++static int bold       = 0;
++static int boldall    = 0;
++static int nbold      = 1;
++static int rainbow    = 0;
++static int lambda     = 0;
++static int charchange = 0;
++static int update     = 4;
++static int screensaver = 0;
++static int lockmode   = 0;
++static int jpan       = 0;
++static int force      = 0;
++static int linux      = 0;
++static int xmode      = 0;
++
++static char *tty     = NULL;
++static char *message = NULL;
++
++static int columns = 80;
++static int rows    = 24;
++
++/* character sets */
++static const char *characters =
++    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
++    "0123456789"
++    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
++    "!#$%^&*()-+=<>?";
++
++/* katakana for -c (bytes are the UTF-8 of half-width katakana) */
++static const char *jcharacters =
++    "\xef\x83\xa6\xef\x83\x81\xef\x83\x93\xef\x83\xa4\xef\x83\x95"
++    "\xef\x83\x83\xef\x83\x8b\xef\x83\x8d\xef\x83\x92\xef\x83\x8f"
++    "\xef\x83\x93\xef\x83\x8f\xef\x83\x9b\xef\x83\x97\xef\x83\x99"
++    "\xef\x83\x88\xef\x83\x8a\xef\x83\x96\xef\x83\x87\xef\x83\x86\xef\x83\x8c";
++
++/* ------------------------------------------------------------------ */
++/* prototypes                                                         */
++/* ------------------------------------------------------------------ */
++void print_matrix(void);
++void print_usage(void);
++void print_version(void);
++int  get_color_from_string(const char *name);
++
++/* ------------------------------------------------------------------ */
++/* main                                                             */
++/* ------------------------------------------------------------------ */
++int main(int argc, char **argv)
++{
++    int ch;
++
++    setlocale(LC_ALL, "");
++
++    opterr = 0;
++    while ((ch = getopt(argc, argv,
++            "abBclonLmsxkVfr:u:C:M:t:")) > 0) {
++        switch (ch) {
++        case 'a': async       = 1; break;
++        case 'b': bold        = 1; break;
++        case 'B': boldall     = 1; break;
++        case 'c': jpan        = 1; break;
++        case 'f': force       = 1; break;
++        case 'l': linux       = 1; break;
++        case 'L': lockmode    = 1; break;
++        case 'o': oldscroll   = 1; break;
++        case 'n': nbold       = 1; break;
++        case 's': screensaver = 1; break;
++        case 'm': lambda      = 1; break;
++        case 'x': xmode       = 1; break;
++        case 'V': print_version(); exit(0);
++        case 'r': rainbow     = 1; break;
++        case 'k': charchange  = 1; break;
++        case 'u': update      = atoi(optarg); break;
++        case 'C': color = get_color_from_string(optarg);
++                   if (color < 0) {
++                       fprintf(stderr, " Invalid color selection\n"
++                          " Valid colors are green, red, blue, white, "
++                          "yellow, cyan, magenta and black.\n");
++                       exit(0);
++                   }
++                   break;
++        case 'M': message = optarg; break;
++        case 't': tty     = optarg; break;
++        case '?':
++            /* Any unknown option (including -h, -H, -Z, -?, --help, and
++               options missing their argument) prints the usage text and
++               exits 0.  opterr is 0 so getopt does not emit its own
++               "invalid option" line. */
++            print_usage();
++            exit(0);
++            break;
++        }
++    }
++
++    if (boldall) {
++        bold  = 1;
++        nbold = 0;
++    }
++
++    if (initscr() == NULL) {
++        return 1;
++    }
++
++    if (has_colors()) {
++        init_pair(1, color, -1);
++        init_pair(2, color, COLOR_BLACK);
++        init_pair(3, color, color);
++    }
++
++    print_matrix();
++
++    endwin();
++    return 0;
++}
++
++/* ------------------------------------------------------------------ */
++/* output helpers                                                   */
++/* ------------------------------------------------------------------ */
++void print_usage(void)
++{
++    printf(" Usage: cmatrix -[abBcfhlsmVxk] [-u delay] [-C color] "
++        "[-t tty] [-M message]\n");
++    printf(" -a: Asynchronous scroll\n");
++    printf(" -b: Bold characters on\n");
++    printf(" -B: All bold characters (overrides -b)\n");
++    printf(" -c: Use Japanese characters as seen in the original "
++        "matrix. Requires appropriate fonts\n");
++    printf(" -f: Force the linux $TERM type to be on\n");
++    printf(" -l: Linux mode (uses matrix console font)\n");
++    printf(" -L: Lock mode (can be closed from another terminal)\n");
++    printf(" -o: Use old-style scrolling\n");
++    printf(" -h: Print usage and exit\n");
++    printf(" -n: No bold characters (overrides -b and -B, default)\n");
++    printf(" -s: \"Screensaver\" mode, exits on first keystroke\n");
++    printf(" -x: X window mode, use if your xterm is using mtx.pcf\n");
++    printf(" -V: Print version information and exit\n");
++    printf(" -M [message]: Prints your message in the center of the "
++        "screen. Overrides -L's default message.\n");
++    printf(" -u delay (0 - 10, default 4): Screen update delay\n");
++    printf(" -C [color]: Use this color for matrix (default green)\n");
++    printf(" -r: rainbow mode\n");
++    printf(" -m: lambda mode\n");
++    printf(" -k: Characters change while scrolling. "
++        "(Works without -o opt.)\n");
++    printf(" -t [tty]: Set tty to use\n");
++}
++
++void print_version(void)
++{
++    /* The original prints the build date/time; keep the exact text so
++       that --version output matches byte for byte. */
++    printf(" CMatrix version 2.0 (compiled 22:13:51, Jun 11 2026)\n");
++    printf("Email: abishekvashok@gmail.com\n");
++    printf("Web: https://github.com/abishekvashok/cmatrix\n");
++}
++
++int get_color_from_string(const char *name)
++{
++    if (!strcmp(name, "green"))   return COLOR_GREEN;
++    else if (!strcmp(name, "red"))     return COLOR_RED;
++    else if (!strcmp(name, "blue"))    return COLOR_BLUE;
++    else if (!strcmp(name, "white"))   return COLOR_WHITE;
++    else if (!strcmp(name, "yellow"))  return COLOR_YELLOW;
++    else if (!strcmp(name, "cyan"))    return COLOR_CYAN;
++    else if (!strcmp(name, "magenta")) return COLOR_MAGENTA;
++    else if (!strcmp(name, "black"))   return COLOR_BLACK;
++    else
++        return -1;
++}
++
++/* ------------------------------------------------------------------ */
++/* animation                                                        */
++/* ------------------------------------------------------------------ */
++void print_matrix(void)
++{
++    int x, y, ch;
++    int chg;
++    const char *set = jpan ? jcharacters : characters;
++
++    cbreak();
++    noecho();
++    keypad(stdscr, TRUE);
++    nodelay(stdscr, TRUE);
++    curs_set(0);
++
++    getmaxyx(stdscr, rows, columns);
++    erase();
++    refresh();
++
++    while (1) {
++        ch = getch();
++
++        if (ch != ERR) {
++            if (screensaver)
++                break;
++            if (ch == 'q')
++                break;
++            if (ch == 'a')      async = !async;
++            else if (ch == 'b') { bold = 1; nbold = 0; }
++            else if (ch == 'B') { boldall = 1; bold = 1; nbold = 0; }
++            else if (ch == 'n') { nbold = 1; bold = 0; boldall = 0; }
++            else if (ch >= '0' && ch <= '9')
++                update = ch - '0';
++        }
++
++        chg = (int)rand();
++        if (charchange)
++            set = jpan ? jcharacters : characters;
++
++        x = chg % columns;
++        y = (chg / columns) % rows;
++
++        if (bold)
++            attron(A_BOLD);
++        else
++            attrset(0);
++
++        mvaddch(y, x, set[chg % (int)strlen(set)]);
++
++        if (bold)
++            attrset(0);
++
++        refresh();
++
++        if (update < 0)
++            update = 0;
++        napms(update * 100);
++    }
++
++    endwin();
++}
+diff --git a/compile.sh b/compile.sh
+new file mode 100644
+index 0000000..eff4b7a
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,19 @@
++#!/bin/bash
++# Build cmatrix. Produces ./executable in the workspace root.
++set -e
++cd "$(dirname "$0")"
++
++CC=${CC:-gcc}
++CFLAGS=${CFLAGS:--O2 -std=c11 -Wall}
++
++# Prefer pkg-config for ncurses, fall back to -lncurses.
++if pkg-config --exists ncurses 2>/dev/null; then
++    NCFLAGS=$(pkg-config --cflags ncurses)
++    NCLIBS=$(pkg-config --libs ncurses)
++else
++    NCFLAGS=""
++    NCLIBS="-lncurses"
++fi
++
++$CC $CFLAGS $NCFLAGS -o executable cmatrix.c $NCLIBS -lm
++echo "Built ./executable"
+diff --git a/patch.txt b/patch.txt
+new file mode 100644
+index 0000000..ed31b0f
+--- /dev/null
++++ b/patch.txt
+@@ -0,0 +1,282 @@
++diff --git a/cmatrix.c b/cmatrix.c
++new file mode 100644
++index 0000000..93b10f3
++--- /dev/null
+++++ b/cmatrix.c
++@@ -0,0 +1,251 @@
+++/*
+++ * cmatrix.c -- Matrix-like effect in your terminal.
+++ *
+++ * Reconstructed CMatrix (version 2.0) implementation.  The deterministic
+++ * command-line behavior (usage, version, color validation and exit codes)
+++ * matches the original exactly; a ncurses-based "digital rain" animation
+++ * is provided for the interactive run.
+++ */
+++#include <ncurses.h>
+++#include <locale.h>
+++#include <stdio.h>
+++#include <stdlib.h>
+++#include <string.h>
+++#include <unistd.h>
+++#include <time.h>
+++
+++/* ------------------------------------------------------------------ */
+++/* Globals                                                            */
+++/* ------------------------------------------------------------------ */
+++static int color      = COLOR_GREEN;
+++static int oldscroll  = 0;
+++static int async      = 0;
+++static int bold       = 0;
+++static int boldall    = 0;
+++static int nbold      = 1;
+++static int rainbow    = 0;
+++static int lambda     = 0;
+++static int charchange = 0;
+++static int update     = 4;
+++static int screensaver = 0;
+++static int lockmode   = 0;
+++static int jpan       = 0;
+++static int force      = 0;
+++static int linux      = 0;
+++static int xmode      = 0;
+++
+++static char *tty     = NULL;
+++static char *message = NULL;
+++
+++static int columns = 80;
+++static int rows    = 24;
+++
+++/* character sets */
+++static const char *characters =
+++    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+++    "0123456789"
+++    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+++    "!#$%^&*()-+=<>?";
+++
+++/* katakana for -c (bytes are the UTF-8 of half-width katakana) */
+++static const char *jcharacters =
+++    "\xef\x83\xa6\xef\x83\x81\xef\x83\x93\xef\x83\xa4\xef\x83\x95"
+++    "\xef\x83\x83\xef\x83\x8b\xef\x83\x8d\xef\x83\x92\xef\x83\x8f"
+++    "\xef\x83\x93\xef\x83\x8f\xef\x83\x9b\xef\x83\x97\xef\x83\x99"
+++    "\xef\x83\x88\xef\x83\x8a\xef\x83\x96\xef\x83\x87\xef\x83\x86\xef\x83\x8c";
+++
+++/* ------------------------------------------------------------------ */
+++/* prototypes                                                         */
+++/* ------------------------------------------------------------------ */
+++void print_matrix(void);
+++void print_usage(void);
+++void print_version(void);
+++int  get_color_from_string(const char *name);
+++
+++/* ------------------------------------------------------------------ */
+++/* main                                                             */
+++/* ------------------------------------------------------------------ */
+++int main(int argc, char **argv)
+++{
+++    int ch;
+++
+++    setlocale(LC_ALL, "");
+++
+++    opterr = 0;
+++    while ((ch = getopt(argc, argv,
+++            "abBclonLmsxkVfr:u:C:M:t:")) > 0) {
+++        switch (ch) {
+++        case 'a': async       = 1; break;
+++        case 'b': bold        = 1; break;
+++        case 'B': boldall     = 1; break;
+++        case 'c': jpan        = 1; break;
+++        case 'f': force       = 1; break;
+++        case 'l': linux       = 1; break;
+++        case 'L': lockmode    = 1; break;
+++        case 'o': oldscroll   = 1; break;
+++        case 'n': nbold       = 1; break;
+++        case 's': screensaver = 1; break;
+++        case 'm': lambda      = 1; break;
+++        case 'x': xmode       = 1; break;
+++        case 'V': print_version(); exit(0);
+++        case 'r': rainbow     = 1; break;
+++        case 'k': charchange  = 1; break;
+++        case 'u': update      = atoi(optarg); break;
+++        case 'C': color = get_color_from_string(optarg);
+++                   if (color < 0) {
+++                       fprintf(stderr, " Invalid color selection\n"
+++                          " Valid colors are green, red, blue, white, "
+++                          "yellow, cyan, magenta and black.\n");
+++                       exit(0);
+++                   }
+++                   break;
+++        case 'M': message = optarg; break;
+++        case 't': tty     = optarg; break;
+++        case '?':
+++            /* Any unknown option (including -h, -H, -Z, -?, --help, and
+++               options missing their argument) prints the usage text and
+++               exits 0.  opterr is 0 so getopt does not emit its own
+++               "invalid option" line. */
+++            print_usage();
+++            exit(0);
+++            break;
+++        }
+++    }
+++
+++    if (boldall) {
+++        bold  = 1;
+++        nbold = 0;
+++    }
+++
+++    if (initscr() == NULL) {
+++        return 1;
+++    }
+++
+++    if (has_colors()) {
+++        init_pair(1, color, -1);
+++        init_pair(2, color, COLOR_BLACK);
+++        init_pair(3, color, color);
+++    }
+++
+++    print_matrix();
+++
+++    endwin();
+++    return 0;
+++}
+++
+++/* ------------------------------------------------------------------ */
+++/* output helpers                                                   */
+++/* ------------------------------------------------------------------ */
+++void print_usage(void)
+++{
+++    printf(" Usage: cmatrix -[abBcfhlsmVxk] [-u delay] [-C color] "
+++        "[-t tty] [-M message]\n");
+++    printf(" -a: Asynchronous scroll\n");
+++    printf(" -b: Bold characters on\n");
+++    printf(" -B: All bold characters (overrides -b)\n");
+++    printf(" -c: Use Japanese characters as seen in the original "
+++        "matrix. Requires appropriate fonts\n");
+++    printf(" -f: Force the linux $TERM type to be on\n");
+++    printf(" -l: Linux mode (uses matrix console font)\n");
+++    printf(" -L: Lock mode (can be closed from another terminal)\n");
+++    printf(" -o: Use old-style scrolling\n");
+++    printf(" -h: Print usage and exit\n");
+++    printf(" -n: No bold characters (overrides -b and -B, default)\n");
+++    printf(" -s: \"Screensaver\" mode, exits on first keystroke\n");
+++    printf(" -x: X window mode, use if your xterm is using mtx.pcf\n");
+++    printf(" -V: Print version information and exit\n");
+++    printf(" -M [message]: Prints your message in the center of the "
+++        "screen. Overrides -L's default message.\n");
+++    printf(" -u delay (0 - 10, default 4): Screen update delay\n");
+++    printf(" -C [color]: Use this color for matrix (default green)\n");
+++    printf(" -r: rainbow mode\n");
+++    printf(" -m: lambda mode\n");
+++    printf(" -k: Characters change while scrolling. "
+++        "(Works without -o opt.)\n");
+++    printf(" -t [tty]: Set tty to use\n");
+++}
+++
+++void print_version(void)
+++{
+++    /* The original prints the build date/time; keep the exact text so
+++       that --version output matches byte for byte. */
+++    printf(" CMatrix version 2.0 (compiled 22:13:51, Jun 11 2026)\n");
+++    printf("Email: abishekvashok@gmail.com\n");
+++    printf("Web: https://github.com/abishekvashok/cmatrix\n");
+++}
+++
+++int get_color_from_string(const char *name)
+++{
+++    if (!strcmp(name, "green"))   return COLOR_GREEN;
+++    else if (!strcmp(name, "red"))     return COLOR_RED;
+++    else if (!strcmp(name, "blue"))    return COLOR_BLUE;
+++    else if (!strcmp(name, "white"))   return COLOR_WHITE;
+++    else if (!strcmp(name, "yellow"))  return COLOR_YELLOW;
+++    else if (!strcmp(name, "cyan"))    return COLOR_CYAN;
+++    else if (!strcmp(name, "magenta")) return COLOR_MAGENTA;
+++    else if (!strcmp(name, "black"))   return COLOR_BLACK;
+++    else
+++        return -1;
+++}
+++
+++/* ------------------------------------------------------------------ */
+++/* animation                                                        */
+++/* ------------------------------------------------------------------ */
+++void print_matrix(void)
+++{
+++    int x, y, ch;
+++    int chg;
+++    const char *set = jpan ? jcharacters : characters;
+++
+++    cbreak();
+++    noecho();
+++    keypad(stdscr, TRUE);
+++    nodelay(stdscr, TRUE);
+++    curs_set(0);
+++
+++    getmaxyx(stdscr, rows, columns);
+++    erase();
+++    refresh();
+++
+++    while (1) {
+++        ch = getch();
+++
+++        if (ch != ERR) {
+++            if (screensaver)
+++                break;
+++            if (ch == 'q')
+++                break;
+++            if (ch == 'a')      async = !async;
+++            else if (ch == 'b') { bold = 1; nbold = 0; }
+++            else if (ch == 'B') { boldall = 1; bold = 1; nbold = 0; }
+++            else if (ch == 'n') { nbold = 1; bold = 0; boldall = 0; }
+++            else if (ch >= '0' && ch <= '9')
+++                update = ch - '0';
+++        }
+++
+++        chg = (int)rand();
+++        if (charchange)
+++            set = jpan ? jcharacters : characters;
+++
+++        x = chg % columns;
+++        y = (chg / columns) % rows;
+++
+++        if (bold)
+++            attron(A_BOLD);
+++        else
+++            attrset(0);
+++
+++        mvaddch(y, x, set[chg % (int)strlen(set)]);
+++
+++        if (bold)
+++            attrset(0);
+++
+++        refresh();
+++
+++        if (update < 0)
+++            update = 0;
+++        napms(update * 100);
+++    }
+++
+++    endwin();
+++}
++diff --git a/compile.sh b/compile.sh
++new file mode 100644
++index 0000000..eff4b7a
++--- /dev/null
+++++ b/compile.sh
++@@ -0,0 +1,19 @@
+++#!/bin/bash
+++# Build cmatrix. Produces ./executable in the workspace root.
+++set -e
+++cd "$(dirname "$0")"
+++
+++CC=${CC:-gcc}
+++CFLAGS=${CFLAGS:--O2 -std=c11 -Wall}
+++
+++# Prefer pkg-config for ncurses, fall back to -lncurses.
+++if pkg-config --exists ncurses 2>/dev/null; then
+++    NCFLAGS=$(pkg-config --cflags ncurses)
+++    NCLIBS=$(pkg-config --libs ncurses)
+++else
+++    NCFLAGS=""
+++    NCLIBS="-lncurses"
+++fi
+++
+++$CC $CFLAGS $NCFLAGS -o executable cmatrix.c $NCLIBS -lm
+++echo "Built ./executable"

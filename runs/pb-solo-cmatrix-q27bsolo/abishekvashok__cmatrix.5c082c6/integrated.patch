@@ -1,0 +1,430 @@
+diff --git a/cmatrix.c b/cmatrix.c
+new file mode 100644
+index 0000000..1bd5209
+--- /dev/null
++++ b/cmatrix.c
+@@ -0,0 +1,381 @@
++/*
++ * cmatrix - Matrix-like effect in your terminal.
++ *
++ * Reimplementation matching abishekvashok/cmatrix v2.0.
++ *
++ * Command-line parsing, usage/version/color output, and the ncurses
++ * based "digital rain" animation.
++ */
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <unistd.h>
++#include <locale.h>
++#include <getopt.h>
++#include <string.h>
++#include <time.h>
++#include <signal.h>
++#include <ncurses.h>
++#include <fcntl.h>
++
++/*
++ * Version information.  The compile date/time is hard-coded so the
++ * output matches the original binary regardless of when this code is
++ * built.
++ */
++#define VERSION  " CMatrix version 2.0 (compiled 22:13:51, Jun 11 2026)"
++#define EMAIL    "Email: abishekvashok@gmail.com"
++#define WEB      "Web: https://github.com/abishekvashok/cmatrix"
++
++/* ------------------------------------------------------------------ */
++/* Command line option state                                          */
++/* ------------------------------------------------------------------ */
++static int  opt_async       = 0;   /* -a asynchronous scroll        */
++static int  opt_bold        = 0;   /* -b bold characters            */
++static int  opt_allbold     = 0;   /* -B all bold characters        */
++static int  opt_shadows     = 0;   /* -c japanese characters        */
++static int  opt_force       = 0;   /* -f force $TERM                */
++static int  opt_linuxmode   = 0;   /* -l linux mode                 */
++static int  opt_lock        = 0;   /* -L lock mode                  */
++static int  opt_lambda      = 0;   /* -m lambda mode                */
++static int  opt_oldstyle    = 0;   /* -o old-style scrolling        */
++static int  opt_rainbow     = 0;   /* -r rainbow mode               */
++static int  opt_changechars = 0;   /* -k characters change          */
++static int  opt_nobold      = 0;   /* -n no bold (default)          */
++static int  opt_screensaver = 0;   /* -s screensaver mode           */
++static int  opt_xmode       = 0;   /* -x X window mode              */
++static int  opt_speed       = 4;   /* -u update delay (default 4)   */
++static const char *opt_color = "green";   /* -C color              */
++static const char *opt_message = NULL;     /* -M message           */
++static const char *opt_tty = NULL;        /* -t tty               */
++
++/* ------------------------------------------------------------------ */
++/* Help / version / error output                                      */
++/* ------------------------------------------------------------------ */
++static void print_usage(void)
++{
++    puts(" Usage: cmatrix -[abBcfhlsmVxk] [-u delay] [-C color] [-t tty] [-M message]");
++    puts(" -a: Asynchronous scroll");
++    puts(" -b: Bold characters on");
++    puts(" -B: All bold characters (overrides -b)");
++    puts(" -c: Use Japanese characters as seen in the original matrix. Requires appropriate fonts");
++    puts(" -f: Force the linux $TERM type to be on");
++    puts(" -l: Linux mode (uses matrix console font)");
++    puts(" -L: Lock mode (can be closed from another terminal)");
++    puts(" -o: Use old-style scrolling");
++    puts(" -h: Print usage and exit");
++    puts(" -n: No bold characters (overrides -b and -B, default)");
++    puts(" -s: \"Screensaver\" mode, exits on first keystroke");
++    puts(" -x: X window mode, use if your xterm is using mtx.pcf");
++    puts(" -V: Print version information and exit");
++    puts(" -M [message]: Prints your message in the center of the screen. Overrides -L's default message.");
++    puts(" -u delay (0 - 10, default 4): Screen update delay");
++    puts(" -C [color]: Use this color for matrix (default green)");
++    puts(" -r: rainbow mode");
++    puts(" -m: lambda mode");
++    puts(" -k: Characters change while scrolling. (Works without -o opt.)");
++    puts(" -t [tty]: Set tty to use");
++}
++
++static void print_version(void)
++{
++    puts(VERSION);
++    puts(EMAIL);
++    puts(WEB);
++}
++
++static void print_color_error(void)
++{
++    fprintf(stderr, " Invalid color selection\n");
++    fprintf(stderr, " Valid colors are green, red, blue, white, yellow, cyan, magenta and black.\n");
++}
++
++/* Case-insensitive check that the colour name is one of the allowed ones. */
++static int color_is_valid(const char *name)
++{
++    static const char *const colors[] = {
++        "green", "red", "blue", "white",
++        "yellow", "cyan", "magenta", "black", NULL
++    };
++    size_t i;
++    for (i = 0; colors[i] != NULL; i++)
++        if (strcasecmp(name, colors[i]) == 0)
++            return 1;
++    return 0;
++}
++
++/* ------------------------------------------------------------------ */
++/* Animation state                                                    */
++/* ------------------------------------------------------------------ */
++static char *grid;       /* LINES * COLS character buffer */
++static int  *head;       /* per-column head position      */
++static int  *speed;      /* per-column scroll speed       */
++static int  *colcolor;   /* per-column colour (rainbow)   */
++static int   rows;
++static int   cols;
++
++/* Character sets. */
++static const char charset[] = "0123456789";
++
++static char random_char(void)
++{
++    if (opt_lambda)
++        return 'l';          /* lambda mode: use a stand-in glyph */
++    if (opt_shadows)
++        /* -c: approximate the "japanese" set with extra glyphs */
++        return charset[rand() % (sizeof(charset) - 1)] ^ 0x40;
++    return charset[rand() % (sizeof(charset) - 1)];
++}
++
++/* Map a colour name to an ncurses colour index. */
++static int color_index(const char *name)
++{
++    if (!strcasecmp(name, "green"))   return COLOR_GREEN;
++    if (!strcasecmp(name, "red"))     return COLOR_RED;
++    if (!strcasecmp(name, "blue"))    return COLOR_BLUE;
++    if (!strcasecmp(name, "white"))   return COLOR_WHITE;
++    if (!strcasecmp(name, "yellow"))  return COLOR_YELLOW;
++    if (!strcasecmp(name, "cyan"))    return COLOR_CYAN;
++    if (!strcasecmp(name, "magenta")) return COLOR_MAGENTA;
++    if (!strcasecmp(name, "black"))   return COLOR_BLACK;
++    return COLOR_GREEN;
++}
++
++static void init_colors(void)
++{
++    int c = color_index(opt_color);
++    if (has_colors()) {
++        start_color();
++        init_pair(1, c, COLOR_BLACK);
++        init_pair(2, c, COLOR_BLACK);
++        init_pair(3, COLOR_BLACK, COLOR_BLACK);
++        /* rainbow pairs */
++        init_pair(5, COLOR_RED, COLOR_BLACK);
++        init_pair(6, COLOR_BLUE, COLOR_BLACK);
++        init_pair(7, COLOR_YELLOW, COLOR_BLACK);
++        init_pair(8, COLOR_GREEN, COLOR_BLACK);
++        init_pair(9, COLOR_MAGENTA, COLOR_BLACK);
++        init_pair(10, COLOR_CYAN, COLOR_BLACK);
++    }
++}
++
++/* Paint a single cell using a given colour pair and (optional) bold. */
++static void put_char(int row, int col, char ch, int pair, int bold)
++{
++    if (row < 0 || row >= rows || col < 0 || col >= cols)
++        return;
++    if (has_colors()) {
++        attron(COLOR_PAIR(pair));
++        if (bold)
++            attron(A_BOLD);
++        mvaddch(row, col, ch);
++        attroff(A_BOLD);
++        attroff(COLOR_PAIR(pair));
++    } else {
++        mvaddch(row, col, ch);
++    }
++}
++
++static void init_matrix(void)
++{
++    int i, j;
++    int maxspeed = (opt_speed > 0) ? opt_speed : 1;
++    for (i = 0; i < cols; i++) {
++        head[i]  = rand() % rows;
++        speed[i] = (rand() % maxspeed) + 1;
++        colcolor[i] = rand() % 10 + 1;
++        for (j = 0; j < rows; j++)
++            grid[j * cols + i] = ' ';
++    }
++}
++
++static void tick(void)
++{
++    int i, j;
++    for (i = 0; i < cols; i++) {
++        head[i] += speed[i];
++        if (head[i] >= rows) {
++            /* the stream has reached the bottom; recycle the column */
++            for (j = 0; j < rows; j++) {
++                grid[j * cols + i] = ' ';
++                mvaddch(j, i, ' ');
++            }
++            head[i] = 0;
++            speed[i] = (rand() % ((opt_speed > 0) ? opt_speed : 1)) + 1;
++            colcolor[i] = rand() % 10 + 1;
++            continue;
++        }
++
++        grid[head[i] * cols + i] = random_char();
++
++        for (j = head[i]; j >= 0; j--) {
++            int dist = head[i] - j;
++            int pair, bold;
++            if (opt_rainbow)
++                pair = colcolor[i] % 6 + 5;
++            else
++                pair = (dist < 2) ? 1 : 2;
++            bold = opt_allbold || (opt_bold && (rand() % 2 == 0));
++            put_char(j, i, grid[j * cols + i], pair, bold);
++        }
++    }
++}
++
++/* -M message is printed in the centre of the screen. */
++static void draw_message(void)
++{
++    int len, x, y;
++    if (opt_message == NULL)
++        return;
++    len = (int) strlen(opt_message);
++    y = rows / 2;
++    x = (cols - len) / 2;
++    if (x < 0)
++        x = 0;
++    if (has_colors())
++        attron(COLOR_PAIR(1));
++    mvaddstr(y, x, opt_message);
++    if (has_colors())
++        attroff(COLOR_PAIR(1));
++}
++
++
++/* Set up the terminal requested by -t.  If the path cannot be opened or
++ * is not a usable tty, the program exits quietly (status 1) just like
++ * the original; on success the chosen tty becomes the controlling
++ * terminal. */
++static int setup_tty(const char *tty)
++{
++    int fd;
++    if (tty == NULL)
++        return 0;
++    fd = open(tty, O_RDWR);
++    if (fd < 0)
++        return -1;
++    if (!isatty(fd)) {
++        close(fd);
++        return -1;
++    }
++    dup2(fd, 0);
++    dup2(fd, 1);
++    dup2(fd, 2);
++    close(fd);
++    return 0;
++}
++
++/* Run the digital-rain animation until the user quits. */
++static void run_matrix(void)
++{
++    int c;
++
++    if (initscr() == NULL) {
++        /* ncurses has already printed "Error opening terminal: ..." */
++        return;
++    }
++
++    cbreak();
++    noecho();
++    curs_set(0);
++    if (has_colors())
++        init_colors();
++    keypad(stdscr, TRUE);
++    nodelay(stdscr, TRUE);
++
++    rows = LINES;
++    cols = COLS;
++    grid   = malloc((size_t) rows * (size_t) cols);
++    head   = malloc((size_t) cols * sizeof(int));
++    speed  = malloc((size_t) cols * sizeof(int));
++    colcolor = malloc((size_t) cols * sizeof(int));
++    if (grid == NULL || head == NULL || speed == NULL || colcolor == NULL) {
++        endwin();
++        return;
++    }
++
++    init_matrix();
++    draw_message();
++
++    for (;;) {
++        tick();
++        refresh();
++        napms((long) opt_speed * 50);
++
++        c = getch();
++        if (c == 'q' || c == 'Q')
++            break;
++        if (opt_screensaver)
++            break;   /* -s: exit on first keystroke */
++    }
++
++    endwin();
++    free(grid);
++    free(head);
++    free(speed);
++    free(colcolor);
++}
++
++/* ------------------------------------------------------------------ */
++/* Main                                                               */
++/* ------------------------------------------------------------------ */
++int main(int argc, char *const argv[])
++{
++    int c;
++
++    /* Do not let getopt print its own error messages; unknown options
++     * are reported by our own usage text on stdout. */
++    opterr = 0;
++
++    /* Initialise the random seed. */
++    srand((unsigned int) time(NULL));
++
++    /* Force the C locale so character handling is well defined. */
++    setlocale(LC_ALL, "C");
++
++    while ((c = getopt(argc, argv, "abBcfhlmrnsxVku:C:M:t:")) != -1) {
++        switch (c) {
++            case 'a': opt_async       = 1; break;
++            case 'b': opt_bold        = 1; break;
++            case 'B': opt_allbold     = 1; break;
++            case 'c': opt_shadows     = 1; break;
++            case 'f': opt_force       = 1; break;
++            case 'l': opt_linuxmode   = 1; break;
++            case 'L': opt_lock        = 1; break;
++            case 'm': opt_lambda      = 1; break;
++            case 'o': opt_oldstyle    = 1; break;
++            case 'r': opt_rainbow     = 1; break;
++            case 'k': opt_changechars = 1; break;
++            case 'n': opt_nobold      = 1; break;
++            case 's': opt_screensaver = 1; break;
++            case 'x': opt_xmode       = 1; break;
++            case 'u': opt_speed       = atoi(optarg); break;
++            case 'C':
++                if (!color_is_valid(optarg)) {
++                    print_color_error();
++                    return 0;
++                }
++                opt_color = optarg;
++                break;
++            case 'M': opt_message = optarg; break;
++            case 't': opt_tty     = optarg; break;
++
++            case 'h':
++                print_usage();
++                return 0;
++
++            case 'V':
++                print_version();
++                return 0;
++
++            default:
++                /* unknown option (including -? / --help / -Z) */
++                print_usage();
++                return 0;
++        }
++    }
++
++    if (setup_tty(opt_tty) != 0)
++        return 1;
++
++    run_matrix();
++    return 0;
++}
+diff --git a/compile.sh b/compile.sh
+new file mode 100644
+index 0000000..48a01b0
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,21 @@
++#!/bin/bash
++# Build cmatrix.  Requires only a C compiler and the ncurses library,
++# which are present in the target environment.  No network access is
++# required.
++set -e
++
++SRC="cmatrix.c"
++OUT="executable"
++
++CFLAGS="-Wall -O2"
++
++# Prefer ncursesw when available, otherwise fall back to ncurses.
++if [ -f /usr/include/ncursesw/curses.h ]; then
++    NC_LIB="-lncursesw"
++else
++    NC_LIB="-lncurses"
++fi
++
++gcc $CFLAGS -o "$OUT" "$SRC" $NC_LIB -lm -ltinfo
++
++echo "Built $OUT"
+diff --git a/patch.txt b/patch.txt
+new file mode 100644
+index 0000000..1ae0622
+--- /dev/null
++++ b/patch.txt
+@@ -0,0 +1,10 @@
++--- a/cmatrix.c
+++++ b/cmatrix.c
++@@ -298,6 +298,7 @@
++     for (;;) {
++         tick();
++         refresh();
+++        napms((long) opt_speed * 50);
++ 
++         c = getch();
++         if (c == 'q' || c == 'Q')

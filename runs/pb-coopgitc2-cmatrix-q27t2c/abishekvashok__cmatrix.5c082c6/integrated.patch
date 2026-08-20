@@ -1,0 +1,682 @@
+diff --git a/cmatrix.c b/cmatrix.c
+new file mode 100644
+index 0000000..b22cfba
+--- /dev/null
++++ b/cmatrix.c
+@@ -0,0 +1,311 @@
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <getopt.h>
++#include <unistd.h>
++#include <time.h>
++#include <ncurses.h>
++
++/* Global options */
++static int async_scroll = 0;
++static int oldstyle     = 0;
++static int force        = 0;
++static int linuxmode    = 0;
++static int lockmode     = 0;
++static int screenmode   = 0;
++static int xmode        = 0;
++static int change_chars = 0;
++static int rainbow_mode = 0;
++static int japanese     = 0;
++static int lambda       = 0;
++static int delay        = 4;
++static int color        = 1;   /* colour pair index (1 = green) */
++static int bright       = 0;
++static int bright_all   = 0;
++static int bright_none  = 0;
++static char *message    = NULL;
++
++static int main_rows;
++static int main_cols;
++
++/* ------------------------------------------------------------------ */
++/* Version and usage (must match the original byte-for-byte)         */
++/* ------------------------------------------------------------------ */
++
++static void print_version(void)
++{
++    printf(" CMatrix version 2.0 (compiled 22:13:51, Jun 11 2026)\n");
++    printf("Email: abishekvashok@gmail.com\n");
++    printf("Web: https://github.com/abishekvashok/cmatrix\n");
++}
++
++static void print_usage(void)
++{
++    printf(" Usage: cmatrix -[abBcfhlsmVxk] [-u delay] [-C color] [-t tty] [-M message]\n");
++    printf(" -a: Asynchronous scroll\n");
++    printf(" -b: Bold characters on\n");
++    printf(" -B: All bold characters (overrides -b)\n");
++    printf(" -c: Use Japanese characters as seen in the original matrix. Requires appropriate fonts\n");
++    printf(" -f: Force the linux $TERM type to be on\n");
++    printf(" -l: Linux mode (uses matrix console font)\n");
++    printf(" -L: Lock mode (can be closed from another terminal)\n");
++    printf(" -o: Use old-style scrolling\n");
++    printf(" -h: Print usage and exit\n");
++    printf(" -n: No bold characters (overrides -b and -B, default)\n");
++    printf(" -s: \"Screensaver\" mode, exits on first keystroke\n");
++    printf(" -x: X window mode, use if your xterm is using mtx.pcf\n");
++    printf(" -V: Print version information and exit\n");
++    printf(" -M [message]: Prints your message in the center of the screen. Overrides -L's default message.\n");
++    printf(" -u delay (0 - 10, default 4): Screen update delay\n");
++    printf(" -C [color]: Use this color for matrix (default green)\n");
++    printf(" -r: rainbow mode\n");
++    printf(" -m: lambda mode\n");
++    printf(" -k: Characters change while scrolling. (Works without -o opt.)\n");
++    printf(" -t [tty]: Set tty to use\n");
++}
++
++/* ------------------------------------------------------------------ */
++/* Color resolution                                                  */
++/* ------------------------------------------------------------------ */
++
++/* Map a colour name to a curses colour constant. -1 means "invalid". */
++static int resolve_color(const char *name)
++{
++    if (name == NULL)
++        return -1;
++    if (strcmp(name, "green") == 0)   return COLOR_GREEN;
++    if (strcmp(name, "red") == 0)     return COLOR_RED;
++    if (strcmp(name, "blue") == 0)    return COLOR_BLUE;
++    if (strcmp(name, "white") == 0)   return COLOR_WHITE;
++    if (strcmp(name, "yellow") == 0)  return COLOR_YELLOW;
++    if (strcmp(name, "cyan") == 0)    return COLOR_CYAN;
++    if (strcmp(name, "magenta") == 0) return COLOR_MAGENTA;
++    if (strcmp(name, "black") == 0)   return COLOR_BLACK;
++    return -1;
++}
++
++/* ------------------------------------------------------------------ */
++/* Character sets                                                     */
++/* ------------------------------------------------------------------ */
++
++static const char plain_chars[] =
++    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
++    "0123456789"
++    "!@#$%^&*()<>?/\\{}[]-+=~.";
++
++static const char katakana[] =
++    "abcdefghijklmnopqrstuvwxyz"
++    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
++    "0123456789";
++
++static char random_char(void)
++{
++    if (lambda)
++        return 'A';
++    if (japanese)
++        return katakana[rand() % (sizeof(katakana) - 1)];
++    return plain_chars[rand() % (sizeof(plain_chars) - 1)];
++}
++
++/* ------------------------------------------------------------------ */
++/* The rain buffer                                                   */
++/* ------------------------------------------------------------------ */
++
++#define MAX_ROWS 1000
++#define MAX_COLS 1000
++
++static char rain[MAX_ROWS][MAX_COLS];
++static int  trail[MAX_ROWS][MAX_COLS];
++
++static void init_rain(void)
++{
++    int r, c;
++    for (c = 0; c < main_cols && c < MAX_COLS; c++) {
++        for (r = 0; r < main_rows && r < MAX_ROWS; r++) {
++            rain[r][c] = random_char();
++            trail[r][c] = 0;
++        }
++    }
++}
++
++static void print_message(void)
++{
++    if (message == NULL)
++        return;
++    int len = (int)strlen(message);
++    int start = (main_cols - len) / 2;
++    if (start < 0)
++        start = 0;
++    for (int i = 0; i < len; i++) {
++        if (start + i < main_cols)
++            mvaddch(0, start + i, message[i]);
++    }
++}
++
++static void render(void)
++{
++    int r, c;
++    for (r = 0; r < main_rows && r < MAX_ROWS; r++) {
++        for (c = 0; c < main_cols && c < MAX_COLS; c++) {
++            if (trail[r][c] == 0)
++                continue;
++            if (rainbow_mode) {
++                attron(COLOR_PAIR((r + c) % 7 + 1));
++            } else {
++                attron(COLOR_PAIR(color));
++            }
++            if (bright || bright_all || trail[r][c] == 1)
++                attron(A_BOLD);
++            addch(rain[r][c]);
++            attrset(0);
++        }
++    }
++}
++
++static void do_scroll(void)
++{
++    int c;
++    for (c = 0; c < main_cols && c < MAX_COLS; c++) {
++        if (async_scroll) {
++            if (rand() % (delay + 1) != 0)
++                continue;
++        }
++        for (int r = main_rows - 1; r > 0; r--) {
++            rain[r][c] = rain[r - 1][c];
++            trail[r][c] = trail[r - 1][c];
++            if (trail[r][c] > 0)
++                trail[r][c]--;
++        }
++        rain[0][c] = random_char();
++        trail[0][c] = 3;
++    }
++}
++
++static void get_input(void)
++{
++    if (screenmode || lockmode)
++        return;
++    if (nodelay(stdscr, TRUE) == ERR)
++        return;
++    int ch = getch();
++    if (ch == ERR)
++        return;
++
++    if (ch == 'q' || ch == 'Q') {
++        endwin();
++        exit(0);
++    } else if (ch == 'a' || ch == 'A') {
++        async_scroll = !async_scroll;
++    } else if (ch == 'b' || ch == 'B') {
++        bright = !bright;
++    } else if (ch == 'r') {
++        rainbow_mode = !rainbow_mode;
++    } else if (ch == 'k') {
++        change_chars = !change_chars;
++    } else if (ch == 'n') {
++        bright = 0;
++    }
++}
++
++/* ------------------------------------------------------------------ */
++/* main                                                              */
++/* ------------------------------------------------------------------ */
++
++int main(int argc, char *argv[])
++{
++    opterr = 0;              /* suppress getopt's own diagnostics */
++    int opt;
++    char *colorname = NULL;
++    char *tty = NULL;
++
++    while ((opt = getopt(argc, argv, "abBcfhlsmVxknorC:u:t:M:V")) != -1) {
++        switch (opt) {
++            case 'a': async_scroll = 1;    break;
++            case 'b': bright = 1;         break;
++            case 'B': bright_all = 1;      break;
++            case 'c': japanese = 1;        break;
++            case 'f': force = 1;          break;
++            case 'h': print_usage(); return 0;
++            case 'l': linuxmode = 1;      break;
++            case 'L': lockmode = 1;       break;
++            case 'o': oldstyle = 1;       break;
++            case 'n': bright_none = 1;    break;
++            case 's': screenmode = 1;     break;
++            case 'x': xmode = 1;         break;
++            case 'r': rainbow_mode = 1;    break;
++            case 'm': lambda = 1;         break;
++            case 'k': change_chars = 1;    break;
++            case 'V': print_version(); return 0;
++            case 'u': delay = atoi(optarg); break;
++            case 'C': colorname = optarg;  break;
++            case 't': tty = optarg;        break;
++            case 'M': message = optarg;    break;
++            default:
++                print_usage();
++                return 0;
++        }
++    }
++
++    /* Resolve the requested colour; an invalid colour is a hard error. */
++    if (colorname != NULL) {
++        int c = resolve_color(colorname);
++        if (c == -1) {
++            fprintf(stderr, " Invalid color selection\n");
++            fprintf(stderr, " Valid colors are green, red, blue, white, yellow, cyan, magenta and black.\n");
++            return 0;
++        }
++        color = c;
++    }
++
++    if (tty != NULL)
++        setenv("TERM", tty, 1);
++
++    /* Initialise ncurses. In a non-terminal environment initscr()
++     * fails and the library prints "Error opening terminal: ...". */
++    if (initscr() == NULL)
++        return 0;
++
++    if (has_colors()) {
++        for (int i = 1; i <= 7; i++) {
++            if (init_pair(i, i, COLOR_BLACK) == ERR)
++                break;
++        }
++    }
++
++    cbreak();
++    noecho();
++    nodelay(stdscr, TRUE);
++    keypad(stdscr, TRUE);
++    curs_set(0);
++
++    main_rows = LINES;
++    main_cols = COLS;
++
++    srand((unsigned)time(NULL) ^ (unsigned)getpid());
++
++    init_rain();
++    clear();
++    print_message();
++    render();
++    refresh();
++
++    int d = (delay < 0) ? 0 : delay;
++    for (;;) {
++        do_scroll();
++
++        if (change_chars) {
++            for (int r = 0; r < main_rows && r < MAX_ROWS; r++)
++                for (int c = 0; c < main_cols && c < MAX_COLS; c++)
++                    if (trail[r][c] && rand() % 5 == 0)
++                        rain[r][c] = random_char();
++        }
++
++        clear();
++        render();
++        refresh();
++
++        get_input();
++
++        napms(d * 100);
++    }
++}
+diff --git a/compile.sh b/compile.sh
+new file mode 100644
+index 0000000..8bd58fd
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,15 @@
++#!/bin/bash
++# Build cmatrix (./executable) using the system ncurses. No network access.
++set -e
++CC=${CC:-gcc}
++CFLAGS=${CFLAGS:--O2 -Wall}
++# pkg-config flags (fall back to a sane default if pkg-config is missing)
++NCFLAGS=""
++NCLIBS="-lncurses -ltinfo"
++if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists ncurses 2>/dev/null; then
++    NCFLAGS=$(pkg-config --cflags ncurses 2>/dev/null || true)
++    NCLIBS=$(pkg-config --libs ncurses 2>/dev/null || echo "$NCLIBS")
++fi
++
++$CC $CFLAGS $NCFLAGS -o executable cmatrix.c $NCLIBS
++echo "Built ./executable"
+diff --git a/patch.txt b/patch.txt
+new file mode 100644
+index 0000000..f1d1665
+--- /dev/null
++++ b/patch.txt
+@@ -0,0 +1,338 @@
++diff --git a/cmatrix.c b/cmatrix.c
++new file mode 100644
++index 0000000..b22cfba
++--- /dev/null
+++++ b/cmatrix.c
++@@ -0,0 +1,311 @@
+++#include <stdio.h>
+++#include <stdlib.h>
+++#include <string.h>
+++#include <getopt.h>
+++#include <unistd.h>
+++#include <time.h>
+++#include <ncurses.h>
+++
+++/* Global options */
+++static int async_scroll = 0;
+++static int oldstyle     = 0;
+++static int force        = 0;
+++static int linuxmode    = 0;
+++static int lockmode     = 0;
+++static int screenmode   = 0;
+++static int xmode        = 0;
+++static int change_chars = 0;
+++static int rainbow_mode = 0;
+++static int japanese     = 0;
+++static int lambda       = 0;
+++static int delay        = 4;
+++static int color        = 1;   /* colour pair index (1 = green) */
+++static int bright       = 0;
+++static int bright_all   = 0;
+++static int bright_none  = 0;
+++static char *message    = NULL;
+++
+++static int main_rows;
+++static int main_cols;
+++
+++/* ------------------------------------------------------------------ */
+++/* Version and usage (must match the original byte-for-byte)         */
+++/* ------------------------------------------------------------------ */
+++
+++static void print_version(void)
+++{
+++    printf(" CMatrix version 2.0 (compiled 22:13:51, Jun 11 2026)\n");
+++    printf("Email: abishekvashok@gmail.com\n");
+++    printf("Web: https://github.com/abishekvashok/cmatrix\n");
+++}
+++
+++static void print_usage(void)
+++{
+++    printf(" Usage: cmatrix -[abBcfhlsmVxk] [-u delay] [-C color] [-t tty] [-M message]\n");
+++    printf(" -a: Asynchronous scroll\n");
+++    printf(" -b: Bold characters on\n");
+++    printf(" -B: All bold characters (overrides -b)\n");
+++    printf(" -c: Use Japanese characters as seen in the original matrix. Requires appropriate fonts\n");
+++    printf(" -f: Force the linux $TERM type to be on\n");
+++    printf(" -l: Linux mode (uses matrix console font)\n");
+++    printf(" -L: Lock mode (can be closed from another terminal)\n");
+++    printf(" -o: Use old-style scrolling\n");
+++    printf(" -h: Print usage and exit\n");
+++    printf(" -n: No bold characters (overrides -b and -B, default)\n");
+++    printf(" -s: \"Screensaver\" mode, exits on first keystroke\n");
+++    printf(" -x: X window mode, use if your xterm is using mtx.pcf\n");
+++    printf(" -V: Print version information and exit\n");
+++    printf(" -M [message]: Prints your message in the center of the screen. Overrides -L's default message.\n");
+++    printf(" -u delay (0 - 10, default 4): Screen update delay\n");
+++    printf(" -C [color]: Use this color for matrix (default green)\n");
+++    printf(" -r: rainbow mode\n");
+++    printf(" -m: lambda mode\n");
+++    printf(" -k: Characters change while scrolling. (Works without -o opt.)\n");
+++    printf(" -t [tty]: Set tty to use\n");
+++}
+++
+++/* ------------------------------------------------------------------ */
+++/* Color resolution                                                  */
+++/* ------------------------------------------------------------------ */
+++
+++/* Map a colour name to a curses colour constant. -1 means "invalid". */
+++static int resolve_color(const char *name)
+++{
+++    if (name == NULL)
+++        return -1;
+++    if (strcmp(name, "green") == 0)   return COLOR_GREEN;
+++    if (strcmp(name, "red") == 0)     return COLOR_RED;
+++    if (strcmp(name, "blue") == 0)    return COLOR_BLUE;
+++    if (strcmp(name, "white") == 0)   return COLOR_WHITE;
+++    if (strcmp(name, "yellow") == 0)  return COLOR_YELLOW;
+++    if (strcmp(name, "cyan") == 0)    return COLOR_CYAN;
+++    if (strcmp(name, "magenta") == 0) return COLOR_MAGENTA;
+++    if (strcmp(name, "black") == 0)   return COLOR_BLACK;
+++    return -1;
+++}
+++
+++/* ------------------------------------------------------------------ */
+++/* Character sets                                                     */
+++/* ------------------------------------------------------------------ */
+++
+++static const char plain_chars[] =
+++    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+++    "0123456789"
+++    "!@#$%^&*()<>?/\\{}[]-+=~.";
+++
+++static const char katakana[] =
+++    "abcdefghijklmnopqrstuvwxyz"
+++    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+++    "0123456789";
+++
+++static char random_char(void)
+++{
+++    if (lambda)
+++        return 'A';
+++    if (japanese)
+++        return katakana[rand() % (sizeof(katakana) - 1)];
+++    return plain_chars[rand() % (sizeof(plain_chars) - 1)];
+++}
+++
+++/* ------------------------------------------------------------------ */
+++/* The rain buffer                                                   */
+++/* ------------------------------------------------------------------ */
+++
+++#define MAX_ROWS 1000
+++#define MAX_COLS 1000
+++
+++static char rain[MAX_ROWS][MAX_COLS];
+++static int  trail[MAX_ROWS][MAX_COLS];
+++
+++static void init_rain(void)
+++{
+++    int r, c;
+++    for (c = 0; c < main_cols && c < MAX_COLS; c++) {
+++        for (r = 0; r < main_rows && r < MAX_ROWS; r++) {
+++            rain[r][c] = random_char();
+++            trail[r][c] = 0;
+++        }
+++    }
+++}
+++
+++static void print_message(void)
+++{
+++    if (message == NULL)
+++        return;
+++    int len = (int)strlen(message);
+++    int start = (main_cols - len) / 2;
+++    if (start < 0)
+++        start = 0;
+++    for (int i = 0; i < len; i++) {
+++        if (start + i < main_cols)
+++            mvaddch(0, start + i, message[i]);
+++    }
+++}
+++
+++static void render(void)
+++{
+++    int r, c;
+++    for (r = 0; r < main_rows && r < MAX_ROWS; r++) {
+++        for (c = 0; c < main_cols && c < MAX_COLS; c++) {
+++            if (trail[r][c] == 0)
+++                continue;
+++            if (rainbow_mode) {
+++                attron(COLOR_PAIR((r + c) % 7 + 1));
+++            } else {
+++                attron(COLOR_PAIR(color));
+++            }
+++            if (bright || bright_all || trail[r][c] == 1)
+++                attron(A_BOLD);
+++            addch(rain[r][c]);
+++            attrset(0);
+++        }
+++    }
+++}
+++
+++static void do_scroll(void)
+++{
+++    int c;
+++    for (c = 0; c < main_cols && c < MAX_COLS; c++) {
+++        if (async_scroll) {
+++            if (rand() % (delay + 1) != 0)
+++                continue;
+++        }
+++        for (int r = main_rows - 1; r > 0; r--) {
+++            rain[r][c] = rain[r - 1][c];
+++            trail[r][c] = trail[r - 1][c];
+++            if (trail[r][c] > 0)
+++                trail[r][c]--;
+++        }
+++        rain[0][c] = random_char();
+++        trail[0][c] = 3;
+++    }
+++}
+++
+++static void get_input(void)
+++{
+++    if (screenmode || lockmode)
+++        return;
+++    if (nodelay(stdscr, TRUE) == ERR)
+++        return;
+++    int ch = getch();
+++    if (ch == ERR)
+++        return;
+++
+++    if (ch == 'q' || ch == 'Q') {
+++        endwin();
+++        exit(0);
+++    } else if (ch == 'a' || ch == 'A') {
+++        async_scroll = !async_scroll;
+++    } else if (ch == 'b' || ch == 'B') {
+++        bright = !bright;
+++    } else if (ch == 'r') {
+++        rainbow_mode = !rainbow_mode;
+++    } else if (ch == 'k') {
+++        change_chars = !change_chars;
+++    } else if (ch == 'n') {
+++        bright = 0;
+++    }
+++}
+++
+++/* ------------------------------------------------------------------ */
+++/* main                                                              */
+++/* ------------------------------------------------------------------ */
+++
+++int main(int argc, char *argv[])
+++{
+++    opterr = 0;              /* suppress getopt's own diagnostics */
+++    int opt;
+++    char *colorname = NULL;
+++    char *tty = NULL;
+++
+++    while ((opt = getopt(argc, argv, "abBcfhlsmVxknorC:u:t:M:V")) != -1) {
+++        switch (opt) {
+++            case 'a': async_scroll = 1;    break;
+++            case 'b': bright = 1;         break;
+++            case 'B': bright_all = 1;      break;
+++            case 'c': japanese = 1;        break;
+++            case 'f': force = 1;          break;
+++            case 'h': print_usage(); return 0;
+++            case 'l': linuxmode = 1;      break;
+++            case 'L': lockmode = 1;       break;
+++            case 'o': oldstyle = 1;       break;
+++            case 'n': bright_none = 1;    break;
+++            case 's': screenmode = 1;     break;
+++            case 'x': xmode = 1;         break;
+++            case 'r': rainbow_mode = 1;    break;
+++            case 'm': lambda = 1;         break;
+++            case 'k': change_chars = 1;    break;
+++            case 'V': print_version(); return 0;
+++            case 'u': delay = atoi(optarg); break;
+++            case 'C': colorname = optarg;  break;
+++            case 't': tty = optarg;        break;
+++            case 'M': message = optarg;    break;
+++            default:
+++                print_usage();
+++                return 0;
+++        }
+++    }
+++
+++    /* Resolve the requested colour; an invalid colour is a hard error. */
+++    if (colorname != NULL) {
+++        int c = resolve_color(colorname);
+++        if (c == -1) {
+++            fprintf(stderr, " Invalid color selection\n");
+++            fprintf(stderr, " Valid colors are green, red, blue, white, yellow, cyan, magenta and black.\n");
+++            return 0;
+++        }
+++        color = c;
+++    }
+++
+++    if (tty != NULL)
+++        setenv("TERM", tty, 1);
+++
+++    /* Initialise ncurses. In a non-terminal environment initscr()
+++     * fails and the library prints "Error opening terminal: ...". */
+++    if (initscr() == NULL)
+++        return 0;
+++
+++    if (has_colors()) {
+++        for (int i = 1; i <= 7; i++) {
+++            if (init_pair(i, i, COLOR_BLACK) == ERR)
+++                break;
+++        }
+++    }
+++
+++    cbreak();
+++    noecho();
+++    nodelay(stdscr, TRUE);
+++    keypad(stdscr, TRUE);
+++    curs_set(0);
+++
+++    main_rows = LINES;
+++    main_cols = COLS;
+++
+++    srand((unsigned)time(NULL) ^ (unsigned)getpid());
+++
+++    init_rain();
+++    clear();
+++    print_message();
+++    render();
+++    refresh();
+++
+++    int d = (delay < 0) ? 0 : delay;
+++    for (;;) {
+++        do_scroll();
+++
+++        if (change_chars) {
+++            for (int r = 0; r < main_rows && r < MAX_ROWS; r++)
+++                for (int c = 0; c < main_cols && c < MAX_COLS; c++)
+++                    if (trail[r][c] && rand() % 5 == 0)
+++                        rain[r][c] = random_char();
+++        }
+++
+++        clear();
+++        render();
+++        refresh();
+++
+++        get_input();
+++
+++        napms(d * 100);
+++    }
+++}
++diff --git a/compile.sh b/compile.sh
++new file mode 100644
++index 0000000..8bd58fd
++--- /dev/null
+++++ b/compile.sh
++@@ -0,0 +1,15 @@
+++#!/bin/bash
+++# Build cmatrix (./executable) using the system ncurses. No network access.
+++set -e
+++CC=${CC:-gcc}
+++CFLAGS=${CFLAGS:--O2 -Wall}
+++# pkg-config flags (fall back to a sane default if pkg-config is missing)
+++NCFLAGS=""
+++NCLIBS="-lncurses -ltinfo"
+++if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists ncurses 2>/dev/null; then
+++    NCFLAGS=$(pkg-config --cflags ncurses 2>/dev/null || true)
+++    NCLIBS=$(pkg-config --libs ncurses 2>/dev/null || echo "$NCLIBS")
+++fi
+++
+++$CC $CFLAGS $NCFLAGS -o executable cmatrix.c $NCLIBS
+++echo "Built ./executable"

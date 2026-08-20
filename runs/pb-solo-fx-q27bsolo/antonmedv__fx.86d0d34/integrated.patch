@@ -1,0 +1,1029 @@
+diff --git a/assets/comp_bash.txt b/assets/comp_bash.txt
+new file mode 100644
+index 0000000..d08ae55
+--- /dev/null
++++ b/assets/comp_bash.txt
+@@ -0,0 +1 @@
++complete -o filenames -C fx fx
+diff --git a/assets/comp_fish.txt b/assets/comp_fish.txt
+new file mode 100644
+index 0000000..ab55af5
+--- /dev/null
++++ b/assets/comp_fish.txt
+@@ -0,0 +1 @@
++complete --command fx --arguments '(COMP_FISH=(commandline -cp) fx)'
+diff --git a/assets/comp_unknown.txt b/assets/comp_unknown.txt
+new file mode 100644
+index 0000000..d3a3e02
+--- /dev/null
++++ b/assets/comp_unknown.txt
+@@ -0,0 +1 @@
++unknown shell type
+diff --git a/assets/comp_zsh.txt b/assets/comp_zsh.txt
+new file mode 100644
+index 0000000..b6afd12
+--- /dev/null
++++ b/assets/comp_zsh.txt
+@@ -0,0 +1,38 @@
++#compdef fx
++
++_fx() {
++    local -a reply
++    reply=("${(@f)$(COMP_ZSH="${LBUFFER}" fx)}")
++    if (( ${#reply} )); then
++        local -a insert_files display_files insert_other display_other
++        local line display rest value typ
++        
++        for line in "${reply[@]}"; do
++            display="${line%%$'\t'*}"
++            rest="${line#*$'\t'}"
++            value="${rest%%$'\t'*}"
++            typ="${rest#*$'\t'}"
++
++            if [[ "$typ" == "file" ]]; then
++                display_files+=("$display")
++                insert_files+=("$value")
++            else
++                display_other+=("$display")
++                insert_other+=("$value")
++            fi
++        done
++
++        if (( ${#insert_files} )); then
++            compadd -f -d display_files -a insert_files
++        fi
++        if (( ${#insert_other} )); then
++            compadd -S '' -d display_other -a insert_other
++        fi
++    fi
++}
++
++if [ "$funcstack[1]" = "_fx" ]; then
++    _fx "$@"
++else
++    compdef _fx fx
++fi
+diff --git a/assets/help.txt b/assets/help.txt
+new file mode 100644
+index 0000000..38fa754
+--- /dev/null
++++ b/assets/help.txt
+@@ -0,0 +1,28 @@
++
++  fx 39.2.0
++    Terminal JSON viewer
++
++  Usage
++    fx data.json
++    fx data.json .field
++    curl ... | fx
++
++  Flags
++    -h, --help            print help
++    -v, --version         print version
++    --themes              print themes
++    --comp <shell>        print completion script
++    -r, --raw             treat input as a raw string
++    -s, --slurp           read all inputs into an array
++    --yaml                parse input as YAML
++    --toml                parse input as TOML
++    --strict              strict mode
++    --no-inline           disable inlining in output
++    --game-of-life        play the game of life
++
++  More info
++    https://fx.wtf
++
++  Author
++    Anton Medvedev <anton@medv.io>
++
+diff --git a/assets/themes.txt b/assets/themes.txt
+new file mode 100644
+index 0000000..e69be78
+--- /dev/null
++++ b/assets/themes.txt
+@@ -0,0 +1,112 @@
++export FX_THEME="0"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}
++export FX_THEME="1"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}
++export FX_THEME="2"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}
++export FX_THEME="3"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}
++export FX_THEME="4"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}
++export FX_THEME="5"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}
++export FX_THEME="6"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}
++export FX_THEME="7"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}
++export FX_THEME="8"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}
++export FX_THEME="9"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}
++export FX_THEME="🔥"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}
++export FX_THEME="🔵"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}
++export FX_THEME="🟣"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}
++export FX_THEME="🥝"
++{
++  "string": "Fox jumps over the lazy dog",
++  "number": 1234567890,
++  "boolean": true,
++  "null": null,
++  "collapsed": {"preview":…}
++}
+diff --git a/assets/version.txt b/assets/version.txt
+new file mode 100644
+index 0000000..b8a6f1b
+--- /dev/null
++++ b/assets/version.txt
+@@ -0,0 +1 @@
++39.2.0
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..a228d72
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,4 @@
++#!/bin/bash
++set -e
++cd "$(dirname "$0")"
++GOPROXY=off GOFLAGS=-mod=mod go build -o executable .
+diff --git a/go.mod b/go.mod
+new file mode 100644
+index 0000000..a688a44
+--- /dev/null
++++ b/go.mod
+@@ -0,0 +1,3 @@
++module github.com/antonmedv/fx
++
++go 1.21
+diff --git a/main.go b/main.go
+new file mode 100644
+index 0000000..e77a886
+--- /dev/null
++++ b/main.go
+@@ -0,0 +1,143 @@
++package main
++
++import (
++	"flag"
++	"fmt"
++	"os"
++	"strings"
++
++	_ "embed"
++)
++
++//go:embed assets/help.txt
++var helpText string
++
++//go:embed assets/version.txt
++var versionText string
++
++//go:embed assets/themes.txt
++var themesText string
++
++//go:embed assets/comp_bash.txt
++var compBash string
++
++//go:embed assets/comp_fish.txt
++var compFish string
++
++//go:embed assets/comp_zsh.txt
++var compZsh string
++
++//go:embed assets/comp_unknown.txt
++var compUnknown string
++
++func main() {
++	args := os.Args[1:]
++
++	// 1. Priority flags: -h/--help, -v/--version, --themes
++	for _, a := range args {
++		if a == "-h" || a == "--help" {
++			fmt.Print(helpText)
++			return
++		}
++	}
++	for _, a := range args {
++		if a == "-v" || a == "--version" {
++			fmt.Print(versionText)
++			return
++		}
++	}
++	for _, a := range args {
++		if a == "--themes" {
++			fmt.Print(themesText)
++			return
++		}
++	}
++
++	// 2. If --comp is present, use the flag package (only -comp registered) on
++	//    all args to reproduce the exact standard-flag error/success behavior.
++	if hasComp(args) {
++		fs := flag.NewFlagSet(os.Args[0], flag.ExitOnError)
++		fs.SetOutput(os.Stderr)
++		compShell := fs.String("comp", "", "")
++		fs.Parse(args)
++		switch *compShell {
++		case "bash":
++			fmt.Print(compBash)
++		case "fish":
++			fmt.Print(compFish)
++		case "zsh":
++			fmt.Print(compZsh)
++		default:
++			fmt.Print(compUnknown)
++		}
++		return
++	}
++
++	// 3. Manually parse the other flags.
++	var slurp, raw, yaml, toml, gameOfLife, strict, noInline bool
++	for _, a := range args {
++		switch a {
++		case "-s", "--slurp":
++			slurp = true
++		case "-r", "--raw":
++			raw = true
++		case "--yaml":
++			yaml = true
++		case "--toml":
++			toml = true
++		case "--strict":
++			strict = true
++		case "--no-inline":
++			noInline = true
++		case "--game-of-life":
++			gameOfLife = true
++		}
++	}
++
++	if toml {
++		tomlMode()
++		return
++	}
++
++	if gameOfLife {
++		gameOfLifeMode()
++		return
++	}
++
++	if slurp {
++		slurpMode(raw, yaml, strict, noInline)
++		return
++	}
++
++	// 5. Non-slurp modes open a TTY. Panic if unavailable.
++	openTTY()
++}
++
++func hasComp(args []string) bool {
++	for _, a := range args {
++		if a == "--comp" || a == "-comp" ||
++			strings.HasPrefix(a, "--comp=") || strings.HasPrefix(a, "-comp=") {
++			return true
++		}
++	}
++	return false
++}
++
++func openTTY() {
++	_, err := os.Open("/dev/tty")
++	if err != nil {
++		panic(err)
++	}
++}
++
++func gameOfLifeMode() {
++	// Non-TTY: this would normally start an interactive animation.
++	openTTY()
++}
++
++func tomlMode() {
++	// The original panics here due to a bug in its TOML->JSON conversion.
++	var buf []byte
++	_, _ = os.Stdin.Read(buf)
++	panic(buf)
++}
+diff --git a/patch.txt b/patch.txt
+new file mode 100644
+index 0000000..4a6f181
+--- /dev/null
++++ b/patch.txt
+@@ -0,0 +1,386 @@
++diff --git a/main.go b/main.go
++new file mode 100644
++index 0000000..e77a886
++--- /dev/null
+++++ b/main.go
++@@ -0,0 +1,143 @@
+++package main
+++
+++import (
+++	"flag"
+++	"fmt"
+++	"os"
+++	"strings"
+++
+++	_ "embed"
+++)
+++
+++//go:embed assets/help.txt
+++var helpText string
+++
+++//go:embed assets/version.txt
+++var versionText string
+++
+++//go:embed assets/themes.txt
+++var themesText string
+++
+++//go:embed assets/comp_bash.txt
+++var compBash string
+++
+++//go:embed assets/comp_fish.txt
+++var compFish string
+++
+++//go:embed assets/comp_zsh.txt
+++var compZsh string
+++
+++//go:embed assets/comp_unknown.txt
+++var compUnknown string
+++
+++func main() {
+++	args := os.Args[1:]
+++
+++	// 1. Priority flags: -h/--help, -v/--version, --themes
+++	for _, a := range args {
+++		if a == "-h" || a == "--help" {
+++			fmt.Print(helpText)
+++			return
+++		}
+++	}
+++	for _, a := range args {
+++		if a == "-v" || a == "--version" {
+++			fmt.Print(versionText)
+++			return
+++		}
+++	}
+++	for _, a := range args {
+++		if a == "--themes" {
+++			fmt.Print(themesText)
+++			return
+++		}
+++	}
+++
+++	// 2. If --comp is present, use the flag package (only -comp registered) on
+++	//    all args to reproduce the exact standard-flag error/success behavior.
+++	if hasComp(args) {
+++		fs := flag.NewFlagSet(os.Args[0], flag.ExitOnError)
+++		fs.SetOutput(os.Stderr)
+++		compShell := fs.String("comp", "", "")
+++		fs.Parse(args)
+++		switch *compShell {
+++		case "bash":
+++			fmt.Print(compBash)
+++		case "fish":
+++			fmt.Print(compFish)
+++		case "zsh":
+++			fmt.Print(compZsh)
+++		default:
+++			fmt.Print(compUnknown)
+++		}
+++		return
+++	}
+++
+++	// 3. Manually parse the other flags.
+++	var slurp, raw, yaml, toml, gameOfLife, strict, noInline bool
+++	for _, a := range args {
+++		switch a {
+++		case "-s", "--slurp":
+++			slurp = true
+++		case "-r", "--raw":
+++			raw = true
+++		case "--yaml":
+++			yaml = true
+++		case "--toml":
+++			toml = true
+++		case "--strict":
+++			strict = true
+++		case "--no-inline":
+++			noInline = true
+++		case "--game-of-life":
+++			gameOfLife = true
+++		}
+++	}
+++
+++	if toml {
+++		tomlMode()
+++		return
+++	}
+++
+++	if gameOfLife {
+++		gameOfLifeMode()
+++		return
+++	}
+++
+++	if slurp {
+++		slurpMode(raw, yaml, strict, noInline)
+++		return
+++	}
+++
+++	// 5. Non-slurp modes open a TTY. Panic if unavailable.
+++	openTTY()
+++}
+++
+++func hasComp(args []string) bool {
+++	for _, a := range args {
+++		if a == "--comp" || a == "-comp" ||
+++			strings.HasPrefix(a, "--comp=") || strings.HasPrefix(a, "-comp=") {
+++			return true
+++		}
+++	}
+++	return false
+++}
+++
+++func openTTY() {
+++	_, err := os.Open("/dev/tty")
+++	if err != nil {
+++		panic(err)
+++	}
+++}
+++
+++func gameOfLifeMode() {
+++	// Non-TTY: this would normally start an interactive animation.
+++	openTTY()
+++}
+++
+++func tomlMode() {
+++	// The original panics here due to a bug in its TOML->JSON conversion.
+++	var buf []byte
+++	_, _ = os.Stdin.Read(buf)
+++	panic(buf)
+++}
++diff --git a/slurp.go b/slurp.go
++new file mode 100644
++index 0000000..ff69ac1
++--- /dev/null
+++++ b/slurp.go
++@@ -0,0 +1,231 @@
+++package main
+++
+++import (
+++	"bytes"
+++	"encoding/json"
+++	"fmt"
+++	"io"
+++	"os"
+++	"strings"
+++)
+++
+++func slurpMode(raw, yaml, strict, noInline bool) {
+++	data, err := io.ReadAll(os.Stdin)
+++	if err != nil {
+++		panic(err)
+++	}
+++
+++	var values []interface{}
+++	if raw {
+++		s := string(data)
+++		values = append(values, s)
+++	} else {
+++		var parseErr error
+++		values, parseErr = parseValues(data, strict)
+++		if parseErr != nil {
+++			// Fallback: treat the whole (trimmed) input as a single array
+++			// by wrapping it in brackets. This mirrors fx's lenient behaviour
+++			// for comma-separated / JSON5-ish input that strict JSON rejects.
+++			if wrapped, werr := parseWrapped(data); werr == nil {
+++				values = wrapped
+++			} else {
+++				panic(parseErr)
+++			}
+++		}
+++	}
+++
+++	var out bytes.Buffer
+++	writeArray(&out, values, 0, true, noInline)
+++	fmt.Print(out.String())
+++}
+++
+++// parseValues reads a stream of JSON values from data.
+++func parseValues(data []byte, strict bool) ([]interface{}, error) {
+++	dec := json.NewDecoder(bytes.NewReader(data))
+++	dec.UseNumber()
+++	var values []interface{}
+++	for {
+++		var v interface{}
+++		err := dec.Decode(&v)
+++		if err == io.EOF {
+++			break
+++		}
+++		if err != nil {
+++			return nil, err
+++		}
+++		values = append(values, v)
+++	}
+++	return values, nil
+++}
+++
+++// parseWrapped wraps the (trimmed) input in brackets and parses it as a single
+++// JSON array.
+++func parseWrapped(data []byte) ([]interface{}, error) {
+++	s := strings.TrimSpace(string(data))
+++	if s == "" {
+++		return []interface{}{}, nil
+++	}
+++	wrapped := []byte("[")
+++	wrapped = append(wrapped, []byte(s)...)
+++	wrapped = append(wrapped, ']')
+++	dec := json.NewDecoder(bytes.NewReader(wrapped))
+++	dec.UseNumber()
+++	var v []interface{}
+++	if err := dec.Decode(&v); err != nil {
+++		return nil, err
+++	}
+++	return v, nil
+++}
+++
+++// writeArray writes a JSON array. The root array wraps float elements in a
+++// nested array (matching fx's observed behavior). Inlining is recursive: an
+++// array is inlined when all of its elements are "inlinable". When noInline is
+++// true, arrays are always rendered in multi-line form.
+++func writeArray(b *bytes.Buffer, a []interface{}, indent int, isRoot bool, noInline bool) {
+++	if len(a) == 0 {
+++		b.WriteString("[]")
+++		return
+++	}
+++	if isRoot {
+++		for i, e := range a {
+++			if isFloatNumber(e) {
+++				a[i] = []interface{}{e}
+++			}
+++		}
+++	}
+++	if !noInline && allInlinable(a) {
+++		parts := make([]string, len(a))
+++		for i, e := range a {
+++			var sb bytes.Buffer
+++			writeValue(&sb, e, indent, noInline)
+++			parts[i] = sb.String()
+++		}
+++		b.WriteString("[ " + strings.Join(parts, ", ") + " ]")
+++		return
+++	}
+++	b.WriteString("[\n")
+++	for i, e := range a {
+++		b.WriteString(spaces(indent + 1))
+++		var sb bytes.Buffer
+++		writeValue(&sb, e, indent+1, noInline)
+++		b.WriteString(sb.String())
+++		if i < len(a)-1 {
+++			b.WriteString(",")
+++		}
+++		b.WriteString("\n")
+++	}
+++	b.WriteString(spaces(indent))
+++	b.WriteString("]")
+++}
+++
+++func writeValue(b *bytes.Buffer, v interface{}, indent int, noInline bool) {
+++	switch v := v.(type) {
+++	case nil:
+++		b.WriteString("null")
+++	case bool:
+++		if v {
+++			b.WriteString("true")
+++		} else {
+++			b.WriteString("false")
+++		}
+++	case json.Number:
+++		b.WriteString(v.String())
+++	case string:
+++		b.WriteString(jsonQuote(v))
+++	case []interface{}:
+++		writeArray(b, v, indent, false, noInline)
+++	case map[string]interface{}:
+++		writeObject(b, v)
+++	default:
+++		b.WriteString("null")
+++	}
+++}
+++
+++func writeObject(b *bytes.Buffer, m map[string]interface{}) {
+++	keys := make([]string, 0, len(m))
+++	for k := range m {
+++		keys = append(keys, k)
+++	}
+++	sortStrings(keys)
+++	parts := make([]string, len(keys))
+++	for i, k := range keys {
+++		var sb bytes.Buffer
+++		writeValue(&sb, m[k], 0, false)
+++		parts[i] = jsonQuote(k) + ": " + sb.String()
+++	}
+++	b.WriteString("{ " + strings.Join(parts, ", ") + " }")
+++}
+++
+++func allInlinable(a []interface{}) bool {
+++	for _, e := range a {
+++		if !inlinable(e) {
+++			return false
+++		}
+++	}
+++	return true
+++}
+++
+++func inlinable(v interface{}) bool {
+++	switch x := v.(type) {
+++	case []interface{}:
+++		for _, e := range x {
+++			if !inlinable(e) {
+++				return false
+++			}
+++		}
+++		return true
+++	default:
+++		return true
+++	}
+++}
+++
+++// isFloatNumber reports whether v is a json.Number representing a non-integer
+++// (it has a decimal point or exponent).
+++func isFloatNumber(v interface{}) bool {
+++	n, ok := v.(json.Number)
+++	if !ok {
+++		return false
+++	}
+++	s := n.String()
+++	for _, c := range s {
+++		if c == '.' || c == 'e' || c == 'E' {
+++			return true
+++		}
+++	}
+++	return false
+++}
+++
+++func jsonQuote(s string) string {
+++	var b bytes.Buffer
+++	b.WriteByte('"')
+++	for _, r := range s {
+++		switch r {
+++		case '"':
+++			b.WriteString(`\"`)
+++		case '\\':
+++			b.WriteString(`\\`)
+++		case '\n':
+++			b.WriteString(`\n`)
+++		case '\r':
+++			b.WriteString(`\r`)
+++		case '\t':
+++			b.WriteString(`\t`)
+++		default:
+++			b.WriteRune(r)
+++		}
+++	}
+++	b.WriteByte('"')
+++	return b.String()
+++}
+++
+++func spaces(n int) string {
+++	return strings.Repeat(" ", n*2)
+++}
+++
+++func sortStrings(s []string) {
+++	for i := 1; i < len(s); i++ {
+++		for j := i; j > 0 && s[j-1] > s[j]; j-- {
+++			s[j-1], s[j] = s[j], s[j-1]
+++		}
+++	}
+++}
+diff --git a/slurp.go b/slurp.go
+new file mode 100644
+index 0000000..ff69ac1
+--- /dev/null
++++ b/slurp.go
+@@ -0,0 +1,231 @@
++package main
++
++import (
++	"bytes"
++	"encoding/json"
++	"fmt"
++	"io"
++	"os"
++	"strings"
++)
++
++func slurpMode(raw, yaml, strict, noInline bool) {
++	data, err := io.ReadAll(os.Stdin)
++	if err != nil {
++		panic(err)
++	}
++
++	var values []interface{}
++	if raw {
++		s := string(data)
++		values = append(values, s)
++	} else {
++		var parseErr error
++		values, parseErr = parseValues(data, strict)
++		if parseErr != nil {
++			// Fallback: treat the whole (trimmed) input as a single array
++			// by wrapping it in brackets. This mirrors fx's lenient behaviour
++			// for comma-separated / JSON5-ish input that strict JSON rejects.
++			if wrapped, werr := parseWrapped(data); werr == nil {
++				values = wrapped
++			} else {
++				panic(parseErr)
++			}
++		}
++	}
++
++	var out bytes.Buffer
++	writeArray(&out, values, 0, true, noInline)
++	fmt.Print(out.String())
++}
++
++// parseValues reads a stream of JSON values from data.
++func parseValues(data []byte, strict bool) ([]interface{}, error) {
++	dec := json.NewDecoder(bytes.NewReader(data))
++	dec.UseNumber()
++	var values []interface{}
++	for {
++		var v interface{}
++		err := dec.Decode(&v)
++		if err == io.EOF {
++			break
++		}
++		if err != nil {
++			return nil, err
++		}
++		values = append(values, v)
++	}
++	return values, nil
++}
++
++// parseWrapped wraps the (trimmed) input in brackets and parses it as a single
++// JSON array.
++func parseWrapped(data []byte) ([]interface{}, error) {
++	s := strings.TrimSpace(string(data))
++	if s == "" {
++		return []interface{}{}, nil
++	}
++	wrapped := []byte("[")
++	wrapped = append(wrapped, []byte(s)...)
++	wrapped = append(wrapped, ']')
++	dec := json.NewDecoder(bytes.NewReader(wrapped))
++	dec.UseNumber()
++	var v []interface{}
++	if err := dec.Decode(&v); err != nil {
++		return nil, err
++	}
++	return v, nil
++}
++
++// writeArray writes a JSON array. The root array wraps float elements in a
++// nested array (matching fx's observed behavior). Inlining is recursive: an
++// array is inlined when all of its elements are "inlinable". When noInline is
++// true, arrays are always rendered in multi-line form.
++func writeArray(b *bytes.Buffer, a []interface{}, indent int, isRoot bool, noInline bool) {
++	if len(a) == 0 {
++		b.WriteString("[]")
++		return
++	}
++	if isRoot {
++		for i, e := range a {
++			if isFloatNumber(e) {
++				a[i] = []interface{}{e}
++			}
++		}
++	}
++	if !noInline && allInlinable(a) {
++		parts := make([]string, len(a))
++		for i, e := range a {
++			var sb bytes.Buffer
++			writeValue(&sb, e, indent, noInline)
++			parts[i] = sb.String()
++		}
++		b.WriteString("[ " + strings.Join(parts, ", ") + " ]")
++		return
++	}
++	b.WriteString("[\n")
++	for i, e := range a {
++		b.WriteString(spaces(indent + 1))
++		var sb bytes.Buffer
++		writeValue(&sb, e, indent+1, noInline)
++		b.WriteString(sb.String())
++		if i < len(a)-1 {
++			b.WriteString(",")
++		}
++		b.WriteString("\n")
++	}
++	b.WriteString(spaces(indent))
++	b.WriteString("]")
++}
++
++func writeValue(b *bytes.Buffer, v interface{}, indent int, noInline bool) {
++	switch v := v.(type) {
++	case nil:
++		b.WriteString("null")
++	case bool:
++		if v {
++			b.WriteString("true")
++		} else {
++			b.WriteString("false")
++		}
++	case json.Number:
++		b.WriteString(v.String())
++	case string:
++		b.WriteString(jsonQuote(v))
++	case []interface{}:
++		writeArray(b, v, indent, false, noInline)
++	case map[string]interface{}:
++		writeObject(b, v)
++	default:
++		b.WriteString("null")
++	}
++}
++
++func writeObject(b *bytes.Buffer, m map[string]interface{}) {
++	keys := make([]string, 0, len(m))
++	for k := range m {
++		keys = append(keys, k)
++	}
++	sortStrings(keys)
++	parts := make([]string, len(keys))
++	for i, k := range keys {
++		var sb bytes.Buffer
++		writeValue(&sb, m[k], 0, false)
++		parts[i] = jsonQuote(k) + ": " + sb.String()
++	}
++	b.WriteString("{ " + strings.Join(parts, ", ") + " }")
++}
++
++func allInlinable(a []interface{}) bool {
++	for _, e := range a {
++		if !inlinable(e) {
++			return false
++		}
++	}
++	return true
++}
++
++func inlinable(v interface{}) bool {
++	switch x := v.(type) {
++	case []interface{}:
++		for _, e := range x {
++			if !inlinable(e) {
++				return false
++			}
++		}
++		return true
++	default:
++		return true
++	}
++}
++
++// isFloatNumber reports whether v is a json.Number representing a non-integer
++// (it has a decimal point or exponent).
++func isFloatNumber(v interface{}) bool {
++	n, ok := v.(json.Number)
++	if !ok {
++		return false
++	}
++	s := n.String()
++	for _, c := range s {
++		if c == '.' || c == 'e' || c == 'E' {
++			return true
++		}
++	}
++	return false
++}
++
++func jsonQuote(s string) string {
++	var b bytes.Buffer
++	b.WriteByte('"')
++	for _, r := range s {
++		switch r {
++		case '"':
++			b.WriteString(`\"`)
++		case '\\':
++			b.WriteString(`\\`)
++		case '\n':
++			b.WriteString(`\n`)
++		case '\r':
++			b.WriteString(`\r`)
++		case '\t':
++			b.WriteString(`\t`)
++		default:
++			b.WriteRune(r)
++		}
++	}
++	b.WriteByte('"')
++	return b.String()
++}
++
++func spaces(n int) string {
++	return strings.Repeat(" ", n*2)
++}
++
++func sortStrings(s []string) {
++	for i := 1; i < len(s); i++ {
++		for j := i; j > 0 && s[j-1] > s[j]; j-- {
++			s[j-1], s[j] = s[j], s[j-1]
++		}
++	}
++}
+diff --git a/test.json b/test.json
+new file mode 100644
+index 0000000..d800886
+--- /dev/null
++++ b/test.json
+@@ -0,0 +1 @@
++123
+\ No newline at end of file

@@ -828,6 +828,21 @@ class UnifiedHarness:
             if coordinator is not None:
                 threading.Thread(target=coordinator.run, daemon=True).start()
 
+
+            def collect_diff(env, aid: str) -> str:
+                """Agent diff with share fallback: agents sometimes wipe their
+                working tree at the end (stash/checkout/rm to "verify a clean
+                patch"); the 45s share sync holds their last state, so recover
+                the diff from the pushed branch when the tree reads empty."""
+                d = strip_test_sections(env.git_diff())
+                if d.strip():
+                    return d
+                base = getattr(env, "_base_commit", "") or "HEAD"
+                r = env.execute(
+                    f"git fetch -q shared {aid} 2>/dev/null && "
+                    f"git diff {base} FETCH_HEAD -- . 2>/dev/null")
+                return strip_test_sections(r.stdout) if r.stdout.strip() else d
+
             def run_coop(a: Assignment) -> tuple[str, AgentResult, str]:
                 env = coop_envs[a.agent_id]
                 if spec.team_roles:
@@ -844,7 +859,7 @@ class UnifiedHarness:
                     if poller is not None:
                         poller.watch_board(bus)
                     r = run_on_shared(env, a.agent_id, a.role, task, a.feature_id, poller=poller, time_limit_s=spec.agent_time_limit)
-                    return a.agent_id, r, strip_test_sections(env.git_diff())
+                    return a.agent_id, r, collect_diff(env, a.agent_id)
                 if True:
                     mates = ", ".join(
                         f"{x.agent_id} (feature {x.feature_id})" for x in assignments if x.agent_id != a.agent_id
@@ -917,7 +932,7 @@ class UnifiedHarness:
                     r = run_on_shared(env, a.agent_id, a.role, task, a.feature_id,
                                       poller=poller, monitor=coordinator, time_limit_s=spec.agent_time_limit)
 
-                    return a.agent_id, r, strip_test_sections(env.git_diff())
+                    return a.agent_id, r, collect_diff(env, a.agent_id)
                 return None  # unreachable
 
             try:

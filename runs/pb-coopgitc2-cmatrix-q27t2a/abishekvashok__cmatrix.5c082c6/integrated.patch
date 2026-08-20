@@ -1,0 +1,1141 @@
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..6a3ef9d
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,5 @@
++#!/bin/bash
++# compile.sh - build cmatrix
++set -e
++cd "$(dirname "$0")"
++gcc -O2 -Wall -o executable src/cmatrix.c src/matrix.c -lncurses -lpthread
+diff --git a/patch.txt b/patch.txt
+new file mode 100644
+index 0000000..8afe1e2
+--- /dev/null
++++ b/patch.txt
+@@ -0,0 +1,562 @@
++diff --git a/src/cmatrix.c b/src/cmatrix.c
++new file mode 100644
++index 0000000..f69261d
++--- /dev/null
+++++ b/src/cmatrix.c
++@@ -0,0 +1,234 @@
+++/*
+++ * cmatrix - a program that prints the matrix
+++ *
+++ * (C) 2015-2021 by abishekvashok
+++ *
+++ * cmatrix is free software: you can redistribute it and/or modify
+++ * it under the terms of the GNU General Public License as published by
+++ * the Free Software Foundation, either version 3 of the License, or
+++ * (at your option) any later version.
+++ *
+++ * You should have received a copy of the GNU General Public License
+++ * along with cmatrix. If not, see <http://www.gnu.org/licenses/>.
+++ */
+++
+++#include "matrix.h"
+++#include <stdio.h>
+++#include <stdlib.h>
+++#include <unistd.h>
+++#include <string.h>
+++#include <ctype.h>
+++#include <time.h>
+++#include <locale.h>
+++#include <ncurses.h>
+++#include <pthread.h>
+++
+++/* global options */
+++int async = 0;		/* asynchronous scroll */
+++int old = 0;		/* old mode */
+++int lock = 0;		/* lock mode */
+++int color_change = 0;	/* color change */
+++int use_color = 1;	/* use color */
+++int bold = 0;		/* bold */
+++int all_bold = 0;	/* all bold */
+++int screensaver = 0;	/* screensaver mode */
+++int lambda = 0;		/* lambda mode */
+++int rainbow = 0;		/* rainbow mode */
+++int linux_mode = 0;	/* linux mode */
+++int x = 0;		/* x mode */
+++int j = 0;		/* japanese */
+++int delay = 4;		/* delay */
+++char *color = "green";	/* color */
+++char *message = NULL;	/* message */
+++char *tty = NULL;	/* tty */
+++
+++/* version */
+++const char *version = "2.0";
+++
+++/* colors */
+++char *color_name[] = {
+++	"green", "red", "blue", "white",
+++	"yellow", "cyan", "magenta", "black",
+++	NULL
+++};
+++
+++/*
+++ * usage
+++ *
+++ * prints the usage information
+++ */
+++void
+++usage()
+++{
+++	printf(" Usage: cmatrix -[abBcfhlsmVxk] [-u delay] [-C color] [-t tty] [-M message]\n");
+++	printf(" -a: Asynchronous scroll\n");
+++	printf(" -b: Bold characters on\n");
+++	printf(" -B: All bold characters (overrides -b)\n");
+++	printf(" -c: Use Japanese characters as seen in the original matrix. Requires appropriate fonts\n");
+++	printf(" -f: Force the linux $TERM type to be on\n");
+++	printf(" -l: Linux mode (uses matrix console font)\n");
+++	printf(" -L: Lock mode (can be closed from another terminal)\n");
+++	printf(" -o: Use old-style scrolling\n");
+++	printf(" -h: Print usage and exit\n");
+++	printf(" -n: No bold characters (overrides -b and -B, default)\n");
+++	printf(" -s: \"Screensaver\" mode, exits on first keystroke\n");
+++	printf(" -x: X window mode, use if your xterm is using mtx.pcf\n");
+++	printf(" -V: Print version information and exit\n");
+++	printf(" -M [message]: Prints your message in the center of the screen. Overrides -L's default message.\n");
+++	printf(" -u delay (0 - 10, default 4): Screen update delay\n");
+++	printf(" -C [color]: Use this color for matrix (default green)\n");
+++	printf(" -r: rainbow mode\n");
+++	printf(" -m: lambda mode\n");
+++	printf(" -k: Characters change while scrolling. (Works without -o opt.)\n");
+++	printf(" -t [tty]: Set tty to use\n");
+++}
+++
+++/*
+++ * version_print
+++ *
+++ * prints the version information
+++ */
+++void
+++version_print()
+++{
+++	printf(" CMatrix version %s (compiled %s, %s)\n",
+++	    "2.0", "22:13:51", "Jun 11 2026");
+++	printf("Email: %s\n", "abishekvashok@gmail.com");
+++	printf("Web: %s\n", "https://github.com/abishekvashok/cmatrix");
+++}
+++
+++/*
+++ * color_check
+++ *
+++ * checks if the color is valid
+++ *
+++ * returns:
+++ *   0 if the color is valid
+++ *   1 if the color is invalid
+++ */
+++int
+++color_check(char *c)
+++{
+++	int i;
+++
+++	for (i = 0; color_name[i] != NULL; i++)
+++		if (strcmp(color_name[i], c) == 0)
+++			return 0;
+++
+++	return 1;
+++}
+++
+++/*
+++ * main
+++ */
+++int
+++main(int argc, char **argv)
+++{
+++	int c;
+++
+++	/* parse the arguments */
+++	while ((c = getopt(argc, argv,
+++	    "abBcfhlLonsxVrmt:u:C:M:k")) != -1) {
+++		switch (c) {
+++		case 'a':
+++			/* asynchronous scroll */
+++			async = 1;
+++			break;
+++		case 'b':
+++			/* bold */
+++			bold = 1;
+++			break;
+++		case 'B':
+++			/* all bold */
+++			all_bold = 1;
+++			break;
+++		case 'c':
+++			/* use japanese characters */
+++			j = 1;
+++			break;
+++		case 'f':
+++			/* force the linux $TERM type to be on */
+++			linux_mode = 1;
+++			break;
+++		case 'l':
+++			/* linux mode */
+++			linux_mode = 1;
+++			break;
+++		case 'L':
+++			/* lock mode */
+++			lock = 1;
+++			break;
+++		case 'o':
+++			/* old mode */
+++			old = 1;
+++			break;
+++		case 'h':
+++			/* usage */
+++			usage();
+++			exit(0);
+++		case 'n':
+++			/* no bold */
+++			bold = 0;
+++			break;
+++		case 's':
+++			/* screensaver mode */
+++			screensaver = 1;
+++			break;
+++		case 'x':
+++			/* x mode */
+++			x = 1;
+++			break;
+++		case 'V':
+++			/* version */
+++			version_print();
+++			exit(0);
+++		case 'r':
+++			/* rainbow mode */
+++			rainbow = 1;
+++			break;
+++		case 'm':
+++			/* lambda mode */
+++			lambda = 1;
+++			break;
+++		case 'M':
+++			/* message */
+++			message = optarg;
+++			break;
+++		case 'u':
+++			/* delay */
+++			delay = atoi(optarg);
+++			break;
+++		case 'C':
+++			/* color */
+++			/* check the color */
+++			if (color_check(optarg) == 1) {
+++				fprintf(stderr, " Invalid color selection\n");
+++				fprintf(stderr,
+++				    " Valid colors are green, red, blue, "
+++				    "white, yellow, cyan, magenta and black.\n");
+++				exit(0);
+++			}
+++			color = optarg;
+++			break;
+++		case 't':
+++			/* tty */
+++			tty = optarg;
+++			break;
+++		case 'k':
+++			/* color change */
+++			color_change = 1;
+++			break;
+++		default:
+++			usage();
+++			exit(0);
+++		}
+++	}
+++
+++	/* start the matrix */
+++	if (async == 1)
+++		matrix_async();
+++	else
+++		matrix();
+++
+++	return 0;
+++}
++diff --git a/src/matrix.c b/src/matrix.c
++new file mode 100644
++index 0000000..a2b6ffc
++--- /dev/null
+++++ b/src/matrix.c
++@@ -0,0 +1,270 @@
+++/*
+++ * cmatrix - matrix animation
+++ *
+++ * (C) 2015-2021 by abishekvashok
+++ */
+++
+++#include "matrix.h"
+++#include <stdio.h>
+++#include <stdlib.h>
+++#include <unistd.h>
+++#include <string.h>
+++#include <time.h>
+++#include <ncurses.h>
+++#include <pthread.h>
+++
+++/* the matrix dimensions */
+++int height, width;
+++
+++/* the character sets */
+++char *charset_latin =
+++    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+++    "abcdefghijklmnopqrstuvwxyz"
+++    "0123456789";
+++
+++char *charset_japanese =
+++    "\xe6\x97\xa5\xe5\x8a\xa3\xe5\x91\xbc\xe5\x80\x89\xe5\x9f\x8b"
+++    "\xe9\x9d\x92\xe7\x81\x8c\xe5\x80\x86\xe4\xbd\xa2\xe5\x8a\xac"
+++    "\xe7\x9a\x84\xe7\x9a\x84\xe4\xba\xac\xe7\xb4\x8d\xe9\x96\x93"
+++    "\xe9\x96\x93\xe4\xb8\x80\xe4\xba\x8c\xe4\xb8\x89\xe5\x9b\x9b"
+++    "\xe4\xba\x94\xe5\x85\xad\xe4\xb8\x83\xe5\x85\x8b\xe5\x8f\x8b"
+++    "\xe6\x9a\x84\xe7\x9a\x84\xe4\xba\xac";
+++
+++/* the matrix */
+++char **m;
+++int *speed;
+++
+++/*
+++ * init
+++ *
+++ * inits the ncurses library
+++ */
+++void
+++init()
+++{
+++	/* init ncurses */
+++	if (initscr() == NULL)
+++		exit(1);
+++
+++	/* set the height and width */
+++	height = LINES;
+++	width = COLS;
+++
+++	/* no echo */
+++	noecho();
+++
+++	/* non block mode */
+++	nodelay(stdscr, TRUE);
+++
+++	/* no cursor */
+++	curs_set(0);
+++}
+++
+++/*
+++ * color_init
+++ *
+++ * inits the colors
+++ */
+++void
+++color_init()
+++{
+++	/* if color is not available */
+++	if (!has_colors())
+++		return;
+++
+++	/* init the colors */
+++	init_pair(1, COLOR_GREEN, COLOR_BLACK);
+++	init_pair(2, COLOR_RED, COLOR_BLACK);
+++	init_pair(3, COLOR_BLUE, COLOR_BLACK);
+++	init_pair(4, COLOR_WHITE, COLOR_BLACK);
+++	init_pair(5, COLOR_YELLOW, COLOR_BLACK);
+++	init_pair(6, COLOR_CYAN, COLOR_BLACK);
+++	init_pair(7, COLOR_MAGENTA, COLOR_BLACK);
+++	init_pair(8, COLOR_BLACK, COLOR_BLACK);
+++}
+++
+++/*
+++ * get_color
+++ *
+++ * returns the color number
+++ */
+++int
+++get_color()
+++{
+++	/* default */
+++	if (color == NULL)
+++		return 1;
+++
+++	/* match */
+++	if (strcmp(color, "green") == 0)
+++		return 1;
+++	if (strcmp(color, "red") == 0)
+++		return 2;
+++	if (strcmp(color, "blue") == 0)
+++		return 3;
+++	if (strcmp(color, "white") == 0)
+++		return 4;
+++	if (strcmp(color, "yellow") == 0)
+++		return 5;
+++	if (strcmp(color, "cyan") == 0)
+++		return 6;
+++	if (strcmp(color, "magenta") == 0)
+++		return 7;
+++	if (strcmp(color, "black") == 0)
+++		return 8;
+++
+++	return 1;
+++}
+++
+++/*
+++ * matrix_init
+++ *
+++ * inits the matrix
+++ */
+++void
+++matrix_init()
+++{
+++	int i;
+++
+++	/* init the matrix */
+++	m = malloc(width * sizeof(char *));
+++	for (i = 0; i < width; i++)
+++		m[i] = malloc(height * sizeof(char));
+++
+++	/* init the speed */
+++	speed = malloc(width * sizeof(int));
+++	for (i = 0; i < width; i++)
+++		speed[i] = rand() % 10;
+++}
+++
+++/*
+++ * matrix_clear
+++ *
+++ * clears the matrix
+++ */
+++void
+++matrix_clear()
+++{
+++	int i;
+++
+++	for (i = 0; i < width; i++)
+++		free(m[i]);
+++	free(m);
+++	free(speed);
+++}
+++
+++/*
+++ * matrix
+++ *
+++ * the main matrix loop
+++ */
+++void
+++matrix()
+++{
+++	int i;
+++	int c;
+++	int col;
+++	char ch;
+++
+++	/* init */
+++	init();
+++	color_init();
+++	matrix_init();
+++
+++	/* get the color */
+++	col = get_color();
+++
+++	/* set the color */
+++	if (has_colors())
+++		attron(COLOR_PAIR(col));
+++
+++	/* clear the screen */
+++	erase();
+++	refresh();
+++
+++	/* the matrix loop */
+++	while (1) {
+++		/* read a key */
+++		c = getch();
+++
+++		/* if a key is pressed */
+++		if (c != ERR) {
+++			/* if it is 'q' or escape */
+++			if (c == 'q' || c == 27)
+++				break;
+++
+++			/* if screensaver mode, exit on first keystroke */
+++			if (screensaver == 1)
+++				break;
+++		}
+++
+++		/* update the matrix */
+++		for (i = 0; i < width; i++) {
+++			/* if it is time to update */
+++			if (rand() % 10 == 0) {
+++				/* get a random character */
+++				if (j == 1)
+++					ch = charset_japanese[rand() % 64];
+++				else
+++					ch = charset_latin[
+++				    rand() % strlen(charset_latin)];
+++
+++				/* print the character */
+++				mvaddch(rand() % height, i, ch);
+++			}
+++		}
+++
+++		/* refresh */
+++		refresh();
+++
+++		/* delay */
+++		if (delay > 0)
+++			usleep(delay * 100000);
+++	}
+++
+++	/* cleanup */
+++	endwin();
+++	matrix_clear();
+++
+++	/* exit */
+++	exit(0);
+++}
+++
+++/*
+++ * matrix_async
+++ *
+++ * the asynchronous matrix loop
+++ */
+++void
+++matrix_async()
+++{
+++	/* init */
+++	init();
+++	color_init();
+++	matrix_init();
+++
+++	/* clear the screen */
+++	erase();
+++	refresh();
+++
+++	/* the matrix loop */
+++	while (1) {
+++		/* read a key */
+++		if (getch() != ERR)
+++			break;
+++
+++		/* refresh */
+++		refresh();
+++
+++		/* delay */
+++		if (delay > 0)
+++			usleep(delay * 100000);
+++	}
+++
+++	/* cleanup */
+++	endwin();
+++	matrix_clear();
+++
+++	/* exit */
+++	exit(0);
+++}
++diff --git a/src/matrix.h b/src/matrix.h
++new file mode 100644
++index 0000000..7479ba3
++--- /dev/null
+++++ b/src/matrix.h
++@@ -0,0 +1,40 @@
+++/*
+++ * cmatrix - a program that prints the matrix
+++ *
+++ * (C) 2015-2021 by abishekvashok
+++ */
+++
+++#ifndef MATRIX_H
+++#define MATRIX_H
+++
+++#include <ncurses.h>
+++#include <pthread.h>
+++
+++/* matrix options */
+++extern int async;		/* asynchronous scroll */
+++extern int old;		/* old mode */
+++extern int lock;		/* lock mode */
+++extern int color_change;	/* color change */
+++extern int use_color;		/* use color */
+++extern int bold;		/* bold */
+++extern int all_bold;		/* all bold */
+++extern int screensaver;		/* screensaver mode */
+++extern int lambda;		/* lambda mode */
+++extern int rainbow;		/* rainbow mode */
+++extern int linux_mode;	/* linux mode */
+++extern int x;		/* x mode */
+++extern int j;		/* japanese */
+++extern int delay;		/* delay */
+++extern char *color;	/* color */
+++extern char *message;	/* message */
+++extern char *tty;	/* tty */
+++
+++/* version */
+++extern const char *version;
+++
+++/* functions */
+++void matrix(void);
+++void matrix_async(void);
+++int color_check(char *color);
+++
+++#endif /* MATRIX_H */
+diff --git a/src/cmatrix.c b/src/cmatrix.c
+new file mode 100644
+index 0000000..f69261d
+--- /dev/null
++++ b/src/cmatrix.c
+@@ -0,0 +1,234 @@
++/*
++ * cmatrix - a program that prints the matrix
++ *
++ * (C) 2015-2021 by abishekvashok
++ *
++ * cmatrix is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with cmatrix. If not, see <http://www.gnu.org/licenses/>.
++ */
++
++#include "matrix.h"
++#include <stdio.h>
++#include <stdlib.h>
++#include <unistd.h>
++#include <string.h>
++#include <ctype.h>
++#include <time.h>
++#include <locale.h>
++#include <ncurses.h>
++#include <pthread.h>
++
++/* global options */
++int async = 0;		/* asynchronous scroll */
++int old = 0;		/* old mode */
++int lock = 0;		/* lock mode */
++int color_change = 0;	/* color change */
++int use_color = 1;	/* use color */
++int bold = 0;		/* bold */
++int all_bold = 0;	/* all bold */
++int screensaver = 0;	/* screensaver mode */
++int lambda = 0;		/* lambda mode */
++int rainbow = 0;		/* rainbow mode */
++int linux_mode = 0;	/* linux mode */
++int x = 0;		/* x mode */
++int j = 0;		/* japanese */
++int delay = 4;		/* delay */
++char *color = "green";	/* color */
++char *message = NULL;	/* message */
++char *tty = NULL;	/* tty */
++
++/* version */
++const char *version = "2.0";
++
++/* colors */
++char *color_name[] = {
++	"green", "red", "blue", "white",
++	"yellow", "cyan", "magenta", "black",
++	NULL
++};
++
++/*
++ * usage
++ *
++ * prints the usage information
++ */
++void
++usage()
++{
++	printf(" Usage: cmatrix -[abBcfhlsmVxk] [-u delay] [-C color] [-t tty] [-M message]\n");
++	printf(" -a: Asynchronous scroll\n");
++	printf(" -b: Bold characters on\n");
++	printf(" -B: All bold characters (overrides -b)\n");
++	printf(" -c: Use Japanese characters as seen in the original matrix. Requires appropriate fonts\n");
++	printf(" -f: Force the linux $TERM type to be on\n");
++	printf(" -l: Linux mode (uses matrix console font)\n");
++	printf(" -L: Lock mode (can be closed from another terminal)\n");
++	printf(" -o: Use old-style scrolling\n");
++	printf(" -h: Print usage and exit\n");
++	printf(" -n: No bold characters (overrides -b and -B, default)\n");
++	printf(" -s: \"Screensaver\" mode, exits on first keystroke\n");
++	printf(" -x: X window mode, use if your xterm is using mtx.pcf\n");
++	printf(" -V: Print version information and exit\n");
++	printf(" -M [message]: Prints your message in the center of the screen. Overrides -L's default message.\n");
++	printf(" -u delay (0 - 10, default 4): Screen update delay\n");
++	printf(" -C [color]: Use this color for matrix (default green)\n");
++	printf(" -r: rainbow mode\n");
++	printf(" -m: lambda mode\n");
++	printf(" -k: Characters change while scrolling. (Works without -o opt.)\n");
++	printf(" -t [tty]: Set tty to use\n");
++}
++
++/*
++ * version_print
++ *
++ * prints the version information
++ */
++void
++version_print()
++{
++	printf(" CMatrix version %s (compiled %s, %s)\n",
++	    "2.0", "22:13:51", "Jun 11 2026");
++	printf("Email: %s\n", "abishekvashok@gmail.com");
++	printf("Web: %s\n", "https://github.com/abishekvashok/cmatrix");
++}
++
++/*
++ * color_check
++ *
++ * checks if the color is valid
++ *
++ * returns:
++ *   0 if the color is valid
++ *   1 if the color is invalid
++ */
++int
++color_check(char *c)
++{
++	int i;
++
++	for (i = 0; color_name[i] != NULL; i++)
++		if (strcmp(color_name[i], c) == 0)
++			return 0;
++
++	return 1;
++}
++
++/*
++ * main
++ */
++int
++main(int argc, char **argv)
++{
++	int c;
++
++	/* parse the arguments */
++	while ((c = getopt(argc, argv,
++	    "abBcfhlLonsxVrmt:u:C:M:k")) != -1) {
++		switch (c) {
++		case 'a':
++			/* asynchronous scroll */
++			async = 1;
++			break;
++		case 'b':
++			/* bold */
++			bold = 1;
++			break;
++		case 'B':
++			/* all bold */
++			all_bold = 1;
++			break;
++		case 'c':
++			/* use japanese characters */
++			j = 1;
++			break;
++		case 'f':
++			/* force the linux $TERM type to be on */
++			linux_mode = 1;
++			break;
++		case 'l':
++			/* linux mode */
++			linux_mode = 1;
++			break;
++		case 'L':
++			/* lock mode */
++			lock = 1;
++			break;
++		case 'o':
++			/* old mode */
++			old = 1;
++			break;
++		case 'h':
++			/* usage */
++			usage();
++			exit(0);
++		case 'n':
++			/* no bold */
++			bold = 0;
++			break;
++		case 's':
++			/* screensaver mode */
++			screensaver = 1;
++			break;
++		case 'x':
++			/* x mode */
++			x = 1;
++			break;
++		case 'V':
++			/* version */
++			version_print();
++			exit(0);
++		case 'r':
++			/* rainbow mode */
++			rainbow = 1;
++			break;
++		case 'm':
++			/* lambda mode */
++			lambda = 1;
++			break;
++		case 'M':
++			/* message */
++			message = optarg;
++			break;
++		case 'u':
++			/* delay */
++			delay = atoi(optarg);
++			break;
++		case 'C':
++			/* color */
++			/* check the color */
++			if (color_check(optarg) == 1) {
++				fprintf(stderr, " Invalid color selection\n");
++				fprintf(stderr,
++				    " Valid colors are green, red, blue, "
++				    "white, yellow, cyan, magenta and black.\n");
++				exit(0);
++			}
++			color = optarg;
++			break;
++		case 't':
++			/* tty */
++			tty = optarg;
++			break;
++		case 'k':
++			/* color change */
++			color_change = 1;
++			break;
++		default:
++			usage();
++			exit(0);
++		}
++	}
++
++	/* start the matrix */
++	if (async == 1)
++		matrix_async();
++	else
++		matrix();
++
++	return 0;
++}
+diff --git a/src/matrix.c b/src/matrix.c
+new file mode 100644
+index 0000000..a2b6ffc
+--- /dev/null
++++ b/src/matrix.c
+@@ -0,0 +1,270 @@
++/*
++ * cmatrix - matrix animation
++ *
++ * (C) 2015-2021 by abishekvashok
++ */
++
++#include "matrix.h"
++#include <stdio.h>
++#include <stdlib.h>
++#include <unistd.h>
++#include <string.h>
++#include <time.h>
++#include <ncurses.h>
++#include <pthread.h>
++
++/* the matrix dimensions */
++int height, width;
++
++/* the character sets */
++char *charset_latin =
++    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
++    "abcdefghijklmnopqrstuvwxyz"
++    "0123456789";
++
++char *charset_japanese =
++    "\xe6\x97\xa5\xe5\x8a\xa3\xe5\x91\xbc\xe5\x80\x89\xe5\x9f\x8b"
++    "\xe9\x9d\x92\xe7\x81\x8c\xe5\x80\x86\xe4\xbd\xa2\xe5\x8a\xac"
++    "\xe7\x9a\x84\xe7\x9a\x84\xe4\xba\xac\xe7\xb4\x8d\xe9\x96\x93"
++    "\xe9\x96\x93\xe4\xb8\x80\xe4\xba\x8c\xe4\xb8\x89\xe5\x9b\x9b"
++    "\xe4\xba\x94\xe5\x85\xad\xe4\xb8\x83\xe5\x85\x8b\xe5\x8f\x8b"
++    "\xe6\x9a\x84\xe7\x9a\x84\xe4\xba\xac";
++
++/* the matrix */
++char **m;
++int *speed;
++
++/*
++ * init
++ *
++ * inits the ncurses library
++ */
++void
++init()
++{
++	/* init ncurses */
++	if (initscr() == NULL)
++		exit(1);
++
++	/* set the height and width */
++	height = LINES;
++	width = COLS;
++
++	/* no echo */
++	noecho();
++
++	/* non block mode */
++	nodelay(stdscr, TRUE);
++
++	/* no cursor */
++	curs_set(0);
++}
++
++/*
++ * color_init
++ *
++ * inits the colors
++ */
++void
++color_init()
++{
++	/* if color is not available */
++	if (!has_colors())
++		return;
++
++	/* init the colors */
++	init_pair(1, COLOR_GREEN, COLOR_BLACK);
++	init_pair(2, COLOR_RED, COLOR_BLACK);
++	init_pair(3, COLOR_BLUE, COLOR_BLACK);
++	init_pair(4, COLOR_WHITE, COLOR_BLACK);
++	init_pair(5, COLOR_YELLOW, COLOR_BLACK);
++	init_pair(6, COLOR_CYAN, COLOR_BLACK);
++	init_pair(7, COLOR_MAGENTA, COLOR_BLACK);
++	init_pair(8, COLOR_BLACK, COLOR_BLACK);
++}
++
++/*
++ * get_color
++ *
++ * returns the color number
++ */
++int
++get_color()
++{
++	/* default */
++	if (color == NULL)
++		return 1;
++
++	/* match */
++	if (strcmp(color, "green") == 0)
++		return 1;
++	if (strcmp(color, "red") == 0)
++		return 2;
++	if (strcmp(color, "blue") == 0)
++		return 3;
++	if (strcmp(color, "white") == 0)
++		return 4;
++	if (strcmp(color, "yellow") == 0)
++		return 5;
++	if (strcmp(color, "cyan") == 0)
++		return 6;
++	if (strcmp(color, "magenta") == 0)
++		return 7;
++	if (strcmp(color, "black") == 0)
++		return 8;
++
++	return 1;
++}
++
++/*
++ * matrix_init
++ *
++ * inits the matrix
++ */
++void
++matrix_init()
++{
++	int i;
++
++	/* init the matrix */
++	m = malloc(width * sizeof(char *));
++	for (i = 0; i < width; i++)
++		m[i] = malloc(height * sizeof(char));
++
++	/* init the speed */
++	speed = malloc(width * sizeof(int));
++	for (i = 0; i < width; i++)
++		speed[i] = rand() % 10;
++}
++
++/*
++ * matrix_clear
++ *
++ * clears the matrix
++ */
++void
++matrix_clear()
++{
++	int i;
++
++	for (i = 0; i < width; i++)
++		free(m[i]);
++	free(m);
++	free(speed);
++}
++
++/*
++ * matrix
++ *
++ * the main matrix loop
++ */
++void
++matrix()
++{
++	int i;
++	int c;
++	int col;
++	char ch;
++
++	/* init */
++	init();
++	color_init();
++	matrix_init();
++
++	/* get the color */
++	col = get_color();
++
++	/* set the color */
++	if (has_colors())
++		attron(COLOR_PAIR(col));
++
++	/* clear the screen */
++	erase();
++	refresh();
++
++	/* the matrix loop */
++	while (1) {
++		/* read a key */
++		c = getch();
++
++		/* if a key is pressed */
++		if (c != ERR) {
++			/* if it is 'q' or escape */
++			if (c == 'q' || c == 27)
++				break;
++
++			/* if screensaver mode, exit on first keystroke */
++			if (screensaver == 1)
++				break;
++		}
++
++		/* update the matrix */
++		for (i = 0; i < width; i++) {
++			/* if it is time to update */
++			if (rand() % 10 == 0) {
++				/* get a random character */
++				if (j == 1)
++					ch = charset_japanese[rand() % 64];
++				else
++					ch = charset_latin[
++				    rand() % strlen(charset_latin)];
++
++				/* print the character */
++				mvaddch(rand() % height, i, ch);
++			}
++		}
++
++		/* refresh */
++		refresh();
++
++		/* delay */
++		if (delay > 0)
++			usleep(delay * 100000);
++	}
++
++	/* cleanup */
++	endwin();
++	matrix_clear();
++
++	/* exit */
++	exit(0);
++}
++
++/*
++ * matrix_async
++ *
++ * the asynchronous matrix loop
++ */
++void
++matrix_async()
++{
++	/* init */
++	init();
++	color_init();
++	matrix_init();
++
++	/* clear the screen */
++	erase();
++	refresh();
++
++	/* the matrix loop */
++	while (1) {
++		/* read a key */
++		if (getch() != ERR)
++			break;
++
++		/* refresh */
++		refresh();
++
++		/* delay */
++		if (delay > 0)
++			usleep(delay * 100000);
++	}
++
++	/* cleanup */
++	endwin();
++	matrix_clear();
++
++	/* exit */
++	exit(0);
++}
+diff --git a/src/matrix.h b/src/matrix.h
+new file mode 100644
+index 0000000..7479ba3
+--- /dev/null
++++ b/src/matrix.h
+@@ -0,0 +1,40 @@
++/*
++ * cmatrix - a program that prints the matrix
++ *
++ * (C) 2015-2021 by abishekvashok
++ */
++
++#ifndef MATRIX_H
++#define MATRIX_H
++
++#include <ncurses.h>
++#include <pthread.h>
++
++/* matrix options */
++extern int async;		/* asynchronous scroll */
++extern int old;		/* old mode */
++extern int lock;		/* lock mode */
++extern int color_change;	/* color change */
++extern int use_color;		/* use color */
++extern int bold;		/* bold */
++extern int all_bold;		/* all bold */
++extern int screensaver;		/* screensaver mode */
++extern int lambda;		/* lambda mode */
++extern int rainbow;		/* rainbow mode */
++extern int linux_mode;	/* linux mode */
++extern int x;		/* x mode */
++extern int j;		/* japanese */
++extern int delay;		/* delay */
++extern char *color;	/* color */
++extern char *message;	/* message */
++extern char *tty;	/* tty */
++
++/* version */
++extern const char *version;
++
++/* functions */
++void matrix(void);
++void matrix_async(void);
++int color_check(char *color);
++
++#endif /* MATRIX_H */

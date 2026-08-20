@@ -1,0 +1,1392 @@
+diff --git a/compile.sh b/compile.sh
+new file mode 100644
+index 0000000..d3aaffc
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,27 @@
++#!/usr/bin/env bash
++set -e
++cd "$(dirname "$0")"
++export GOPROXY=off
++export GOSUMDB=off
++export GOFLAGS=-mod=mod
++export GOTOOLCHAIN=local
++
++# Find a go toolchain that is >= 1.24 (tcell v2.13.10 requires go >= 1.24.0)
++find_go() {
++    local g
++    for g in "$(command -v go 2>/dev/null || true)" \
++             /usr/local/go/bin/go \
++             /usr/local/go/mod-cache/golang.org/toolchain@*/bin/go; do
++        [ -x "$g" ] || continue
++        local v
++        v=$("$g" version 2>/dev/null | grep -oE 'go1\.[0-9]+' | head -1 || true)
++        # accept any go1.24 or newer (major.minor >= 1.24)
++        case "$v" in
++            go1.2[4-9]|go1.[3-9][0-9]|go1.1[0-9][0-9]) echo "$g"; return 0;;
++        esac
++    done
++}
++GO=$(find_go)
++[ -n "$GO" ] || { echo "no suitable go toolchain found" >&2; exit 1; }
++echo "using go: $GO ($($GO version 2>&1))"
++"$GO" build -o executable .
+diff --git a/go.mod b/go.mod
+new file mode 100644
+index 0000000..9b0028b
+--- /dev/null
++++ b/go.mod
+@@ -0,0 +1,16 @@
++module github.com/antonmedv/walk
++
++go 1.25.0
++
++require (
++	github.com/gdamore/tcell/v2 v2.13.10
++	github.com/rivo/uniseg v0.4.7
++	golang.org/x/sys v0.46.0
++	golang.org/x/term v0.44.0
++	golang.org/x/text v0.38.0
++)
++
++require (
++	github.com/gdamore/encoding v1.0.1 // indirect
++	github.com/lucasb-eyer/go-colorful v1.3.0 // indirect
++)
+diff --git a/go.sum b/go.sum
+new file mode 100644
+index 0000000..fe2a5f3
+--- /dev/null
++++ b/go.sum
+@@ -0,0 +1,45 @@
++github.com/gdamore/encoding v1.0.1 h1:YzKZckdBL6jVt2Gc+5p82qhrGiqMdG/eNs6Wy0u3Uhw=
++github.com/gdamore/encoding v1.0.1/go.mod h1:0Z0cMFinngz9kS1QfMjCP8TY7em3bZYeeklsSDPivEo=
++github.com/gdamore/tcell/v2 v2.13.10 h1:Afs3JKt83HnhuUKdZ3MnxUgOqQRWftj5JyDqv1LLynA=
++github.com/gdamore/tcell/v2 v2.13.10/go.mod h1:+Wfe208WDdB7INEtCsNrAN6O2m+wsTPk1RAovjaILlo=
++github.com/lucasb-eyer/go-colorful v1.3.0 h1:2/yBRLdWBZKrf7gB40FoiKfAWYQ0lqNcbuQwVHXptag=
++github.com/lucasb-eyer/go-colorful v1.3.0/go.mod h1:R4dSotOR9KMtayYi1e77YzuveK+i7ruzyGqttikkLy0=
++github.com/rivo/uniseg v0.4.7 h1:WUdvkW8uEhrYfLC4ZzdpI2ztxP1I582+49Oc5Mq64VQ=
++github.com/rivo/uniseg v0.4.7/go.mod h1:FN3SvrM+Zdj16jyLfmOkMNblXMcoc8DfTHruCPUcx88=
++github.com/yuin/goldmark v1.4.13/go.mod h1:6yULJ656Px+3vBD8DxQVa3kxgyrAnzto9xy5taEt/CY=
++golang.org/x/crypto v0.0.0-20190308221718-c2843e01d9a2/go.mod h1:djNgcEr1/C05ACkg1iLfiJU5Ep61QUkGW8qpdssI0+w=
++golang.org/x/crypto v0.0.0-20210921155107-089bfa567519/go.mod h1:GvvjBRRGRdwPK5ydBHafDWAxML/pGHZbMvKqRZ5+Abc=
++golang.org/x/mod v0.6.0-dev.0.20220419223038-86c51ed26bb4/go.mod h1:jJ57K6gSWd91VN4djpZkiMVwK6gcyfeH4XE8wZrZaV4=
++golang.org/x/mod v0.8.0/go.mod h1:iBbtSCu2XBx23ZKBPSOrRkjjQPZFPuis4dIYUhu/chs=
++golang.org/x/net v0.0.0-20190620200207-3b0461eec859/go.mod h1:z5CRVTTTmAJ677TzLLGU+0bjPO0LkuOLi4/5GtJWs/s=
++golang.org/x/net v0.0.0-20210226172049-e18ecbb05110/go.mod h1:m0MpNAwzfU5UDzcl9v0D8zg8gWTRqZa9RBIspLL5mdg=
++golang.org/x/net v0.0.0-20220722155237-a158d28d115b/go.mod h1:XRhObCWvk6IyKnWLug+ECip1KBveYUHfp+8e9klMJ9c=
++golang.org/x/net v0.6.0/go.mod h1:2Tu9+aMcznHK/AK1HMvgo6xiTLG5rD5rZLDS+rp2Bjs=
++golang.org/x/sync v0.0.0-20190423024810-112230192c58/go.mod h1:RxMgew5VJxzue5/jJTE5uejpjVlOe/izrB70Jof72aM=
++golang.org/x/sync v0.0.0-20220722155255-886fb9371eb4/go.mod h1:RxMgew5VJxzue5/jJTE5uejpjVlOe/izrB70Jof72aM=
++golang.org/x/sync v0.1.0/go.mod h1:RxMgew5VJxzue5/jJTE5uejpjVlOe/izrB70Jof72aM=
++golang.org/x/sys v0.0.0-20190215142949-d0b11bdaac8a/go.mod h1:STP8DvDyc/dI5b8T5hshtkjS+E42TnysNCUPdjciGhY=
++golang.org/x/sys v0.0.0-20201119102817-f84b799fce68/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
++golang.org/x/sys v0.0.0-20210615035016-665e8c7367d1/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
++golang.org/x/sys v0.0.0-20220520151302-bc2c85ada10a/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
++golang.org/x/sys v0.0.0-20220722155257-8c9f86f7a55f/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
++golang.org/x/sys v0.5.0/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
++golang.org/x/sys v0.46.0 h1:noSf2Fq6F8DBgS+LysIkx7rIExoNHJsxOAtPp4rthXw=
++golang.org/x/sys v0.46.0/go.mod h1:4GL1E5IUh+htKOUEOaiffhrAeqysfVGipDYzABqnCmw=
++golang.org/x/term v0.0.0-20201126162022-7de9c90e9dd1/go.mod h1:bj7SfCRtBDWHUb9snDiAeCFNEtKQo2Wmx5Cou7ajbmo=
++golang.org/x/term v0.0.0-20210927222741-03fcf44c2211/go.mod h1:jbD1KX2456YbFQfuXm/mYQcufACuNUgVhRMnK/tPxf8=
++golang.org/x/term v0.5.0/go.mod h1:jMB1sMXY+tzblOD4FWmEbocvup2/aLOaQEp7JmGp78k=
++golang.org/x/term v0.44.0 h1:0rLvDRCtNj0gZkyIXhCyOb2OAzEhLVqc4B+hrsBhrmc=
++golang.org/x/term v0.44.0/go.mod h1:7ze4MdzUzLXpSAoFP1H0bOI9aXDqveSvatT5vKcFh2Y=
++golang.org/x/text v0.3.0/go.mod h1:NqM8EUOU14njkJ3fqMW+pc6Ldnwhi/IjpwHt7yyuwOQ=
++golang.org/x/text v0.3.3/go.mod h1:5Zoc/QRtKVWzQhOtBMvqHzDpF6irO9z98xDceosuGiQ=
++golang.org/x/text v0.3.7/go.mod h1:u+2+/6zg+i71rQMx5EYifcz6MCKuco9NR6JIITiCfzQ=
++golang.org/x/text v0.7.0/go.mod h1:mrYo+phRRbMaCq/xk9113O4dZlRixOauAjOtrjsXDZ8=
++golang.org/x/text v0.14.0/go.mod h1:18ZOQIKpY8NJVqYksKHtTdi31H5itFRjB5/qKTNYzSU=
++golang.org/x/text v0.38.0 h1:sXmwo9DwP3OK9EZ7PqAdaooSGozfl/3a6/xJcbzPRhE=
++golang.org/x/text v0.38.0/go.mod h1:YXZt3QhHUKYT53r2lLKFIVi6Ao1jdzrTR/KQ09qyxF4=
++golang.org/x/tools v0.0.0-20180917221912-90fa682c2a6e/go.mod h1:n7NCudcB/nEzxVGmLbDWY5pfWTLqBcC2KZ6jyYvM4mQ=
++golang.org/x/tools v0.0.0-20191119224855-298f0cb1881e/go.mod h1:b+2E5dAYhXwXZwtnZ6UAqBI28+e2cm9otk0dWdXHAEo=
++golang.org/x/tools v0.1.12/go.mod h1:hNGJHUnrk76NpqgfD5Aqm5Crs+Hm0VOH/i9J2+nxYbc=
++golang.org/x/tools v0.6.0/go.mod h1:Xwgl3UAJ/d3gWutnCtw505GrjyAbvKui8lOU390QaIU=
++golang.org/x/xerrors v0.0.0-20190717185122-a985d3407aa7/go.mod h1:I/5z698sn9Ka8TeJc9MKroUUfqBBauWjQqLJ2OPfmY0=
+diff --git a/help.txt b/help.txt
+new file mode 100644
+index 0000000..49ed89e
+--- /dev/null
++++ b/help.txt
+@@ -0,0 +1,26 @@
++
++  walk v1.13.0
++
++  Usage: walk [path]
++
++    arrows, hjkl  Move cursor
++    enter         Enter directory
++    backspace     Exit directory
++    space         Toggle preview
++    esc, q        Exit with cd
++    ctrl+c        Exit without cd
++    /             Fuzzy search
++    d, delete     Delete file or dir
++    y             Copy to clipboard
++    .             Hide hidden files
++    ?             Show help
++
++  Flags:
++
++    --icons        display icons
++    --dir-only     show dirs only
++    --hide-hidden  hide hidden files
++    --preview      display preview
++    --with-border  preview with border
++    --fuzzy        fuzzy mode
++
+diff --git a/main.go b/main.go
+new file mode 100644
+index 0000000..13e4478
+--- /dev/null
++++ b/main.go
+@@ -0,0 +1,565 @@
++package main
++
++import (
++	"fmt"
++	"os"
++	"os/exec"
++	"path/filepath"
++	"sort"
++	"strings"
++
++	"github.com/gdamore/tcell/v2"
++)
++
++const version = "v1.13.0"
++
++const helpText = `
++  walk v1.13.0
++
++  Usage: walk [path]
++
++    arrows, hjkl  Move cursor
++    enter         Enter directory
++    backspace     Exit directory
++    space         Toggle preview
++    esc, q        Exit with cd
++    ctrl+c        Exit without cd
++    /             Fuzzy search
++    d, delete     Delete file or dir
++    y             Copy to clipboard
++    .             Hide hidden files
++    ?             Show help
++
++  Flags:
++
++    --icons        display icons
++    --dir-only     show dirs only
++    --hide-hidden  hide hidden files
++    --preview      display preview
++    --with-border  preview with border
++    --fuzzy        fuzzy mode
++
++`
++
++func main() {
++	o := parseArgs(os.Args[1:])
++
++	if o.exitCode != 0 {
++		os.Exit(o.exitCode)
++	}
++	if o.versionSeen {
++		os.Exit(0)
++	}
++
++	fd, err := openTTY()
++	if err != nil {
++		panic("could not open a new TTY: " + err.Error())
++	}
++	runTUI(fd, o)
++}
++
++type opts struct {
++	exitCode    int
++	versionSeen bool
++	icons       bool
++	dirOnly     bool
++	hideHidden  bool
++	preview     bool
++	withBorder  bool
++	fuzzy       bool
++	path        string
++}
++
++func parseArgs(args []string) *opts {
++	o := &opts{}
++	o.path = "."
++
++loop:
++	for i := 0; i < len(args); i++ {
++		a := args[i]
++		switch a {
++		case "-v", "--version":
++			fmt.Println(version)
++			o.versionSeen = true
++			break loop
++		case "-h", "--help":
++			fmt.Fprint(os.Stderr, helpText)
++			o.exitCode = 1
++			break loop
++		case "--icons":
++			o.icons = true
++		case "--dir-only":
++			o.dirOnly = true
++		case "--hide-hidden":
++			o.hideHidden = true
++		case "--preview":
++			o.preview = true
++		case "--with-border":
++			o.withBorder = true
++		case "--fuzzy":
++			o.fuzzy = true
++		case "-":
++			o.path = "."
++		default:
++			if !startsWith(a, "-") {
++				if o.path == "." {
++					o.path = a
++				}
++			}
++			// ignore unknown flags (lenient)
++		}
++	}
++
++	return o
++}
++
++func startsWith(s, prefix string) bool {
++	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
++}
++
++func openTTY() (int, error) {
++	f, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
++	if err != nil {
++		return 0, err
++	}
++	_ = f
++	return 0, nil
++}
++
++func runTUI(fd int, o *opts) {
++	screen, err := tcell.NewScreen()
++	if err != nil {
++		panic("could not create a new screen: " + err.Error())
++	}
++	if err = screen.Init(); err != nil {
++		panic("could not init the screen: " + err.Error())
++	}
++	defer screen.Fini()
++
++	a := &app{
++		screen:     screen,
++		opts:       o,
++		preview:    o.preview,
++		withBorder: o.withBorder,
++		fuzzy:      o.fuzzy,
++	}
++	a.mainColor = tcell.GetColor(strings.TrimSpace(os.Getenv("WALK_MAIN_COLOR")))
++	a.statusBar = os.Getenv("WALK_STATUS_BAR")
++	a.editor = pickEnv("WALK_EDITOR", "EDITOR")
++	a.openWith = os.Getenv("WALK_OPEN_WITH")
++	a.removeCmd = os.Getenv("WALK_REMOVE_CMD")
++
++	a.chdir(a.absPath(o.path))
++
++	for {
++		a.draw()
++		a.event()
++	}
++}
++
++type app struct {
++	screen     tcell.Screen
++	opts       *opts
++	dir        string
++	entries    []entry
++	cur        int
++	preview    bool
++	withBorder bool
++	fuzzy      bool
++	search     string
++	mainColor  tcell.Color
++	statusBar  string
++	editor     string
++	openWith   string
++	removeCmd  string
++}
++
++func (a *app) absPath(path string) string {
++	if path == "" {
++		path = "."
++	}
++	abs, err := filepath.Abs(path)
++	if err != nil {
++		abs = path
++	}
++	return abs
++}
++
++func (a *app) chdir(abs string) {
++	a.dir = abs
++	a.entries = loadEntries(abs, a.opts)
++	if a.cur >= len(a.entries) {
++		a.cur = 0
++	}
++}
++
++func (a *app) current() *entry {
++	if a.cur < 0 || a.cur >= len(a.entries) {
++		return nil
++	}
++	return &a.entries[a.cur]
++}
++
++func (a *app) mainStyle() tcell.Style {
++	fg := a.mainColor
++	if fg == 0 {
++		fg = tcell.ColorWhite
++	}
++	return tcell.StyleDefault.Background(fg).Foreground(tcell.ColorBlack)
++}
++
++func (a *app) draw() {
++	w, h := a.screen.Size()
++	a.screen.Clear()
++
++	// Status bar on row 0.
++	status := a.dir
++	if a.statusBar != "" {
++		status = a.statusBar
++	}
++	if w > 0 {
++		a.screen.PutStrStyled(0, 0, trunc(status, w), tcell.StyleDefault.Bold(true))
++	}
++
++	// File list starting at row 1.
++	listW := w
++	if a.preview {
++		listW = w / 2
++		if listW < 1 {
++			listW = 1
++		}
++	}
++	hl := a.mainStyle()
++	for i, e := range a.entries {
++		row := i + 1
++		if row >= h {
++			break
++		}
++		name := a.label(e)
++		if i == a.cur {
++			a.screen.PutStrStyled(0, row, trunc(name, listW), hl)
++		} else {
++			a.screen.PutStrStyled(0, row, trunc(name, listW), tcell.StyleDefault)
++		}
++	}
++
++	if a.preview {
++		a.drawPreview(w, h)
++	}
++
++	a.screen.ShowCursor(0, a.cur+1)
++	a.screen.Show()
++}
++
++func (a *app) label(e entry) string {
++	name := e.name
++	if e.isDir {
++		name = name + "/"
++	}
++	return name
++}
++
++func (a *app) drawPreview(w, h int) {
++	col := w / 2
++	if col < 1 {
++		col = 1
++	}
++	width := w - col
++	if width < 1 {
++		return
++	}
++	if a.withBorder {
++		for y := 0; y < h; y++ {
++			a.screen.PutStrStyled(col, y, "|", tcell.StyleDefault)
++		}
++	}
++	e := a.current()
++	if e == nil || e.isDir {
++		return
++	}
++	content, err := os.ReadFile(filepath.Join(a.dir, e.name))
++	if err != nil {
++		return
++	}
++	lines := strings.Split(string(content), "\n")
++	for i, ln := range lines {
++		y := i + 1
++		if y >= h {
++			break
++		}
++		a.screen.PutStrStyled(col, y, trunc(ln, width), tcell.StyleDefault)
++	}
++}
++
++func (a *app) event() {
++	ev := a.screen.PollEvent()
++	keyEv, ok := ev.(*tcell.EventKey)
++	if !ok {
++		return
++	}
++
++	switch keyEv.Key() {
++	case tcell.KeyCtrlC:
++		a.exit(false)
++		return
++	case tcell.KeyEscape:
++		a.exit(true)
++		return
++	}
++
++	shift := keyEv.Modifiers()&tcell.ModShift != 0
++	switch keyEv.Key() {
++	case tcell.KeyDown:
++		if shift {
++			a.jumpEnd()
++		} else {
++			a.moveDown()
++		}
++	case tcell.KeyUp:
++		if shift {
++			a.jumpStart()
++		} else {
++			a.moveUp()
++		}
++	case tcell.KeyLeft:
++		a.moveUp()
++	case tcell.KeyRight:
++		a.moveDown()
++	case tcell.KeyEnter:
++		a.enter()
++	case tcell.KeyBackspace, tcell.KeyBackspace2:
++		a.back()
++	case tcell.KeyDelete:
++		a.delete()
++	}
++
++	if !shift {
++		switch keyEv.Rune() {
++		case 'q':
++			a.exit(true)
++		case 'j':
++			a.moveDown()
++		case 'k':
++			a.moveUp()
++		case 'h':
++			a.moveUp()
++		case 'l':
++			a.moveDown()
++		case ' ':
++			a.preview = !a.preview
++		case '/':
++			a.fuzzy = !a.fuzzy
++			a.search = ""
++		case '.':
++			a.opts.hideHidden = !a.opts.hideHidden
++			a.chdir(a.dir)
++		case 'd':
++			a.delete()
++		case 'y':
++			a.yank()
++		case '?':
++			// show help
++		default:
++			if a.fuzzy {
++				a.search += string(keyEv.Rune())
++			}
++		}
++	}
++}
++
++func (a *app) moveDown() {
++	if a.cur < len(a.entries)-1 {
++		a.cur++
++	}
++}
++
++func (a *app) moveUp() {
++	if a.cur > 0 {
++		a.cur--
++	}
++}
++
++func (a *app) jumpEnd() {
++	if len(a.entries) > 0 {
++		a.cur = len(a.entries) - 1
++	}
++}
++
++func (a *app) jumpStart() {
++	a.cur = 0
++}
++
++func (a *app) enter() {
++	e := a.current()
++	if e == nil {
++		return
++	}
++	if e.isDir {
++		a.chdir(filepath.Join(a.dir, e.name))
++		return
++	}
++	a.openFile(e)
++}
++
++func (a *app) back() {
++	parent := filepath.Dir(a.dir)
++	if parent != a.dir {
++		a.chdir(parent)
++	}
++}
++
++func (a *app) delete() {
++	e := a.current()
++	if e == nil {
++		return
++	}
++	target := filepath.Join(a.dir, e.name)
++	cmd := a.removeCmd
++	if cmd == "" {
++		cmd = "rm"
++	}
++	args := strings.Fields(cmd)
++	args = append(args, target)
++	if len(args) > 0 {
++		c := exec.Command(args[0], args[1:]...)
++		c.Run()
++	}
++	a.chdir(a.dir)
++}
++
++func (a *app) yank() {
++	e := a.current()
++	if e == nil {
++		return
++	}
++	// Best-effort copy to clipboard; fall back to printing the path.
++	if p := clipboardTool(); p != "" {
++		args := strings.Fields(p)
++		if len(args) > 0 {
++			c := exec.Command(args[0], args[1:]...)
++			c.Stdin = strings.NewReader(filepath.Join(a.dir, e.name))
++			c.Run()
++			return
++		}
++	}
++	fmt.Fprint(os.Stdout, filepath.Join(a.dir, e.name))
++}
++
++func clipboardTool() string {
++	for _, name := range []string{"pbcopy", "wl-copy", "xclip", "xsel"} {
++		if path, err := exec.LookPath(name); err == nil {
++			return path
++		}
++	}
++	return ""
++}
++
++func (a *app) openFile(e *entry) {
++	// WALK_OPEN_WITH is "ext:cmd" pairs.
++	if a.openWith != "" {
++		ext := ext(e.name)
++		for _, pair := range strings.Split(a.openWith, " ") {
++			pair = strings.TrimSpace(pair)
++			if pair == "" {
++				continue
++			}
++			kv := strings.SplitN(pair, ":", 2)
++			if len(kv) == 2 && kv[0] == ext {
++				args := strings.Fields(kv[1])
++				if len(args) > 0 {
++					args = append(args, filepath.Join(a.dir, e.name))
++					c := exec.Command(args[0], args[1:]...)
++					c.Run()
++					return
++				}
++			}
++		}
++	}
++	editor := a.editor
++	if editor == "" {
++		editor = "vi"
++	}
++	args := strings.Fields(editor)
++	if len(args) > 0 {
++		args = append(args, filepath.Join(a.dir, e.name))
++		c := exec.Command(args[0], args[1:]...)
++		c.Run()
++	}
++}
++
++func (a *app) exit(withCd bool) {
++	a.screen.Fini()
++	if withCd {
++		fmt.Fprint(os.Stdout, "cd "+a.dir+"\n")
++	}
++}
++
++type entry struct {
++	name  string
++	isDir bool
++	size  int64
++}
++
++func loadEntries(abs string, o *opts) []entry {
++	infos, err := os.ReadDir(abs)
++	if err != nil {
++		return []entry{}
++	}
++	out := make([]entry, 0, len(infos))
++	for _, fi := range infos {
++		name := fi.Name()
++		if o.hideHidden && len(name) > 0 && name[0] == '.' {
++			continue
++		}
++		isDir := fi.IsDir()
++		if o.dirOnly && !isDir {
++			continue
++		}
++		size := int64(0)
++		if fi.Type().IsRegular() {
++			if info, err := fi.Info(); err == nil {
++				size = info.Size()
++			}
++		}
++		out = append(out, entry{name: name, isDir: isDir, size: size})
++	}
++	sort.Slice(out, func(i, j int) bool {
++		if out[i].isDir != out[j].isDir {
++			return out[i].isDir
++		}
++		return strings.ToLower(out[i].name) < strings.ToLower(out[j].name)
++	})
++	return out
++}
++
++func pickEnv(names ...string) string {
++	for _, n := range names {
++		if v := os.Getenv(n); v != "" {
++			return v
++		}
++	}
++	return ""
++}
++
++func ext(name string) string {
++	idx := strings.LastIndex(name, ".")
++	if idx < 0 {
++		return ""
++	}
++	return strings.ToLower(name[idx+1:])
++}
++
++func trunc(s string, width int) string {
++	if width <= 0 {
++		return ""
++	}
++	r := []rune(s)
++	if len(r) <= width {
++		return s
++	}
++	if width <= 1 {
++		return string(r[:width])
++	}
++	return string(r[:width-1]) + "…"
++}
++
+diff --git a/patch.txt b/patch.txt
+new file mode 100644
+index 0000000..c899230
+--- /dev/null
++++ b/patch.txt
+@@ -0,0 +1,677 @@
++diff --git a/compile.sh b/compile.sh
++new file mode 100644
++index 0000000..d3aaffc
++--- /dev/null
+++++ b/compile.sh
++@@ -0,0 +1,27 @@
+++#!/usr/bin/env bash
+++set -e
+++cd "$(dirname "$0")"
+++export GOPROXY=off
+++export GOSUMDB=off
+++export GOFLAGS=-mod=mod
+++export GOTOOLCHAIN=local
+++
+++# Find a go toolchain that is >= 1.24 (tcell v2.13.10 requires go >= 1.24.0)
+++find_go() {
+++    local g
+++    for g in "$(command -v go 2>/dev/null || true)" \
+++             /usr/local/go/bin/go \
+++             /usr/local/go/mod-cache/golang.org/toolchain@*/bin/go; do
+++        [ -x "$g" ] || continue
+++        local v
+++        v=$("$g" version 2>/dev/null | grep -oE 'go1\.[0-9]+' | head -1 || true)
+++        # accept any go1.24 or newer (major.minor >= 1.24)
+++        case "$v" in
+++            go1.2[4-9]|go1.[3-9][0-9]|go1.1[0-9][0-9]) echo "$g"; return 0;;
+++        esac
+++    done
+++}
+++GO=$(find_go)
+++[ -n "$GO" ] || { echo "no suitable go toolchain found" >&2; exit 1; }
+++echo "using go: $GO ($($GO version 2>&1))"
+++"$GO" build -o executable .
++diff --git a/go.mod b/go.mod
++new file mode 100644
++index 0000000..9b0028b
++--- /dev/null
+++++ b/go.mod
++@@ -0,0 +1,16 @@
+++module github.com/antonmedv/walk
+++
+++go 1.25.0
+++
+++require (
+++	github.com/gdamore/tcell/v2 v2.13.10
+++	github.com/rivo/uniseg v0.4.7
+++	golang.org/x/sys v0.46.0
+++	golang.org/x/term v0.44.0
+++	golang.org/x/text v0.38.0
+++)
+++
+++require (
+++	github.com/gdamore/encoding v1.0.1 // indirect
+++	github.com/lucasb-eyer/go-colorful v1.3.0 // indirect
+++)
++diff --git a/go.sum b/go.sum
++new file mode 100644
++index 0000000..fe2a5f3
++--- /dev/null
+++++ b/go.sum
++@@ -0,0 +1,45 @@
+++github.com/gdamore/encoding v1.0.1 h1:YzKZckdBL6jVt2Gc+5p82qhrGiqMdG/eNs6Wy0u3Uhw=
+++github.com/gdamore/encoding v1.0.1/go.mod h1:0Z0cMFinngz9kS1QfMjCP8TY7em3bZYeeklsSDPivEo=
+++github.com/gdamore/tcell/v2 v2.13.10 h1:Afs3JKt83HnhuUKdZ3MnxUgOqQRWftj5JyDqv1LLynA=
+++github.com/gdamore/tcell/v2 v2.13.10/go.mod h1:+Wfe208WDdB7INEtCsNrAN6O2m+wsTPk1RAovjaILlo=
+++github.com/lucasb-eyer/go-colorful v1.3.0 h1:2/yBRLdWBZKrf7gB40FoiKfAWYQ0lqNcbuQwVHXptag=
+++github.com/lucasb-eyer/go-colorful v1.3.0/go.mod h1:R4dSotOR9KMtayYi1e77YzuveK+i7ruzyGqttikkLy0=
+++github.com/rivo/uniseg v0.4.7 h1:WUdvkW8uEhrYfLC4ZzdpI2ztxP1I582+49Oc5Mq64VQ=
+++github.com/rivo/uniseg v0.4.7/go.mod h1:FN3SvrM+Zdj16jyLfmOkMNblXMcoc8DfTHruCPUcx88=
+++github.com/yuin/goldmark v1.4.13/go.mod h1:6yULJ656Px+3vBD8DxQVa3kxgyrAnzto9xy5taEt/CY=
+++golang.org/x/crypto v0.0.0-20190308221718-c2843e01d9a2/go.mod h1:djNgcEr1/C05ACkg1iLfiJU5Ep61QUkGW8qpdssI0+w=
+++golang.org/x/crypto v0.0.0-20210921155107-089bfa567519/go.mod h1:GvvjBRRGRdwPK5ydBHafDWAxML/pGHZbMvKqRZ5+Abc=
+++golang.org/x/mod v0.6.0-dev.0.20220419223038-86c51ed26bb4/go.mod h1:jJ57K6gSWd91VN4djpZkiMVwK6gcyfeH4XE8wZrZaV4=
+++golang.org/x/mod v0.8.0/go.mod h1:iBbtSCu2XBx23ZKBPSOrRkjjQPZFPuis4dIYUhu/chs=
+++golang.org/x/net v0.0.0-20190620200207-3b0461eec859/go.mod h1:z5CRVTTTmAJ677TzLLGU+0bjPO0LkuOLi4/5GtJWs/s=
+++golang.org/x/net v0.0.0-20210226172049-e18ecbb05110/go.mod h1:m0MpNAwzfU5UDzcl9v0D8zg8gWTRqZa9RBIspLL5mdg=
+++golang.org/x/net v0.0.0-20220722155237-a158d28d115b/go.mod h1:XRhObCWvk6IyKnWLug+ECip1KBveYUHfp+8e9klMJ9c=
+++golang.org/x/net v0.6.0/go.mod h1:2Tu9+aMcznHK/AK1HMvgo6xiTLG5rD5rZLDS+rp2Bjs=
+++golang.org/x/sync v0.0.0-20190423024810-112230192c58/go.mod h1:RxMgew5VJxzue5/jJTE5uejpjVlOe/izrB70Jof72aM=
+++golang.org/x/sync v0.0.0-20220722155255-886fb9371eb4/go.mod h1:RxMgew5VJxzue5/jJTE5uejpjVlOe/izrB70Jof72aM=
+++golang.org/x/sync v0.1.0/go.mod h1:RxMgew5VJxzue5/jJTE5uejpjVlOe/izrB70Jof72aM=
+++golang.org/x/sys v0.0.0-20190215142949-d0b11bdaac8a/go.mod h1:STP8DvDyc/dI5b8T5hshtkjS+E42TnysNCUPdjciGhY=
+++golang.org/x/sys v0.0.0-20201119102817-f84b799fce68/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
+++golang.org/x/sys v0.0.0-20210615035016-665e8c7367d1/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
+++golang.org/x/sys v0.0.0-20220520151302-bc2c85ada10a/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
+++golang.org/x/sys v0.0.0-20220722155257-8c9f86f7a55f/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
+++golang.org/x/sys v0.5.0/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
+++golang.org/x/sys v0.46.0 h1:noSf2Fq6F8DBgS+LysIkx7rIExoNHJsxOAtPp4rthXw=
+++golang.org/x/sys v0.46.0/go.mod h1:4GL1E5IUh+htKOUEOaiffhrAeqysfVGipDYzABqnCmw=
+++golang.org/x/term v0.0.0-20201126162022-7de9c90e9dd1/go.mod h1:bj7SfCRtBDWHUb9snDiAeCFNEtKQo2Wmx5Cou7ajbmo=
+++golang.org/x/term v0.0.0-20210927222741-03fcf44c2211/go.mod h1:jbD1KX2456YbFQfuXm/mYQcufACuNUgVhRMnK/tPxf8=
+++golang.org/x/term v0.5.0/go.mod h1:jMB1sMXY+tzblOD4FWmEbocvup2/aLOaQEp7JmGp78k=
+++golang.org/x/term v0.44.0 h1:0rLvDRCtNj0gZkyIXhCyOb2OAzEhLVqc4B+hrsBhrmc=
+++golang.org/x/term v0.44.0/go.mod h1:7ze4MdzUzLXpSAoFP1H0bOI9aXDqveSvatT5vKcFh2Y=
+++golang.org/x/text v0.3.0/go.mod h1:NqM8EUOU14njkJ3fqMW+pc6Ldnwhi/IjpwHt7yyuwOQ=
+++golang.org/x/text v0.3.3/go.mod h1:5Zoc/QRtKVWzQhOtBMvqHzDpF6irO9z98xDceosuGiQ=
+++golang.org/x/text v0.3.7/go.mod h1:u+2+/6zg+i71rQMx5EYifcz6MCKuco9NR6JIITiCfzQ=
+++golang.org/x/text v0.7.0/go.mod h1:mrYo+phRRbMaCq/xk9113O4dZlRixOauAjOtrjsXDZ8=
+++golang.org/x/text v0.14.0/go.mod h1:18ZOQIKpY8NJVqYksKHtTdi31H5itFRjB5/qKTNYzSU=
+++golang.org/x/text v0.38.0 h1:sXmwo9DwP3OK9EZ7PqAdaooSGozfl/3a6/xJcbzPRhE=
+++golang.org/x/text v0.38.0/go.mod h1:YXZt3QhHUKYT53r2lLKFIVi6Ao1jdzrTR/KQ09qyxF4=
+++golang.org/x/tools v0.0.0-20180917221912-90fa682c2a6e/go.mod h1:n7NCudcB/nEzxVGmLbDWY5pfWTLqBcC2KZ6jyYvM4mQ=
+++golang.org/x/tools v0.0.0-20191119224855-298f0cb1881e/go.mod h1:b+2E5dAYhXwXZwtnZ6UAqBI28+e2cm9otk0dWdXHAEo=
+++golang.org/x/tools v0.1.12/go.mod h1:hNGJHUnrk76NpqgfD5Aqm5Crs+Hm0VOH/i9J2+nxYbc=
+++golang.org/x/tools v0.6.0/go.mod h1:Xwgl3UAJ/d3gWutnCtw505GrjyAbvKui8lOU390QaIU=
+++golang.org/x/xerrors v0.0.0-20190717185122-a985d3407aa7/go.mod h1:I/5z698sn9Ka8TeJc9MKroUUfqBBauWjQqLJ2OPfmY0=
++diff --git a/main.go b/main.go
++new file mode 100644
++index 0000000..13e4478
++--- /dev/null
+++++ b/main.go
++@@ -0,0 +1,565 @@
+++package main
+++
+++import (
+++	"fmt"
+++	"os"
+++	"os/exec"
+++	"path/filepath"
+++	"sort"
+++	"strings"
+++
+++	"github.com/gdamore/tcell/v2"
+++)
+++
+++const version = "v1.13.0"
+++
+++const helpText = `
+++  walk v1.13.0
+++
+++  Usage: walk [path]
+++
+++    arrows, hjkl  Move cursor
+++    enter         Enter directory
+++    backspace     Exit directory
+++    space         Toggle preview
+++    esc, q        Exit with cd
+++    ctrl+c        Exit without cd
+++    /             Fuzzy search
+++    d, delete     Delete file or dir
+++    y             Copy to clipboard
+++    .             Hide hidden files
+++    ?             Show help
+++
+++  Flags:
+++
+++    --icons        display icons
+++    --dir-only     show dirs only
+++    --hide-hidden  hide hidden files
+++    --preview      display preview
+++    --with-border  preview with border
+++    --fuzzy        fuzzy mode
+++
+++`
+++
+++func main() {
+++	o := parseArgs(os.Args[1:])
+++
+++	if o.exitCode != 0 {
+++		os.Exit(o.exitCode)
+++	}
+++	if o.versionSeen {
+++		os.Exit(0)
+++	}
+++
+++	fd, err := openTTY()
+++	if err != nil {
+++		panic("could not open a new TTY: " + err.Error())
+++	}
+++	runTUI(fd, o)
+++}
+++
+++type opts struct {
+++	exitCode    int
+++	versionSeen bool
+++	icons       bool
+++	dirOnly     bool
+++	hideHidden  bool
+++	preview     bool
+++	withBorder  bool
+++	fuzzy       bool
+++	path        string
+++}
+++
+++func parseArgs(args []string) *opts {
+++	o := &opts{}
+++	o.path = "."
+++
+++loop:
+++	for i := 0; i < len(args); i++ {
+++		a := args[i]
+++		switch a {
+++		case "-v", "--version":
+++			fmt.Println(version)
+++			o.versionSeen = true
+++			break loop
+++		case "-h", "--help":
+++			fmt.Fprint(os.Stderr, helpText)
+++			o.exitCode = 1
+++			break loop
+++		case "--icons":
+++			o.icons = true
+++		case "--dir-only":
+++			o.dirOnly = true
+++		case "--hide-hidden":
+++			o.hideHidden = true
+++		case "--preview":
+++			o.preview = true
+++		case "--with-border":
+++			o.withBorder = true
+++		case "--fuzzy":
+++			o.fuzzy = true
+++		case "-":
+++			o.path = "."
+++		default:
+++			if !startsWith(a, "-") {
+++				if o.path == "." {
+++					o.path = a
+++				}
+++			}
+++			// ignore unknown flags (lenient)
+++		}
+++	}
+++
+++	return o
+++}
+++
+++func startsWith(s, prefix string) bool {
+++	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
+++}
+++
+++func openTTY() (int, error) {
+++	f, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+++	if err != nil {
+++		return 0, err
+++	}
+++	_ = f
+++	return 0, nil
+++}
+++
+++func runTUI(fd int, o *opts) {
+++	screen, err := tcell.NewScreen()
+++	if err != nil {
+++		panic("could not create a new screen: " + err.Error())
+++	}
+++	if err = screen.Init(); err != nil {
+++		panic("could not init the screen: " + err.Error())
+++	}
+++	defer screen.Fini()
+++
+++	a := &app{
+++		screen:     screen,
+++		opts:       o,
+++		preview:    o.preview,
+++		withBorder: o.withBorder,
+++		fuzzy:      o.fuzzy,
+++	}
+++	a.mainColor = tcell.GetColor(strings.TrimSpace(os.Getenv("WALK_MAIN_COLOR")))
+++	a.statusBar = os.Getenv("WALK_STATUS_BAR")
+++	a.editor = pickEnv("WALK_EDITOR", "EDITOR")
+++	a.openWith = os.Getenv("WALK_OPEN_WITH")
+++	a.removeCmd = os.Getenv("WALK_REMOVE_CMD")
+++
+++	a.chdir(a.absPath(o.path))
+++
+++	for {
+++		a.draw()
+++		a.event()
+++	}
+++}
+++
+++type app struct {
+++	screen     tcell.Screen
+++	opts       *opts
+++	dir        string
+++	entries    []entry
+++	cur        int
+++	preview    bool
+++	withBorder bool
+++	fuzzy      bool
+++	search     string
+++	mainColor  tcell.Color
+++	statusBar  string
+++	editor     string
+++	openWith   string
+++	removeCmd  string
+++}
+++
+++func (a *app) absPath(path string) string {
+++	if path == "" {
+++		path = "."
+++	}
+++	abs, err := filepath.Abs(path)
+++	if err != nil {
+++		abs = path
+++	}
+++	return abs
+++}
+++
+++func (a *app) chdir(abs string) {
+++	a.dir = abs
+++	a.entries = loadEntries(abs, a.opts)
+++	if a.cur >= len(a.entries) {
+++		a.cur = 0
+++	}
+++}
+++
+++func (a *app) current() *entry {
+++	if a.cur < 0 || a.cur >= len(a.entries) {
+++		return nil
+++	}
+++	return &a.entries[a.cur]
+++}
+++
+++func (a *app) mainStyle() tcell.Style {
+++	fg := a.mainColor
+++	if fg == 0 {
+++		fg = tcell.ColorWhite
+++	}
+++	return tcell.StyleDefault.Background(fg).Foreground(tcell.ColorBlack)
+++}
+++
+++func (a *app) draw() {
+++	w, h := a.screen.Size()
+++	a.screen.Clear()
+++
+++	// Status bar on row 0.
+++	status := a.dir
+++	if a.statusBar != "" {
+++		status = a.statusBar
+++	}
+++	if w > 0 {
+++		a.screen.PutStrStyled(0, 0, trunc(status, w), tcell.StyleDefault.Bold(true))
+++	}
+++
+++	// File list starting at row 1.
+++	listW := w
+++	if a.preview {
+++		listW = w / 2
+++		if listW < 1 {
+++			listW = 1
+++		}
+++	}
+++	hl := a.mainStyle()
+++	for i, e := range a.entries {
+++		row := i + 1
+++		if row >= h {
+++			break
+++		}
+++		name := a.label(e)
+++		if i == a.cur {
+++			a.screen.PutStrStyled(0, row, trunc(name, listW), hl)
+++		} else {
+++			a.screen.PutStrStyled(0, row, trunc(name, listW), tcell.StyleDefault)
+++		}
+++	}
+++
+++	if a.preview {
+++		a.drawPreview(w, h)
+++	}
+++
+++	a.screen.ShowCursor(0, a.cur+1)
+++	a.screen.Show()
+++}
+++
+++func (a *app) label(e entry) string {
+++	name := e.name
+++	if e.isDir {
+++		name = name + "/"
+++	}
+++	return name
+++}
+++
+++func (a *app) drawPreview(w, h int) {
+++	col := w / 2
+++	if col < 1 {
+++		col = 1
+++	}
+++	width := w - col
+++	if width < 1 {
+++		return
+++	}
+++	if a.withBorder {
+++		for y := 0; y < h; y++ {
+++			a.screen.PutStrStyled(col, y, "|", tcell.StyleDefault)
+++		}
+++	}
+++	e := a.current()
+++	if e == nil || e.isDir {
+++		return
+++	}
+++	content, err := os.ReadFile(filepath.Join(a.dir, e.name))
+++	if err != nil {
+++		return
+++	}
+++	lines := strings.Split(string(content), "\n")
+++	for i, ln := range lines {
+++		y := i + 1
+++		if y >= h {
+++			break
+++		}
+++		a.screen.PutStrStyled(col, y, trunc(ln, width), tcell.StyleDefault)
+++	}
+++}
+++
+++func (a *app) event() {
+++	ev := a.screen.PollEvent()
+++	keyEv, ok := ev.(*tcell.EventKey)
+++	if !ok {
+++		return
+++	}
+++
+++	switch keyEv.Key() {
+++	case tcell.KeyCtrlC:
+++		a.exit(false)
+++		return
+++	case tcell.KeyEscape:
+++		a.exit(true)
+++		return
+++	}
+++
+++	shift := keyEv.Modifiers()&tcell.ModShift != 0
+++	switch keyEv.Key() {
+++	case tcell.KeyDown:
+++		if shift {
+++			a.jumpEnd()
+++		} else {
+++			a.moveDown()
+++		}
+++	case tcell.KeyUp:
+++		if shift {
+++			a.jumpStart()
+++		} else {
+++			a.moveUp()
+++		}
+++	case tcell.KeyLeft:
+++		a.moveUp()
+++	case tcell.KeyRight:
+++		a.moveDown()
+++	case tcell.KeyEnter:
+++		a.enter()
+++	case tcell.KeyBackspace, tcell.KeyBackspace2:
+++		a.back()
+++	case tcell.KeyDelete:
+++		a.delete()
+++	}
+++
+++	if !shift {
+++		switch keyEv.Rune() {
+++		case 'q':
+++			a.exit(true)
+++		case 'j':
+++			a.moveDown()
+++		case 'k':
+++			a.moveUp()
+++		case 'h':
+++			a.moveUp()
+++		case 'l':
+++			a.moveDown()
+++		case ' ':
+++			a.preview = !a.preview
+++		case '/':
+++			a.fuzzy = !a.fuzzy
+++			a.search = ""
+++		case '.':
+++			a.opts.hideHidden = !a.opts.hideHidden
+++			a.chdir(a.dir)
+++		case 'd':
+++			a.delete()
+++		case 'y':
+++			a.yank()
+++		case '?':
+++			// show help
+++		default:
+++			if a.fuzzy {
+++				a.search += string(keyEv.Rune())
+++			}
+++		}
+++	}
+++}
+++
+++func (a *app) moveDown() {
+++	if a.cur < len(a.entries)-1 {
+++		a.cur++
+++	}
+++}
+++
+++func (a *app) moveUp() {
+++	if a.cur > 0 {
+++		a.cur--
+++	}
+++}
+++
+++func (a *app) jumpEnd() {
+++	if len(a.entries) > 0 {
+++		a.cur = len(a.entries) - 1
+++	}
+++}
+++
+++func (a *app) jumpStart() {
+++	a.cur = 0
+++}
+++
+++func (a *app) enter() {
+++	e := a.current()
+++	if e == nil {
+++		return
+++	}
+++	if e.isDir {
+++		a.chdir(filepath.Join(a.dir, e.name))
+++		return
+++	}
+++	a.openFile(e)
+++}
+++
+++func (a *app) back() {
+++	parent := filepath.Dir(a.dir)
+++	if parent != a.dir {
+++		a.chdir(parent)
+++	}
+++}
+++
+++func (a *app) delete() {
+++	e := a.current()
+++	if e == nil {
+++		return
+++	}
+++	target := filepath.Join(a.dir, e.name)
+++	cmd := a.removeCmd
+++	if cmd == "" {
+++		cmd = "rm"
+++	}
+++	args := strings.Fields(cmd)
+++	args = append(args, target)
+++	if len(args) > 0 {
+++		c := exec.Command(args[0], args[1:]...)
+++		c.Run()
+++	}
+++	a.chdir(a.dir)
+++}
+++
+++func (a *app) yank() {
+++	e := a.current()
+++	if e == nil {
+++		return
+++	}
+++	// Best-effort copy to clipboard; fall back to printing the path.
+++	if p := clipboardTool(); p != "" {
+++		args := strings.Fields(p)
+++		if len(args) > 0 {
+++			c := exec.Command(args[0], args[1:]...)
+++			c.Stdin = strings.NewReader(filepath.Join(a.dir, e.name))
+++			c.Run()
+++			return
+++		}
+++	}
+++	fmt.Fprint(os.Stdout, filepath.Join(a.dir, e.name))
+++}
+++
+++func clipboardTool() string {
+++	for _, name := range []string{"pbcopy", "wl-copy", "xclip", "xsel"} {
+++		if path, err := exec.LookPath(name); err == nil {
+++			return path
+++		}
+++	}
+++	return ""
+++}
+++
+++func (a *app) openFile(e *entry) {
+++	// WALK_OPEN_WITH is "ext:cmd" pairs.
+++	if a.openWith != "" {
+++		ext := ext(e.name)
+++		for _, pair := range strings.Split(a.openWith, " ") {
+++			pair = strings.TrimSpace(pair)
+++			if pair == "" {
+++				continue
+++			}
+++			kv := strings.SplitN(pair, ":", 2)
+++			if len(kv) == 2 && kv[0] == ext {
+++				args := strings.Fields(kv[1])
+++				if len(args) > 0 {
+++					args = append(args, filepath.Join(a.dir, e.name))
+++					c := exec.Command(args[0], args[1:]...)
+++					c.Run()
+++					return
+++				}
+++			}
+++		}
+++	}
+++	editor := a.editor
+++	if editor == "" {
+++		editor = "vi"
+++	}
+++	args := strings.Fields(editor)
+++	if len(args) > 0 {
+++		args = append(args, filepath.Join(a.dir, e.name))
+++		c := exec.Command(args[0], args[1:]...)
+++		c.Run()
+++	}
+++}
+++
+++func (a *app) exit(withCd bool) {
+++	a.screen.Fini()
+++	if withCd {
+++		fmt.Fprint(os.Stdout, "cd "+a.dir+"\n")
+++	}
+++}
+++
+++type entry struct {
+++	name  string
+++	isDir bool
+++	size  int64
+++}
+++
+++func loadEntries(abs string, o *opts) []entry {
+++	infos, err := os.ReadDir(abs)
+++	if err != nil {
+++		return []entry{}
+++	}
+++	out := make([]entry, 0, len(infos))
+++	for _, fi := range infos {
+++		name := fi.Name()
+++		if o.hideHidden && len(name) > 0 && name[0] == '.' {
+++			continue
+++		}
+++		isDir := fi.IsDir()
+++		if o.dirOnly && !isDir {
+++			continue
+++		}
+++		size := int64(0)
+++		if fi.Type().IsRegular() {
+++			if info, err := fi.Info(); err == nil {
+++				size = info.Size()
+++			}
+++		}
+++		out = append(out, entry{name: name, isDir: isDir, size: size})
+++	}
+++	sort.Slice(out, func(i, j int) bool {
+++		if out[i].isDir != out[j].isDir {
+++			return out[i].isDir
+++		}
+++		return strings.ToLower(out[i].name) < strings.ToLower(out[j].name)
+++	})
+++	return out
+++}
+++
+++func pickEnv(names ...string) string {
+++	for _, n := range names {
+++		if v := os.Getenv(n); v != "" {
+++			return v
+++		}
+++	}
+++	return ""
+++}
+++
+++func ext(name string) string {
+++	idx := strings.LastIndex(name, ".")
+++	if idx < 0 {
+++		return ""
+++	}
+++	return strings.ToLower(name[idx+1:])
+++}
+++
+++func trunc(s string, width int) string {
+++	if width <= 0 {
+++		return ""
+++	}
+++	r := []rune(s)
+++	if len(r) <= width {
+++		return s
+++	}
+++	if width <= 1 {
+++		return string(r[:width])
+++	}
+++	return string(r[:width-1]) + "…"
+++}
+++

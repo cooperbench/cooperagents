@@ -47,7 +47,7 @@ from cooperagents.env.docker import DockerEnv
 from cooperagents.harness import UnifiedHarness
 from cooperagents.types import Assignment, TeamSpec
 
-ADAPTER = get_adapter("programbench")
+ADAPTER = get_adapter(os.getenv("COOPER_BENCHMARK", "programbench"))
 
 
 def _score(instance: str, patch: str) -> tuple:

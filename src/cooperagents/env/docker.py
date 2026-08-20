@@ -114,6 +114,15 @@ class DockerEnv(Environment):
         self.execute("git add -A")
         base = self._base_commit or "HEAD"
         res = self.execute(f"git diff --cached {base}")
+        if not res.stdout.strip():
+            # Agents sometimes stash their work to "verify a clean patch"
+            # right before finishing (observed: tree back at base, 1000+
+            # lines sitting in the stash). Restore and re-collect.
+            has_stash = self.execute("git stash list | head -1").stdout.strip()
+            if has_stash:
+                self.execute("git stash pop -q 2>/dev/null || git checkout stash@{0} -- . 2>/dev/null")
+                self.execute("git add -A")
+                res = self.execute(f"git diff --cached {base}")
         return res.stdout
 
     def cleanup(self) -> None:

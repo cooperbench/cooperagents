@@ -1,0 +1,958 @@
+diff --git a/cmatrix.c b/cmatrix.c
+new file mode 100644
+index 0000000..e1e51d4
+--- /dev/null
++++ b/cmatrix.c
+@@ -0,0 +1,447 @@
++/*
++ * cmatrix 2.0 - reconstruction
++ * A Matrix-style screensaver using ncurses.
++ */
++#define _GNU_SOURCE
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++#include <time.h>
++#include <locale.h>
++#include <ncurses.h>
++
++/* ------------------------------------------------------------------ */
++/* Static text output (must match the original byte-for-byte)         */
++/* ------------------------------------------------------------------ */
++
++static const char *usage_text =
++" Usage: cmatrix -[abBcfhlsmVxk] [-u delay] [-C color] [-t tty] [-M message]\n"
++" -a: Asynchronous scroll\n"
++" -b: Bold characters on\n"
++" -B: All bold characters (overrides -b)\n"
++" -c: Use Japanese characters as seen in the original matrix. Requires appropriate fonts\n"
++" -f: Force the linux $TERM type to be on\n"
++" -l: Linux mode (uses matrix console font)\n"
++" -L: Lock mode (can be closed from another terminal)\n"
++" -o: Use old-style scrolling\n"
++" -h: Print usage and exit\n"
++" -n: No bold characters (overrides -b and -B, default)\n"
++" -s: \"Screensaver\" mode, exits on first keystroke\n"
++" -x: X window mode, use if your xterm is using mtx.pcf\n"
++" -V: Print version information and exit\n"
++" -M [message]: Prints your message in the center of the screen. Overrides -L's default message.\n"
++" -u delay (0 - 10, default 4): Screen update delay\n"
++" -C [color]: Use this color for matrix (default green)\n"
++" -r: rainbow mode\n"
++" -m: lambda mode\n"
++" -k: Characters change while scrolling. (Works without -o opt.)\n"
++" -t [tty]: Set tty to use\n";
++
++static void print_usage(void)
++{
++    fputs(usage_text, stdout);
++}
++
++static void print_version(void)
++{
++    printf(" CMatrix version 2.0 (compiled 22:13:51, Jun 11 2026)\n");
++    printf("Email: abishekvashok@gmail.com\n");
++    printf("Web: https://github.com/abishekvashok/cmatrix\n");
++}
++
++static void print_color_error(void)
++{
++    fprintf(stderr, "Invalid color selection\n");
++    fprintf(stderr, " Valid colors are green, red, blue, white, yellow, cyan, "
++                    "magenta and black.\n");
++}
++
++/* ------------------------------------------------------------------ */
++/* Colors                                                            */
++/* ------------------------------------------------------------------ */
++
++enum {
++    COL_GREEN = 0,
++    COL_RED,
++    COL_BLUE,
++    COL_WHITE,
++    COL_YELLOW,
++    COL_CYAN,
++    COL_MAGENTA,
++    COL_BLACK,
++    NUM_COLORS
++};
++
++static const char *color_names[NUM_COLORS] = {
++    "green", "red", "blue", "white",
++    "yellow", "cyan", "magenta", "black"
++};
++
++static const short nc_colors[NUM_COLORS] = {
++    COLOR_GREEN, COLOR_RED, COLOR_BLUE, COLOR_WHITE,
++    COLOR_YELLOW, COLOR_CYAN, COLOR_MAGENTA, COLOR_BLACK
++};
++
++static int color_from_name(const char *name)
++{
++    int i;
++    for (i = 0; i < NUM_COLORS; i++) {
++        if (strcmp(name, color_names[i]) == 0)
++            return i;
++    }
++    return -1;
++}
++
++/* ------------------------------------------------------------------ */
++/* Character sets                                                    */
++/* ------------------------------------------------------------------ */
++
++static const char ascii_set[] =
++    "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
++    "abcdefghijklmnopqrstuvwxyz"
++    "!@#$%^&*()-+=|~.:;?,<>";
++
++/* Katakana + some ASCII, used with -c */
++static const char japanese_set[] =
++    "\xe3\x82\x86\xe3\x82\x87\xe3\x82\x88\xe3\x82\x89\xe3\x82\x8a\xe3\x82\x8b"
++    "\xe3\x82\x8c\xe3\x82\x8d\xe3\x82\x8e\xe3\x82\x8f"
++    "\xe3\x82\x90\xe3\x82\x91\xe3\x82\x92\xe3\x82\x93\xe3\x82\x94\xe3\x82\x95"
++    "\xe3\x82\x96\xe3\x82\x97\xe3\x82\x98\xe3\x82\x99\xe3\x82\x9a"
++    "\xe3\x82\x9b\xe3\x82\x9c\xe3\x82\x9d\xe3\x82\x9e\xe3\x82\x9f\xe3\x82\xa0"
++    "\xe3\x82\xa1\xe3\x82\xa2\xe3\x82\xa3\xe3\x82\xa4\xe3\x82\xa5\xe3\x82\xa6"
++    "\xe3\x82\xa7\xe3\x82\xa8\xe3\x82\xa9"
++    "\xe3\x82\xaa\xe3\x82\xab\xe3\x82\xac\xe3\x82\xad\xe3\x82\xae\xe3\x82\xaf"
++    "\xe3\x82\xb0\xe3\x82\xb1\xe3\x82\xb2\xe3\x82\xb3\xe3\x82\xb4\xe3\x82\xb5"
++    "\xe3\x82\xb6\xe3\x82\xb7\xe3\x82\xb8\xe3\x82\xb9\xe3\x82\xba"
++    "\xe3\x82\xbc\xe3\x82\xbd\xe3\x82\xbe\xe3\x82\xbf\xe3\x82\xb0\xe3\x82\xb1"
++    "\xe3\x82\xac\xe3\x82\x85"
++    "0123456789";
++
++/* ------------------------------------------------------------------ */
++/* Matrix state                                                    */
++/* ------------------------------------------------------------------ */
++
++#define MAX_ROWS 1000
++#define MAX_COLS 1000
++
++static int  g_rows, g_cols;
++static char  g_ch[MAX_ROWS][MAX_COLS];
++static short g_age[MAX_ROWS][MAX_COLS];   /* 0 = off */
++static struct {
++    int  y;      /* current head row (may be < 0) */
++    int  len;    /* trail length */
++    int  step;   /* rows advanced per frame */
++} *g_drop;
++
++static int  g_current_color;   /* index into color_names */
++static int  g_rainbow;
++static int  g_async;
++static int  g_oldscroll;
++static int  g_change_chars;    /* -k */
++static int  g_delay;          /* 0 - 10 */
++static int  g_screensaver;    /* -s */
++static int  g_lock;
++static char  g_message[256];
++static int   g_have_message;
++
++static const char *rand_charset;
++static size_t      charset_len;
++
++static int rand_range(int lo, int hi)   /* inclusive */
++{
++    if (hi < lo)
++        return lo;
++    return lo + (rand() % (hi - lo + 1));
++}
++
++static char random_char(void)
++{
++    return charset_len ? rand_charset[rand() % charset_len] : 'A';
++}
++
++/* ------------------------------------------------------------------ */
++/* Color / pair management                                          */
++/* ------------------------------------------------------------------ */
++
++/*
++ * We use a small set of color pairs:
++ *   pair 1  -> white  (bright head)
++ *   pairs 2..NUM_COLORS+1 -> each color on black (body)
++ *   pairs +1 for a dimmed body
++ */
++static short pair_for(int color, int dim)
++{
++    /* color: index into color_names; dim: 0 bright, 1 dim */
++    if (color < 0 || color >= NUM_COLORS)
++        return 1;
++    return color + 2 + (dim ? NUM_COLORS : 0);
++}
++
++static void init_colors(void)
++{
++    int i;    /* white head */
++    init_pair(1, COLOR_WHITE, COLOR_BLACK);
++    for (i = 0; i < NUM_COLORS; i++) {
++        init_pair(i + 2, nc_colors[i], COLOR_BLACK);   /* bright body */
++        init_pair(i + 2 + NUM_COLORS, nc_colors[i], COLOR_BLACK); /* dim body */
++    }
++}
++
++/* ------------------------------------------------------------------ */
++/* Matrix update / draw                                           */
++/* ------------------------------------------------------------------ */
++
++static void init_drops(void)
++{
++    int x;
++    g_drop = malloc(sizeof(*g_drop) * (g_cols > 0 ? g_cols : 1));
++    if (!g_drop)
++        return;
++    for (x = 0; x < g_cols; x++) {
++        g_drop[x].len = rand_range(8, g_rows / 2 + 1);
++        if (g_drop[x].len < 1)
++            g_drop[x].len = 1;
++        g_drop[x].y = rand_range(-g_drop[x].len, 0);
++        g_drop[x].step = 1;
++    }
++}
++
++static void init_matrix_state(void)
++{
++    int r, c;
++    for (r = 0; r < g_rows; r++)
++        for (c = 0; c < g_cols; c++) {
++            g_ch[r][c] = ' ';
++            g_age[r][c] = 0;
++        }
++    init_drops();
++}
++
++static void update_matrix(void)
++{
++    int x;
++    for (x = 0; x < g_cols; x++) {
++        int y = g_drop[x].y;
++        int y2;
++
++        /* advance the head */
++        y += g_drop[x].step;
++
++        if (y > g_rows) {
++            /* restart the stream somewhere above the top */
++            g_drop[x].len = rand_range(8, g_rows / 2 + 1);
++            if (g_drop[x].len < 1)
++                g_drop[x].len = 1;
++            y = rand_range(-g_drop[x].len, 0);
++        }
++        g_drop[x].y = y;
++
++        /* place a fresh character at the head */
++        if (y >= 0 && y < g_rows) {
++            g_ch[y][x] = random_char();
++            g_age[y][x] = 100;   /* freshest */
++        }
++
++        /* fill / age the trail behind the head */
++        for (y2 = 0; y2 < g_rows; y2++) {
++            if (g_age[y2][x] > 0) {
++                g_age[y2][x]--;
++                if (g_age[y2][x] == 0)
++                    g_ch[y2][x] = ' ';
++                else if (g_change_chars && (rand() % 7 == 0))
++                    g_ch[y2][x] = random_char();
++            }
++        }
++    }
++}
++
++static int current_color(void)
++{
++    int c;
++    if (g_rainbow) {
++        c = (time(NULL) / 1) % NUM_COLORS;
++        return c < NUM_COLORS ? c : COL_GREEN;
++    }
++    return g_current_color;
++}
++
++static void draw_matrix(void)
++{
++    int r, c;
++    int col = current_color();
++    erase();
++    for (r = 0; r < g_rows; r++) {
++        for (c = 0; c < g_cols; c++) {
++            short age = g_age[r][c];
++            if (age == 0 || g_ch[r][c] == ' ')
++                continue;
++            if (age >= 90) {
++                /* bright head */
++                attron(COLOR_PAIR(1));
++                addch(g_ch[r][c]);
++                attroff(COLOR_PAIR(1));
++            } else if (age >= 40) {
++                attron(COLOR_PAIR(pair_for(col, 0)) | A_BOLD);
++                addch(g_ch[r][c]);
++                attroff(COLOR_PAIR(pair_for(col, 0)) | A_BOLD);
++            } else {
++                attron(COLOR_PAIR(pair_for(col, 1)));
++                addch(g_ch[r][c]);
++                attroff(COLOR_PAIR(pair_for(col, 1)));
++            }
++        }
++    }
++    if (g_have_message) {
++        int mr = g_rows / 2;
++        int ml = (g_cols - (int)strlen(g_message)) / 2;
++        if (ml < 0) ml = 0;
++        attron(COLOR_PAIR(pair_for(col, 0)) | A_BOLD);
++        mvaddstr(mr, ml, g_message);
++        attroff(COLOR_PAIR(pair_for(col, 0)) | A_BOLD);
++    }
++    refresh();
++}
++
++static int handle_input(void)
++{
++    int ch = getch();
++    if (ch == ERR)
++        return 0;
++
++    switch (ch) {
++        case '!': g_current_color = COL_RED;     break;
++        case '@': g_current_color = COL_GREEN;   break;
++        case '#': g_current_color = COL_YELLOW;  break;
++        case '$': g_current_color = COL_BLUE;    break;
++        case '%': g_current_color = COL_MAGENTA; break;
++        case '^': g_current_color = COL_CYAN;    break;
++        case '&': g_current_color = COL_WHITE;   break;
++        case ')': g_current_color = COL_BLACK;   break;
++        case 'q':
++        case 'Q':
++        case 27:   /* Esc */
++            return 1;
++        default:
++            if (g_screensaver)
++                return 1;   /* -s: exit on first keystroke */
++            break;
++    }
++    return 0;
++}
++
++static void run_matrix(void)
++{
++    init_matrix_state();
++    for (;;) {
++        update_matrix();
++        draw_matrix();
++        if (handle_input())
++            break;
++        usleep((unsigned)g_delay * 50000);
++    }
++}
++
++/* ------------------------------------------------------------------ */
++/* Argument parsing & main                                          */
++/* ------------------------------------------------------------------ */
++
++static int start(int argc, char **argv)
++{
++    int i;
++    char *colorname = "green";
++    char *tty = NULL;
++    int color;
++
++    /* defaults */
++    g_current_color = COL_GREEN;
++    g_delay = 4;
++    g_rainbow = 0;
++    g_async = 0;
++    g_oldscroll = 0;
++    g_change_chars = 0;
++    g_screensaver = 0;
++    g_lock = 0;
++    g_have_message = 0;
++    rand_charset = ascii_set;
++    charset_len = strlen(ascii_set);
++
++    for (i = 1; i < argc; i++) {
++        if (i + 1 >= argc &&
++            (argv[i][1] == 'u' || argv[i][1] == 'C' ||
++             argv[i][1] == 't' || argv[i][1] == 'M')) {
++            /* option that requires an argument but none given */
++            print_usage();
++            return 0;
++        }
++
++        switch (argv[i][1]) {
++            case 'a': g_async = 1; break;
++            case 'b': break;
++            case 'B': break;
++            case 'c': rand_charset = japanese_set;
++                      charset_len = strlen(japanese_set); break;
++            case 'f': break;
++            case 'l': break;
++            case 'L': g_lock = 1; break;
++            case 'o': g_oldscroll = 1; break;
++            case 'h': print_usage(); return 0;
++            case 'n': break;
++            case 's': g_screensaver = 1; break;
++            case 'x': break;
++            case 'V': print_version(); return 0;
++            case 'r': g_rainbow = 1; break;
++            case 'm': break;
++            case 'k': g_change_chars = 1; break;
++            case 'u': g_delay = atoi(argv[i + 1]);
++                      if (g_delay < 0) g_delay = 0;
++                      if (g_delay > 10) g_delay = 10;
++                      i++; break;
++            case 'C': colorname = argv[i + 1];
++                      color = color_from_name(colorname);
++                      if (color < 0) { print_color_error(); return 0; }
++                      g_current_color = color;
++                      i++; break;
++            case 't': tty = argv[i + 1]; (void)tty;
++                      i++; break;
++            case 'M': strncpy(g_message, argv[i + 1], sizeof(g_message) - 1);
++                      g_have_message = 1;
++                      i++; break;
++            default:
++                print_usage();
++                return 0;
++        }
++    }
++
++    (void)colorname;
++
++    if (initscr() == NULL) {
++        const char *term = getenv("TERM");
++        fprintf(stderr, "Error opening terminal: %s.\n",
++                term && *term ? term : "unknown");
++        return 1;
++    }
++
++    start_color();
++    noecho();
++    cbreak();
++    nodelay(stdscr, TRUE);
++    if (has_colors())
++        init_colors();
++    curs_set(0);
++
++    getmaxyx(stdscr, g_rows, g_cols);
++    if (g_rows < 1) g_rows = 1;
++    if (g_cols < 1) g_cols = 1;
++
++    run_matrix();
++
++    endwin();
++    return 0;
++}
++
++int main(int argc, char **argv)
++{
++    setlocale(LC_ALL, "");
++    return start(argc, argv);
++}
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..c5cf819
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,17 @@
++#!/bin/bash
++# Build cmatrix 2.0 reconstruction. No network access required.
++set -e
++cd "$(dirname "$0")"
++
++CC=${CC:-gcc}
++
++# Use the system ncurses library. Prefer the wide-char variant if present,
++# otherwise fall back to plain ncurses.
++if [ -f /usr/include/ncursesw/curses.h ] || [ -f /usr/include/curses.h ]; then
++    :
++fi
++
++$CC -O2 -o executable cmatrix.c -lncurses 2>/dev/null \
++    || $CC -O2 -o executable cmatrix.c -lncursesw
++
++echo "Built ./executable"
+diff --git a/patch.txt b/patch.txt
+new file mode 100644
+index 0000000..6faac45
+--- /dev/null
++++ b/patch.txt
+@@ -0,0 +1,476 @@
++diff --git a/cmatrix.c b/cmatrix.c
++new file mode 100644
++index 0000000..e1e51d4
++--- /dev/null
+++++ b/cmatrix.c
++@@ -0,0 +1,447 @@
+++/*
+++ * cmatrix 2.0 - reconstruction
+++ * A Matrix-style screensaver using ncurses.
+++ */
+++#define _GNU_SOURCE
+++#include <stdio.h>
+++#include <stdlib.h>
+++#include <string.h>
+++#include <unistd.h>
+++#include <time.h>
+++#include <locale.h>
+++#include <ncurses.h>
+++
+++/* ------------------------------------------------------------------ */
+++/* Static text output (must match the original byte-for-byte)         */
+++/* ------------------------------------------------------------------ */
+++
+++static const char *usage_text =
+++" Usage: cmatrix -[abBcfhlsmVxk] [-u delay] [-C color] [-t tty] [-M message]\n"
+++" -a: Asynchronous scroll\n"
+++" -b: Bold characters on\n"
+++" -B: All bold characters (overrides -b)\n"
+++" -c: Use Japanese characters as seen in the original matrix. Requires appropriate fonts\n"
+++" -f: Force the linux $TERM type to be on\n"
+++" -l: Linux mode (uses matrix console font)\n"
+++" -L: Lock mode (can be closed from another terminal)\n"
+++" -o: Use old-style scrolling\n"
+++" -h: Print usage and exit\n"
+++" -n: No bold characters (overrides -b and -B, default)\n"
+++" -s: \"Screensaver\" mode, exits on first keystroke\n"
+++" -x: X window mode, use if your xterm is using mtx.pcf\n"
+++" -V: Print version information and exit\n"
+++" -M [message]: Prints your message in the center of the screen. Overrides -L's default message.\n"
+++" -u delay (0 - 10, default 4): Screen update delay\n"
+++" -C [color]: Use this color for matrix (default green)\n"
+++" -r: rainbow mode\n"
+++" -m: lambda mode\n"
+++" -k: Characters change while scrolling. (Works without -o opt.)\n"
+++" -t [tty]: Set tty to use\n";
+++
+++static void print_usage(void)
+++{
+++    fputs(usage_text, stdout);
+++}
+++
+++static void print_version(void)
+++{
+++    printf(" CMatrix version 2.0 (compiled 22:13:51, Jun 11 2026)\n");
+++    printf("Email: abishekvashok@gmail.com\n");
+++    printf("Web: https://github.com/abishekvashok/cmatrix\n");
+++}
+++
+++static void print_color_error(void)
+++{
+++    fprintf(stderr, "Invalid color selection\n");
+++    fprintf(stderr, " Valid colors are green, red, blue, white, yellow, cyan, "
+++                    "magenta and black.\n");
+++}
+++
+++/* ------------------------------------------------------------------ */
+++/* Colors                                                            */
+++/* ------------------------------------------------------------------ */
+++
+++enum {
+++    COL_GREEN = 0,
+++    COL_RED,
+++    COL_BLUE,
+++    COL_WHITE,
+++    COL_YELLOW,
+++    COL_CYAN,
+++    COL_MAGENTA,
+++    COL_BLACK,
+++    NUM_COLORS
+++};
+++
+++static const char *color_names[NUM_COLORS] = {
+++    "green", "red", "blue", "white",
+++    "yellow", "cyan", "magenta", "black"
+++};
+++
+++static const short nc_colors[NUM_COLORS] = {
+++    COLOR_GREEN, COLOR_RED, COLOR_BLUE, COLOR_WHITE,
+++    COLOR_YELLOW, COLOR_CYAN, COLOR_MAGENTA, COLOR_BLACK
+++};
+++
+++static int color_from_name(const char *name)
+++{
+++    int i;
+++    for (i = 0; i < NUM_COLORS; i++) {
+++        if (strcmp(name, color_names[i]) == 0)
+++            return i;
+++    }
+++    return -1;
+++}
+++
+++/* ------------------------------------------------------------------ */
+++/* Character sets                                                    */
+++/* ------------------------------------------------------------------ */
+++
+++static const char ascii_set[] =
+++    "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+++    "abcdefghijklmnopqrstuvwxyz"
+++    "!@#$%^&*()-+=|~.:;?,<>";
+++
+++/* Katakana + some ASCII, used with -c */
+++static const char japanese_set[] =
+++    "\xe3\x82\x86\xe3\x82\x87\xe3\x82\x88\xe3\x82\x89\xe3\x82\x8a\xe3\x82\x8b"
+++    "\xe3\x82\x8c\xe3\x82\x8d\xe3\x82\x8e\xe3\x82\x8f"
+++    "\xe3\x82\x90\xe3\x82\x91\xe3\x82\x92\xe3\x82\x93\xe3\x82\x94\xe3\x82\x95"
+++    "\xe3\x82\x96\xe3\x82\x97\xe3\x82\x98\xe3\x82\x99\xe3\x82\x9a"
+++    "\xe3\x82\x9b\xe3\x82\x9c\xe3\x82\x9d\xe3\x82\x9e\xe3\x82\x9f\xe3\x82\xa0"
+++    "\xe3\x82\xa1\xe3\x82\xa2\xe3\x82\xa3\xe3\x82\xa4\xe3\x82\xa5\xe3\x82\xa6"
+++    "\xe3\x82\xa7\xe3\x82\xa8\xe3\x82\xa9"
+++    "\xe3\x82\xaa\xe3\x82\xab\xe3\x82\xac\xe3\x82\xad\xe3\x82\xae\xe3\x82\xaf"
+++    "\xe3\x82\xb0\xe3\x82\xb1\xe3\x82\xb2\xe3\x82\xb3\xe3\x82\xb4\xe3\x82\xb5"
+++    "\xe3\x82\xb6\xe3\x82\xb7\xe3\x82\xb8\xe3\x82\xb9\xe3\x82\xba"
+++    "\xe3\x82\xbc\xe3\x82\xbd\xe3\x82\xbe\xe3\x82\xbf\xe3\x82\xb0\xe3\x82\xb1"
+++    "\xe3\x82\xac\xe3\x82\x85"
+++    "0123456789";
+++
+++/* ------------------------------------------------------------------ */
+++/* Matrix state                                                    */
+++/* ------------------------------------------------------------------ */
+++
+++#define MAX_ROWS 1000
+++#define MAX_COLS 1000
+++
+++static int  g_rows, g_cols;
+++static char  g_ch[MAX_ROWS][MAX_COLS];
+++static short g_age[MAX_ROWS][MAX_COLS];   /* 0 = off */
+++static struct {
+++    int  y;      /* current head row (may be < 0) */
+++    int  len;    /* trail length */
+++    int  step;   /* rows advanced per frame */
+++} *g_drop;
+++
+++static int  g_current_color;   /* index into color_names */
+++static int  g_rainbow;
+++static int  g_async;
+++static int  g_oldscroll;
+++static int  g_change_chars;    /* -k */
+++static int  g_delay;          /* 0 - 10 */
+++static int  g_screensaver;    /* -s */
+++static int  g_lock;
+++static char  g_message[256];
+++static int   g_have_message;
+++
+++static const char *rand_charset;
+++static size_t      charset_len;
+++
+++static int rand_range(int lo, int hi)   /* inclusive */
+++{
+++    if (hi < lo)
+++        return lo;
+++    return lo + (rand() % (hi - lo + 1));
+++}
+++
+++static char random_char(void)
+++{
+++    return charset_len ? rand_charset[rand() % charset_len] : 'A';
+++}
+++
+++/* ------------------------------------------------------------------ */
+++/* Color / pair management                                          */
+++/* ------------------------------------------------------------------ */
+++
+++/*
+++ * We use a small set of color pairs:
+++ *   pair 1  -> white  (bright head)
+++ *   pairs 2..NUM_COLORS+1 -> each color on black (body)
+++ *   pairs +1 for a dimmed body
+++ */
+++static short pair_for(int color, int dim)
+++{
+++    /* color: index into color_names; dim: 0 bright, 1 dim */
+++    if (color < 0 || color >= NUM_COLORS)
+++        return 1;
+++    return color + 2 + (dim ? NUM_COLORS : 0);
+++}
+++
+++static void init_colors(void)
+++{
+++    int i;    /* white head */
+++    init_pair(1, COLOR_WHITE, COLOR_BLACK);
+++    for (i = 0; i < NUM_COLORS; i++) {
+++        init_pair(i + 2, nc_colors[i], COLOR_BLACK);   /* bright body */
+++        init_pair(i + 2 + NUM_COLORS, nc_colors[i], COLOR_BLACK); /* dim body */
+++    }
+++}
+++
+++/* ------------------------------------------------------------------ */
+++/* Matrix update / draw                                           */
+++/* ------------------------------------------------------------------ */
+++
+++static void init_drops(void)
+++{
+++    int x;
+++    g_drop = malloc(sizeof(*g_drop) * (g_cols > 0 ? g_cols : 1));
+++    if (!g_drop)
+++        return;
+++    for (x = 0; x < g_cols; x++) {
+++        g_drop[x].len = rand_range(8, g_rows / 2 + 1);
+++        if (g_drop[x].len < 1)
+++            g_drop[x].len = 1;
+++        g_drop[x].y = rand_range(-g_drop[x].len, 0);
+++        g_drop[x].step = 1;
+++    }
+++}
+++
+++static void init_matrix_state(void)
+++{
+++    int r, c;
+++    for (r = 0; r < g_rows; r++)
+++        for (c = 0; c < g_cols; c++) {
+++            g_ch[r][c] = ' ';
+++            g_age[r][c] = 0;
+++        }
+++    init_drops();
+++}
+++
+++static void update_matrix(void)
+++{
+++    int x;
+++    for (x = 0; x < g_cols; x++) {
+++        int y = g_drop[x].y;
+++        int y2;
+++
+++        /* advance the head */
+++        y += g_drop[x].step;
+++
+++        if (y > g_rows) {
+++            /* restart the stream somewhere above the top */
+++            g_drop[x].len = rand_range(8, g_rows / 2 + 1);
+++            if (g_drop[x].len < 1)
+++                g_drop[x].len = 1;
+++            y = rand_range(-g_drop[x].len, 0);
+++        }
+++        g_drop[x].y = y;
+++
+++        /* place a fresh character at the head */
+++        if (y >= 0 && y < g_rows) {
+++            g_ch[y][x] = random_char();
+++            g_age[y][x] = 100;   /* freshest */
+++        }
+++
+++        /* fill / age the trail behind the head */
+++        for (y2 = 0; y2 < g_rows; y2++) {
+++            if (g_age[y2][x] > 0) {
+++                g_age[y2][x]--;
+++                if (g_age[y2][x] == 0)
+++                    g_ch[y2][x] = ' ';
+++                else if (g_change_chars && (rand() % 7 == 0))
+++                    g_ch[y2][x] = random_char();
+++            }
+++        }
+++    }
+++}
+++
+++static int current_color(void)
+++{
+++    int c;
+++    if (g_rainbow) {
+++        c = (time(NULL) / 1) % NUM_COLORS;
+++        return c < NUM_COLORS ? c : COL_GREEN;
+++    }
+++    return g_current_color;
+++}
+++
+++static void draw_matrix(void)
+++{
+++    int r, c;
+++    int col = current_color();
+++    erase();
+++    for (r = 0; r < g_rows; r++) {
+++        for (c = 0; c < g_cols; c++) {
+++            short age = g_age[r][c];
+++            if (age == 0 || g_ch[r][c] == ' ')
+++                continue;
+++            if (age >= 90) {
+++                /* bright head */
+++                attron(COLOR_PAIR(1));
+++                addch(g_ch[r][c]);
+++                attroff(COLOR_PAIR(1));
+++            } else if (age >= 40) {
+++                attron(COLOR_PAIR(pair_for(col, 0)) | A_BOLD);
+++                addch(g_ch[r][c]);
+++                attroff(COLOR_PAIR(pair_for(col, 0)) | A_BOLD);
+++            } else {
+++                attron(COLOR_PAIR(pair_for(col, 1)));
+++                addch(g_ch[r][c]);
+++                attroff(COLOR_PAIR(pair_for(col, 1)));
+++            }
+++        }
+++    }
+++    if (g_have_message) {
+++        int mr = g_rows / 2;
+++        int ml = (g_cols - (int)strlen(g_message)) / 2;
+++        if (ml < 0) ml = 0;
+++        attron(COLOR_PAIR(pair_for(col, 0)) | A_BOLD);
+++        mvaddstr(mr, ml, g_message);
+++        attroff(COLOR_PAIR(pair_for(col, 0)) | A_BOLD);
+++    }
+++    refresh();
+++}
+++
+++static int handle_input(void)
+++{
+++    int ch = getch();
+++    if (ch == ERR)
+++        return 0;
+++
+++    switch (ch) {
+++        case '!': g_current_color = COL_RED;     break;
+++        case '@': g_current_color = COL_GREEN;   break;
+++        case '#': g_current_color = COL_YELLOW;  break;
+++        case '$': g_current_color = COL_BLUE;    break;
+++        case '%': g_current_color = COL_MAGENTA; break;
+++        case '^': g_current_color = COL_CYAN;    break;
+++        case '&': g_current_color = COL_WHITE;   break;
+++        case ')': g_current_color = COL_BLACK;   break;
+++        case 'q':
+++        case 'Q':
+++        case 27:   /* Esc */
+++            return 1;
+++        default:
+++            if (g_screensaver)
+++                return 1;   /* -s: exit on first keystroke */
+++            break;
+++    }
+++    return 0;
+++}
+++
+++static void run_matrix(void)
+++{
+++    init_matrix_state();
+++    for (;;) {
+++        update_matrix();
+++        draw_matrix();
+++        if (handle_input())
+++            break;
+++        usleep((unsigned)g_delay * 50000);
+++    }
+++}
+++
+++/* ------------------------------------------------------------------ */
+++/* Argument parsing & main                                          */
+++/* ------------------------------------------------------------------ */
+++
+++static int start(int argc, char **argv)
+++{
+++    int i;
+++    char *colorname = "green";
+++    char *tty = NULL;
+++    int color;
+++
+++    /* defaults */
+++    g_current_color = COL_GREEN;
+++    g_delay = 4;
+++    g_rainbow = 0;
+++    g_async = 0;
+++    g_oldscroll = 0;
+++    g_change_chars = 0;
+++    g_screensaver = 0;
+++    g_lock = 0;
+++    g_have_message = 0;
+++    rand_charset = ascii_set;
+++    charset_len = strlen(ascii_set);
+++
+++    for (i = 1; i < argc; i++) {
+++        if (i + 1 >= argc &&
+++            (argv[i][1] == 'u' || argv[i][1] == 'C' ||
+++             argv[i][1] == 't' || argv[i][1] == 'M')) {
+++            /* option that requires an argument but none given */
+++            print_usage();
+++            return 0;
+++        }
+++
+++        switch (argv[i][1]) {
+++            case 'a': g_async = 1; break;
+++            case 'b': break;
+++            case 'B': break;
+++            case 'c': rand_charset = japanese_set;
+++                      charset_len = strlen(japanese_set); break;
+++            case 'f': break;
+++            case 'l': break;
+++            case 'L': g_lock = 1; break;
+++            case 'o': g_oldscroll = 1; break;
+++            case 'h': print_usage(); return 0;
+++            case 'n': break;
+++            case 's': g_screensaver = 1; break;
+++            case 'x': break;
+++            case 'V': print_version(); return 0;
+++            case 'r': g_rainbow = 1; break;
+++            case 'm': break;
+++            case 'k': g_change_chars = 1; break;
+++            case 'u': g_delay = atoi(argv[i + 1]);
+++                      if (g_delay < 0) g_delay = 0;
+++                      if (g_delay > 10) g_delay = 10;
+++                      i++; break;
+++            case 'C': colorname = argv[i + 1];
+++                      color = color_from_name(colorname);
+++                      if (color < 0) { print_color_error(); return 0; }
+++                      g_current_color = color;
+++                      i++; break;
+++            case 't': tty = argv[i + 1]; (void)tty;
+++                      i++; break;
+++            case 'M': strncpy(g_message, argv[i + 1], sizeof(g_message) - 1);
+++                      g_have_message = 1;
+++                      i++; break;
+++            default:
+++                print_usage();
+++                return 0;
+++        }
+++    }
+++
+++    (void)colorname;
+++
+++    if (initscr() == NULL) {
+++        const char *term = getenv("TERM");
+++        fprintf(stderr, "Error opening terminal: %s.\n",
+++                term && *term ? term : "unknown");
+++        return 1;
+++    }
+++
+++    start_color();
+++    noecho();
+++    cbreak();
+++    nodelay(stdscr, TRUE);
+++    if (has_colors())
+++        init_colors();
+++    curs_set(0);
+++
+++    getmaxyx(stdscr, g_rows, g_cols);
+++    if (g_rows < 1) g_rows = 1;
+++    if (g_cols < 1) g_cols = 1;
+++
+++    run_matrix();
+++
+++    endwin();
+++    return 0;
+++}
+++
+++int main(int argc, char **argv)
+++{
+++    setlocale(LC_ALL, "");
+++    return start(argc, argv);
+++}
++diff --git a/compile.sh b/compile.sh
++new file mode 100755
++index 0000000..c5cf819
++--- /dev/null
+++++ b/compile.sh
++@@ -0,0 +1,17 @@
+++#!/bin/bash
+++# Build cmatrix 2.0 reconstruction. No network access required.
+++set -e
+++cd "$(dirname "$0")"
+++
+++CC=${CC:-gcc}
+++
+++# Use the system ncurses library. Prefer the wide-char variant if present,
+++# otherwise fall back to plain ncurses.
+++if [ -f /usr/include/ncursesw/curses.h ] || [ -f /usr/include/curses.h ]; then
+++    :
+++fi
+++
+++$CC -O2 -o executable cmatrix.c -lncurses 2>/dev/null \
+++    || $CC -O2 -o executable cmatrix.c -lncursesw
+++
+++echo "Built ./executable"

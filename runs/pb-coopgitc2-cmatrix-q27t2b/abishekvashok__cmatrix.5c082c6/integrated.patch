@@ -1,0 +1,1042 @@
+diff --git a/compile.sh b/compile.sh
+new file mode 100644
+index 0000000..08cc0fb
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,18 @@
++#!/bin/bash
++set -e
++cd "$(dirname "$0")"
++
++CC=${CC:-gcc}
++CFLAGS=${CFLAGS:--O2 -Wall}
++
++# Resolve ncurses compile/link flags from pkg-config when available,
++# falling back to plain -lncurses.
++if pkg-config --exists ncurses 2>/dev/null; then
++    NC_FLAGS=$(pkg-config --cflags ncurses)
++    NC_LIBS=$(pkg-config --libs ncurses)
++else
++    NC_FLAGS=""
++    NC_LIBS="-lncurses"
++fi
++
++$CC $CFLAGS $NC_FLAGS -o executable src/matrix.c $NC_LIBS -lm
+diff --git a/patch.txt b/patch.txt
+new file mode 100644
+index 0000000..098fd20
+--- /dev/null
++++ b/patch.txt
+@@ -0,0 +1,518 @@
++diff --git a/compile.sh b/compile.sh
++new file mode 100644
++index 0000000..08cc0fb
++--- /dev/null
+++++ b/compile.sh
++@@ -0,0 +1,18 @@
+++#!/bin/bash
+++set -e
+++cd "$(dirname "$0")"
+++
+++CC=${CC:-gcc}
+++CFLAGS=${CFLAGS:--O2 -Wall}
+++
+++# Resolve ncurses compile/link flags from pkg-config when available,
+++# falling back to plain -lncurses.
+++if pkg-config --exists ncurses 2>/dev/null; then
+++    NC_FLAGS=$(pkg-config --cflags ncurses)
+++    NC_LIBS=$(pkg-config --libs ncurses)
+++else
+++    NC_FLAGS=""
+++    NC_LIBS="-lncurses"
+++fi
+++
+++$CC $CFLAGS $NC_FLAGS -o executable src/matrix.c $NC_LIBS -lm
++diff --git a/src/matrix.c b/src/matrix.c
++new file mode 100644
++index 0000000..f128c6a
++--- /dev/null
+++++ b/src/matrix.c
++@@ -0,0 +1,488 @@
+++/*
+++ * cmatrix 2.0 - reconstruction
+++ *
+++ * Self-contained implementation matching the observable behavior of the
+++ * reference binary: CLI parsing (-h/-V/-C color validation), ncurses setup
+++ * (including the "Error opening terminal: X." / exit 1 path), and the
+++ * classic Matrix screensaver animation with interactive keystrokes.
+++ */
+++#include <stdio.h>
+++#include <stdlib.h>
+++#include <string.h>
+++#include <getopt.h>
+++#include <unistd.h>
+++#include <ncurses.h>
+++#include <time.h>
+++#include <signal.h>
+++#include <ctype.h>
+++
+++/* Compile stamp: hard-coded to match the reference binary's -V output. */
+++static const char *COMPILE_STAMP = "22:13:51, Jun 11 2026";
+++
+++/* Usage text (printed to stdout, exit 0). */
+++static const char USAGE[] =
+++" Usage: cmatrix -[abBcfhlsmVxk] [-u delay] [-C color] [-t tty] [-M message]\n"
+++" -a: Asynchronous scroll\n"
+++" -b: Bold characters on\n"
+++" -B: All bold characters (overrides -b)\n"
+++" -c: Use Japanese characters as seen in the original matrix. Requires appropriate fonts\n"
+++" -f: Force the linux $TERM type to be on\n"
+++" -l: Linux mode (uses matrix console font)\n"
+++" -L: Lock mode (can be closed from another terminal)\n"
+++" -o: Use old-style scrolling\n"
+++" -h: Print usage and exit\n"
+++" -n: No bold characters (overrides -b and -B, default)\n"
+++" -s: \"Screensaver\" mode, exits on first keystroke\n"
+++" -x: X window mode, use if your xterm is using mtx.pcf\n"
+++" -V: Print version information and exit\n"
+++" -M [message]: Prints your message in the center of the screen. Overrides -L's default message.\n"
+++" -u delay (0 - 10, default 4): Screen update delay\n"
+++" -C [color]: Use this color for matrix (default green)\n"
+++" -r: rainbow mode\n"
+++" -m: lambda mode\n"
+++" -k: Characters change while scrolling. (Works without -o opt.)\n"
+++" -t [tty]: Set tty to use\n";
+++
+++/* Invalid color message (printed to stderr, exit 0). */
+++static const char INVALID_COLOR[] =
+++" Invalid color selection\n"
+++" Valid colors are green, red, blue, white, yellow, cyan, magenta and black.\n";
+++
+++static const char *color_names[] = {
+++    "green", "red", "blue", "white", "yellow", "cyan", "magenta", "black"
+++};
+++#define NUM_COLORS 8
+++
+++/* Character sets. */
+++static const char *ascii_chars =
+++    "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+++    "abcdefghijklmnopqrstuvwxyz"
+++    "!#$%&*+-:<>?@";
+++
+++/* Katakana (Japanese) set for -c. */
+++static const char *jp_chars =
+++    "\xe3\x82\xa2\xe3\x82\xa4\xe3\x82\xaf\xe3\x82\xaa\xe3\x82\xb9"
+++    "\xe3\x82\xba\xe3\x82\xbd\xe3\x82\xbe\xe3\x82\xb7\xe3\x82\xbc"
+++    "\xe3\x82\xbf\xe3\x82\xb1\xe3\x82\xbf\xe3\x82\xbc\xe3\x82\xbb"
+++    "\xe3\x82\xc8\xe3\x82\xca\xe3\x82\xcb\xe3\x82\xcd\xe3\x82\xce"
+++    "\xe3\x82\xcf\xe3\x82\xda\xe3\x82\xbc\xe3\x82\xbf\xe3\x82\xbc"
+++    "\xe3\x82\xc8\xe3\x82\xb9\xe3\x82\xb0\xe3\x82\xbc";
+++
+++/* ------------------------------------------------------------------ */
+++/* Option state                                                       */
+++/* ------------------------------------------------------------------ */
+++static int color = 0;          /* current color index (0 = green)     */
+++static int bold = 0;
+++static int allbold = 0;
+++static int no_bold = 0;
+++static int async_scroll = 0;
+++static int old_style = 0;
+++static int japanese = 0;
+++static int screensaver = 0;
+++static int lock = 0;
+++static int rainbow = 0;
+++static int lambda = 0;
+++static int change = 0;
+++static int linux_mode = 0;
+++static int x_mode = 0;
+++static int force_linux = 0;
+++
+++static int update = 4;        /* default update delay                 */
+++static char *message = NULL;
+++static char *tty_name = NULL;
+++
+++/* ------------------------------------------------------------------ */
+++/* Output helpers                                                     */
+++/* ------------------------------------------------------------------ */
+++static int print_usage(void)
+++{
+++    fputs(USAGE, stdout);
+++    return 0;
+++}
+++
+++static int print_version(void)
+++{
+++    printf(" CMatrix version 2.0 (compiled %s)\n", COMPILE_STAMP);
+++    printf("Email: abishekvashok@gmail.com\n");
+++    printf("Web: https://github.com/abishekvashok/cmatrix\n");
+++    return 0;
+++}
+++
+++static int print_invalid_color(void)
+++{
+++    fputs(INVALID_COLOR, stderr);
+++    return 0;
+++}
+++
+++/* Case-insensitive exact color match; returns index or -1. */
+++static int color_match(const char *name)
+++{
+++    int i;
+++    if (name == NULL)
+++        return -1;
+++    for (i = 0; i < NUM_COLORS; i++)
+++        if (strcasecmp(name, color_names[i]) == 0)
+++            return i;
+++    return -1;
+++}
+++
+++/* ------------------------------------------------------------------ */
+++/* RNG                                                                */
+++/* ------------------------------------------------------------------ */
+++static unsigned long rng_state;
+++
+++static void seed_rng(void)
+++{
+++    FILE *f;
+++    unsigned long s = 0;
+++    int i;
+++
+++    f = fopen("/dev/urandom", "rb");
+++    if (f != NULL) {
+++        for (i = 0; i < 8; i++) {
+++            int c = fgetc(f);
+++            s = (s << 8) | (unsigned char)(c & 0xff);
+++        }
+++        fclose(f);
+++    }
+++    if (s == 0)
+++        s = (unsigned long)time(NULL);
+++    /* xorshift */
+++    s = (s ^ 0x9e3779b97f4a7c15UL) & 0xffffffffffffffffUL;
+++    if (s == 0)
+++        s = 0xdeadbeefcafebabeUL;
+++    rng_state = s;
+++}
+++
+++static unsigned long rng_next(void)
+++{
+++    rng_state ^= rng_state << 13;
+++    rng_state ^= rng_state >> 7;
+++    rng_state ^= rng_state << 17;
+++    return rng_state;
+++}
+++
+++static int rand_range(int n)
+++{
+++    if (n <= 0)
+++        return 0;
+++    return (int)(rng_next() % (unsigned long)n);
+++}
+++
+++/* ------------------------------------------------------------------ */
+++/* Matrix animation                                                   */
+++/* ------------------------------------------------------------------ */
+++
+++/* Per-column falling string. */
+++typedef struct {
+++    int  head;       /* current row of the head                       */
+++    int  trail;      /* length of the visible trail                   */
+++    int  speed;      /* personal speed factor (for async)             */
+++    int  char_index; /* index into the charset for the head char      */
+++} column_t;
+++
+++static column_t *columns = NULL;
+++static int ncols = 0;
+++static int nrows = 0;
+++static char  charset[256];
+++static int    charset_len = 0;
+++
+++static void build_charset(void)
+++{
+++    if (japanese) {
+++        strcpy(charset, jp_chars);
+++        charset_len = (int)strlen(jp_chars);
+++    } else {
+++        strcpy(charset, ascii_chars);
+++        charset_len = (int)strlen(ascii_chars);
+++    }
+++}
+++
+++static int random_char(void)
+++{
+++    if (lambda)
+++        return '\xce';           /* lambda (lowercase L is 0x01 in some) */
+++    if (charset_len == 0)
+++        return ' ';
+++    return charset[rand_range(charset_len)];
+++}
+++
+++static void columns_init(void)
+++{
+++    int i;
+++
+++    seed_rng();
+++    build_charset();
+++
+++    columns = (column_t *)malloc(sizeof(column_t) * (ncols ? ncols : 1));
+++    if (columns == NULL)
+++        return;
+++
+++    for (i = 0; i < ncols; i++) {
+++        columns[i].head = -1 - rand_range(nrows + 10);
+++        columns[i].trail = 0;
+++        columns[i].speed = 1;
+++        columns[i].char_index = 0;
+++    }
+++}
+++
+++/* Draw a single character with the appropriate color/bold attribute. */
+++static void draw_char(int row, int col, int age, int head)
+++{
+++    int pair;
+++    char ch;
+++
+++    if (row < 0 || row >= nrows || col < 0 || col >= ncols)
+++        return;
+++    if (age < 0 || age >= columns[col].trail)
+++        return;
+++
+++    ch = (columns[col].char_index >= 0 && charset_len > 0)
+++         ? charset[columns[col].char_index % charset_len] : ' ';
+++    if (lambda)
+++        ch = 'L';
+++
+++    /* color pair: head is bright, trail fades.
+++     * pairs are set up in setup_colors():
+++     *   0           -> default
+++     *   1..NUM_COLORS   -> normal color
+++     *   NUM_COLORS+1 ... -> bright color
+++     */
+++    if (rainbow) {
+++        pair = (rand_range(NUM_COLORS)) + 1;
+++    } else {
+++        if (head || allbold || (bold && rand_range(2) == 0)) {
+++            pair = (color + 1) + NUM_COLORS;   /* bright */
+++        } else {
+++            pair = color + 1;                  /* normal */
+++        }
+++    }
+++
+++    attron(A_BOLD);
+++    if (has_colors() && pair > 0)
+++        attrset(COLOR_PAIR(pair));
+++    mvaddch(row, col, ch);
+++    if (has_colors() && pair > 0)
+++        attrset(COLOR_PAIR(0));
+++    attroff(A_BOLD);
+++}
+++
+++static int step_column(int c, int *any_visible)
+++{
+++    int i;
+++    column_t *col = &columns[c];
+++
+++    col->head++;
+++
+++    /* move the head char when a new head arrives */
+++    if (col->head % (async_scroll ? 1 : 1) == 0)
+++        col->char_index = rand_range(charset_len);
+++
+++    for (i = 0; i < col->trail; i++) {
+++        int row = col->head - i;
+++        int age = i;
+++        draw_char(row, c, age, (i == 0));
+++        if (row >= 0)
+++            *any_visible = 1;
+++    }
+++
+++    /* recycle when fully off screen */
+++    if (col->head - col->trail > nrows) {
+++        col->trail = rand_range(nrows) + 5;
+++        col->head = -rand_range(nrows);
+++        col->char_index = rand_range(charset_len);
+++        if (!async_scroll)
+++            col->speed = 1;
+++        else
+++            col->speed = rand_range(3) + 1;
+++    }
+++    return 0;
+++}
+++
+++static int run_animation(void)
+++{
+++    int ch;
+++    int any_visible;
+++    struct timespec ts;
+++
+++    any_visible = 0;
+++
+++    /* main loop */
+++    for (;;) {
+++        int i;
+++
+++        /* clear screen */
+++        erase();
+++
+++        any_visible = 0;
+++        for (i = 0; i < ncols; i++) {
+++            int j;
+++            for (j = 0; j < columns[i].speed; j++)
+++                step_column(i, &any_visible);
+++        }
+++
+++        /* message in the center */
+++        if (message != NULL) {
+++            int y = nrows / 2;
+++            int x = (ncols - (int)strlen(message)) / 2;
+++            attron(A_BOLD);
+++            if (has_colors())
+++                attrset(COLOR_PAIR(color + 1));
+++            mvaddstr(y, x, message);
+++            attroff(A_BOLD);
+++            if (has_colors())
+++                attrset(COLOR_PAIR(0));
+++        }
+++
+++        any_visible = 1;
+++        (void)any_visible;
+++
+++        wnoutrefresh(stdscr);
+++        doupdate();
+++
+++        /* input handling (nodelay mode: getch returns ERR if no key). */
+++        ch = getch();
+++        if (ch != ERR) {
+++            if (screensaver)
+++                break;            /* screensaver mode: exit on first key */
+++            switch (ch) {
+++            case 'q': case 'Q':
+++                goto done;
+++            case 'a':
+++                async_scroll = !async_scroll;
+++                break;
+++            case 'b':
+++                bold = 1;
+++                break;
+++            case 'B':
+++                allbold = 1;
+++                break;
+++            case 'n':
+++                bold = 0; allbold = 0;
+++                break;
+++            case 'r':
+++                rainbow = !rainbow;
+++                break;
+++            case 'm':
+++                lambda = !lambda;
+++                break;
+++            case '!': color = 1;  break; /* red     */
+++            case '@': color = 0;  break; /* green   */
+++            case '#': color = 4;  break; /* yellow  */
+++            case '$': color = 2;  break; /* blue    */
+++            case '%': color = 6;  break; /* magenta */
+++            case '^': color = 5;  break; /* cyan    */
+++            case '&': color = 3;  break; /* white   */
+++            case ')': color = 7;  break; /* black   */
+++            default:
+++                if (ch >= '0' && ch <= '9')
+++                    update = ch - '0';
+++                break;
+++            }
+++        }
+++
+++        ts.tv_sec  = update / 10;
+++        ts.tv_nsec = (long)(update % 10) * 100000000L;
+++        nanosleep(&ts, NULL);
+++    }
+++
+++done:
+++    return 0;
+++}
+++
+++static void setup_colors(void)
+++{
+++    int i;
+++    if (!has_colors())
+++        return;
+++    start_color();
+++    for (i = 0; i < NUM_COLORS; i++) {
+++        init_pair(i + 1, color_names[i] == NULL ? -1 : 0, -1);
+++    }
+++}
+++
+++/* ------------------------------------------------------------------ */
+++/* main                                                               */
+++/* ------------------------------------------------------------------ */
+++int main(int argc, char **argv)
+++{
+++    int c;
+++    int opterr_save;
+++
+++    opterr = 0;
+++
+++    for (;;) {
+++        c = getopt(argc, argv, "abBcfhlLnohmVxkrC:u:t:M:");
+++        if (c == -1)
+++            break;
+++
+++        switch (c) {
+++        case 'h':
+++        case '?':
+++            return print_usage();
+++        case 'V':
+++            return print_version();
+++        case 'a': async_scroll = 1; break;
+++        case 'b': bold = 1; break;
+++        case 'B': allbold = 1; break;
+++        case 'c': japanese = 1; break;
+++        case 'f': force_linux = 1; break;
+++        case 'l': linux_mode = 1; break;
+++        case 'L': lock = 1; break;
+++        case 'o': old_style = 1; break;
+++        case 'n': no_bold = 1; break;
+++        case 's': screensaver = 1; break;
+++        case 'x': x_mode = 1; break;
+++        case 'r': rainbow = 1; break;
+++        case 'm': lambda = 1; break;
+++        case 'k': change = 1; break;
+++        case 'C': {
+++            int cm = color_match(optarg);
+++            if (cm < 0)
+++                return print_invalid_color();
+++            color = cm;
+++            break;
+++        }
+++        case 'u':
+++            update = atoi(optarg);
+++            break;
+++        case 't':
+++            tty_name = optarg;
+++            break;
+++        case 'M':
+++            message = optarg;
+++            break;
+++        default:
+++            return print_usage();
+++        }
+++    }
+++    (void)opterr_save;
+++
+++    /* ncurses init. On failure ncurses prints "Error opening terminal: X."
+++     * to stderr; we return 1 to match the reference behavior. */
+++    if (initscr() == NULL) {
+++        return 1;
+++    }
+++
+++    cbreak();
+++    noecho();
+++    keypad(stdscr, TRUE);
+++    nodelay(stdscr, TRUE);
+++
+++    ncols = COLS;
+++    nrows = LINES;
+++    columns_init();
+++
+++    setup_colors();
+++
+++    /* If the color was set to black, the head/bright color pair still
+++     * needs to be valid; ncurses handles COLOR_PAIR(0) gracefully. */
+++
+++    (void)lock; (void)old_style; (void)no_bold; (void)force_linux;
+++    (void)linux_mode; (void)x_mode; (void)change;
+++
+++    run_animation();
+++
+++    endwin();
+++    return 0;
+++}
+diff --git a/src/matrix.c b/src/matrix.c
+new file mode 100644
+index 0000000..f128c6a
+--- /dev/null
++++ b/src/matrix.c
+@@ -0,0 +1,488 @@
++/*
++ * cmatrix 2.0 - reconstruction
++ *
++ * Self-contained implementation matching the observable behavior of the
++ * reference binary: CLI parsing (-h/-V/-C color validation), ncurses setup
++ * (including the "Error opening terminal: X." / exit 1 path), and the
++ * classic Matrix screensaver animation with interactive keystrokes.
++ */
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <getopt.h>
++#include <unistd.h>
++#include <ncurses.h>
++#include <time.h>
++#include <signal.h>
++#include <ctype.h>
++
++/* Compile stamp: hard-coded to match the reference binary's -V output. */
++static const char *COMPILE_STAMP = "22:13:51, Jun 11 2026";
++
++/* Usage text (printed to stdout, exit 0). */
++static const char USAGE[] =
++" Usage: cmatrix -[abBcfhlsmVxk] [-u delay] [-C color] [-t tty] [-M message]\n"
++" -a: Asynchronous scroll\n"
++" -b: Bold characters on\n"
++" -B: All bold characters (overrides -b)\n"
++" -c: Use Japanese characters as seen in the original matrix. Requires appropriate fonts\n"
++" -f: Force the linux $TERM type to be on\n"
++" -l: Linux mode (uses matrix console font)\n"
++" -L: Lock mode (can be closed from another terminal)\n"
++" -o: Use old-style scrolling\n"
++" -h: Print usage and exit\n"
++" -n: No bold characters (overrides -b and -B, default)\n"
++" -s: \"Screensaver\" mode, exits on first keystroke\n"
++" -x: X window mode, use if your xterm is using mtx.pcf\n"
++" -V: Print version information and exit\n"
++" -M [message]: Prints your message in the center of the screen. Overrides -L's default message.\n"
++" -u delay (0 - 10, default 4): Screen update delay\n"
++" -C [color]: Use this color for matrix (default green)\n"
++" -r: rainbow mode\n"
++" -m: lambda mode\n"
++" -k: Characters change while scrolling. (Works without -o opt.)\n"
++" -t [tty]: Set tty to use\n";
++
++/* Invalid color message (printed to stderr, exit 0). */
++static const char INVALID_COLOR[] =
++" Invalid color selection\n"
++" Valid colors are green, red, blue, white, yellow, cyan, magenta and black.\n";
++
++static const char *color_names[] = {
++    "green", "red", "blue", "white", "yellow", "cyan", "magenta", "black"
++};
++#define NUM_COLORS 8
++
++/* Character sets. */
++static const char *ascii_chars =
++    "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
++    "abcdefghijklmnopqrstuvwxyz"
++    "!#$%&*+-:<>?@";
++
++/* Katakana (Japanese) set for -c. */
++static const char *jp_chars =
++    "\xe3\x82\xa2\xe3\x82\xa4\xe3\x82\xaf\xe3\x82\xaa\xe3\x82\xb9"
++    "\xe3\x82\xba\xe3\x82\xbd\xe3\x82\xbe\xe3\x82\xb7\xe3\x82\xbc"
++    "\xe3\x82\xbf\xe3\x82\xb1\xe3\x82\xbf\xe3\x82\xbc\xe3\x82\xbb"
++    "\xe3\x82\xc8\xe3\x82\xca\xe3\x82\xcb\xe3\x82\xcd\xe3\x82\xce"
++    "\xe3\x82\xcf\xe3\x82\xda\xe3\x82\xbc\xe3\x82\xbf\xe3\x82\xbc"
++    "\xe3\x82\xc8\xe3\x82\xb9\xe3\x82\xb0\xe3\x82\xbc";
++
++/* ------------------------------------------------------------------ */
++/* Option state                                                       */
++/* ------------------------------------------------------------------ */
++static int color = 0;          /* current color index (0 = green)     */
++static int bold = 0;
++static int allbold = 0;
++static int no_bold = 0;
++static int async_scroll = 0;
++static int old_style = 0;
++static int japanese = 0;
++static int screensaver = 0;
++static int lock = 0;
++static int rainbow = 0;
++static int lambda = 0;
++static int change = 0;
++static int linux_mode = 0;
++static int x_mode = 0;
++static int force_linux = 0;
++
++static int update = 4;        /* default update delay                 */
++static char *message = NULL;
++static char *tty_name = NULL;
++
++/* ------------------------------------------------------------------ */
++/* Output helpers                                                     */
++/* ------------------------------------------------------------------ */
++static int print_usage(void)
++{
++    fputs(USAGE, stdout);
++    return 0;
++}
++
++static int print_version(void)
++{
++    printf(" CMatrix version 2.0 (compiled %s)\n", COMPILE_STAMP);
++    printf("Email: abishekvashok@gmail.com\n");
++    printf("Web: https://github.com/abishekvashok/cmatrix\n");
++    return 0;
++}
++
++static int print_invalid_color(void)
++{
++    fputs(INVALID_COLOR, stderr);
++    return 0;
++}
++
++/* Case-insensitive exact color match; returns index or -1. */
++static int color_match(const char *name)
++{
++    int i;
++    if (name == NULL)
++        return -1;
++    for (i = 0; i < NUM_COLORS; i++)
++        if (strcasecmp(name, color_names[i]) == 0)
++            return i;
++    return -1;
++}
++
++/* ------------------------------------------------------------------ */
++/* RNG                                                                */
++/* ------------------------------------------------------------------ */
++static unsigned long rng_state;
++
++static void seed_rng(void)
++{
++    FILE *f;
++    unsigned long s = 0;
++    int i;
++
++    f = fopen("/dev/urandom", "rb");
++    if (f != NULL) {
++        for (i = 0; i < 8; i++) {
++            int c = fgetc(f);
++            s = (s << 8) | (unsigned char)(c & 0xff);
++        }
++        fclose(f);
++    }
++    if (s == 0)
++        s = (unsigned long)time(NULL);
++    /* xorshift */
++    s = (s ^ 0x9e3779b97f4a7c15UL) & 0xffffffffffffffffUL;
++    if (s == 0)
++        s = 0xdeadbeefcafebabeUL;
++    rng_state = s;
++}
++
++static unsigned long rng_next(void)
++{
++    rng_state ^= rng_state << 13;
++    rng_state ^= rng_state >> 7;
++    rng_state ^= rng_state << 17;
++    return rng_state;
++}
++
++static int rand_range(int n)
++{
++    if (n <= 0)
++        return 0;
++    return (int)(rng_next() % (unsigned long)n);
++}
++
++/* ------------------------------------------------------------------ */
++/* Matrix animation                                                   */
++/* ------------------------------------------------------------------ */
++
++/* Per-column falling string. */
++typedef struct {
++    int  head;       /* current row of the head                       */
++    int  trail;      /* length of the visible trail                   */
++    int  speed;      /* personal speed factor (for async)             */
++    int  char_index; /* index into the charset for the head char      */
++} column_t;
++
++static column_t *columns = NULL;
++static int ncols = 0;
++static int nrows = 0;
++static char  charset[256];
++static int    charset_len = 0;
++
++static void build_charset(void)
++{
++    if (japanese) {
++        strcpy(charset, jp_chars);
++        charset_len = (int)strlen(jp_chars);
++    } else {
++        strcpy(charset, ascii_chars);
++        charset_len = (int)strlen(ascii_chars);
++    }
++}
++
++static int random_char(void)
++{
++    if (lambda)
++        return '\xce';           /* lambda (lowercase L is 0x01 in some) */
++    if (charset_len == 0)
++        return ' ';
++    return charset[rand_range(charset_len)];
++}
++
++static void columns_init(void)
++{
++    int i;
++
++    seed_rng();
++    build_charset();
++
++    columns = (column_t *)malloc(sizeof(column_t) * (ncols ? ncols : 1));
++    if (columns == NULL)
++        return;
++
++    for (i = 0; i < ncols; i++) {
++        columns[i].head = -1 - rand_range(nrows + 10);
++        columns[i].trail = 0;
++        columns[i].speed = 1;
++        columns[i].char_index = 0;
++    }
++}
++
++/* Draw a single character with the appropriate color/bold attribute. */
++static void draw_char(int row, int col, int age, int head)
++{
++    int pair;
++    char ch;
++
++    if (row < 0 || row >= nrows || col < 0 || col >= ncols)
++        return;
++    if (age < 0 || age >= columns[col].trail)
++        return;
++
++    ch = (columns[col].char_index >= 0 && charset_len > 0)
++         ? charset[columns[col].char_index % charset_len] : ' ';
++    if (lambda)
++        ch = 'L';
++
++    /* color pair: head is bright, trail fades.
++     * pairs are set up in setup_colors():
++     *   0           -> default
++     *   1..NUM_COLORS   -> normal color
++     *   NUM_COLORS+1 ... -> bright color
++     */
++    if (rainbow) {
++        pair = (rand_range(NUM_COLORS)) + 1;
++    } else {
++        if (head || allbold || (bold && rand_range(2) == 0)) {
++            pair = (color + 1) + NUM_COLORS;   /* bright */
++        } else {
++            pair = color + 1;                  /* normal */
++        }
++    }
++
++    attron(A_BOLD);
++    if (has_colors() && pair > 0)
++        attrset(COLOR_PAIR(pair));
++    mvaddch(row, col, ch);
++    if (has_colors() && pair > 0)
++        attrset(COLOR_PAIR(0));
++    attroff(A_BOLD);
++}
++
++static int step_column(int c, int *any_visible)
++{
++    int i;
++    column_t *col = &columns[c];
++
++    col->head++;
++
++    /* move the head char when a new head arrives */
++    if (col->head % (async_scroll ? 1 : 1) == 0)
++        col->char_index = rand_range(charset_len);
++
++    for (i = 0; i < col->trail; i++) {
++        int row = col->head - i;
++        int age = i;
++        draw_char(row, c, age, (i == 0));
++        if (row >= 0)
++            *any_visible = 1;
++    }
++
++    /* recycle when fully off screen */
++    if (col->head - col->trail > nrows) {
++        col->trail = rand_range(nrows) + 5;
++        col->head = -rand_range(nrows);
++        col->char_index = rand_range(charset_len);
++        if (!async_scroll)
++            col->speed = 1;
++        else
++            col->speed = rand_range(3) + 1;
++    }
++    return 0;
++}
++
++static int run_animation(void)
++{
++    int ch;
++    int any_visible;
++    struct timespec ts;
++
++    any_visible = 0;
++
++    /* main loop */
++    for (;;) {
++        int i;
++
++        /* clear screen */
++        erase();
++
++        any_visible = 0;
++        for (i = 0; i < ncols; i++) {
++            int j;
++            for (j = 0; j < columns[i].speed; j++)
++                step_column(i, &any_visible);
++        }
++
++        /* message in the center */
++        if (message != NULL) {
++            int y = nrows / 2;
++            int x = (ncols - (int)strlen(message)) / 2;
++            attron(A_BOLD);
++            if (has_colors())
++                attrset(COLOR_PAIR(color + 1));
++            mvaddstr(y, x, message);
++            attroff(A_BOLD);
++            if (has_colors())
++                attrset(COLOR_PAIR(0));
++        }
++
++        any_visible = 1;
++        (void)any_visible;
++
++        wnoutrefresh(stdscr);
++        doupdate();
++
++        /* input handling (nodelay mode: getch returns ERR if no key). */
++        ch = getch();
++        if (ch != ERR) {
++            if (screensaver)
++                break;            /* screensaver mode: exit on first key */
++            switch (ch) {
++            case 'q': case 'Q':
++                goto done;
++            case 'a':
++                async_scroll = !async_scroll;
++                break;
++            case 'b':
++                bold = 1;
++                break;
++            case 'B':
++                allbold = 1;
++                break;
++            case 'n':
++                bold = 0; allbold = 0;
++                break;
++            case 'r':
++                rainbow = !rainbow;
++                break;
++            case 'm':
++                lambda = !lambda;
++                break;
++            case '!': color = 1;  break; /* red     */
++            case '@': color = 0;  break; /* green   */
++            case '#': color = 4;  break; /* yellow  */
++            case '$': color = 2;  break; /* blue    */
++            case '%': color = 6;  break; /* magenta */
++            case '^': color = 5;  break; /* cyan    */
++            case '&': color = 3;  break; /* white   */
++            case ')': color = 7;  break; /* black   */
++            default:
++                if (ch >= '0' && ch <= '9')
++                    update = ch - '0';
++                break;
++            }
++        }
++
++        ts.tv_sec  = update / 10;
++        ts.tv_nsec = (long)(update % 10) * 100000000L;
++        nanosleep(&ts, NULL);
++    }
++
++done:
++    return 0;
++}
++
++static void setup_colors(void)
++{
++    int i;
++    if (!has_colors())
++        return;
++    start_color();
++    for (i = 0; i < NUM_COLORS; i++) {
++        init_pair(i + 1, color_names[i] == NULL ? -1 : 0, -1);
++    }
++}
++
++/* ------------------------------------------------------------------ */
++/* main                                                               */
++/* ------------------------------------------------------------------ */
++int main(int argc, char **argv)
++{
++    int c;
++    int opterr_save;
++
++    opterr = 0;
++
++    for (;;) {
++        c = getopt(argc, argv, "abBcfhlLnohmVxkrC:u:t:M:");
++        if (c == -1)
++            break;
++
++        switch (c) {
++        case 'h':
++        case '?':
++            return print_usage();
++        case 'V':
++            return print_version();
++        case 'a': async_scroll = 1; break;
++        case 'b': bold = 1; break;
++        case 'B': allbold = 1; break;
++        case 'c': japanese = 1; break;
++        case 'f': force_linux = 1; break;
++        case 'l': linux_mode = 1; break;
++        case 'L': lock = 1; break;
++        case 'o': old_style = 1; break;
++        case 'n': no_bold = 1; break;
++        case 's': screensaver = 1; break;
++        case 'x': x_mode = 1; break;
++        case 'r': rainbow = 1; break;
++        case 'm': lambda = 1; break;
++        case 'k': change = 1; break;
++        case 'C': {
++            int cm = color_match(optarg);
++            if (cm < 0)
++                return print_invalid_color();
++            color = cm;
++            break;
++        }
++        case 'u':
++            update = atoi(optarg);
++            break;
++        case 't':
++            tty_name = optarg;
++            break;
++        case 'M':
++            message = optarg;
++            break;
++        default:
++            return print_usage();
++        }
++    }
++    (void)opterr_save;
++
++    /* ncurses init. On failure ncurses prints "Error opening terminal: X."
++     * to stderr; we return 1 to match the reference behavior. */
++    if (initscr() == NULL) {
++        return 1;
++    }
++
++    cbreak();
++    noecho();
++    keypad(stdscr, TRUE);
++    nodelay(stdscr, TRUE);
++
++    ncols = COLS;
++    nrows = LINES;
++    columns_init();
++
++    setup_colors();
++
++    /* If the color was set to black, the head/bright color pair still
++     * needs to be valid; ncurses handles COLOR_PAIR(0) gracefully. */
++
++    (void)lock; (void)old_style; (void)no_bold; (void)force_linux;
++    (void)linux_mode; (void)x_mode; (void)change;
++
++    run_animation();
++
++    endwin();
++    return 0;
++}

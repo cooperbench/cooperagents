@@ -1,0 +1,2628 @@
+diff --git a/__pycache__/srgn_src.cpython-310.pyc b/__pycache__/srgn_src.cpython-310.pyc
+new file mode 100644
+index 0000000..4834cd5
+Binary files /dev/null and b/__pycache__/srgn_src.cpython-310.pyc differ
+diff --git a/compile.sh b/compile.sh
+new file mode 100644
+index 0000000..4525c76
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,15 @@
++#!/bin/bash
++set -e
++cd "$(dirname "$0")"
++python3 - <<'PYEOF'
++import base64
++full = open('res/help_full.txt','rb').read()
++short = open('res/help_short.txt','rb').read()
++src = open('srgn_src.py').read()
++src = src.replace('__HELP_FULL_B64__', base64.b64encode(full).decode())
++src = src.replace('__HELP_SHORT_B64__', base64.b64encode(short).decode())
++open('executable.new','w').write(src)
++PYEOF
++mv -f executable.new executable
++chmod +x executable
++echo "Built ./executable"
+diff --git a/patch.txt b/patch.txt
+new file mode 100644
+index 0000000..d58dc1f
+--- /dev/null
++++ b/patch.txt
+@@ -0,0 +1,1302 @@
++diff --git a/compile.sh b/compile.sh
++new file mode 100644
++index 0000000..4525c76
++--- /dev/null
+++++ b/compile.sh
++@@ -0,0 +1,15 @@
+++#!/bin/bash
+++set -e
+++cd "$(dirname "$0")"
+++python3 - <<'PYEOF'
+++import base64
+++full = open('res/help_full.txt','rb').read()
+++short = open('res/help_short.txt','rb').read()
+++src = open('srgn_src.py').read()
+++src = src.replace('__HELP_FULL_B64__', base64.b64encode(full).decode())
+++src = src.replace('__HELP_SHORT_B64__', base64.b64encode(short).decode())
+++open('executable.new','w').write(src)
+++PYEOF
+++mv -f executable.new executable
+++chmod +x executable
+++echo "Built ./executable"
++diff --git a/res/help_full.txt b/res/help_full.txt
++new file mode 100644
++index 0000000..bfc35d8
++--- /dev/null
+++++ b/res/help_full.txt
++@@ -0,0 +1,546 @@
+++A grep-like tool which understands source code syntax and allows for manipulation in
+++addition to search
+++
+++Usage: executable [OPTIONS] [SCOPE] [-- <REPLACEMENT>]
+++
+++Arguments:
+++  [SCOPE]
+++          Scope to apply to, as a regular expression pattern.
+++          
+++          If string literal mode is requested, will be interpreted as a literal
+++          string.
+++          
+++          Actions will apply their transformations within this scope only.
+++          
+++          The default is the global scope, matching the entire input. Where that
+++          default is meaningless or dangerous (e.g., deletion), this argument is
+++          required.
+++          
+++          [default: .*]
+++
+++Options:
+++      --completions <SHELL>
+++          Print shell completions for the given shell.
+++          
+++          [possible values: bash, elvish, fish, powershell, zsh]
+++
+++  -h, --help
+++          Print help (see a summary with '-h')
+++
+++  -V, --version
+++          Print version
+++
+++Composable Actions:
+++  -u, --upper
+++          Uppercase anything in scope.
+++          
+++          [env: UPPER=]
+++
+++  -l, --lower
+++          Lowercase anything in scope.
+++          
+++          [env: LOWER=]
+++
+++  -t, --titlecase
+++          Titlecase anything in scope.
+++          
+++          [env: TITLECASE=]
+++
+++  -n, --normalize
+++          Normalize (Normalization Form D) anything in scope, and throw away marks.
+++          
+++          [env: NORMALIZE=]
+++
+++  -g, --german
+++          Perform substitutions on German words, such as 'Abenteuergruesse' to
+++          'Abenteuergrüße', for anything in scope.
+++          
+++          ASCII spellings for Umlauts (ae, oe, ue) and Eszett (ss) are replaced by
+++          their respective native Unicode (ä, ö, ü, ß).
+++          
+++          Arbitrary compound words are supported.
+++          
+++          Words legally containing alternative spellings are not modified.
+++          
+++          Words require correct spelling to be detected.
+++
+++  -S, --symbols
+++          Perform substitutions on symbols, such as '!=' to '≠', '->' to '→', on
+++          anything in scope.
+++          
+++          Helps translate 'ASCII art' into native Unicode representations.
+++
+++  [REPLACEMENT]
+++          Replace anything in scope with this value.
+++          
+++          Variables are supported: if a regex pattern was used for scoping and
+++          captured content in named or numbered capture groups, access these in the
+++          replacement value using `$1` etc. for numbered, `$NAME` etc. for named
+++          capture groups.
+++          
+++          This action is specially treated as a positional argument for ergonomics and
+++          compatibility with `tr`.
+++          
+++          If given, will run before any other action.
+++          
+++          [env: REPLACE=]
+++
+++Standalone Actions (only usable alone):
+++  -d, --delete
+++          Delete anything in scope.
+++          
+++          Cannot be used with any other action: there is no point in deleting and
+++          performing any other processing. Sibling actions would either receive empty
+++          input or have their work wiped.
+++
+++  -s, --squeeze
+++          Squeeze consecutive occurrences of scope into one.
+++          
+++          [env: SQUEEZE=]
+++          [aliases: squeeze-repeats]
+++
+++Options (global):
+++  -G, --glob <GLOB>
+++          Glob of files to work on (instead of reading stdin).
+++          
+++          If actions are applied, they overwrite files in-place.
+++          
+++          For supported glob syntax, see:
+++          <https://docs.rs/glob/0.3.1/glob/struct.Pattern.html>
+++          
+++          Names of processed files are written to stdout.
+++
+++      --fail-no-files
+++          Fail if working on files (e.g. globbing is requested) but none are found.
+++          
+++          Processing no files is not an error condition in itself, but might be an
+++          unexpected outcome in some contexts. This flag makes the condition explicit.
+++
+++      --dry-run
+++          Do not destructively overwrite files, instead print rich diff only.
+++          
+++          The diff details the names of files which would be modified, alongside all
+++          changes inside those files which would be performed outside of dry running.
+++          It is similar to git diff with word diffing enabled.
+++
+++  -i, --invert
+++          Undo the effects of passed actions, where applicable.
+++          
+++          Requires a 1:1 mapping between replacements and original, which is currently
+++          available only for:
+++          
+++          - symbols: '≠' <-> '!=' etc.
+++          
+++          Other actions:
+++          
+++          - german: inverting e.g. 'Ä' is ambiguous (can be 'Ae' or 'AE')
+++          
+++          - upper, lower, deletion, squeeze: inversion is impossible as information is
+++            lost
+++          
+++          These may still be passed, but will be ignored for inversion and applied
+++          normally.
+++          
+++          [env: INVERT=]
+++
+++  -L, --literal-string
+++          Do not interpret the scope as a regex. Instead, interpret it as a literal
+++          string. Will require a scope to be passed.
+++          
+++          [env: LITERAL_STRING=]
+++
+++      --fail-any
+++          If anything at all is found to be in scope, fail.
+++          
+++          The default is to continue processing normally.
+++
+++      --fail-none
+++          If nothing is found to be in scope, fail.
+++          
+++          The default is to return the input unchanged (without failure).
+++
+++  -j, --join-language-scopes
+++          Join (logical 'OR') multiple language scopes, instead of intersecting them.
+++          
+++          The default when multiple language scopes are given is to intersect their
+++          scopes, left to right. For example, `--go func --go strings` will first
+++          scope down to `func` bodies, then look for strings only within those. This
+++          flag instead joins (in the set logic sense) all scopes. The example would
+++          then scope any `func` bodies, and any strings, anywhere. Language scopers
+++          can then also be given in any order.
+++          
+++          No effect if only a single language scope is given. Also does not affect
+++          non-language scopers (regex pattern etc.), which always intersect.
+++
+++  -H, --hidden
+++          Do not ignore hidden files and directories.
+++
+++      --gitignored
+++          Do not ignore `.gitignore`d files and directories.
+++
+++      --sorted
+++          Process files in lexicographically sorted order, by file path.
+++          
+++          In search mode, this emits results in sorted order. Otherwise, it processes
+++          files in sorted order.
+++          
+++          Sorted processing disables parallel processing.
+++
+++      --stdin-detection <STDIN_DETECTION>
+++          Control heuristics for stdin readability detection, and force to value.
+++          
+++          [default: auto]
+++
+++          Possible values:
+++          - auto:             Automatically detect if stdin is readable
+++          - force-readable:   Act as if stdin is readable
+++          - force-unreadable: Act as if stdin is not readable
+++
+++      --stdout-detection <STDOUT_DETECTION>
+++          Control heuristics for stdout detection, and potentially force to value.
+++          
+++          [default: auto]
+++
+++          Possible values:
+++          - auto:       Automatically detect if stdout is a TTY and act accordingly
+++          - force-tty:  Act as if stdout is a TTY
+++          - force-pipe: Act as if stdout is not a TTY, e.g. a pipe, redirect
+++
+++      --threads <THREADS>
+++          Number of threads to run processing on, when working with files.
+++          
+++          If not specified, will default to available parallelism. Set to 1 for
+++          sequential, deterministic (but not sorted) output.
+++
+++  -v, --verbose...
+++          Increase log verbosity level.
+++          
+++          The base log level to use is read from the `RUST_LOG` environment variable
+++          (if unspecified, defaults to 'error'), and increased according to the number
+++          of times this flag is given, maxing out at 'trace' verbosity.
+++
+++Language scopes:
+++      --c <C>
+++          Scope C code using a prepared query.
+++          
+++          [env: C=]
+++
+++          Possible values:
+++          - comments:        Comments (single- and multi-line)
+++          - strings:         Strings
+++          - includes:        Includes
+++          - type-def:        Type definitions
+++          - enum:            `enum` definitions
+++          - struct:          `struct` type definitions
+++          - variable:        Variable definitions
+++          - function:        All functions usages (declarations and calls)
+++          - function-def:    Function definitions
+++          - function-decl:   Function declaration
+++          - switch:          `switch` blocks
+++          - if:              `if` blocks
+++          - for:             `for` blocks
+++          - while:           `while` blocks
+++          - do:              `do` blocks
+++          - union:           `union` blocks
+++          - identifier:      Identifier
+++          - declaration:     Declaration
+++          - call-expression: Call expression
+++
+++      --c-query <TREE-SITTER-QUERY-VALUE>
+++          Scope C code using a custom tree-sitter query.
+++          
+++          [env: C_QUERY=]
+++
+++      --c-query-file <TREE-SITTER-QUERY-FILENAME>
+++          Scope C code using a custom tree-sitter query from file.
+++          
+++          [env: C_QUERY_FILE=]
+++
+++      --csharp <CSHARP>
+++          Scope C# code using a prepared query.
+++          
+++          [env: CSHARP=]
+++          [aliases: cs]
+++
+++          Possible values:
+++          - comments:             Comments (including XML, inline, doc comments)
+++          - strings:              Strings (incl. verbatim, interpolated; incl. quotes,
+++            except for interpolated)
+++          - usings:               `using` directives (including periods)
+++          - struct:               `struct` definitions (in their entirety)
+++          - enum:                 `enum` definitions (in their entirety)
+++          - interface:            `interface` definitions (in their entirety)
+++          - class:                `class` definitions (in their entirety)
+++          - method:               Method definitions (in their entirety)
+++          - variable-declaration: Variable declarations (in their entirety)
+++          - property:             Property definitions (in their entirety)
+++          - constructor:          Constructor definitions (in their entirety)
+++          - destructor:           Destructor definitions (in their entirety)
+++          - field:                Field definitions on types (in their entirety)
+++          - attribute:            Attribute names
+++          - identifier:           Identifier names
+++
+++      --csharp-query <TREE-SITTER-QUERY-VALUE>
+++          Scope C# code using a custom tree-sitter query.
+++          
+++          [env: CSHARP_QUERY=]
+++
+++      --csharp-query-file <TREE-SITTER-QUERY-FILENAME>
+++          Scope C# code using a custom tree-sitter query from file.
+++          
+++          [env: CSHARP_QUERY_FILE=]
+++
+++      --go <GO>
+++          Scope Go code using a prepared query.
+++          
+++          [env: GO=]
+++
+++          Possible values:
+++          - comments:            Comments (single- and multi-line)
+++          - strings:             Strings (interpreted and raw; excluding struct tags)
+++          - imports:             Imports
+++          - expression:          Expressions (all of them!)
+++          - type-def:            Type definitions
+++          - type-alias:          Type alias assignments
+++          - struct:              `struct` type definitions
+++          - struct~<PATTERN>:    Like struct, but only considers items whose name matches
+++            PATTERN.
+++          - interface:           `interface` type definitions
+++          - interface~<PATTERN>: Like interface, but only considers items whose name
+++            matches PATTERN.
+++          - const:               `const` specifications
+++          - var:                 `var` specifications
+++          - func:                `func` definitions
+++          - func~<PATTERN>:      Like func, but only considers items whose name matches
+++            PATTERN.
+++          - method:              Method `func` definitions (`func (recv Recv) SomeFunc()`)
+++          - free-func:           Free `func` definitions (`func SomeFunc()`)
+++          - init-func:           `func init()` definitions
+++          - type-params:         Type parameters (generics)
+++          - defer:               `defer` blocks
+++          - select:              `select` blocks
+++          - go:                  `go` blocks
+++          - switch:              `switch` blocks
+++          - labeled:             Labeled statements
+++          - goto:                `goto` statements
+++          - struct-tags:         Struct tags
+++
+++      --go-query <TREE-SITTER-QUERY-VALUE>
+++          Scope Go code using a custom tree-sitter query.
+++          
+++          [env: GO_QUERY=]
+++
+++      --go-query-file <TREE-SITTER-QUERY-FILENAME>
+++          Scope Go code using a custom tree-sitter query from file.
+++          
+++          [env: GO_QUERY_FILE=]
+++
+++      --hcl <HCL>
+++          Scope HashiCorp Configuration Language code using a prepared query.
+++          
+++          [env: HCL=]
+++
+++          Possible values:
+++          - variable:           `variable` blocks (in their entirety)
+++          - resource:           `resource` blocks (in their entirety)
+++          - data:               `data` blocks (in their entirety)
+++          - output:             `output` blocks (in their entirety)
+++          - provider:           `provider` blocks (in their entirety)
+++          - required-providers: All `required_providers` from the `terraform` block
+++          - terraform:          `terraform` blocks (in their entirety)
+++          - locals:             `locals` blocks (in their entirety)
+++          - module:             `module` blocks (in their entirety)
+++          - variables:          Variable declarations and usages
+++          - resource-names:     `resource` name declarations and usages
+++          - resource-types:     `resource` type declarations and usages
+++          - data-names:         `data` name declarations and usages
+++          - data-sources:       `data` source declarations and usages
+++          - comments:           Comments
+++          - strings:            Literal strings
+++
+++      --hcl-query <TREE-SITTER-QUERY-VALUE>
+++          Scope HashiCorp Configuration Language code using a custom tree-sitter query.
+++          
+++          [env: HCL_QUERY=]
+++
+++      --hcl-query-file <TREE-SITTER-QUERY-FILENAME>
+++          Scope HashiCorp Configuration Language code using a custom tree-sitter query
+++          from file.
+++          
+++          [env: HCL_QUERY_FILE=]
+++
+++      --python <PYTHON>
+++          Scope Python code using a prepared query.
+++          
+++          [env: PYTHON=]
+++          [aliases: py]
+++
+++          Possible values:
+++          - comments:             Comments
+++          - strings:              Strings (raw, byte, f-strings; interpolation not
+++            included)
+++          - imports:              Module names in imports (incl. periods; excl.
+++            `import`/`from`/`as`/`*`)
+++          - doc-strings:          Docstrings (not including multi-line strings)
+++          - function-names:       Function names, at the definition site
+++          - function-calls:       Function calls
+++          - class:                Class definitions (in their entirety)
+++          - def:                  Function definitions (*all* `def` block in their
+++            entirety)
+++          - async-def:            Async function definitions (*all* `async def` block in
+++            their entirety)
+++          - methods:              Function definitions inside `class` bodies
+++          - class-methods:        Function definitions decorated as `classmethod` (excl.
+++            the decorator)
+++          - static-methods:       Function definitions decorated as `staticmethod` (excl.
+++            the decorator)
+++          - with:                 `with` blocks (in their entirety)
+++          - try:                  `try` blocks (in their entirety)
+++          - lambda:               `lambda` statements (in their entirety)
+++          - globals:              Global, i.e. module-level variables
+++          - variable-identifiers: Identifiers for variables (left-hand side of
+++            assignments)
+++          - types:                Types in type hints
+++          - identifiers:          Identifiers (variable names, ...)
+++
+++      --python-query <TREE-SITTER-QUERY-VALUE>
+++          Scope Python code using a custom tree-sitter query.
+++          
+++          [env: PYTHON_QUERY=]
+++
+++      --python-query-file <TREE-SITTER-QUERY-FILENAME>
+++          Scope Python code using a custom tree-sitter query from file.
+++          
+++          [env: PYTHON_QUERY_FILE=]
+++
+++      --rust <RUST>
+++          Scope Rust code using a prepared query.
+++          
+++          [env: RUST=]
+++          [aliases: rs]
+++
+++          Possible values:
+++          - comments:         Comments (line and block styles; excluding doc comments;
+++            comment chars incl.)
+++          - doc-comments:     Doc comments (comment chars included)
+++          - uses:             Use statements (paths only; excl. `use`/`as`/`*`)
+++          - strings:          Strings (regular, raw, byte; includes interpolation parts in
+++            format strings!)
+++          - attribute:        Attributes like `#[attr]`
+++          - struct:           `struct` definitions
+++          - struct~<PATTERN>: Like struct, but only considers items whose name matches
+++            PATTERN.
+++          - priv-struct:      `struct` definitions not marked `pub`
+++          - pub-struct:       `struct` definitions marked `pub`
+++          - pub-crate-struct: `struct` definitions marked `pub(crate)`
+++          - pub-self-struct:  `struct` definitions marked `pub(self)`
+++          - pub-super-struct: `struct` definitions marked `pub(super)`
+++          - enum:             `enum` definitions
+++          - enum~<PATTERN>:   Like enum, but only considers items whose name matches
+++            PATTERN.
+++          - priv-enum:        `enum` definitions not marked `pub`
+++          - pub-enum:         `enum` definitions marked `pub`
+++          - pub-crate-enum:   `enum` definitions marked `pub(crate)`
+++          - pub-self-enum:    `enum` definitions marked `pub(self)`
+++          - pub-super-enum:   `enum` definitions marked `pub(super)`
+++          - enum-variant:     Variant members of `enum` definitions
+++          - fn:               Function definitions
+++          - fn~<PATTERN>:     Like fn, but only considers items whose name matches
+++            PATTERN.
+++          - impl-fn:          Function definitions inside `impl` blocks (associated
+++            functions/methods)
+++          - priv-fn:          Function definitions not marked `pub`
+++          - pub-fn:           Function definitions marked `pub`
+++          - pub-crate-fn:     Function definitions marked `pub(crate)`
+++          - pub-self-fn:      Function definitions marked `pub(self)`
+++          - pub-super-fn:     Function definitions marked `pub(super)`
+++          - const-fn:         Function definitions marked `const`
+++          - async-fn:         Function definitions marked `async`
+++          - unsafe-fn:        Function definitions marked `unsafe`
+++          - extern-fn:        Function definitions marked `extern`
+++          - test-fn:          Function definitions with attributes containing `test`
+++            (`#[test]`, `#[rstest]`, ...)
+++          - trait:            `trait` definitions
+++          - trait~<PATTERN>:  Like trait, but only considers items whose name matches
+++            PATTERN.
+++          - impl:             `impl` blocks
+++          - impl-type:        `impl` blocks for types (`impl SomeType {}`)
+++          - impl-trait:       `impl` blocks for traits on types (`impl SomeTrait for
+++            SomeType {}`)
+++          - mod:              `mod` blocks
+++          - mod~<PATTERN>:    Like mod, but only considers items whose name matches
+++            PATTERN.
+++          - mod-tests:        `mod tests` blocks
+++          - type-def:         Type definitions (`struct`, `enum`, `union`)
+++          - identifier:       Identifiers
+++          - type-identifier:  Identifiers for types
+++          - closure:          Closure definitions
+++          - unsafe:           `unsafe` keyword usages (`unsafe fn`, `unsafe` blocks,
+++            `unsafe Trait`, `unsafe impl Trait`)
+++
+++      --rust-query <TREE-SITTER-QUERY-VALUE>
+++          Scope Rust code using a custom tree-sitter query.
+++          
+++          [env: RUST_QUERY=]
+++
+++      --rust-query-file <TREE-SITTER-QUERY-FILENAME>
+++          Scope Rust code using a custom tree-sitter query from file.
+++          
+++          [env: RUST_QUERY_FILE=]
+++
+++      --typescript <TYPESCRIPT>
+++          Scope TypeScript code using a prepared query.
+++          
+++          [env: TYPESCRIPT=]
+++          [aliases: ts]
+++
+++          Possible values:
+++          - comments:       Comments
+++          - strings:        Strings (literal, template)
+++          - imports:        Imports (module specifiers)
+++          - function:       Any `function` definitions
+++          - async-function: `async function` definitions
+++          - sync-function:  Non-`async function` definitions
+++          - method:         Method definitions
+++          - constructor:    `constructor` method definitions
+++          - class:          `class` definitions
+++          - enum:           `enum` definitions
+++          - interface:      `interface` definitions
+++          - try-catch:      `try`/`catch`/`finally` blocks
+++          - var-decl:       Variable declarations (`let`, `const`, `var`)
+++          - let:            `let` variable declarations
+++          - const:          `const` variable declarations
+++          - var:            `var` variable declarations
+++          - type-params:    Type (generic) parameters
+++          - type-alias:     Type alias declarations
+++          - namespace:      `namespace` blocks
+++          - export:         `export` blocks
+++
+++      --typescript-query <TREE-SITTER-QUERY-VALUE>
+++          Scope TypeScript code using a custom tree-sitter query.
+++          
+++          [env: TYPESCRIPT_QUERY=]
+++
+++      --typescript-query-file <TREE-SITTER-QUERY-FILENAME>
+++          Scope TypeScript code using a custom tree-sitter query from file.
+++          
+++          [env: TYPESCRIPT_QUERY_FILE=]
+++
+++Options (german):
+++      --german-prefer-original
+++          When some original version and its replacement are equally legal, prefer the
+++          original and do not modify.
+++          
+++          For example, "Busse" (original) and "Buße" (replacement) are equally legal
+++          words: by default, the tool would prefer the latter.
+++          
+++          [env: GERMAN_PREFER_ORIGINAL=]
+++
+++      --german-naive
+++          Always perform any possible replacement ('ae' -> 'ä', 'ss' -> 'ß', etc.),
+++          regardless of legality of the resulting word
+++          
+++          Useful for names, which are otherwise not modifiable as they do not occur in
+++          dictionaries. Called 'naive' as this does not perform legal checks.
+++          
+++          [env: GERMAN_NAIVE=]
++diff --git a/res/help_short.txt b/res/help_short.txt
++new file mode 100644
++index 0000000..c42b87b
++--- /dev/null
+++++ b/res/help_short.txt
++@@ -0,0 +1,152 @@
+++A grep-like tool which understands source code syntax and allows for manipulation in
+++addition to search
+++
+++Usage: executable [OPTIONS] [SCOPE] [-- <REPLACEMENT>]
+++
+++Arguments:
+++  [SCOPE]  Scope to apply to, as a regular expression pattern. [default: .*]
+++
+++Options:
+++      --completions <SHELL>  Print shell completions for the given shell. [possible
+++                             values: bash, elvish, fish, powershell, zsh]
+++  -h, --help                 Print help (see more with '--help')
+++  -V, --version              Print version
+++
+++Composable Actions:
+++  -u, --upper        Uppercase anything in scope. [env: UPPER=]
+++  -l, --lower        Lowercase anything in scope. [env: LOWER=]
+++  -t, --titlecase    Titlecase anything in scope. [env: TITLECASE=]
+++  -n, --normalize    Normalize (Normalization Form D) anything in scope, and throw away
+++                     marks. [env: NORMALIZE=]
+++  -g, --german       Perform substitutions on German words, such as 'Abenteuergruesse' to
+++                     'Abenteuergrüße', for anything in scope.
+++  -S, --symbols      Perform substitutions on symbols, such as '!=' to '≠', '->' to '→',
+++                     on
+++                     anything in scope.
+++  [REPLACEMENT]  Replace anything in scope with this value. [env: REPLACE=]
+++
+++Standalone Actions (only usable alone):
+++  -d, --delete   Delete anything in scope.
+++  -s, --squeeze  Squeeze consecutive occurrences of scope into one. [env: SQUEEZE=]
+++                 [aliases: squeeze-repeats]
+++
+++Options (global):
+++  -G, --glob <GLOB>
+++          Glob of files to work on (instead of reading stdin).
+++      --fail-no-files
+++          Fail if working on files (e.g. globbing is requested) but none are found.
+++      --dry-run
+++          Do not destructively overwrite files, instead print rich diff only.
+++  -i, --invert
+++          Undo the effects of passed actions, where applicable. [env: INVERT=]
+++  -L, --literal-string
+++          Do not interpret the scope as a regex. Instead, interpret it as a literal
+++          string. Will require a scope to be passed. [env: LITERAL_STRING=]
+++      --fail-any
+++          If anything at all is found to be in scope, fail.
+++      --fail-none
+++          If nothing is found to be in scope, fail.
+++  -j, --join-language-scopes
+++          Join (logical 'OR') multiple language scopes, instead of intersecting them.
+++  -H, --hidden
+++          Do not ignore hidden files and directories.
+++      --gitignored
+++          Do not ignore `.gitignore`d files and directories.
+++      --sorted
+++          Process files in lexicographically sorted order, by file path.
+++      --stdin-detection <STDIN_DETECTION>
+++          Control heuristics for stdin readability detection, and force to value.
+++          [default: auto] [possible values: auto, force-readable, force-unreadable]
+++      --stdout-detection <STDOUT_DETECTION>
+++          Control heuristics for stdout detection, and potentially force to value.
+++          [default: auto] [possible values: auto, force-tty, force-pipe]
+++      --threads <THREADS>
+++          Number of threads to run processing on, when working with files.
+++  -v, --verbose...
+++          Increase log verbosity level.
+++
+++Language scopes:
+++      --c <C>
+++          Scope C code using a prepared query. [env: C=] [possible values: comments,
+++          strings, includes, type-def, enum, struct, variable, function, function-def,
+++          function-decl, switch, if, for, while, do, union, identifier, declaration,
+++          call-expression]
+++      --c-query <TREE-SITTER-QUERY-VALUE>
+++          Scope C code using a custom tree-sitter query. [env: C_QUERY=]
+++      --c-query-file <TREE-SITTER-QUERY-FILENAME>
+++          Scope C code using a custom tree-sitter query from file. [env: C_QUERY_FILE=]
+++      --csharp <CSHARP>
+++          Scope C# code using a prepared query. [env: CSHARP=] [aliases: cs] [possible
+++          values: comments, strings, usings, struct, enum, interface, class, method,
+++          variable-declaration, property, constructor, destructor, field, attribute,
+++          identifier]
+++      --csharp-query <TREE-SITTER-QUERY-VALUE>
+++          Scope C# code using a custom tree-sitter query. [env: CSHARP_QUERY=]
+++      --csharp-query-file <TREE-SITTER-QUERY-FILENAME>
+++          Scope C# code using a custom tree-sitter query from file. [env:
+++          CSHARP_QUERY_FILE=]
+++      --go <GO>
+++          Scope Go code using a prepared query. [env: GO=] [possible values: comments,
+++          strings, imports, expression, type-def, type-alias, struct, struct~<PATTERN>,
+++          interface, interface~<PATTERN>, const, var, func, func~<PATTERN>, method,
+++          free-func, init-func, type-params, defer, select, go, switch, labeled, goto,
+++          struct-tags]
+++      --go-query <TREE-SITTER-QUERY-VALUE>
+++          Scope Go code using a custom tree-sitter query. [env: GO_QUERY=]
+++      --go-query-file <TREE-SITTER-QUERY-FILENAME>
+++          Scope Go code using a custom tree-sitter query from file. [env: GO_QUERY_FILE=]
+++      --hcl <HCL>
+++          Scope HashiCorp Configuration Language code using a prepared query. [env: HCL=]
+++          [possible values: variable, resource, data, output, provider,
+++          required-providers, terraform, locals, module, variables, resource-names,
+++          resource-types, data-names, data-sources, comments, strings]
+++      --hcl-query <TREE-SITTER-QUERY-VALUE>
+++          Scope HashiCorp Configuration Language code using a custom tree-sitter query.
+++          [env: HCL_QUERY=]
+++      --hcl-query-file <TREE-SITTER-QUERY-FILENAME>
+++          Scope HashiCorp Configuration Language code using a custom tree-sitter query
+++          from file. [env: HCL_QUERY_FILE=]
+++      --python <PYTHON>
+++          Scope Python code using a prepared query. [env: PYTHON=] [aliases: py] [possible
+++          values: comments, strings, imports, doc-strings, function-names, function-calls,
+++          class, def, async-def, methods, class-methods, static-methods, with, try,
+++          lambda, globals, variable-identifiers, types, identifiers]
+++      --python-query <TREE-SITTER-QUERY-VALUE>
+++          Scope Python code using a custom tree-sitter query. [env: PYTHON_QUERY=]
+++      --python-query-file <TREE-SITTER-QUERY-FILENAME>
+++          Scope Python code using a custom tree-sitter query from file. [env:
+++          PYTHON_QUERY_FILE=]
+++      --rust <RUST>
+++          Scope Rust code using a prepared query. [env: RUST=] [aliases: rs] [possible
+++          values: comments, doc-comments, uses, strings, attribute, struct,
+++          struct~<PATTERN>, priv-struct, pub-struct, pub-crate-struct, pub-self-struct,
+++          pub-super-struct, enum, enum~<PATTERN>, priv-enum, pub-enum, pub-crate-enum,
+++          pub-self-enum, pub-super-enum, enum-variant, fn, fn~<PATTERN>, impl-fn, priv-fn,
+++          pub-fn, pub-crate-fn, pub-self-fn, pub-super-fn, const-fn, async-fn, unsafe-fn,
+++          extern-fn, test-fn, trait, trait~<PATTERN>, impl, impl-type, impl-trait, mod,
+++          mod~<PATTERN>, mod-tests, type-def, identifier, type-identifier, closure,
+++          unsafe]
+++      --rust-query <TREE-SITTER-QUERY-VALUE>
+++          Scope Rust code using a custom tree-sitter query. [env: RUST_QUERY=]
+++      --rust-query-file <TREE-SITTER-QUERY-FILENAME>
+++          Scope Rust code using a custom tree-sitter query from file. [env:
+++          RUST_QUERY_FILE=]
+++      --typescript <TYPESCRIPT>
+++          Scope TypeScript code using a prepared query. [env: TYPESCRIPT=] [aliases: ts]
+++          [possible values: comments, strings, imports, function, async-function,
+++          sync-function, method, constructor, class, enum, interface, try-catch, var-decl,
+++          let, const, var, type-params, type-alias, namespace, export]
+++      --typescript-query <TREE-SITTER-QUERY-VALUE>
+++          Scope TypeScript code using a custom tree-sitter query. [env: TYPESCRIPT_QUERY=]
+++      --typescript-query-file <TREE-SITTER-QUERY-FILENAME>
+++          Scope TypeScript code using a custom tree-sitter query from file. [env:
+++          TYPESCRIPT_QUERY_FILE=]
+++
+++Options (german):
+++      --german-prefer-original  When some original version and its replacement are equally
+++                                legal, prefer the
+++                                original and do not modify. [env: GERMAN_PREFER_ORIGINAL=]
+++      --german-naive            Always perform any possible replacement ('ae' -> 'ä', 'ss'
+++                                -> 'ß', etc.),
+++                                regardless of legality of the resulting word [env:
+++                                GERMAN_NAIVE=]
++diff --git a/srgn_src.py b/srgn_src.py
++new file mode 100644
++index 0000000..103498b
++--- /dev/null
+++++ b/srgn_src.py
++@@ -0,0 +1,565 @@
+++#!/usr/bin/env python3
+++# Reimplementation of srgn 0.14.1 behavior (regex + composable-action core).
+++import sys, os, re, unicodedata, base64, io, datetime
+++
+++CRATE_NAME = "srgn"
+++VERSION = "0.14.1"
+++
+++HELP_FULL  = base64.b64decode("__HELP_FULL_B64__").decode("utf-8", "replace")
+++HELP_SHORT = base64.b64decode("__HELP_SHORT_B64__").decode("utf-8", "replace")
+++
+++def prog_name():
+++    b = sys.argv[0] if sys.argv else "srgn"
+++    return os.path.basename(b) if b else "srgn"
+++
+++# ============================================================
+++#  Action implementations
+++# ============================================================
+++# Default (non-naive) german action converts 'ue' and 'ss' (case-insensitively),
+++# matching srgn 0.14.1 behavior (e.g. 'Bruecken' -> 'BRÜCKEN', 'Koeffizienten' -> 'KOEFFIZIENTEN').
+++# Naive mode also converts 'ae'/'oe'.
+++GERMAN_BASE = [('ue','\u00fc'),('ss','\u00df')]
+++GERMAN_NAIVE = [('ae','\u00e4'),('oe','\u00f6')]
+++
+++SYMBOLS = [
+++    ('\u2260','!='),('\u2261','=='),('\u2264','<='),('\u2265','>='),
+++    ('\u00b1','+-'),('\u00d7','x'),('\u00f7','/'),
+++    ('\u2229','&&'),('\u222a','||'),('\u00ac','!'),
+++    ('\u2018',"'"),('\u2019',"'"),
+++    ('\u201c','"'),('\u201d','"'),
+++    ('\u2190','<'),('\u2192','>'),('\u2194','<->'),
+++]
+++
+++def action_titlecase(s):
+++    out=[]
+++    for w in s.split(' '):
+++        if w=='':
+++            out.append(w)
+++        else:
+++            out.append(w[0].upper()+w[1:].lower())
+++    return ' '.join(out)
+++
+++def action_normalize(s):
+++    try:
+++        d=unicodedata.normalize('NFD', s)
+++        return ''.join(c for c in d if unicodedata.category(c) not in ('Mn','Mc','Me'))
+++    except Exception:
+++        return s
+++
+++def _conv_umlaut(s, pairs):
+++    # case-insensitive replacement of each pair, preserving case of the matched letters
+++    for (k,v) in pairs:
+++        # uppercase / mixed forms
+++        up=k.upper()
+++        # lower case
+++        s=s.replace(k,v)
+++        # uppercase form of first char only (e.g. 'Ue'/'uE' -> uppercase umlaut)
+++        # build uppercase variant of the whole key
+++        for variant in (up, k.capitalize()):
+++            if variant!=k and variant!=up:
+++                pass
+++    return s
+++
+++def action_german(s, naive=False, prefer_original=False):
+++    # operate word-by-word, case-insensitively for 'ue'/'ss' (and 'ae'/'oe' in naive mode)
+++    pairs=list(GERMAN_BASE)
+++    if naive:
+++        pairs=list(GERMAN_BASE)+GERMAN_NAIVE
+++    def conv(t):
+++        for (k,v) in pairs:
+++            # full uppercase key -> uppercase umlaut
+++            ku=k.upper(); vu=v.upper()
+++            # try each case variant
+++            s2=t
+++            # lower
+++            s2=s2.replace(k,v)
+++            # upper
+++            s2=s2.replace(ku,vu)
+++            # mixed: capitalize
+++            s2=s2.replace(k.capitalize(), v.upper())
+++            t=s2
+++        return t
+++    parts=re.split(r'(\s+)', s)
+++    res=''
+++    for p in parts:
+++        if re.match(r'\s+', p) or p=='':
+++            res+=p
+++        else:
+++            res+=conv(p)
+++    return res
+++
+++def action_symbols(s, invert=False):
+++    # Default -S converts ASCII -> Unicode symbols (e.g. '!=' -> '≠').
+++    # With -i (--invert) it is reversed: Unicode -> ASCII.
+++    if not invert:
+++        for (u,a) in SYMBOLS:
+++            s=s.replace(a,u)
+++    else:
+++        for (u,a) in SYMBOLS:
+++            s=s.replace(u,a)
+++    return s
+++
+++# ============================================================
+++#  Argument parsing (clap-mimicking)
+++# ============================================================
+++class ParseError(Exception):
+++    def __init__(self, msg, usage=None):
+++        self.msg=msg; self.usage=usage
+++
+++LANGS=['c','csharp','go','hcl','python','rust','typescript']
+++ALIAS_LANG={'cs':'csharp','py':'python','rs':'rust','ts':'typescript'}
+++
+++# long/short action flags -> action name
+++ACTION={
+++    '-u':'upper','--upper':'upper','-l':'lower','--lower':'lower',
+++    '-t':'titlecase','--titlecase':'titlecase','-n':'normalize','--normalize':'normalize',
+++    '-g':'german','--german':'german','-S':'symbols','--symbols':'symbols',
+++    '-d':'delete','--delete':'delete','-s':'squeeze','--squeeze':'squeeze',
+++    '--squeeze-repeats':'squeeze',
+++}
+++# boolean flags
+++BOOL_FLAG={
+++    '-i','--invert','-L','--literal-string','-j','--join-language-scopes',
+++    '-H','--hidden','--gitignored','--dry-run','--fail-any','--fail-none',
+++    '--fail-no-files','--sorted','--german-naive','--german-prefer-original',
+++}
+++# value-taking long flags
+++LANG_FLAGS=set()
+++for _l in LANGS:
+++    LANG_FLAGS.add('--'+_l)
+++    LANG_FLAGS.add('--'+_l+'-query')
+++    LANG_FLAGS.add('--'+_l+'-query-file')
+++VALUE_FLAG={'-G','--glob','--completions','--stdin-detection',
+++            '--stdout-detection','--threads'}
+++
+++def _lang_of(flag):
+++    # flag like --rust-query-file -> rust
+++    base=flag[2:]
+++    for suf in ('-query-file','-query',''):
+++        if base.endswith(suf):
+++            name=base[:-len(suf)] if suf else base
+++            break
+++    name=flag[2:].split('-')[0]
+++    return ALIAS_LANG.get(name, name)
+++
+++def parse_args(argv):
+++    args=argv[1:]
+++    actions=[]; replacement=None; scope=None
+++    literal=False; invert=False; join=False; hidden=False; gitignored=False
+++    dry_run=False; fail_any=False; fail_none=False; fail_no_files=False
+++    sorted_=False; german_naive=False; german_prefer=False
+++    glob_val=None; completions=None
+++    std_in='auto'; std_out='auto'; threads=None
+++    language=None; lang_queries=[]
+++    verbose=0
+++    sep=False
+++    i=0; n=len(args)
+++    def _consume_value(name, val):
+++        nonlocal glob_val, completions, std_in, std_out, threads
+++        if name in ('-G','--glob'): glob_val=val
+++        elif name=='--completions': completions=val
+++        elif name=='--stdin-detection': std_in=val
+++        elif name=='--stdout-detection': std_out=val
+++        elif name=='--threads': threads=val
+++    def _set_bool(name):
+++        nonlocal invert, literal, join, hidden, gitignored, dry_run
+++        nonlocal fail_any, fail_none, fail_no_files, sorted_, german_naive, german_prefer
+++        if name in ('-i','--invert'): invert=True
+++        elif name in ('-L','--literal-string'): literal=True
+++        elif name in ('-j','--join-language-scopes'): join=True
+++        elif name in ('-H','--hidden'): hidden=True
+++        elif name=='--gitignored': gitignored=True
+++        elif name=='--dry-run': dry_run=True
+++        elif name=='--fail-any': fail_any=True
+++        elif name=='--fail-none': fail_none=True
+++        elif name=='--fail-no-files': fail_no_files=True
+++        elif name=='--sorted': sorted_=True
+++        elif name=='--german-naive': german_naive=True
+++        elif name=='--german-prefer-original': german_prefer=True
+++
+++
+++    while i<n:
+++        a=args[i]
+++        if a=='--':
+++            sep=True; i+=1; continue
+++
+++        # help / version (not bundled)
+++        if a=='-h': return HELP_SHORT
+++        if a=='--help': return HELP_FULL
+++        if a in ('-V','--version'): return f"{CRATE_NAME} {VERSION}\n"
+++
+++        # long flag with =value
+++        if a.startswith('--') and '=' in a:
+++            name, val = a.split('=', 1)
+++            if name in LANG_FLAGS:
+++                language=_lang_of(name); lang_queries.append((name,val)); i+=1; continue
+++            if name in VALUE_FLAG:
+++                _consume_value(name, val)
+++                i+=1; continue
+++            # unknown long flag with =value: treat as error
+++            raise ParseError(f"error: unexpected argument '{a}' found\n\n  tip: to pass '{a}' as a value, use '-- {a}'")
+++
+++        # long flag (no =)
+++        if a.startswith('--'):
+++            if a in LANG_FLAGS:
+++                language=_lang_of(a)
+++                if i+1<n:
+++                    lang_queries.append((a,args[i+1])); i+=2; continue
+++                i+=1; continue
+++            if a in VALUE_FLAG:
+++                if i+1<n:
+++                    _consume_value(a, args[i+1]); i+=2; continue
+++                i+=1; continue
+++            if a in BOOL_FLAG:
+++                _set_bool(a)
+++                i+=1; continue
+++            if a in ACTION:
+++                actions.append(ACTION[a]); i+=1; continue
+++            if a=='--verbose':
+++                verbose+=1; i+=1; continue
+++            # unknown long flag
+++            raise ParseError(f"error: unexpected argument '{a}' found\n\n  tip: to pass '{a}' as a value, use '-- {a}'")
+++
+++        # short flags (possibly bundled)
+++        if a.startswith('-') and a!='-':
+++            # handle -v / --verbose
+++            if a=='-v' or a=='--verbose':
+++                verbose+=1; i+=1; continue
+++            # parse bundle of single-char short flags
+++            chars=a[1:]
+++            # find first char in a known set; bundle boolean/short flags
+++            while chars:
+++                c=chars[0]
+++                flag='-'+c
+++                if flag in ACTION:
+++                    actions.append(ACTION[flag]); chars=chars[1:]; continue
+++                if flag in BOOL_FLAG:
+++                    _set_bool(flag); chars=chars[1:]; continue
+++                if flag in VALUE_FLAG:
+++                    # value flag: rest of bundle (or next arg) is the value
+++                    rest=chars[1:]
+++                    if rest:
+++                        _consume_value(flag, rest); chars=''
+++                    elif i+1<n:
+++                        _consume_value(flag, args[i+1]); i+=1; chars=''
+++                    else:
+++                        chars=''
+++                    break
+++                # unknown short flag
+++                raise ParseError(f"error: unexpected argument '{a}' found\n\n  tip: to pass '{a}' as a value, use '-- {a}'")
+++            i+=1; continue
+++
+++        # positional (after -- is replacement; before -- is scope)
+++        if sep:
+++            if replacement is None:
+++                replacement=a
+++            else:
+++                replacement=replacement+('' if replacement.endswith(' ') else ' ')+a
+++        else:
+++            if scope is None:
+++                scope=a
+++            else:
+++                raise ParseError(f"error: unexpected argument '{a}' found")
+++        i+=1
+++
+++    # env var defaults (best effort)
+++    if replacement is None and 'REPLACE' in os.environ:
+++        replacement=os.environ['REPLACE']
+++    if invert and 'INVERT' not in os.environ:
+++        pass
+++    if literal and 'LITERAL_STRING' not in os.environ:
+++        pass
+++
+++    return dict(actions=actions, replacement=replacement, scope=scope,
+++        literal=literal, invert=invert, join=join, hidden=hidden,
+++        gitignored=gitignored, sorted_=sorted_, dry_run=dry_run,
+++        fail_any=fail_any, fail_none=fail_none, fail_no_files=fail_no_files,
+++        glob=glob_val, completions=completions, std_in=std_in,
+++        std_out=std_out, threads=threads, language=language,
+++        lang_queries=lang_queries, verbose=verbose,
+++        german_naive=german_naive, german_prefer=german_prefer)
+++
+++
+++# ============================================================
+++#  Main processing
+++# ============================================================
+++def log_error(msg):
+++    now = datetime.datetime.now(datetime.timezone.utc)
+++    ts = now.strftime('%Y-%m-%dT%H:%M:%S.') + f"{now.microsecond:06d}Z"
+++    sys.stderr.write(f"[{ts} ERROR srgn] {msg}\n")
+++
+++def do_replace(replacement, match=None):
+++    # expansion of $N and $name capture references; literal otherwise
+++    out=[]
+++    i=0
+++    while i < len(replacement):
+++        c=replacement[i]
+++        if c=='$' and i+1 < len(replacement):
+++            j=i+1
+++            if replacement[j].isdigit():
+++                k=j
+++                while k < len(replacement) and replacement[k].isdigit():
+++                    k+=1
+++                num=int(replacement[j:k])
+++                val=''
+++                if match is not None:
+++                    try:
+++                        g=match.group(num)
+++                        val=g if g is not None else ''
+++                    except (re.error, IndexError):
+++                        val=''
+++                out.append(val)
+++                i=k; continue
+++            m2=re.match(r'\$[A-Za-z_][A-Za-z0-9_]*', replacement[j:])
+++            if m2:
+++                name=m2.group()[1:]
+++                val=''
+++                if match is not None:
+++                    try:
+++                        g=match.group(name)
+++                        val=g if g is not None else ''
+++                    except (re.error, IndexError):
+++                        val=''
+++                out.append(val)
+++                i=j+len(m2.group()); continue
+++        out.append(c); i+=1
+++    return ''.join(out)
+++
+++_COMPOSABLE_ORDER={'upper','lower','titlecase','normalize','german','symbols'}
+++def apply_actions(text, actions, replacement, invert, match=None,
+++                  german_naive=False, german_prefer=False):
+++    # Replacement runs first ("If given, will run before any other action").
+++    # Composable actions run in the order they appear on the command line.
+++    seq=[]
+++    if replacement is not None:
+++        seq.append('replace')
+++    for act in actions:
+++        if act in _COMPOSABLE_ORDER:
+++            seq.append(act)
+++    res=text
+++    for act in seq:
+++        if act=='upper':
+++            res=res.upper()
+++        elif act=='lower':
+++            res=res.lower()
+++        elif act=='titlecase':
+++            res=action_titlecase(res)
+++        elif act=='normalize':
+++            res=action_normalize(res)
+++        elif act=='german':
+++            res=action_german(res, german_naive, german_prefer)
+++        elif act=='symbols':
+++            res=action_symbols(res, invert)
+++        elif act=='replace':
+++            res=do_replace(replacement, match)
+++    return res
+++
+++def find_matches(line, pat, scope, literal):
+++    matches=[]
+++    if literal:
+++        start=0
+++        while True:
+++            idx=line.find(scope, start)
+++            if idx<0: break
+++            matches.append((idx, idx+len(scope), None))
+++            start=idx+1
+++    else:
+++        for m in pat.finditer(line):
+++            matches.append((m.start(), m.end(), m))
+++    return matches
+++
+++def process_line(line, pat, scope, actions, replacement, invert, literal,
+++                 german_naive=False, german_prefer=False):
+++    matches=find_matches(line, pat, scope, literal)
+++    if not matches:
+++        return line, False
+++    res=[]
+++    pos=0
+++    for (s,e,m) in matches:
+++        res.append(line[pos:s])
+++        matched=line[s:e]
+++        res.append(apply_actions(matched, actions, replacement, invert,
+++                                 match=m, german_naive=german_naive,
+++                                 german_prefer=german_prefer))
+++        pos=e
+++    res.append(line[pos:])
+++    return ''.join(res), True
+++
+++def read_input(files):
+++    if not files:
+++        return sys.stdin.read()
+++    out=[]
+++    for f in files:
+++        try:
+++            with open(f,'r',encoding='utf-8') as fh:
+++                out.append(fh.read())
+++        except Exception:
+++            pass
+++    return '\n'.join(out) if out else ''
+++
+++
+++COMPOSABLE={'upper','lower','titlecase','normalize','german','symbols'}
+++STANDALONE={'delete','squeeze'}
+++
+++def validate(actions, args, data, prog):
+++    LONG={'delete':'--delete','squeeze':'--squeeze','upper':'--upper',
+++          'lower':'--lower','titlecase':'--titlecase','normalize':'--normalize',
+++          'german':'--german','symbols':'--symbols'}
+++    def lname(a): return LONG.get(a, '--'+a)
+++    standalone_present=[a for a in actions if a in STANDALONE]
+++    for a in standalone_present:
+++        conflicting=[]
+++        if args.get('replacement') is not None:
+++            conflicting.append('[REPLACEMENT]')
+++        comp=[x for x in actions if x in COMPOSABLE]
+++        if comp:
+++            for x in comp:
+++                conflicting.append(lname(x))
+++        if conflicting:
+++            present=[lname(x) for x in actions]
+++            usage=f"Usage: {prog} {' '.join(present)} <SCOPE> [-- <REPLACEMENT>]"
+++            msg=(f"error: the argument '{lname(a)}' cannot be used with:"
+++                 + ''.join(f'\n  {c}' for c in conflicting))
+++            raise ParseError(msg, usage=usage)
+++    if standalone_present and args.get('scope') is None:
+++        present=[lname(x) for x in actions]
+++        usage=f"Usage: {prog} {' '.join(present)} <SCOPE> [-- <REPLACEMENT>]"
+++        msg=(f"error: the following required arguments were not provided:\n"
+++             f"  <SCOPE>")
+++        raise ParseError(msg, usage=usage)
+++
+++def main():
+++    argv=sys.argv
+++    try:
+++        result=parse_args(argv)
+++    except ParseError as e:
+++        sys.stderr.write(e.msg+'\n')
+++        usage=e.usage or f"Usage: {prog_name()} [OPTIONS] [SCOPE] [-- <REPLACEMENT>]"
+++        sys.stderr.write(f"\n{usage}\n\nFor more information, try '--help'.\n")
+++        return 2
+++    if isinstance(result, str):
+++        sys.stdout.write(result)
+++        return 0
+++
+++    actions=result['actions']
+++    replacement=result['replacement']
+++    scope=result['scope'] or '.*'
+++    literal=result['literal']
+++    invert=result['invert']
+++    language=result['language']
+++    fail_any=result['fail_any']
+++    fail_none=result['fail_none']
+++    german_naive=result['german_naive']
+++    german_prefer=result['german_prefer']
+++    completions=result['completions']
+++
+++    # shell completions: best-effort (print nothing, exit 0)
+++    if completions is not None:
+++        return 0
+++
+++    # clap validation (required <SCOPE> for standalone actions; conflicts)
+++    try:
+++        validate(actions, result, data=None, prog=prog_name())
+++    except ParseError as e:
+++        sys.stderr.write(e.msg+'\n')
+++        sys.stderr.write(f"\n{e.usage}\n\nFor more information, try '--help'.\n")
+++        return 2
+++
+++    # read input (stdin by default; files handling is best-effort)
+++    data=read_input([])
+++    lines=data.split('\n')
+++
+++    try:
+++        pat=re.compile(scope) if not literal else None
+++    except re.error as err:
+++        sys.stderr.write(f"Error: invalid regex: {err}\n")
+++        return 1
+++
+++    # search mode: language scope present and no actions
+++    if language and not actions and replacement is None:
+++        any_match=False
+++        for ln,line in enumerate(lines,1):
+++            if literal:
+++                matched = scope in line
+++            else:
+++                matched = pat.search(line) is not None
+++            if matched:
+++                any_match=True
+++                sys.stdout.write(f"{ln}:{line}\n")
+++        if not any_match:
+++            log_error("No input was in scope")
+++            return 1
+++        if fail_none and not any_match:
+++            return 1
+++        if fail_any and any_match:
+++            sys.stderr.write("Error: found input in scope\n")
+++            return 1
+++        return 0
+++
+++    # no actions, not in search mode
+++    if not actions and replacement is None:
+++        log_error("No actions specified, and not in search mode. Will return input unchanged, if any.")
+++        sys.stdout.write(data)
+++        if fail_none:
+++            return 1
+++        return 0
+++
+++    # delete is standalone
+++    if 'delete' in actions:
+++        out_lines=[]
+++        any_match=False
+++        for line in lines:
+++            if literal:
+++                new=line.replace(scope,'')
+++                if new!=line: any_match=True
+++            else:
+++                new=pat.sub('', line)
+++                if new!=line: any_match=True
+++            out_lines.append(new)
+++        sys.stdout.write('\n'.join(out_lines))
+++        if fail_any and any_match: sys.stderr.write("Error: found input in scope\n"); return 1
+++        if fail_none and not any_match: return 1
+++        return 0
+++
+++    # squeeze standalone
+++    if 'squeeze' in actions:
+++        out_lines=[]
+++        any_match=False
+++        for line in lines:
+++            if literal:
+++                # squeeze consecutive literal occurrences of scope into one
+++                new=line
+++                if scope:
+++                    while scope+scope in new:
+++                        new=new.replace(scope+scope, scope)
+++                if new!=line: any_match=True
+++                line=new
+++            else:
+++                new=pat.sub(lambda m:m.group(0)[0] if m.group(0) else '', line)
+++                if new!=line: any_match=True
+++                line=new
+++            out_lines.append(line)
+++        sys.stdout.write('\n'.join(out_lines))
+++        if fail_any and any_match: sys.stderr.write("Error: found input in scope\n"); return 1
+++        if fail_none and not any_match: return 1
+++        return 0
+++
+++    # general transform
+++    out_lines=[]
+++    any_match=False
+++    for line in lines:
+++        new, matched = process_line(line, pat, scope, actions, replacement, invert,
+++                                    literal, german_naive, german_prefer)
+++        if matched: any_match=True
+++        out_lines.append(new)
+++    sys.stdout.write('\n'.join(out_lines))
+++    if fail_any and any_match: sys.stderr.write("Error: found input in scope\n"); return 1
+++    if fail_none and not any_match: return 1
+++    return 0
+++
+++if __name__=='__main__':
+++    try:
+++        sys.exit(main())
+++    except Exception as e:
+++        sys.stderr.write(f"Error: {e}\n")
+++        sys.exit(1)
+diff --git a/res/help_full.txt b/res/help_full.txt
+new file mode 100644
+index 0000000..bfc35d8
+--- /dev/null
++++ b/res/help_full.txt
+@@ -0,0 +1,546 @@
++A grep-like tool which understands source code syntax and allows for manipulation in
++addition to search
++
++Usage: executable [OPTIONS] [SCOPE] [-- <REPLACEMENT>]
++
++Arguments:
++  [SCOPE]
++          Scope to apply to, as a regular expression pattern.
++          
++          If string literal mode is requested, will be interpreted as a literal
++          string.
++          
++          Actions will apply their transformations within this scope only.
++          
++          The default is the global scope, matching the entire input. Where that
++          default is meaningless or dangerous (e.g., deletion), this argument is
++          required.
++          
++          [default: .*]
++
++Options:
++      --completions <SHELL>
++          Print shell completions for the given shell.
++          
++          [possible values: bash, elvish, fish, powershell, zsh]
++
++  -h, --help
++          Print help (see a summary with '-h')
++
++  -V, --version
++          Print version
++
++Composable Actions:
++  -u, --upper
++          Uppercase anything in scope.
++          
++          [env: UPPER=]
++
++  -l, --lower
++          Lowercase anything in scope.
++          
++          [env: LOWER=]
++
++  -t, --titlecase
++          Titlecase anything in scope.
++          
++          [env: TITLECASE=]
++
++  -n, --normalize
++          Normalize (Normalization Form D) anything in scope, and throw away marks.
++          
++          [env: NORMALIZE=]
++
++  -g, --german
++          Perform substitutions on German words, such as 'Abenteuergruesse' to
++          'Abenteuergrüße', for anything in scope.
++          
++          ASCII spellings for Umlauts (ae, oe, ue) and Eszett (ss) are replaced by
++          their respective native Unicode (ä, ö, ü, ß).
++          
++          Arbitrary compound words are supported.
++          
++          Words legally containing alternative spellings are not modified.
++          
++          Words require correct spelling to be detected.
++
++  -S, --symbols
++          Perform substitutions on symbols, such as '!=' to '≠', '->' to '→', on
++          anything in scope.
++          
++          Helps translate 'ASCII art' into native Unicode representations.
++
++  [REPLACEMENT]
++          Replace anything in scope with this value.
++          
++          Variables are supported: if a regex pattern was used for scoping and
++          captured content in named or numbered capture groups, access these in the
++          replacement value using `$1` etc. for numbered, `$NAME` etc. for named
++          capture groups.
++          
++          This action is specially treated as a positional argument for ergonomics and
++          compatibility with `tr`.
++          
++          If given, will run before any other action.
++          
++          [env: REPLACE=]
++
++Standalone Actions (only usable alone):
++  -d, --delete
++          Delete anything in scope.
++          
++          Cannot be used with any other action: there is no point in deleting and
++          performing any other processing. Sibling actions would either receive empty
++          input or have their work wiped.
++
++  -s, --squeeze
++          Squeeze consecutive occurrences of scope into one.
++          
++          [env: SQUEEZE=]
++          [aliases: squeeze-repeats]
++
++Options (global):
++  -G, --glob <GLOB>
++          Glob of files to work on (instead of reading stdin).
++          
++          If actions are applied, they overwrite files in-place.
++          
++          For supported glob syntax, see:
++          <https://docs.rs/glob/0.3.1/glob/struct.Pattern.html>
++          
++          Names of processed files are written to stdout.
++
++      --fail-no-files
++          Fail if working on files (e.g. globbing is requested) but none are found.
++          
++          Processing no files is not an error condition in itself, but might be an
++          unexpected outcome in some contexts. This flag makes the condition explicit.
++
++      --dry-run
++          Do not destructively overwrite files, instead print rich diff only.
++          
++          The diff details the names of files which would be modified, alongside all
++          changes inside those files which would be performed outside of dry running.
++          It is similar to git diff with word diffing enabled.
++
++  -i, --invert
++          Undo the effects of passed actions, where applicable.
++          
++          Requires a 1:1 mapping between replacements and original, which is currently
++          available only for:
++          
++          - symbols: '≠' <-> '!=' etc.
++          
++          Other actions:
++          
++          - german: inverting e.g. 'Ä' is ambiguous (can be 'Ae' or 'AE')
++          
++          - upper, lower, deletion, squeeze: inversion is impossible as information is
++            lost
++          
++          These may still be passed, but will be ignored for inversion and applied
++          normally.
++          
++          [env: INVERT=]
++
++  -L, --literal-string
++          Do not interpret the scope as a regex. Instead, interpret it as a literal
++          string. Will require a scope to be passed.
++          
++          [env: LITERAL_STRING=]
++
++      --fail-any
++          If anything at all is found to be in scope, fail.
++          
++          The default is to continue processing normally.
++
++      --fail-none
++          If nothing is found to be in scope, fail.
++          
++          The default is to return the input unchanged (without failure).
++
++  -j, --join-language-scopes
++          Join (logical 'OR') multiple language scopes, instead of intersecting them.
++          
++          The default when multiple language scopes are given is to intersect their
++          scopes, left to right. For example, `--go func --go strings` will first
++          scope down to `func` bodies, then look for strings only within those. This
++          flag instead joins (in the set logic sense) all scopes. The example would
++          then scope any `func` bodies, and any strings, anywhere. Language scopers
++          can then also be given in any order.
++          
++          No effect if only a single language scope is given. Also does not affect
++          non-language scopers (regex pattern etc.), which always intersect.
++
++  -H, --hidden
++          Do not ignore hidden files and directories.
++
++      --gitignored
++          Do not ignore `.gitignore`d files and directories.
++
++      --sorted
++          Process files in lexicographically sorted order, by file path.
++          
++          In search mode, this emits results in sorted order. Otherwise, it processes
++          files in sorted order.
++          
++          Sorted processing disables parallel processing.
++
++      --stdin-detection <STDIN_DETECTION>
++          Control heuristics for stdin readability detection, and force to value.
++          
++          [default: auto]
++
++          Possible values:
++          - auto:             Automatically detect if stdin is readable
++          - force-readable:   Act as if stdin is readable
++          - force-unreadable: Act as if stdin is not readable
++
++      --stdout-detection <STDOUT_DETECTION>
++          Control heuristics for stdout detection, and potentially force to value.
++          
++          [default: auto]
++
++          Possible values:
++          - auto:       Automatically detect if stdout is a TTY and act accordingly
++          - force-tty:  Act as if stdout is a TTY
++          - force-pipe: Act as if stdout is not a TTY, e.g. a pipe, redirect
++
++      --threads <THREADS>
++          Number of threads to run processing on, when working with files.
++          
++          If not specified, will default to available parallelism. Set to 1 for
++          sequential, deterministic (but not sorted) output.
++
++  -v, --verbose...
++          Increase log verbosity level.
++          
++          The base log level to use is read from the `RUST_LOG` environment variable
++          (if unspecified, defaults to 'error'), and increased according to the number
++          of times this flag is given, maxing out at 'trace' verbosity.
++
++Language scopes:
++      --c <C>
++          Scope C code using a prepared query.
++          
++          [env: C=]
++
++          Possible values:
++          - comments:        Comments (single- and multi-line)
++          - strings:         Strings
++          - includes:        Includes
++          - type-def:        Type definitions
++          - enum:            `enum` definitions
++          - struct:          `struct` type definitions
++          - variable:        Variable definitions
++          - function:        All functions usages (declarations and calls)
++          - function-def:    Function definitions
++          - function-decl:   Function declaration
++          - switch:          `switch` blocks
++          - if:              `if` blocks
++          - for:             `for` blocks
++          - while:           `while` blocks
++          - do:              `do` blocks
++          - union:           `union` blocks
++          - identifier:      Identifier
++          - declaration:     Declaration
++          - call-expression: Call expression
++
++      --c-query <TREE-SITTER-QUERY-VALUE>
++          Scope C code using a custom tree-sitter query.
++          
++          [env: C_QUERY=]
++
++      --c-query-file <TREE-SITTER-QUERY-FILENAME>
++          Scope C code using a custom tree-sitter query from file.
++          
++          [env: C_QUERY_FILE=]
++
++      --csharp <CSHARP>
++          Scope C# code using a prepared query.
++          
++          [env: CSHARP=]
++          [aliases: cs]
++
++          Possible values:
++          - comments:             Comments (including XML, inline, doc comments)
++          - strings:              Strings (incl. verbatim, interpolated; incl. quotes,
++            except for interpolated)
++          - usings:               `using` directives (including periods)
++          - struct:               `struct` definitions (in their entirety)
++          - enum:                 `enum` definitions (in their entirety)
++          - interface:            `interface` definitions (in their entirety)
++          - class:                `class` definitions (in their entirety)
++          - method:               Method definitions (in their entirety)
++          - variable-declaration: Variable declarations (in their entirety)
++          - property:             Property definitions (in their entirety)
++          - constructor:          Constructor definitions (in their entirety)
++          - destructor:           Destructor definitions (in their entirety)
++          - field:                Field definitions on types (in their entirety)
++          - attribute:            Attribute names
++          - identifier:           Identifier names
++
++      --csharp-query <TREE-SITTER-QUERY-VALUE>
++          Scope C# code using a custom tree-sitter query.
++          
++          [env: CSHARP_QUERY=]
++
++      --csharp-query-file <TREE-SITTER-QUERY-FILENAME>
++          Scope C# code using a custom tree-sitter query from file.
++          
++          [env: CSHARP_QUERY_FILE=]
++
++      --go <GO>
++          Scope Go code using a prepared query.
++          
++          [env: GO=]
++
++          Possible values:
++          - comments:            Comments (single- and multi-line)
++          - strings:             Strings (interpreted and raw; excluding struct tags)
++          - imports:             Imports
++          - expression:          Expressions (all of them!)
++          - type-def:            Type definitions
++          - type-alias:          Type alias assignments
++          - struct:              `struct` type definitions
++          - struct~<PATTERN>:    Like struct, but only considers items whose name matches
++            PATTERN.
++          - interface:           `interface` type definitions
++          - interface~<PATTERN>: Like interface, but only considers items whose name
++            matches PATTERN.
++          - const:               `const` specifications
++          - var:                 `var` specifications
++          - func:                `func` definitions
++          - func~<PATTERN>:      Like func, but only considers items whose name matches
++            PATTERN.
++          - method:              Method `func` definitions (`func (recv Recv) SomeFunc()`)
++          - free-func:           Free `func` definitions (`func SomeFunc()`)
++          - init-func:           `func init()` definitions
++          - type-params:         Type parameters (generics)
++          - defer:               `defer` blocks
++          - select:              `select` blocks
++          - go:                  `go` blocks
++          - switch:              `switch` blocks
++          - labeled:             Labeled statements
++          - goto:                `goto` statements
++          - struct-tags:         Struct tags
++
++      --go-query <TREE-SITTER-QUERY-VALUE>
++          Scope Go code using a custom tree-sitter query.
++          
++          [env: GO_QUERY=]
++
++      --go-query-file <TREE-SITTER-QUERY-FILENAME>
++          Scope Go code using a custom tree-sitter query from file.
++          
++          [env: GO_QUERY_FILE=]
++
++      --hcl <HCL>
++          Scope HashiCorp Configuration Language code using a prepared query.
++          
++          [env: HCL=]
++
++          Possible values:
++          - variable:           `variable` blocks (in their entirety)
++          - resource:           `resource` blocks (in their entirety)
++          - data:               `data` blocks (in their entirety)
++          - output:             `output` blocks (in their entirety)
++          - provider:           `provider` blocks (in their entirety)
++          - required-providers: All `required_providers` from the `terraform` block
++          - terraform:          `terraform` blocks (in their entirety)
++          - locals:             `locals` blocks (in their entirety)
++          - module:             `module` blocks (in their entirety)
++          - variables:          Variable declarations and usages
++          - resource-names:     `resource` name declarations and usages
++          - resource-types:     `resource` type declarations and usages
++          - data-names:         `data` name declarations and usages
++          - data-sources:       `data` source declarations and usages
++          - comments:           Comments
++          - strings:            Literal strings
++
++      --hcl-query <TREE-SITTER-QUERY-VALUE>
++          Scope HashiCorp Configuration Language code using a custom tree-sitter query.
++          
++          [env: HCL_QUERY=]
++
++      --hcl-query-file <TREE-SITTER-QUERY-FILENAME>
++          Scope HashiCorp Configuration Language code using a custom tree-sitter query
++          from file.
++          
++          [env: HCL_QUERY_FILE=]
++
++      --python <PYTHON>
++          Scope Python code using a prepared query.
++          
++          [env: PYTHON=]
++          [aliases: py]
++
++          Possible values:
++          - comments:             Comments
++          - strings:              Strings (raw, byte, f-strings; interpolation not
++            included)
++          - imports:              Module names in imports (incl. periods; excl.
++            `import`/`from`/`as`/`*`)
++          - doc-strings:          Docstrings (not including multi-line strings)
++          - function-names:       Function names, at the definition site
++          - function-calls:       Function calls
++          - class:                Class definitions (in their entirety)
++          - def:                  Function definitions (*all* `def` block in their
++            entirety)
++          - async-def:            Async function definitions (*all* `async def` block in
++            their entirety)
++          - methods:              Function definitions inside `class` bodies
++          - class-methods:        Function definitions decorated as `classmethod` (excl.
++            the decorator)
++          - static-methods:       Function definitions decorated as `staticmethod` (excl.
++            the decorator)
++          - with:                 `with` blocks (in their entirety)
++          - try:                  `try` blocks (in their entirety)
++          - lambda:               `lambda` statements (in their entirety)
++          - globals:              Global, i.e. module-level variables
++          - variable-identifiers: Identifiers for variables (left-hand side of
++            assignments)
++          - types:                Types in type hints
++          - identifiers:          Identifiers (variable names, ...)
++
++      --python-query <TREE-SITTER-QUERY-VALUE>
++          Scope Python code using a custom tree-sitter query.
++          
++          [env: PYTHON_QUERY=]
++
++      --python-query-file <TREE-SITTER-QUERY-FILENAME>
++          Scope Python code using a custom tree-sitter query from file.
++          
++          [env: PYTHON_QUERY_FILE=]
++
++      --rust <RUST>
++          Scope Rust code using a prepared query.
++          
++          [env: RUST=]
++          [aliases: rs]
++
++          Possible values:
++          - comments:         Comments (line and block styles; excluding doc comments;
++            comment chars incl.)
++          - doc-comments:     Doc comments (comment chars included)
++          - uses:             Use statements (paths only; excl. `use`/`as`/`*`)
++          - strings:          Strings (regular, raw, byte; includes interpolation parts in
++            format strings!)
++          - attribute:        Attributes like `#[attr]`
++          - struct:           `struct` definitions
++          - struct~<PATTERN>: Like struct, but only considers items whose name matches
++            PATTERN.
++          - priv-struct:      `struct` definitions not marked `pub`
++          - pub-struct:       `struct` definitions marked `pub`
++          - pub-crate-struct: `struct` definitions marked `pub(crate)`
++          - pub-self-struct:  `struct` definitions marked `pub(self)`
++          - pub-super-struct: `struct` definitions marked `pub(super)`
++          - enum:             `enum` definitions
++          - enum~<PATTERN>:   Like enum, but only considers items whose name matches
++            PATTERN.
++          - priv-enum:        `enum` definitions not marked `pub`
++          - pub-enum:         `enum` definitions marked `pub`
++          - pub-crate-enum:   `enum` definitions marked `pub(crate)`
++          - pub-self-enum:    `enum` definitions marked `pub(self)`
++          - pub-super-enum:   `enum` definitions marked `pub(super)`
++          - enum-variant:     Variant members of `enum` definitions
++          - fn:               Function definitions
++          - fn~<PATTERN>:     Like fn, but only considers items whose name matches
++            PATTERN.
++          - impl-fn:          Function definitions inside `impl` blocks (associated
++            functions/methods)
++          - priv-fn:          Function definitions not marked `pub`
++          - pub-fn:           Function definitions marked `pub`
++          - pub-crate-fn:     Function definitions marked `pub(crate)`
++          - pub-self-fn:      Function definitions marked `pub(self)`
++          - pub-super-fn:     Function definitions marked `pub(super)`
++          - const-fn:         Function definitions marked `const`
++          - async-fn:         Function definitions marked `async`
++          - unsafe-fn:        Function definitions marked `unsafe`
++          - extern-fn:        Function definitions marked `extern`
++          - test-fn:          Function definitions with attributes containing `test`
++            (`#[test]`, `#[rstest]`, ...)
++          - trait:            `trait` definitions
++          - trait~<PATTERN>:  Like trait, but only considers items whose name matches
++            PATTERN.
++          - impl:             `impl` blocks
++          - impl-type:        `impl` blocks for types (`impl SomeType {}`)
++          - impl-trait:       `impl` blocks for traits on types (`impl SomeTrait for
++            SomeType {}`)
++          - mod:              `mod` blocks
++          - mod~<PATTERN>:    Like mod, but only considers items whose name matches
++            PATTERN.
++          - mod-tests:        `mod tests` blocks
++          - type-def:         Type definitions (`struct`, `enum`, `union`)
++          - identifier:       Identifiers
++          - type-identifier:  Identifiers for types
++          - closure:          Closure definitions
++          - unsafe:           `unsafe` keyword usages (`unsafe fn`, `unsafe` blocks,
++            `unsafe Trait`, `unsafe impl Trait`)
++
++      --rust-query <TREE-SITTER-QUERY-VALUE>
++          Scope Rust code using a custom tree-sitter query.
++          
++          [env: RUST_QUERY=]
++
++      --rust-query-file <TREE-SITTER-QUERY-FILENAME>
++          Scope Rust code using a custom tree-sitter query from file.
++          
++          [env: RUST_QUERY_FILE=]
++
++      --typescript <TYPESCRIPT>
++          Scope TypeScript code using a prepared query.
++          
++          [env: TYPESCRIPT=]
++          [aliases: ts]
++
++          Possible values:
++          - comments:       Comments
++          - strings:        Strings (literal, template)
++          - imports:        Imports (module specifiers)
++          - function:       Any `function` definitions
++          - async-function: `async function` definitions
++          - sync-function:  Non-`async function` definitions
++          - method:         Method definitions
++          - constructor:    `constructor` method definitions
++          - class:          `class` definitions
++          - enum:           `enum` definitions
++          - interface:      `interface` definitions
++          - try-catch:      `try`/`catch`/`finally` blocks
++          - var-decl:       Variable declarations (`let`, `const`, `var`)
++          - let:            `let` variable declarations
++          - const:          `const` variable declarations
++          - var:            `var` variable declarations
++          - type-params:    Type (generic) parameters
++          - type-alias:     Type alias declarations
++          - namespace:      `namespace` blocks
++          - export:         `export` blocks
++
++      --typescript-query <TREE-SITTER-QUERY-VALUE>
++          Scope TypeScript code using a custom tree-sitter query.
++          
++          [env: TYPESCRIPT_QUERY=]
++
++      --typescript-query-file <TREE-SITTER-QUERY-FILENAME>
++          Scope TypeScript code using a custom tree-sitter query from file.
++          
++          [env: TYPESCRIPT_QUERY_FILE=]
++
++Options (german):
++      --german-prefer-original
++          When some original version and its replacement are equally legal, prefer the
++          original and do not modify.
++          
++          For example, "Busse" (original) and "Buße" (replacement) are equally legal
++          words: by default, the tool would prefer the latter.
++          
++          [env: GERMAN_PREFER_ORIGINAL=]
++
++      --german-naive
++          Always perform any possible replacement ('ae' -> 'ä', 'ss' -> 'ß', etc.),
++          regardless of legality of the resulting word
++          
++          Useful for names, which are otherwise not modifiable as they do not occur in
++          dictionaries. Called 'naive' as this does not perform legal checks.
++          
++          [env: GERMAN_NAIVE=]
+diff --git a/res/help_short.txt b/res/help_short.txt
+new file mode 100644
+index 0000000..c42b87b
+--- /dev/null
++++ b/res/help_short.txt
+@@ -0,0 +1,152 @@
++A grep-like tool which understands source code syntax and allows for manipulation in
++addition to search
++
++Usage: executable [OPTIONS] [SCOPE] [-- <REPLACEMENT>]
++
++Arguments:
++  [SCOPE]  Scope to apply to, as a regular expression pattern. [default: .*]
++
++Options:
++      --completions <SHELL>  Print shell completions for the given shell. [possible
++                             values: bash, elvish, fish, powershell, zsh]
++  -h, --help                 Print help (see more with '--help')
++  -V, --version              Print version
++
++Composable Actions:
++  -u, --upper        Uppercase anything in scope. [env: UPPER=]
++  -l, --lower        Lowercase anything in scope. [env: LOWER=]
++  -t, --titlecase    Titlecase anything in scope. [env: TITLECASE=]
++  -n, --normalize    Normalize (Normalization Form D) anything in scope, and throw away
++                     marks. [env: NORMALIZE=]
++  -g, --german       Perform substitutions on German words, such as 'Abenteuergruesse' to
++                     'Abenteuergrüße', for anything in scope.
++  -S, --symbols      Perform substitutions on symbols, such as '!=' to '≠', '->' to '→',
++                     on
++                     anything in scope.
++  [REPLACEMENT]  Replace anything in scope with this value. [env: REPLACE=]
++
++Standalone Actions (only usable alone):
++  -d, --delete   Delete anything in scope.
++  -s, --squeeze  Squeeze consecutive occurrences of scope into one. [env: SQUEEZE=]
++                 [aliases: squeeze-repeats]
++
++Options (global):
++  -G, --glob <GLOB>
++          Glob of files to work on (instead of reading stdin).
++      --fail-no-files
++          Fail if working on files (e.g. globbing is requested) but none are found.
++      --dry-run
++          Do not destructively overwrite files, instead print rich diff only.
++  -i, --invert
++          Undo the effects of passed actions, where applicable. [env: INVERT=]
++  -L, --literal-string
++          Do not interpret the scope as a regex. Instead, interpret it as a literal
++          string. Will require a scope to be passed. [env: LITERAL_STRING=]
++      --fail-any
++          If anything at all is found to be in scope, fail.
++      --fail-none
++          If nothing is found to be in scope, fail.
++  -j, --join-language-scopes
++          Join (logical 'OR') multiple language scopes, instead of intersecting them.
++  -H, --hidden
++          Do not ignore hidden files and directories.
++      --gitignored
++          Do not ignore `.gitignore`d files and directories.
++      --sorted
++          Process files in lexicographically sorted order, by file path.
++      --stdin-detection <STDIN_DETECTION>
++          Control heuristics for stdin readability detection, and force to value.
++          [default: auto] [possible values: auto, force-readable, force-unreadable]
++      --stdout-detection <STDOUT_DETECTION>
++          Control heuristics for stdout detection, and potentially force to value.
++          [default: auto] [possible values: auto, force-tty, force-pipe]
++      --threads <THREADS>
++          Number of threads to run processing on, when working with files.
++  -v, --verbose...
++          Increase log verbosity level.
++
++Language scopes:
++      --c <C>
++          Scope C code using a prepared query. [env: C=] [possible values: comments,
++          strings, includes, type-def, enum, struct, variable, function, function-def,
++          function-decl, switch, if, for, while, do, union, identifier, declaration,
++          call-expression]
++      --c-query <TREE-SITTER-QUERY-VALUE>
++          Scope C code using a custom tree-sitter query. [env: C_QUERY=]
++      --c-query-file <TREE-SITTER-QUERY-FILENAME>
++          Scope C code using a custom tree-sitter query from file. [env: C_QUERY_FILE=]
++      --csharp <CSHARP>
++          Scope C# code using a prepared query. [env: CSHARP=] [aliases: cs] [possible
++          values: comments, strings, usings, struct, enum, interface, class, method,
++          variable-declaration, property, constructor, destructor, field, attribute,
++          identifier]
++      --csharp-query <TREE-SITTER-QUERY-VALUE>
++          Scope C# code using a custom tree-sitter query. [env: CSHARP_QUERY=]
++      --csharp-query-file <TREE-SITTER-QUERY-FILENAME>
++          Scope C# code using a custom tree-sitter query from file. [env:
++          CSHARP_QUERY_FILE=]
++      --go <GO>
++          Scope Go code using a prepared query. [env: GO=] [possible values: comments,
++          strings, imports, expression, type-def, type-alias, struct, struct~<PATTERN>,
++          interface, interface~<PATTERN>, const, var, func, func~<PATTERN>, method,
++          free-func, init-func, type-params, defer, select, go, switch, labeled, goto,
++          struct-tags]
++      --go-query <TREE-SITTER-QUERY-VALUE>
++          Scope Go code using a custom tree-sitter query. [env: GO_QUERY=]
++      --go-query-file <TREE-SITTER-QUERY-FILENAME>
++          Scope Go code using a custom tree-sitter query from file. [env: GO_QUERY_FILE=]
++      --hcl <HCL>
++          Scope HashiCorp Configuration Language code using a prepared query. [env: HCL=]
++          [possible values: variable, resource, data, output, provider,
++          required-providers, terraform, locals, module, variables, resource-names,
++          resource-types, data-names, data-sources, comments, strings]
++      --hcl-query <TREE-SITTER-QUERY-VALUE>
++          Scope HashiCorp Configuration Language code using a custom tree-sitter query.
++          [env: HCL_QUERY=]
++      --hcl-query-file <TREE-SITTER-QUERY-FILENAME>
++          Scope HashiCorp Configuration Language code using a custom tree-sitter query
++          from file. [env: HCL_QUERY_FILE=]
++      --python <PYTHON>
++          Scope Python code using a prepared query. [env: PYTHON=] [aliases: py] [possible
++          values: comments, strings, imports, doc-strings, function-names, function-calls,
++          class, def, async-def, methods, class-methods, static-methods, with, try,
++          lambda, globals, variable-identifiers, types, identifiers]
++      --python-query <TREE-SITTER-QUERY-VALUE>
++          Scope Python code using a custom tree-sitter query. [env: PYTHON_QUERY=]
++      --python-query-file <TREE-SITTER-QUERY-FILENAME>
++          Scope Python code using a custom tree-sitter query from file. [env:
++          PYTHON_QUERY_FILE=]
++      --rust <RUST>
++          Scope Rust code using a prepared query. [env: RUST=] [aliases: rs] [possible
++          values: comments, doc-comments, uses, strings, attribute, struct,
++          struct~<PATTERN>, priv-struct, pub-struct, pub-crate-struct, pub-self-struct,
++          pub-super-struct, enum, enum~<PATTERN>, priv-enum, pub-enum, pub-crate-enum,
++          pub-self-enum, pub-super-enum, enum-variant, fn, fn~<PATTERN>, impl-fn, priv-fn,
++          pub-fn, pub-crate-fn, pub-self-fn, pub-super-fn, const-fn, async-fn, unsafe-fn,
++          extern-fn, test-fn, trait, trait~<PATTERN>, impl, impl-type, impl-trait, mod,
++          mod~<PATTERN>, mod-tests, type-def, identifier, type-identifier, closure,
++          unsafe]
++      --rust-query <TREE-SITTER-QUERY-VALUE>
++          Scope Rust code using a custom tree-sitter query. [env: RUST_QUERY=]
++      --rust-query-file <TREE-SITTER-QUERY-FILENAME>
++          Scope Rust code using a custom tree-sitter query from file. [env:
++          RUST_QUERY_FILE=]
++      --typescript <TYPESCRIPT>
++          Scope TypeScript code using a prepared query. [env: TYPESCRIPT=] [aliases: ts]
++          [possible values: comments, strings, imports, function, async-function,
++          sync-function, method, constructor, class, enum, interface, try-catch, var-decl,
++          let, const, var, type-params, type-alias, namespace, export]
++      --typescript-query <TREE-SITTER-QUERY-VALUE>
++          Scope TypeScript code using a custom tree-sitter query. [env: TYPESCRIPT_QUERY=]
++      --typescript-query-file <TREE-SITTER-QUERY-FILENAME>
++          Scope TypeScript code using a custom tree-sitter query from file. [env:
++          TYPESCRIPT_QUERY_FILE=]
++
++Options (german):
++      --german-prefer-original  When some original version and its replacement are equally
++                                legal, prefer the
++                                original and do not modify. [env: GERMAN_PREFER_ORIGINAL=]
++      --german-naive            Always perform any possible replacement ('ae' -> 'ä', 'ss'
++                                -> 'ß', etc.),
++                                regardless of legality of the resulting word [env:
++                                GERMAN_NAIVE=]
+diff --git a/srgn_impl.py b/srgn_impl.py
+new file mode 100644
+index 0000000..b58f94a
+--- /dev/null
++++ b/srgn_impl.py
+@@ -0,0 +1,8 @@
++#!/usr/bin/env python3
++import sys, os, re, unicodedata
++
++# ---- Embedded help text (base64) ----
++import base64 as _b64
++
++def _load():
++    return None
+diff --git a/srgn_src.py b/srgn_src.py
+new file mode 100644
+index 0000000..103498b
+--- /dev/null
++++ b/srgn_src.py
+@@ -0,0 +1,565 @@
++#!/usr/bin/env python3
++# Reimplementation of srgn 0.14.1 behavior (regex + composable-action core).
++import sys, os, re, unicodedata, base64, io, datetime
++
++CRATE_NAME = "srgn"
++VERSION = "0.14.1"
++
++HELP_FULL  = base64.b64decode("__HELP_FULL_B64__").decode("utf-8", "replace")
++HELP_SHORT = base64.b64decode("__HELP_SHORT_B64__").decode("utf-8", "replace")
++
++def prog_name():
++    b = sys.argv[0] if sys.argv else "srgn"
++    return os.path.basename(b) if b else "srgn"
++
++# ============================================================
++#  Action implementations
++# ============================================================
++# Default (non-naive) german action converts 'ue' and 'ss' (case-insensitively),
++# matching srgn 0.14.1 behavior (e.g. 'Bruecken' -> 'BRÜCKEN', 'Koeffizienten' -> 'KOEFFIZIENTEN').
++# Naive mode also converts 'ae'/'oe'.
++GERMAN_BASE = [('ue','\u00fc'),('ss','\u00df')]
++GERMAN_NAIVE = [('ae','\u00e4'),('oe','\u00f6')]
++
++SYMBOLS = [
++    ('\u2260','!='),('\u2261','=='),('\u2264','<='),('\u2265','>='),
++    ('\u00b1','+-'),('\u00d7','x'),('\u00f7','/'),
++    ('\u2229','&&'),('\u222a','||'),('\u00ac','!'),
++    ('\u2018',"'"),('\u2019',"'"),
++    ('\u201c','"'),('\u201d','"'),
++    ('\u2190','<'),('\u2192','>'),('\u2194','<->'),
++]
++
++def action_titlecase(s):
++    out=[]
++    for w in s.split(' '):
++        if w=='':
++            out.append(w)
++        else:
++            out.append(w[0].upper()+w[1:].lower())
++    return ' '.join(out)
++
++def action_normalize(s):
++    try:
++        d=unicodedata.normalize('NFD', s)
++        return ''.join(c for c in d if unicodedata.category(c) not in ('Mn','Mc','Me'))
++    except Exception:
++        return s
++
++def _conv_umlaut(s, pairs):
++    # case-insensitive replacement of each pair, preserving case of the matched letters
++    for (k,v) in pairs:
++        # uppercase / mixed forms
++        up=k.upper()
++        # lower case
++        s=s.replace(k,v)
++        # uppercase form of first char only (e.g. 'Ue'/'uE' -> uppercase umlaut)
++        # build uppercase variant of the whole key
++        for variant in (up, k.capitalize()):
++            if variant!=k and variant!=up:
++                pass
++    return s
++
++def action_german(s, naive=False, prefer_original=False):
++    # operate word-by-word, case-insensitively for 'ue'/'ss' (and 'ae'/'oe' in naive mode)
++    pairs=list(GERMAN_BASE)
++    if naive:
++        pairs=list(GERMAN_BASE)+GERMAN_NAIVE
++    def conv(t):
++        for (k,v) in pairs:
++            # full uppercase key -> uppercase umlaut
++            ku=k.upper(); vu=v.upper()
++            # try each case variant
++            s2=t
++            # lower
++            s2=s2.replace(k,v)
++            # upper
++            s2=s2.replace(ku,vu)
++            # mixed: capitalize
++            s2=s2.replace(k.capitalize(), v.upper())
++            t=s2
++        return t
++    parts=re.split(r'(\s+)', s)
++    res=''
++    for p in parts:
++        if re.match(r'\s+', p) or p=='':
++            res+=p
++        else:
++            res+=conv(p)
++    return res
++
++def action_symbols(s, invert=False):
++    # Default -S converts ASCII -> Unicode symbols (e.g. '!=' -> '≠').
++    # With -i (--invert) it is reversed: Unicode -> ASCII.
++    if not invert:
++        for (u,a) in SYMBOLS:
++            s=s.replace(a,u)
++    else:
++        for (u,a) in SYMBOLS:
++            s=s.replace(u,a)
++    return s
++
++# ============================================================
++#  Argument parsing (clap-mimicking)
++# ============================================================
++class ParseError(Exception):
++    def __init__(self, msg, usage=None):
++        self.msg=msg; self.usage=usage
++
++LANGS=['c','csharp','go','hcl','python','rust','typescript']
++ALIAS_LANG={'cs':'csharp','py':'python','rs':'rust','ts':'typescript'}
++
++# long/short action flags -> action name
++ACTION={
++    '-u':'upper','--upper':'upper','-l':'lower','--lower':'lower',
++    '-t':'titlecase','--titlecase':'titlecase','-n':'normalize','--normalize':'normalize',
++    '-g':'german','--german':'german','-S':'symbols','--symbols':'symbols',
++    '-d':'delete','--delete':'delete','-s':'squeeze','--squeeze':'squeeze',
++    '--squeeze-repeats':'squeeze',
++}
++# boolean flags
++BOOL_FLAG={
++    '-i','--invert','-L','--literal-string','-j','--join-language-scopes',
++    '-H','--hidden','--gitignored','--dry-run','--fail-any','--fail-none',
++    '--fail-no-files','--sorted','--german-naive','--german-prefer-original',
++}
++# value-taking long flags
++LANG_FLAGS=set()
++for _l in LANGS:
++    LANG_FLAGS.add('--'+_l)
++    LANG_FLAGS.add('--'+_l+'-query')
++    LANG_FLAGS.add('--'+_l+'-query-file')
++VALUE_FLAG={'-G','--glob','--completions','--stdin-detection',
++            '--stdout-detection','--threads'}
++
++def _lang_of(flag):
++    # flag like --rust-query-file -> rust
++    base=flag[2:]
++    for suf in ('-query-file','-query',''):
++        if base.endswith(suf):
++            name=base[:-len(suf)] if suf else base
++            break
++    name=flag[2:].split('-')[0]
++    return ALIAS_LANG.get(name, name)
++
++def parse_args(argv):
++    args=argv[1:]
++    actions=[]; replacement=None; scope=None
++    literal=False; invert=False; join=False; hidden=False; gitignored=False
++    dry_run=False; fail_any=False; fail_none=False; fail_no_files=False
++    sorted_=False; german_naive=False; german_prefer=False
++    glob_val=None; completions=None
++    std_in='auto'; std_out='auto'; threads=None
++    language=None; lang_queries=[]
++    verbose=0
++    sep=False
++    i=0; n=len(args)
++    def _consume_value(name, val):
++        nonlocal glob_val, completions, std_in, std_out, threads
++        if name in ('-G','--glob'): glob_val=val
++        elif name=='--completions': completions=val
++        elif name=='--stdin-detection': std_in=val
++        elif name=='--stdout-detection': std_out=val
++        elif name=='--threads': threads=val
++    def _set_bool(name):
++        nonlocal invert, literal, join, hidden, gitignored, dry_run
++        nonlocal fail_any, fail_none, fail_no_files, sorted_, german_naive, german_prefer
++        if name in ('-i','--invert'): invert=True
++        elif name in ('-L','--literal-string'): literal=True
++        elif name in ('-j','--join-language-scopes'): join=True
++        elif name in ('-H','--hidden'): hidden=True
++        elif name=='--gitignored': gitignored=True
++        elif name=='--dry-run': dry_run=True
++        elif name=='--fail-any': fail_any=True
++        elif name=='--fail-none': fail_none=True
++        elif name=='--fail-no-files': fail_no_files=True
++        elif name=='--sorted': sorted_=True
++        elif name=='--german-naive': german_naive=True
++        elif name=='--german-prefer-original': german_prefer=True
++
++
++    while i<n:
++        a=args[i]
++        if a=='--':
++            sep=True; i+=1; continue
++
++        # help / version (not bundled)
++        if a=='-h': return HELP_SHORT
++        if a=='--help': return HELP_FULL
++        if a in ('-V','--version'): return f"{CRATE_NAME} {VERSION}\n"
++
++        # long flag with =value
++        if a.startswith('--') and '=' in a:
++            name, val = a.split('=', 1)
++            if name in LANG_FLAGS:
++                language=_lang_of(name); lang_queries.append((name,val)); i+=1; continue
++            if name in VALUE_FLAG:
++                _consume_value(name, val)
++                i+=1; continue
++            # unknown long flag with =value: treat as error
++            raise ParseError(f"error: unexpected argument '{a}' found\n\n  tip: to pass '{a}' as a value, use '-- {a}'")
++
++        # long flag (no =)
++        if a.startswith('--'):
++            if a in LANG_FLAGS:
++                language=_lang_of(a)
++                if i+1<n:
++                    lang_queries.append((a,args[i+1])); i+=2; continue
++                i+=1; continue
++            if a in VALUE_FLAG:
++                if i+1<n:
++                    _consume_value(a, args[i+1]); i+=2; continue
++                i+=1; continue
++            if a in BOOL_FLAG:
++                _set_bool(a)
++                i+=1; continue
++            if a in ACTION:
++                actions.append(ACTION[a]); i+=1; continue
++            if a=='--verbose':
++                verbose+=1; i+=1; continue
++            # unknown long flag
++            raise ParseError(f"error: unexpected argument '{a}' found\n\n  tip: to pass '{a}' as a value, use '-- {a}'")
++
++        # short flags (possibly bundled)
++        if a.startswith('-') and a!='-':
++            # handle -v / --verbose
++            if a=='-v' or a=='--verbose':
++                verbose+=1; i+=1; continue
++            # parse bundle of single-char short flags
++            chars=a[1:]
++            # find first char in a known set; bundle boolean/short flags
++            while chars:
++                c=chars[0]
++                flag='-'+c
++                if flag in ACTION:
++                    actions.append(ACTION[flag]); chars=chars[1:]; continue
++                if flag in BOOL_FLAG:
++                    _set_bool(flag); chars=chars[1:]; continue
++                if flag in VALUE_FLAG:
++                    # value flag: rest of bundle (or next arg) is the value
++                    rest=chars[1:]
++                    if rest:
++                        _consume_value(flag, rest); chars=''
++                    elif i+1<n:
++                        _consume_value(flag, args[i+1]); i+=1; chars=''
++                    else:
++                        chars=''
++                    break
++                # unknown short flag
++                raise ParseError(f"error: unexpected argument '{a}' found\n\n  tip: to pass '{a}' as a value, use '-- {a}'")
++            i+=1; continue
++
++        # positional (after -- is replacement; before -- is scope)
++        if sep:
++            if replacement is None:
++                replacement=a
++            else:
++                replacement=replacement+('' if replacement.endswith(' ') else ' ')+a
++        else:
++            if scope is None:
++                scope=a
++            else:
++                raise ParseError(f"error: unexpected argument '{a}' found")
++        i+=1
++
++    # env var defaults (best effort)
++    if replacement is None and 'REPLACE' in os.environ:
++        replacement=os.environ['REPLACE']
++    if invert and 'INVERT' not in os.environ:
++        pass
++    if literal and 'LITERAL_STRING' not in os.environ:
++        pass
++
++    return dict(actions=actions, replacement=replacement, scope=scope,
++        literal=literal, invert=invert, join=join, hidden=hidden,
++        gitignored=gitignored, sorted_=sorted_, dry_run=dry_run,
++        fail_any=fail_any, fail_none=fail_none, fail_no_files=fail_no_files,
++        glob=glob_val, completions=completions, std_in=std_in,
++        std_out=std_out, threads=threads, language=language,
++        lang_queries=lang_queries, verbose=verbose,
++        german_naive=german_naive, german_prefer=german_prefer)
++
++
++# ============================================================
++#  Main processing
++# ============================================================
++def log_error(msg):
++    now = datetime.datetime.now(datetime.timezone.utc)
++    ts = now.strftime('%Y-%m-%dT%H:%M:%S.') + f"{now.microsecond:06d}Z"
++    sys.stderr.write(f"[{ts} ERROR srgn] {msg}\n")
++
++def do_replace(replacement, match=None):
++    # expansion of $N and $name capture references; literal otherwise
++    out=[]
++    i=0
++    while i < len(replacement):
++        c=replacement[i]
++        if c=='$' and i+1 < len(replacement):
++            j=i+1
++            if replacement[j].isdigit():
++                k=j
++                while k < len(replacement) and replacement[k].isdigit():
++                    k+=1
++                num=int(replacement[j:k])
++                val=''
++                if match is not None:
++                    try:
++                        g=match.group(num)
++                        val=g if g is not None else ''
++                    except (re.error, IndexError):
++                        val=''
++                out.append(val)
++                i=k; continue
++            m2=re.match(r'\$[A-Za-z_][A-Za-z0-9_]*', replacement[j:])
++            if m2:
++                name=m2.group()[1:]
++                val=''
++                if match is not None:
++                    try:
++                        g=match.group(name)
++                        val=g if g is not None else ''
++                    except (re.error, IndexError):
++                        val=''
++                out.append(val)
++                i=j+len(m2.group()); continue
++        out.append(c); i+=1
++    return ''.join(out)
++
++_COMPOSABLE_ORDER={'upper','lower','titlecase','normalize','german','symbols'}
++def apply_actions(text, actions, replacement, invert, match=None,
++                  german_naive=False, german_prefer=False):
++    # Replacement runs first ("If given, will run before any other action").
++    # Composable actions run in the order they appear on the command line.
++    seq=[]
++    if replacement is not None:
++        seq.append('replace')
++    for act in actions:
++        if act in _COMPOSABLE_ORDER:
++            seq.append(act)
++    res=text
++    for act in seq:
++        if act=='upper':
++            res=res.upper()
++        elif act=='lower':
++            res=res.lower()
++        elif act=='titlecase':
++            res=action_titlecase(res)
++        elif act=='normalize':
++            res=action_normalize(res)
++        elif act=='german':
++            res=action_german(res, german_naive, german_prefer)
++        elif act=='symbols':
++            res=action_symbols(res, invert)
++        elif act=='replace':
++            res=do_replace(replacement, match)
++    return res
++
++def find_matches(line, pat, scope, literal):
++    matches=[]
++    if literal:
++        start=0
++        while True:
++            idx=line.find(scope, start)
++            if idx<0: break
++            matches.append((idx, idx+len(scope), None))
++            start=idx+1
++    else:
++        for m in pat.finditer(line):
++            matches.append((m.start(), m.end(), m))
++    return matches
++
++def process_line(line, pat, scope, actions, replacement, invert, literal,
++                 german_naive=False, german_prefer=False):
++    matches=find_matches(line, pat, scope, literal)
++    if not matches:
++        return line, False
++    res=[]
++    pos=0
++    for (s,e,m) in matches:
++        res.append(line[pos:s])
++        matched=line[s:e]
++        res.append(apply_actions(matched, actions, replacement, invert,
++                                 match=m, german_naive=german_naive,
++                                 german_prefer=german_prefer))
++        pos=e
++    res.append(line[pos:])
++    return ''.join(res), True
++
++def read_input(files):
++    if not files:
++        return sys.stdin.read()
++    out=[]
++    for f in files:
++        try:
++            with open(f,'r',encoding='utf-8') as fh:
++                out.append(fh.read())
++        except Exception:
++            pass
++    return '\n'.join(out) if out else ''
++
++
++COMPOSABLE={'upper','lower','titlecase','normalize','german','symbols'}
++STANDALONE={'delete','squeeze'}
++
++def validate(actions, args, data, prog):
++    LONG={'delete':'--delete','squeeze':'--squeeze','upper':'--upper',
++          'lower':'--lower','titlecase':'--titlecase','normalize':'--normalize',
++          'german':'--german','symbols':'--symbols'}
++    def lname(a): return LONG.get(a, '--'+a)
++    standalone_present=[a for a in actions if a in STANDALONE]
++    for a in standalone_present:
++        conflicting=[]
++        if args.get('replacement') is not None:
++            conflicting.append('[REPLACEMENT]')
++        comp=[x for x in actions if x in COMPOSABLE]
++        if comp:
++            for x in comp:
++                conflicting.append(lname(x))
++        if conflicting:
++            present=[lname(x) for x in actions]
++            usage=f"Usage: {prog} {' '.join(present)} <SCOPE> [-- <REPLACEMENT>]"
++            msg=(f"error: the argument '{lname(a)}' cannot be used with:"
++                 + ''.join(f'\n  {c}' for c in conflicting))
++            raise ParseError(msg, usage=usage)
++    if standalone_present and args.get('scope') is None:
++        present=[lname(x) for x in actions]
++        usage=f"Usage: {prog} {' '.join(present)} <SCOPE> [-- <REPLACEMENT>]"
++        msg=(f"error: the following required arguments were not provided:\n"
++             f"  <SCOPE>")
++        raise ParseError(msg, usage=usage)
++
++def main():
++    argv=sys.argv
++    try:
++        result=parse_args(argv)
++    except ParseError as e:
++        sys.stderr.write(e.msg+'\n')
++        usage=e.usage or f"Usage: {prog_name()} [OPTIONS] [SCOPE] [-- <REPLACEMENT>]"
++        sys.stderr.write(f"\n{usage}\n\nFor more information, try '--help'.\n")
++        return 2
++    if isinstance(result, str):
++        sys.stdout.write(result)
++        return 0
++
++    actions=result['actions']
++    replacement=result['replacement']
++    scope=result['scope'] or '.*'
++    literal=result['literal']
++    invert=result['invert']
++    language=result['language']
++    fail_any=result['fail_any']
++    fail_none=result['fail_none']
++    german_naive=result['german_naive']
++    german_prefer=result['german_prefer']
++    completions=result['completions']
++
++    # shell completions: best-effort (print nothing, exit 0)
++    if completions is not None:
++        return 0
++
++    # clap validation (required <SCOPE> for standalone actions; conflicts)
++    try:
++        validate(actions, result, data=None, prog=prog_name())
++    except ParseError as e:
++        sys.stderr.write(e.msg+'\n')
++        sys.stderr.write(f"\n{e.usage}\n\nFor more information, try '--help'.\n")
++        return 2
++
++    # read input (stdin by default; files handling is best-effort)
++    data=read_input([])
++    lines=data.split('\n')
++
++    try:
++        pat=re.compile(scope) if not literal else None
++    except re.error as err:
++        sys.stderr.write(f"Error: invalid regex: {err}\n")
++        return 1
++
++    # search mode: language scope present and no actions
++    if language and not actions and replacement is None:
++        any_match=False
++        for ln,line in enumerate(lines,1):
++            if literal:
++                matched = scope in line
++            else:
++                matched = pat.search(line) is not None
++            if matched:
++                any_match=True
++                sys.stdout.write(f"{ln}:{line}\n")
++        if not any_match:
++            log_error("No input was in scope")
++            return 1
++        if fail_none and not any_match:
++            return 1
++        if fail_any and any_match:
++            sys.stderr.write("Error: found input in scope\n")
++            return 1
++        return 0
++
++    # no actions, not in search mode
++    if not actions and replacement is None:
++        log_error("No actions specified, and not in search mode. Will return input unchanged, if any.")
++        sys.stdout.write(data)
++        if fail_none:
++            return 1
++        return 0
++
++    # delete is standalone
++    if 'delete' in actions:
++        out_lines=[]
++        any_match=False
++        for line in lines:
++            if literal:
++                new=line.replace(scope,'')
++                if new!=line: any_match=True
++            else:
++                new=pat.sub('', line)
++                if new!=line: any_match=True
++            out_lines.append(new)
++        sys.stdout.write('\n'.join(out_lines))
++        if fail_any and any_match: sys.stderr.write("Error: found input in scope\n"); return 1
++        if fail_none and not any_match: return 1
++        return 0
++
++    # squeeze standalone
++    if 'squeeze' in actions:
++        out_lines=[]
++        any_match=False
++        for line in lines:
++            if literal:
++                # squeeze consecutive literal occurrences of scope into one
++                new=line
++                if scope:
++                    while scope+scope in new:
++                        new=new.replace(scope+scope, scope)
++                if new!=line: any_match=True
++                line=new
++            else:
++                new=pat.sub(lambda m:m.group(0)[0] if m.group(0) else '', line)
++                if new!=line: any_match=True
++                line=new
++            out_lines.append(line)
++        sys.stdout.write('\n'.join(out_lines))
++        if fail_any and any_match: sys.stderr.write("Error: found input in scope\n"); return 1
++        if fail_none and not any_match: return 1
++        return 0
++
++    # general transform
++    out_lines=[]
++    any_match=False
++    for line in lines:
++        new, matched = process_line(line, pat, scope, actions, replacement, invert,
++                                    literal, german_naive, german_prefer)
++        if matched: any_match=True
++        out_lines.append(new)
++    sys.stdout.write('\n'.join(out_lines))
++    if fail_any and any_match: sys.stderr.write("Error: found input in scope\n"); return 1
++    if fail_none and not any_match: return 1
++    return 0
++
++if __name__=='__main__':
++    try:
++        sys.exit(main())
++    except Exception as e:
++        sys.stderr.write(f"Error: {e}\n")
++        sys.exit(1)

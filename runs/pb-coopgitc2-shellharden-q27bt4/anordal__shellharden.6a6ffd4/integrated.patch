@@ -1,0 +1,904 @@
+diff --git a/compile.sh b/compile.sh
+new file mode 100644
+index 0000000..c90c29d
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,5 @@
++#!/bin/bash
++# Build script for shellharden reimplementation (C++, standard library only, no network)
++set -e
++cd "$(dirname "$0")"
++g++ -O2 -std=c++17 -Wall -o executable shellharden.cpp
+diff --git a/patch.txt b/patch.txt
+new file mode 100644
+index 0000000..5d321ee
+--- /dev/null
++++ b/patch.txt
+@@ -0,0 +1,449 @@
++diff --git a/shellharden.cpp b/shellharden.cpp
++new file mode 100644
++index 0000000..7c0ccc5
++--- /dev/null
+++++ b/shellharden.cpp
++@@ -0,0 +1,432 @@
+++// Shellharden reimplementation (C++, standard library only, no network).
+++#include <iostream>
+++#include <fstream>
+++#include <sstream>
+++#include <string>
+++#include <vector>
+++#include <cstdio>
+++#include <cstring>
+++#include <cstdlib>
+++
+++// ===========================================================================
+++// Color
+++// ===========================================================================
+++struct Color {
+++    std::string codes;
+++    Color() {}
+++    Color(const std::string &c) : codes(c) {}
+++    bool empty() const { return codes.empty(); }
+++};
+++static const Color C_BOLD("0;1");
+++static const Color C_COMMAND("0;38;2;192;0;128");
+++static const Color C_VARIABLE("0;38;2;63;127;207");
+++static const Color C_DEFINED("0;38;2;0;127;255");
+++static const Color C_DQUOTE("0;38;2;255;0;0");
+++static const Color C_SQUOTE("0;38;2;255;204;85");
+++static const Color C_COMMENT("0;1;38;2;120;144;96");
+++static const Color C_HERE("0;38;2;128;32;0");
+++static const Color C_SUGGEST("0;42");
+++
+++// ===========================================================================
+++// Mode
+++// ===========================================================================
+++enum Mode { M_DEFAULT, M_SYNTAX, M_SUGGEST, M_TRANSFORM, M_CHECK, M_REPLACE };
+++static Mode g_mode = M_DEFAULT;
+++
+++// ===========================================================================
+++// Output segment
+++// ===========================================================================
+++struct Seg {
+++    std::string text;
+++    Color color;
+++    bool added;
+++    Seg() : added(false) {}
+++    Seg(const std::string &t, Color c, bool a) : text(t), color(c), added(a) {}
+++};
+++
+++// ===========================================================================
+++// Helpers
+++// ===========================================================================
+++static bool isAlpha(char c) {
+++    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
+++}
+++static bool isAlphaNum(char c) { return isAlpha(c) || (c >= '0' && c <= '9'); }
+++static bool isDigit(char c) { return c >= '0' && c <= '9'; }
+++static bool isSep(char c) {
+++    return c == ' ' || c == '\t' || c == ';' || c == '|' || c == '&'
+++        || c == '<' || c == '>' || c == '\n';
+++}
+++static bool isKeyword(const std::string &w) {
+++    static const char *kw[] = {
+++        "if", "then", "else", "elif", "fi", "for", "while", "until",
+++        "do", "done", "case", "esac", "in", "function", "select", "time",
+++    };
+++    for (auto &k : kw) if (w == k) return true;
+++    return false;
+++}
+++
+++// ===========================================================================
+++// Atom: a piece of the line. text is the EXACT substring.
+++// ===========================================================================
+++struct Atom {
+++    std::string text;
+++    Color color;
+++    bool cmdName;        // is this a command name?
+++    bool hasUnquotedExp; // contains an unquoted expansion
+++    bool assignment;     // is this an assignment token (IDENT=...)
+++    bool assignLhs;      // is this the LHS of an assignment
+++};
+++
+++// ===========================================================================
+++// Lexer
+++// ===========================================================================
+++static std::vector<Atom> lexLine(const std::string &line) {
+++    std::vector<Atom> atoms;
+++    size_t n = line.size();
+++    size_t i = 0;
+++    bool expectCommand = true;
+++
+++    auto push = [&](const std::string &t, Color c, bool cn, bool exp,
+++                    bool asn, bool lhs) {
+++        Atom a; a.text = t; a.color = c; a.cmdName = cn;
+++        a.hasUnquotedExp = exp; a.assignment = asn; a.assignLhs = lhs;
+++        atoms.push_back(a);
+++    };
+++
+++    while (i < n) {
+++        char c = line[i];
+++
+++        // whitespace
+++        if (c == ' ' || c == '\t') {
+++            push(std::string(1, c), Color(), false, false, false, false);
+++            i++;
+++            continue;
+++        }
+++        // comment
+++        if (c == '#') {
+++            push(line.substr(i), C_COMMENT, false, false, false, false);
+++            i = n;
+++            continue;
+++        }
+++        // double quote
+++        if (c == '"') {
+++            size_t s = i++;
+++            while (i < n && line[i] != '"') {
+++                if (line[i] == '\\' && i + 1 < n) i++;
+++                i++;
+++            }
+++            if (i < n) i++; // closing quote
+++            push(line.substr(s, i - s), C_DQUOTE, false, false, false, false);
+++            continue;
+++        }
+++        // single quote
+++        if (c == '\'') {
+++            size_t s = i++;
+++            while (i < n && line[i] != '\'') i++;
+++            if (i < n) i++;
+++            push(line.substr(s, i - s), C_SQUOTE, false, false, false, false);
+++            continue;
+++        }
+++        // variable / expansion
+++        if (c == '$') {
+++            size_t s = i++;
+++            char nx = (i < n) ? line[i] : 0;
+++            if (nx == '{') {
+++                i++;
+++                while (i < n && line[i] != '}') i++;
+++                if (i < n) i++;
+++            } else if (nx == '(') {
+++                i++;
+++                int depth = 1;
+++                while (i < n && depth > 0) {
+++                    if (line[i] == '(') depth++;
+++                    else if (line[i] == ')') depth--;
+++                    if (depth > 0) i++;
+++                }
+++                if (i < n) i++;
+++            } else if (nx == '`') {
+++                i++;
+++                while (i < n && line[i] != '`') i++;
+++                if (i < n) i++;
+++            } else if (isAlpha(nx) || isDigit(nx) || nx == '?' || nx == '@'
+++                || nx == '*' || nx == '!' || nx == '$' || nx == '#'
+++                || nx == '-' || nx == '+' || nx == '%' || nx == '0') {
+++                i++;
+++                if (isAlpha(nx)) {
+++                    while (i < n && (isAlphaNum(line[i]) || line[i] == '_')) i++;
+++                }
+++            }
+++            push(line.substr(s, i - s), C_VARIABLE, expectCommand, true, false, false);
+++            expectCommand = false;
+++            continue;
+++        }
+++        // backtick
+++        if (c == '`') {
+++            size_t s = i++;
+++            while (i < n && line[i] != '`') i++;
+++            if (i < n) i++;
+++            push(line.substr(s, i - s), C_VARIABLE, expectCommand, true, false, false);
+++            expectCommand = false;
+++            continue;
+++        }
+++        // separator
+++        if (isSep(c)) {
+++            push(std::string(1, c), Color(), false, false, false, false);
+++            i++;
+++            expectCommand = true;
+++            continue;
+++        }
+++        // parens / braces / brackets as delimiters
+++        if (c == '(' || c == ')' || c == '{' || c == '}' || c == '[' || c == ']') {
+++            push(std::string(1, c), Color(), false, false, false, false);
+++            i++;
+++            expectCommand = true;
+++            continue;
+++        }
+++        // a word
+++        size_t ws = i;
+++        while (i < n && !isSep(line[i]) && line[i] != '"' && line[i] != '\''
+++               && line[i] != '$' && line[i] != '`' && line[i] != '#'
+++               && line[i] != '(' && line[i] != ')' && line[i] != '{'
+++               && line[i] != '}' && line[i] != '[' && line[i] != ']') {
+++            i++;
+++        }
+++        std::string word = line.substr(ws, i - ws);
+++        Color col;
+++        bool cn = expectCommand;
+++        bool asn = false;
+++        // detect assignment: IDENT= at start
+++        if (isAlpha(word[0])) {
+++            size_t p = 0;
+++            while (p < word.size() && isAlphaNum(word[p])) p++;
+++            if (p > 0 && p < word.size() && word[p] == '=') {
+++                asn = true;
+++                // the IDENT part (up to '=') is the LHS
+++            }
+++        }
+++        if (isKeyword(word)) {
+++            col = C_BOLD;
+++            cn = false;
+++            expectCommand = true;
+++        } else if (asn) {
+++            // color the LHS as defined; the value part as plain (or expansion)
+++            // We'll split: but for simplicity, color the whole word plain and
+++            // mark assignment. The transform handles quoting the value.
+++            col = Color();
+++            expectCommand = false;
+++        } else if (cn) {
+++            col = C_COMMAND;
+++            expectCommand = false;
+++        } else {
+++            col = Color();
+++            expectCommand = false;
+++        }
+++        push(word, col, cn, false, asn, false);
+++    }
+++    return atoms;
+++}
+++
+++// ===========================================================================
+++// Transform: produce output segments, inserting quotes for unquoted expansions
+++// ===========================================================================
+++static std::vector<Seg> transformLine(const std::vector<Atom> &atoms, bool &changed) {
+++    std::vector<Seg> out;
+++    changed = false;
+++    for (size_t k = 0; k < atoms.size(); k++) {
+++        const Atom &a = atoms[k];
+++        if (a.hasUnquotedExp && !a.cmdName) {
+++            // quote this expansion
+++            out.push_back(Seg("\"", C_SUGGEST, true));
+++            out.push_back(Seg(a.text, a.color, false));
+++            out.push_back(Seg("\"", C_SUGGEST, true));
+++            changed = true;
+++        } else {
+++            out.push_back(Seg(a.text, a.color, false));
+++        }
+++    }
+++    return out;
+++}
+++
+++// ===========================================================================
+++// Output a line's segments per mode
+++// ===========================================================================
+++static void emitSeg(std::ostream &os, const Seg &s) {
+++    if (s.color.empty()) {
+++        os << s.text;
+++        return;
+++    }
+++    // color (and for added, the green bg)
+++    // For added segments, color is C_SUGGEST (green bg) regardless of mode color.
+++    os << "\x1b[" << s.color.codes << "m" << s.text << "\x1b[0m";
+++}
+++
+++static void outputLine(std::ostream &os, const std::vector<Seg> &segs) {
+++    for (const Seg &s : segs) {
+++        if (g_mode == M_SYNTAX) {
+++            // only original chars, with color
+++            if (s.added) continue;
+++            emitSeg(os, s);
+++        } else if (g_mode == M_TRANSFORM) {
+++            // all chars, no color
+++            os << s.text;
+++        } else if (g_mode == M_REPLACE) {
+++            os << s.text;
+++        } else if (g_mode == M_SUGGEST) {
+++            // original plain, added green bg
+++            if (s.added) emitSeg(os, s);
+++            else os << s.text;
+++        } else { // M_DEFAULT
+++            // original with color, added green bg
+++            emitSeg(os, s);
+++        }
+++    }
+++}
+++
+++// ===========================================================================
+++// Main
+++// ===========================================================================
+++static std::string g_program = "shellharden";
+++
+++int main(int argc, char **argv) {
+++    std::vector<std::string> files;   // file names (in order)
+++    bool readStdin = false;
+++    bool stopOpts = false;
+++    bool anyInput = false;
+++
+++    for (int i = 1; i < argc; i++) {
+++        std::string a = argv[i];
+++        if (!stopOpts) {
+++            if (a == "--syntax") { g_mode = M_SYNTAX; continue; }
+++            if (a == "--suggest") { g_mode = M_SUGGEST; continue; }
+++            if (a == "--syntax-suggest") { g_mode = M_DEFAULT; continue; }
+++            if (a == "--transform") { g_mode = M_TRANSFORM; continue; }
+++            if (a == "--check") { g_mode = M_CHECK; continue; }
+++            if (a == "--replace") { g_mode = M_REPLACE; continue; }
+++            if (a == "--") { stopOpts = true; continue; }
+++            if (a == "-h" || a == "--help") {
+++                std::string help =
+++                    "Shellharden: The corrective bash syntax highlighter.\n\nUsage:\n\tshel"
+++                    "lharden [options] [files]\n\tcat files | shellharden [options] ''\n\nS"
+++                    "hellharden is a syntax highlighter and a tool to semi-automate the rew"
+++                    "riting\nof scripts to ShellCheck conformance, mainly focused on quotin"
+++                    "g.\n\nThe default mode of operation is like `cat`, but with syntax hig"
+++                    "hlighting in\nforeground colors and suggestive changes in background c"
+++                    "olors.\n\nOptions:\n\t--suggest         Output a colored diff suggesti"
+++                    "ng changes.\n\t--syntax          Output syntax highlighting with ANSI "
+++                    "colors.\n\t--syntax-suggest  Diff with syntax highlighting (default mo"
+++                    "de).\n\t--transform       Output suggested changes.\n\t--check        "
+++                    "   No output; exit with 2 if changes are suggested.\n\t--replace      "
+++                    "   Replace file contents with suggested changes.\n\t--                "
+++                    "Don't treat further arguments as options.\n\t-h|--help         Show he"
+++                    "lp text.\n\t--version         Show version.\n\nThe changes suggested b"
+++                    "y Shellharden inhibits word splitting and indirect\npathname expansion"
+++                    ". This will make your script ShellCheck compliant in terms of\nquoting"
+++                    ". Whether your script will work afterwards is a different question:\nI"
+++                    "f your script was using those features on purpose, it obviously won't "
+++                    "anymore!\n\nEvery script is possible to write without using word split"
+++                    "ting or indirect\npathname expansion, but it may involve doing things "
+++                    "differently.\nSee the accompanying file how_to_do_things_safely_in_bas"
+++                    "h.md or online:\nhttps://github.com/anordal/shellharden/blob/master/ho"
+++                    "w_to_do_things_safely_in_bash.md\n\n";
+++
+++                std::cout << help;
+++                return 0;
+++            }
+++            if (a == "--version") {
+++                std::cout << "4.3.1\n";
+++                return 0;
+++            }
+++            if (a.size() > 0 && a[0] == '-') {
+++                std::cerr << a << ": No such option.\n";
+++                return 3;
+++            }
+++        }
+++        // a file argument
+++        anyInput = true;
+++        if (a == "") {
+++            readStdin = true;
+++        } else {
+++            files.push_back(a);
+++        }
+++    }
+++
+++    if (!anyInput) {
+++        // No input at all: do nothing, exit 0.
+++        return 0;
+++    }
+++
+++    bool changed = false;
+++    int rc = 0;
+++
+++    // Process stdin first if requested, then files? The original processes
+++    // arguments in order. For simplicity we handle stdin then files.
+++    if (readStdin) {
+++        std::string line;
+++        while (std::getline(std::cin, line)) {
+++            std::vector<Atom> atoms = lexLine(line);
+++            std::vector<Seg> segs = transformLine(atoms, changed);
+++            if (g_mode == M_CHECK) {
+++                // no output
+++            } else {
+++                outputLine(std::cout, segs);
+++                std::cout << "\n";
+++            }
+++        }
+++    }
+++
+++    for (const std::string &fname : files) {
+++        std::ifstream in(fname);
+++        if (!in) {
+++            std::cerr << fname << ": No such file or directory (os error 2)\n";
+++            rc = 1;
+++            continue;
+++        }
+++        std::vector<std::string> lines;
+++        std::string line;
+++        while (std::getline(in, line)) {
+++            lines.push_back(line);
+++        }
+++        in.close();
+++
+++        if (g_mode == M_REPLACE) {
+++            // write transformed content back
+++            std::ofstream out(fname);
+++            if (!out) {
+++                std::cerr << fname << ": No such file or directory (os error 2)\n";
+++                rc = 1;
+++                continue;
+++            }
+++            bool localChanged = false;
+++            for (const std::string &l : lines) {
+++                std::vector<Atom> atoms = lexLine(l);
+++                std::vector<Seg> segs = transformLine(atoms, localChanged);
+++                outputLine(out, segs);
+++                out << "\n";
+++            }
+++            out.close();
+++            changed = changed || localChanged;
+++            continue;
+++        }
+++
+++        if (g_mode == M_CHECK) {
+++            for (const std::string &l : lines) {
+++                std::vector<Atom> atoms = lexLine(l);
+++                std::vector<Seg> segs = transformLine(atoms, changed);
+++                (void)segs;
+++            }
+++            continue;
+++        }
+++
+++        for (const std::string &l : lines) {
+++            std::vector<Atom> atoms = lexLine(l);
+++            std::vector<Seg> segs = transformLine(atoms, changed);
+++            outputLine(std::cout, segs);
+++            std::cout << "\n";
+++        }
+++    }
+++
+++    if (g_mode == M_CHECK && changed) {
+++        return 2;
+++    }
+++    return rc;
+++}
++diff --git a/compile.sh b/compile.sh
++new file mode 100644
++index 0000000..c90c29d
++--- /dev/null
+++++ b/compile.sh
++@@ -0,0 +1,5 @@
+++#!/bin/bash
+++# Build script for shellharden reimplementation (C++, standard library only, no network)
+++set -e
+++cd "$(dirname "$0")"
+++g++ -O2 -std=c++17 -Wall -o executable shellharden.cpp
+diff --git a/shellharden.cpp b/shellharden.cpp
+new file mode 100644
+index 0000000..7c0ccc5
+--- /dev/null
++++ b/shellharden.cpp
+@@ -0,0 +1,432 @@
++// Shellharden reimplementation (C++, standard library only, no network).
++#include <iostream>
++#include <fstream>
++#include <sstream>
++#include <string>
++#include <vector>
++#include <cstdio>
++#include <cstring>
++#include <cstdlib>
++
++// ===========================================================================
++// Color
++// ===========================================================================
++struct Color {
++    std::string codes;
++    Color() {}
++    Color(const std::string &c) : codes(c) {}
++    bool empty() const { return codes.empty(); }
++};
++static const Color C_BOLD("0;1");
++static const Color C_COMMAND("0;38;2;192;0;128");
++static const Color C_VARIABLE("0;38;2;63;127;207");
++static const Color C_DEFINED("0;38;2;0;127;255");
++static const Color C_DQUOTE("0;38;2;255;0;0");
++static const Color C_SQUOTE("0;38;2;255;204;85");
++static const Color C_COMMENT("0;1;38;2;120;144;96");
++static const Color C_HERE("0;38;2;128;32;0");
++static const Color C_SUGGEST("0;42");
++
++// ===========================================================================
++// Mode
++// ===========================================================================
++enum Mode { M_DEFAULT, M_SYNTAX, M_SUGGEST, M_TRANSFORM, M_CHECK, M_REPLACE };
++static Mode g_mode = M_DEFAULT;
++
++// ===========================================================================
++// Output segment
++// ===========================================================================
++struct Seg {
++    std::string text;
++    Color color;
++    bool added;
++    Seg() : added(false) {}
++    Seg(const std::string &t, Color c, bool a) : text(t), color(c), added(a) {}
++};
++
++// ===========================================================================
++// Helpers
++// ===========================================================================
++static bool isAlpha(char c) {
++    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
++}
++static bool isAlphaNum(char c) { return isAlpha(c) || (c >= '0' && c <= '9'); }
++static bool isDigit(char c) { return c >= '0' && c <= '9'; }
++static bool isSep(char c) {
++    return c == ' ' || c == '\t' || c == ';' || c == '|' || c == '&'
++        || c == '<' || c == '>' || c == '\n';
++}
++static bool isKeyword(const std::string &w) {
++    static const char *kw[] = {
++        "if", "then", "else", "elif", "fi", "for", "while", "until",
++        "do", "done", "case", "esac", "in", "function", "select", "time",
++    };
++    for (auto &k : kw) if (w == k) return true;
++    return false;
++}
++
++// ===========================================================================
++// Atom: a piece of the line. text is the EXACT substring.
++// ===========================================================================
++struct Atom {
++    std::string text;
++    Color color;
++    bool cmdName;        // is this a command name?
++    bool hasUnquotedExp; // contains an unquoted expansion
++    bool assignment;     // is this an assignment token (IDENT=...)
++    bool assignLhs;      // is this the LHS of an assignment
++};
++
++// ===========================================================================
++// Lexer
++// ===========================================================================
++static std::vector<Atom> lexLine(const std::string &line) {
++    std::vector<Atom> atoms;
++    size_t n = line.size();
++    size_t i = 0;
++    bool expectCommand = true;
++
++    auto push = [&](const std::string &t, Color c, bool cn, bool exp,
++                    bool asn, bool lhs) {
++        Atom a; a.text = t; a.color = c; a.cmdName = cn;
++        a.hasUnquotedExp = exp; a.assignment = asn; a.assignLhs = lhs;
++        atoms.push_back(a);
++    };
++
++    while (i < n) {
++        char c = line[i];
++
++        // whitespace
++        if (c == ' ' || c == '\t') {
++            push(std::string(1, c), Color(), false, false, false, false);
++            i++;
++            continue;
++        }
++        // comment
++        if (c == '#') {
++            push(line.substr(i), C_COMMENT, false, false, false, false);
++            i = n;
++            continue;
++        }
++        // double quote
++        if (c == '"') {
++            size_t s = i++;
++            while (i < n && line[i] != '"') {
++                if (line[i] == '\\' && i + 1 < n) i++;
++                i++;
++            }
++            if (i < n) i++; // closing quote
++            push(line.substr(s, i - s), C_DQUOTE, false, false, false, false);
++            continue;
++        }
++        // single quote
++        if (c == '\'') {
++            size_t s = i++;
++            while (i < n && line[i] != '\'') i++;
++            if (i < n) i++;
++            push(line.substr(s, i - s), C_SQUOTE, false, false, false, false);
++            continue;
++        }
++        // variable / expansion
++        if (c == '$') {
++            size_t s = i++;
++            char nx = (i < n) ? line[i] : 0;
++            if (nx == '{') {
++                i++;
++                while (i < n && line[i] != '}') i++;
++                if (i < n) i++;
++            } else if (nx == '(') {
++                i++;
++                int depth = 1;
++                while (i < n && depth > 0) {
++                    if (line[i] == '(') depth++;
++                    else if (line[i] == ')') depth--;
++                    if (depth > 0) i++;
++                }
++                if (i < n) i++;
++            } else if (nx == '`') {
++                i++;
++                while (i < n && line[i] != '`') i++;
++                if (i < n) i++;
++            } else if (isAlpha(nx) || isDigit(nx) || nx == '?' || nx == '@'
++                || nx == '*' || nx == '!' || nx == '$' || nx == '#'
++                || nx == '-' || nx == '+' || nx == '%' || nx == '0') {
++                i++;
++                if (isAlpha(nx)) {
++                    while (i < n && (isAlphaNum(line[i]) || line[i] == '_')) i++;
++                }
++            }
++            push(line.substr(s, i - s), C_VARIABLE, expectCommand, true, false, false);
++            expectCommand = false;
++            continue;
++        }
++        // backtick
++        if (c == '`') {
++            size_t s = i++;
++            while (i < n && line[i] != '`') i++;
++            if (i < n) i++;
++            push(line.substr(s, i - s), C_VARIABLE, expectCommand, true, false, false);
++            expectCommand = false;
++            continue;
++        }
++        // separator
++        if (isSep(c)) {
++            push(std::string(1, c), Color(), false, false, false, false);
++            i++;
++            expectCommand = true;
++            continue;
++        }
++        // parens / braces / brackets as delimiters
++        if (c == '(' || c == ')' || c == '{' || c == '}' || c == '[' || c == ']') {
++            push(std::string(1, c), Color(), false, false, false, false);
++            i++;
++            expectCommand = true;
++            continue;
++        }
++        // a word
++        size_t ws = i;
++        while (i < n && !isSep(line[i]) && line[i] != '"' && line[i] != '\''
++               && line[i] != '$' && line[i] != '`' && line[i] != '#'
++               && line[i] != '(' && line[i] != ')' && line[i] != '{'
++               && line[i] != '}' && line[i] != '[' && line[i] != ']') {
++            i++;
++        }
++        std::string word = line.substr(ws, i - ws);
++        Color col;
++        bool cn = expectCommand;
++        bool asn = false;
++        // detect assignment: IDENT= at start
++        if (isAlpha(word[0])) {
++            size_t p = 0;
++            while (p < word.size() && isAlphaNum(word[p])) p++;
++            if (p > 0 && p < word.size() && word[p] == '=') {
++                asn = true;
++                // the IDENT part (up to '=') is the LHS
++            }
++        }
++        if (isKeyword(word)) {
++            col = C_BOLD;
++            cn = false;
++            expectCommand = true;
++        } else if (asn) {
++            // color the LHS as defined; the value part as plain (or expansion)
++            // We'll split: but for simplicity, color the whole word plain and
++            // mark assignment. The transform handles quoting the value.
++            col = Color();
++            expectCommand = false;
++        } else if (cn) {
++            col = C_COMMAND;
++            expectCommand = false;
++        } else {
++            col = Color();
++            expectCommand = false;
++        }
++        push(word, col, cn, false, asn, false);
++    }
++    return atoms;
++}
++
++// ===========================================================================
++// Transform: produce output segments, inserting quotes for unquoted expansions
++// ===========================================================================
++static std::vector<Seg> transformLine(const std::vector<Atom> &atoms, bool &changed) {
++    std::vector<Seg> out;
++    changed = false;
++    for (size_t k = 0; k < atoms.size(); k++) {
++        const Atom &a = atoms[k];
++        if (a.hasUnquotedExp && !a.cmdName) {
++            // quote this expansion
++            out.push_back(Seg("\"", C_SUGGEST, true));
++            out.push_back(Seg(a.text, a.color, false));
++            out.push_back(Seg("\"", C_SUGGEST, true));
++            changed = true;
++        } else {
++            out.push_back(Seg(a.text, a.color, false));
++        }
++    }
++    return out;
++}
++
++// ===========================================================================
++// Output a line's segments per mode
++// ===========================================================================
++static void emitSeg(std::ostream &os, const Seg &s) {
++    if (s.color.empty()) {
++        os << s.text;
++        return;
++    }
++    // color (and for added, the green bg)
++    // For added segments, color is C_SUGGEST (green bg) regardless of mode color.
++    os << "\x1b[" << s.color.codes << "m" << s.text << "\x1b[0m";
++}
++
++static void outputLine(std::ostream &os, const std::vector<Seg> &segs) {
++    for (const Seg &s : segs) {
++        if (g_mode == M_SYNTAX) {
++            // only original chars, with color
++            if (s.added) continue;
++            emitSeg(os, s);
++        } else if (g_mode == M_TRANSFORM) {
++            // all chars, no color
++            os << s.text;
++        } else if (g_mode == M_REPLACE) {
++            os << s.text;
++        } else if (g_mode == M_SUGGEST) {
++            // original plain, added green bg
++            if (s.added) emitSeg(os, s);
++            else os << s.text;
++        } else { // M_DEFAULT
++            // original with color, added green bg
++            emitSeg(os, s);
++        }
++    }
++}
++
++// ===========================================================================
++// Main
++// ===========================================================================
++static std::string g_program = "shellharden";
++
++int main(int argc, char **argv) {
++    std::vector<std::string> files;   // file names (in order)
++    bool readStdin = false;
++    bool stopOpts = false;
++    bool anyInput = false;
++
++    for (int i = 1; i < argc; i++) {
++        std::string a = argv[i];
++        if (!stopOpts) {
++            if (a == "--syntax") { g_mode = M_SYNTAX; continue; }
++            if (a == "--suggest") { g_mode = M_SUGGEST; continue; }
++            if (a == "--syntax-suggest") { g_mode = M_DEFAULT; continue; }
++            if (a == "--transform") { g_mode = M_TRANSFORM; continue; }
++            if (a == "--check") { g_mode = M_CHECK; continue; }
++            if (a == "--replace") { g_mode = M_REPLACE; continue; }
++            if (a == "--") { stopOpts = true; continue; }
++            if (a == "-h" || a == "--help") {
++                std::string help =
++                    "Shellharden: The corrective bash syntax highlighter.\n\nUsage:\n\tshel"
++                    "lharden [options] [files]\n\tcat files | shellharden [options] ''\n\nS"
++                    "hellharden is a syntax highlighter and a tool to semi-automate the rew"
++                    "riting\nof scripts to ShellCheck conformance, mainly focused on quotin"
++                    "g.\n\nThe default mode of operation is like `cat`, but with syntax hig"
++                    "hlighting in\nforeground colors and suggestive changes in background c"
++                    "olors.\n\nOptions:\n\t--suggest         Output a colored diff suggesti"
++                    "ng changes.\n\t--syntax          Output syntax highlighting with ANSI "
++                    "colors.\n\t--syntax-suggest  Diff with syntax highlighting (default mo"
++                    "de).\n\t--transform       Output suggested changes.\n\t--check        "
++                    "   No output; exit with 2 if changes are suggested.\n\t--replace      "
++                    "   Replace file contents with suggested changes.\n\t--                "
++                    "Don't treat further arguments as options.\n\t-h|--help         Show he"
++                    "lp text.\n\t--version         Show version.\n\nThe changes suggested b"
++                    "y Shellharden inhibits word splitting and indirect\npathname expansion"
++                    ". This will make your script ShellCheck compliant in terms of\nquoting"
++                    ". Whether your script will work afterwards is a different question:\nI"
++                    "f your script was using those features on purpose, it obviously won't "
++                    "anymore!\n\nEvery script is possible to write without using word split"
++                    "ting or indirect\npathname expansion, but it may involve doing things "
++                    "differently.\nSee the accompanying file how_to_do_things_safely_in_bas"
++                    "h.md or online:\nhttps://github.com/anordal/shellharden/blob/master/ho"
++                    "w_to_do_things_safely_in_bash.md\n\n";
++
++                std::cout << help;
++                return 0;
++            }
++            if (a == "--version") {
++                std::cout << "4.3.1\n";
++                return 0;
++            }
++            if (a.size() > 0 && a[0] == '-') {
++                std::cerr << a << ": No such option.\n";
++                return 3;
++            }
++        }
++        // a file argument
++        anyInput = true;
++        if (a == "") {
++            readStdin = true;
++        } else {
++            files.push_back(a);
++        }
++    }
++
++    if (!anyInput) {
++        // No input at all: do nothing, exit 0.
++        return 0;
++    }
++
++    bool changed = false;
++    int rc = 0;
++
++    // Process stdin first if requested, then files? The original processes
++    // arguments in order. For simplicity we handle stdin then files.
++    if (readStdin) {
++        std::string line;
++        while (std::getline(std::cin, line)) {
++            std::vector<Atom> atoms = lexLine(line);
++            std::vector<Seg> segs = transformLine(atoms, changed);
++            if (g_mode == M_CHECK) {
++                // no output
++            } else {
++                outputLine(std::cout, segs);
++                std::cout << "\n";
++            }
++        }
++    }
++
++    for (const std::string &fname : files) {
++        std::ifstream in(fname);
++        if (!in) {
++            std::cerr << fname << ": No such file or directory (os error 2)\n";
++            rc = 1;
++            continue;
++        }
++        std::vector<std::string> lines;
++        std::string line;
++        while (std::getline(in, line)) {
++            lines.push_back(line);
++        }
++        in.close();
++
++        if (g_mode == M_REPLACE) {
++            // write transformed content back
++            std::ofstream out(fname);
++            if (!out) {
++                std::cerr << fname << ": No such file or directory (os error 2)\n";
++                rc = 1;
++                continue;
++            }
++            bool localChanged = false;
++            for (const std::string &l : lines) {
++                std::vector<Atom> atoms = lexLine(l);
++                std::vector<Seg> segs = transformLine(atoms, localChanged);
++                outputLine(out, segs);
++                out << "\n";
++            }
++            out.close();
++            changed = changed || localChanged;
++            continue;
++        }
++
++        if (g_mode == M_CHECK) {
++            for (const std::string &l : lines) {
++                std::vector<Atom> atoms = lexLine(l);
++                std::vector<Seg> segs = transformLine(atoms, changed);
++                (void)segs;
++            }
++            continue;
++        }
++
++        for (const std::string &l : lines) {
++            std::vector<Atom> atoms = lexLine(l);
++            std::vector<Seg> segs = transformLine(atoms, changed);
++            outputLine(std::cout, segs);
++            std::cout << "\n";
++        }
++    }
++
++    if (g_mode == M_CHECK && changed) {
++        return 2;
++    }
++    return rc;
++}

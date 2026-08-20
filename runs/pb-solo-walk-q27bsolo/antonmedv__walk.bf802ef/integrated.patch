@@ -1,0 +1,432 @@
+diff --git a/compile.sh b/compile.sh
+new file mode 100755
+index 0000000..65582b7
+--- /dev/null
++++ b/compile.sh
+@@ -0,0 +1,15 @@
++#!/usr/bin/env bash
++set -euo pipefail
++cd "$(dirname "$0")"
++
++export GOROOT=/usr/local/go/mod-cache/golang.org/toolchain@v0.0.1-go1.25.11.linux-amd64
++export GOPATH=/usr/local/go/mod-cache
++export GOPROXY=file:///usr/local/go/mod-cache/cache/download
++export GOSUMDB=off
++export GOTOOLCHAIN=local
++export GOFLAGS=-mod=mod
++export GO111MODULE=on
++
++GO=/usr/local/go/mod-cache/golang.org/toolchain@v0.0.1-go1.25.11.linux-amd64/bin/go
++
++"$GO" build -o executable .
+diff --git a/go.mod b/go.mod
+new file mode 100644
+index 0000000..06962b4
+--- /dev/null
++++ b/go.mod
+@@ -0,0 +1,19 @@
++module github.com/antonmedv/walk
++
++go 1.25.0
++
++require (
++	github.com/gdamore/tcell/v2 v2.13.10
++	golang.org/x/sys v0.46.0
++	golang.org/x/term v0.44.0
++	golang.org/x/text v0.38.0
++)
++
++require (
++	github.com/clipperhouse/uax29/v2 v2.2.0 // indirect
++	github.com/gdamore/encoding v1.0.1 // indirect
++	github.com/lucasb-eyer/go-colorful v1.3.0 // indirect
++	github.com/mattn/go-colorable v0.1.14 // indirect
++	github.com/mattn/go-isatty v0.0.22 // indirect
++	github.com/rivo/uniseg v0.4.7 // indirect
++)
+diff --git a/go.sum b/go.sum
+new file mode 100644
+index 0000000..cfee3bc
+--- /dev/null
++++ b/go.sum
+@@ -0,0 +1,14 @@
++github.com/gdamore/encoding v1.0.1 h1:YzKZckdBL6jVt2Gc+5p82qhrGiqMdG/eNs6Wy0u3Uhw=
++github.com/gdamore/encoding v1.0.1/go.mod h1:0Z0cMFinngz9kS1QfMjCP8TY7em3bZYeeklsSDPivEo=
++github.com/gdamore/tcell/v2 v2.13.10 h1:Afs3JKt83HnhuUKdZ3MnxUgOqQRWftj5JyDqv1LLynA=
++github.com/gdamore/tcell/v2 v2.13.10/go.mod h1:+Wfe208WDdB7INEtCsNrAN6O2m+wsTPk1RAovjaILlo=
++github.com/lucasb-eyer/go-colorful v1.3.0 h1:2/yBRLdWBZKrf7gB40FoiKfAWYQ0lqNcbuQwVHXptag=
++github.com/lucasb-eyer/go-colorful v1.3.0/go.mod h1:R4dSotOR9KMtayYi1e77YzuveK+i7ruzyGqttikkLy0=
++github.com/rivo/uniseg v0.4.7 h1:WUdvkW8uEhrYfLC4ZzdpI2ztxP1I582+49Oc5Mq64VQ=
++github.com/rivo/uniseg v0.4.7/go.mod h1:FN3SvrM+Zdj16jyLfmOkMNblXMcoc8DfTHruCPUcx88=
++golang.org/x/sys v0.46.0 h1:noSf2Fq6F8DBgS+LysIkx7rIExoNHJsxOAtPp4rthXw=
++golang.org/x/sys v0.46.0/go.mod h1:4GL1E5IUh+htKOUEOaiffhrAeqysfVGipDYzABqnCmw=
++golang.org/x/term v0.44.0 h1:0rLvDRCtNj0gZkyIXhCyOb2OAzEhLVqc4B+hrsBhrmc=
++golang.org/x/term v0.44.0/go.mod h1:7ze4MdzUzLXpSAoFP1H0bOI9aXDqveSvatT5vKcFh2Y=
++golang.org/x/text v0.38.0 h1:sXmwo9DwP3OK9EZ7PqAdaooSGozfl/3a6/xJcbzPRhE=
++golang.org/x/text v0.38.0/go.mod h1:YXZt3QhHUKYT53r2lLKFIVi6Ao1jdzrTR/KQ09qyxF4=
+diff --git a/main.go b/main.go
+new file mode 100644
+index 0000000..6d3ad78
+--- /dev/null
++++ b/main.go
+@@ -0,0 +1,151 @@
++package main
++
++import (
++	"fmt"
++	"os"
++	"sort"
++
++	"github.com/gdamore/tcell/v2"
++)
++
++// version is the program version, printed by -v / --version.
++const version = "v1.13.0"
++
++// helpText is the exact text printed by -h / --help.
++const helpText = `
++  walk v1.13.0
++
++  Usage: walk [path]
++
++    arrows, hjkl  Move cursor
++    enter         Enter directory
++    backspace     Exit directory
++    space         Toggle preview
++    esc, q        Exit with cd
++    ctrl+c        Exit without cd
++    /             Fuzzy search
++    d, delete     Delete file or dir
++    y             Copy to clipboard
++    .             Hide hidden files
++    ?             Show help
++
++  Flags:
++
++    --icons        display icons
++    --dir-only     show dirs only
++    --hide-hidden  hide hidden files
++    --preview      display preview
++    --with-border  preview with border
++    --fuzzy        fuzzy mode
++
++`
++
++// options holds the parsed command-line flags.
++type options struct {
++	path        string
++	showIcons   bool
++	dirsOnly    bool
++	hideHidden  bool
++	showPreview bool
++	bordered    bool
++	fuzzy       bool
++}
++
++// parseArgs performs a single left-to-right scan of the arguments.
++//
++// The long flags --version and --help are recognised in any position; the
++// short forms -v and -h are recognised only when they are the first
++// argument. The first trigger wins: an earlier --version yields the version
++// action, an earlier --help yields the help action. Remaining flags are
++// collected into opts and a nil action is returned so the caller proceeds to
++// open the terminal.
++func parseArgs(args []string) (action func(), opts *options) {
++	opts = &options{}
++	for i, arg := range args {
++		switch {
++		case arg == "--version" || (i == 0 && arg == "-v"):
++			return func() {
++				fmt.Println(version)
++			}, opts
++		case arg == "--help" || (i == 0 && arg == "-h"):
++			return func() {
++				fmt.Fprint(os.Stderr, helpText)
++				os.Exit(1)
++			}, opts
++		case arg == "--icons":
++			opts.showIcons = true
++		case arg == "--dir-only":
++			opts.dirsOnly = true
++		case arg == "--hide-hidden":
++			opts.hideHidden = true
++		case arg == "--preview":
++			opts.showPreview = true
++		case arg == "--with-border":
++			opts.bordered = true
++		case arg == "--fuzzy":
++			opts.fuzzy = true
++		case arg == "--":
++			continue
++		default:
++			if opts.path == "" {
++				opts.path = arg
++			}
++		}
++	}
++	return nil, opts
++}
++
++func main() {
++	action, opts := parseArgs(os.Args[1:])
++	if action != nil {
++		action()
++		return
++	}
++
++	f, err := os.Open("/dev/tty")
++	if err != nil {
++		panic(fmt.Errorf("could not open a new TTY: %v", err))
++	}
++	defer f.Close()
++
++	if opts.path == "" {
++		opts.path = "."
++	}
++
++	screen, err := tcell.NewScreen()
++	if err != nil {
++		panic(fmt.Errorf("could not create a new TTY: %v", err))
++	}
++
++	if err := screen.Init(); err != nil {
++		panic(fmt.Errorf("could not initialize a new TTY: %v", err))
++	}
++	defer screen.Fini()
++
++	screen.Clear()
++	screen.SetStyle(tcell.StyleDefault)
++	for y, e := range listEntries(opts) {
++		screen.PutStr(0, y, e)
++	}
++	screen.Show()
++
++}
++
++func listEntries(opts *options) []string {
++	entries, err := os.ReadDir(opts.path)
++	if err != nil {
++		return nil
++	}
++	out := make([]string, 0, len(entries))
++	for _, e := range entries {
++		if opts.hideHidden && len(e.Name()) > 0 && e.Name()[0] == '.' {
++			continue
++		}
++		if opts.dirsOnly && !e.IsDir() {
++			continue
++		}
++		out = append(out, e.Name())
++	}
++	sort.Strings(out)
++	return out
++}
+diff --git a/patch.txt b/patch.txt
+new file mode 100644
+index 0000000..9f2d11f
+--- /dev/null
++++ b/patch.txt
+@@ -0,0 +1,203 @@
++diff --git a/compile.sh b/compile.sh
++new file mode 100755
++index 0000000..65582b7
++--- /dev/null
+++++ b/compile.sh
++@@ -0,0 +1,15 @@
+++#!/usr/bin/env bash
+++set -euo pipefail
+++cd "$(dirname "$0")"
+++
+++export GOROOT=/usr/local/go/mod-cache/golang.org/toolchain@v0.0.1-go1.25.11.linux-amd64
+++export GOPATH=/usr/local/go/mod-cache
+++export GOPROXY=file:///usr/local/go/mod-cache/cache/download
+++export GOSUMDB=off
+++export GOTOOLCHAIN=local
+++export GOFLAGS=-mod=mod
+++export GO111MODULE=on
+++
+++GO=/usr/local/go/mod-cache/golang.org/toolchain@v0.0.1-go1.25.11.linux-amd64/bin/go
+++
+++"$GO" build -o executable .
++diff --git a/go.mod b/go.mod
++new file mode 100644
++index 0000000..06962b4
++--- /dev/null
+++++ b/go.mod
++@@ -0,0 +1,19 @@
+++module github.com/antonmedv/walk
+++
+++go 1.25.0
+++
+++require (
+++	github.com/gdamore/tcell/v2 v2.13.10
+++	golang.org/x/sys v0.46.0
+++	golang.org/x/term v0.44.0
+++	golang.org/x/text v0.38.0
+++)
+++
+++require (
+++	github.com/clipperhouse/uax29/v2 v2.2.0 // indirect
+++	github.com/gdamore/encoding v1.0.1 // indirect
+++	github.com/lucasb-eyer/go-colorful v1.3.0 // indirect
+++	github.com/mattn/go-colorable v0.1.14 // indirect
+++	github.com/mattn/go-isatty v0.0.22 // indirect
+++	github.com/rivo/uniseg v0.4.7 // indirect
+++)
++diff --git a/main.go b/main.go
++new file mode 100644
++index 0000000..6d3ad78
++--- /dev/null
+++++ b/main.go
++@@ -0,0 +1,151 @@
+++package main
+++
+++import (
+++	"fmt"
+++	"os"
+++	"sort"
+++
+++	"github.com/gdamore/tcell/v2"
+++)
+++
+++// version is the program version, printed by -v / --version.
+++const version = "v1.13.0"
+++
+++// helpText is the exact text printed by -h / --help.
+++const helpText = `
+++  walk v1.13.0
+++
+++  Usage: walk [path]
+++
+++    arrows, hjkl  Move cursor
+++    enter         Enter directory
+++    backspace     Exit directory
+++    space         Toggle preview
+++    esc, q        Exit with cd
+++    ctrl+c        Exit without cd
+++    /             Fuzzy search
+++    d, delete     Delete file or dir
+++    y             Copy to clipboard
+++    .             Hide hidden files
+++    ?             Show help
+++
+++  Flags:
+++
+++    --icons        display icons
+++    --dir-only     show dirs only
+++    --hide-hidden  hide hidden files
+++    --preview      display preview
+++    --with-border  preview with border
+++    --fuzzy        fuzzy mode
+++
+++`
+++
+++// options holds the parsed command-line flags.
+++type options struct {
+++	path        string
+++	showIcons   bool
+++	dirsOnly    bool
+++	hideHidden  bool
+++	showPreview bool
+++	bordered    bool
+++	fuzzy       bool
+++}
+++
+++// parseArgs performs a single left-to-right scan of the arguments.
+++//
+++// The long flags --version and --help are recognised in any position; the
+++// short forms -v and -h are recognised only when they are the first
+++// argument. The first trigger wins: an earlier --version yields the version
+++// action, an earlier --help yields the help action. Remaining flags are
+++// collected into opts and a nil action is returned so the caller proceeds to
+++// open the terminal.
+++func parseArgs(args []string) (action func(), opts *options) {
+++	opts = &options{}
+++	for i, arg := range args {
+++		switch {
+++		case arg == "--version" || (i == 0 && arg == "-v"):
+++			return func() {
+++				fmt.Println(version)
+++			}, opts
+++		case arg == "--help" || (i == 0 && arg == "-h"):
+++			return func() {
+++				fmt.Fprint(os.Stderr, helpText)
+++				os.Exit(1)
+++			}, opts
+++		case arg == "--icons":
+++			opts.showIcons = true
+++		case arg == "--dir-only":
+++			opts.dirsOnly = true
+++		case arg == "--hide-hidden":
+++			opts.hideHidden = true
+++		case arg == "--preview":
+++			opts.showPreview = true
+++		case arg == "--with-border":
+++			opts.bordered = true
+++		case arg == "--fuzzy":
+++			opts.fuzzy = true
+++		case arg == "--":
+++			continue
+++		default:
+++			if opts.path == "" {
+++				opts.path = arg
+++			}
+++		}
+++	}
+++	return nil, opts
+++}
+++
+++func main() {
+++	action, opts := parseArgs(os.Args[1:])
+++	if action != nil {
+++		action()
+++		return
+++	}
+++
+++	f, err := os.Open("/dev/tty")
+++	if err != nil {
+++		panic(fmt.Errorf("could not open a new TTY: %v", err))
+++	}
+++	defer f.Close()
+++
+++	if opts.path == "" {
+++		opts.path = "."
+++	}
+++
+++	screen, err := tcell.NewScreen()
+++	if err != nil {
+++		panic(fmt.Errorf("could not create a new TTY: %v", err))
+++	}
+++
+++	if err := screen.Init(); err != nil {
+++		panic(fmt.Errorf("could not initialize a new TTY: %v", err))
+++	}
+++	defer screen.Fini()
+++
+++	screen.Clear()
+++	screen.SetStyle(tcell.StyleDefault)
+++	for y, e := range listEntries(opts) {
+++		screen.PutStr(0, y, e)
+++	}
+++	screen.Show()
+++
+++}
+++
+++func listEntries(opts *options) []string {
+++	entries, err := os.ReadDir(opts.path)
+++	if err != nil {
+++		return nil
+++	}
+++	out := make([]string, 0, len(entries))
+++	for _, e := range entries {
+++		if opts.hideHidden && len(e.Name()) > 0 && e.Name()[0] == '.' {
+++			continue
+++		}
+++		if opts.dirsOnly && !e.IsDir() {
+++			continue
+++		}
+++		out = append(out, e.Name())
+++	}
+++	sort.Strings(out)
+++	return out
+++}
