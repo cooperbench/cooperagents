@@ -1387,3 +1387,18 @@ single-cell noise ~±6). srgn-t2 = valid r2 rerun (64.6). One NUL-byte agent
 crash (fixed in worker) and one 272-team-size shepherd bug (caught at
 dispatch, node cleaned) were the only incidents; zero starvation across all
 40 cells (heartbeat-verified first calls +1-20s).
+
+--- 2026-08-20: LEADERBOARD CONTEXT (programbench.com, same 10 tasks, official mini-swe runs) ---
+Means computed from the 21 per-task leaderboard tables:
+GPT5.5(high) 79.5 | Opus4.8(xh) 78.7 | Opus5(xh) 77.3 | GPT5.5(xh) 75.4 |
+GPT5.6Sol(xh) 73.5 | Gemini3.6F 73.2 | GPT5.5 72.8 | GLM-5.2 71.3 |
+Opus4.7(xh) 70.7 | Gemini3.5F 66.5 | GPT5.6Sol 63.0 | Opus4.7 62.1 |
+Gemini3.7F 61.5 | Opus4.6 53.7 | Gemini3.1Pro 52.7 | Sonnet4.6 51.4 |
+>> OUR 27B t2 (fin) 51.3 | our t4 50.0 << | GPT5.4 49.1 | our t3 45.3 |
+Haiku4.5 40.8 | Gemini3F 40.5 | our solo 37.9 | GPT5.4mini 26.6 | GPT5mini 23.3
+READING: the fin team harness lifts open Qwen3.8-27B from below-Haiku (solo
+37.9) to Sonnet-4.6/Opus-4.6 territory — past GPT 5.4, Haiku 4.5, Gemini 3
+Flash — with model and tasks held constant. Frontier models also show large
+single-run variance across their own effort variants (e.g. GPT5.6Sol zoxide
+1.1 vs xhigh 90.2; GPT5.5 chroma high 41.7 vs xhigh 13.1), supporting the
+±6-10pt noise band for single-cell comparisons.
