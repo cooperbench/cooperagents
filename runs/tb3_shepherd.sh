@@ -9,16 +9,15 @@ cd /home/ubuntu/CooperAgents
 F=scripts/fleet
 SSH="ssh -o ConnectTimeout=8 -i $HOME/.ssh/fleet_key"
 export COOPER_ENV_FILE=.env.qwen38b200tb
-BASEFLAGS="--step-limit 1000 --agent-time-limit 14400"
+BASEFLAGS="--step-limit 1000 --agent-time-limit 14400 --repair"
+TEAMFLAGS="--completion-gate --env-brief --presub-merge"
 log() { echo "$(date -u +%H:%M) $*"; }
 
-log "waiting for q27b batch to complete"
-until grep -q "Q27B BATCH COMPLETE" runs/q27b_shepherd.log 2>/dev/null; do sleep 300; done
-log "q27b complete — starting TB3 batch"
+log "starting TB3 fin-config batch"
 
 score_new() {
   $F/collect.sh </dev/null >/dev/null 2>&1
-  for d in runs/pb-coopgitc2-*-tb3t* runs/pb-solo-*-tb3solo*; do
+  for d in runs/pb-coopgitc2-*-tb3f* runs/pb-solo-*-tb3f*; do
     [ -d "$d" ] && [ -f "$d.DONE" ] && [ ! -f "$d/.val" ] || continue
     name=$(basename "$d" | sed -E "s/^pb-(coopgitc2|solo)-//")
     reward=$(COOPER_BENCHMARK=terminalbench .venv/bin/python -c "
@@ -56,7 +55,7 @@ while :; do
       line=$(head -1 runs/tb3_queue.txt)
       rep=$(echo "$line" | cut -d' ' -f1); inst=$(echo "$line" | cut -d' ' -f2)
       size=$(echo "$line" | cut -d' ' -f3); arm=$(echo "$line" | cut -d' ' -f4)
-      if [ "$arm" = "solo" ]; then FL="$BASEFLAGS"; else FL="$BASEFLAGS --team-size $size"; fi
+      if [ "$arm" = "solo" ]; then FL="$BASEFLAGS"; else FL="$BASEFLAGS $TEAMFLAGS --team-size $size"; fi
       if $F/pbrun.sh "$freenode" "$inst" "$arm" "$rep" $FL >/dev/null 2>&1; then
         sed -i 1d runs/tb3_queue.txt
         log "DISPATCHED $rep ($arm t$size) -> $freenode [queue=$(wc -l < runs/tb3_queue.txt)]"
@@ -65,7 +64,7 @@ while :; do
   else
     live=0
     for ip in $(cat $F/nodes.txt); do
-      n=$($SSH ubuntu@$ip 'pgrep -cf "tb3[ts]"' </dev/null 2>/dev/null)
+      n=$($SSH ubuntu@$ip 'pgrep -cf "tb3[f]"' </dev/null 2>/dev/null)
       live=$((live + ${n:-0}))
     done
     if [ "$live" -eq 0 ]; then
