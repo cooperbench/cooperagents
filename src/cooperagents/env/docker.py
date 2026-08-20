@@ -44,6 +44,7 @@ class DockerEnv(Environment):
             # inside the container must not reach the internet (model calls
             # happen host-side and are unaffected).
             base += ["--network", network]
+        self.volumes = list(volumes or [])
         for v in volumes or []:
             base += ["-v", v]
         tail = [image, "sleep", keepalive]

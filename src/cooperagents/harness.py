@@ -841,7 +841,21 @@ class UnifiedHarness:
                 r = env.execute(
                     f"git fetch -q shared {aid} 2>/dev/null && "
                     f"git diff {base} FETCH_HEAD -- . 2>/dev/null")
-                return strip_test_sections(r.stdout) if r.stdout.strip() else d
+                if r.stdout.strip():
+                    return strip_test_sections(r.stdout)
+                # last resort: the agent destroyed even its .git — read the
+                # share volume directly with a throwaway container
+                vol = next((v.split(":")[0] for v in getattr(env, "volumes", None) or []
+                            if v.endswith(":/cbshared")), None)
+                if vol and base != "HEAD":
+                    import subprocess as _sp
+                    rr = _sp.run(["docker", "run", "--rm", "-v", f"{vol}:/cb",
+                                  "alpine/git", "--git-dir=/cb/repo.git",
+                                  "diff", base, aid],
+                                 capture_output=True, text=True, timeout=120)
+                    if rr.returncode == 0 and rr.stdout.strip():
+                        return strip_test_sections(rr.stdout)
+                return d
 
             def run_coop(a: Assignment) -> tuple[str, AgentResult, str]:
                 env = coop_envs[a.agent_id]
