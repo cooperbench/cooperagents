@@ -30,7 +30,7 @@ ref() {  # lazily resolve the reference node's launch config
 queued() { cat runs/*_queue.txt 2>/dev/null | grep -c . || true; }
 
 node_busy() {  # 0 = busy/unreachable, 1 = idle
-  n=$($SSH ubuntu@$1 'pgrep -cf "bench_programbench.p[y]"' </dev/null 2>/dev/null)
+  n=$(timeout 15 $SSH ubuntu@$1 'pgrep -cf "bench_programbench.p[y]"' </dev/null 2>/dev/null)
   [ "$n" = "0" ] && return 1 || return 0
 }
 
