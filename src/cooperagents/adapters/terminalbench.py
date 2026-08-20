@@ -142,7 +142,7 @@ class TerminalBenchAdapter(BenchmarkAdapter):
         """Score every instance directory under run_dir with the task's own
         verifier. Returns {instance: reward}."""
         out = {}
-        for inst_dir in sorted(Path(run_dir).iterdir()):
+        for inst_dir in sorted(Path(run_dir).resolve().iterdir()):
             if not (inst_dir / "integrated.patch").exists():
                 continue
             instance = inst_dir.name
@@ -153,7 +153,7 @@ class TerminalBenchAdapter(BenchmarkAdapter):
                 subprocess.run(["docker", "build", "-t", vtag, str(td / "tests")],
                                check=True, capture_output=True, text=True)
             logs = inst_dir / "verifier_logs"
-            logs.mkdir(exist_ok=True)
+            (logs / "verifier").mkdir(parents=True, exist_ok=True)
             mounts = ["-v", f"{logs}:/logs"]
             for a in self.artifacts(instance):
                 src = inst_dir / "artifacts" / a.lstrip("/")
@@ -166,7 +166,23 @@ class TerminalBenchAdapter(BenchmarkAdapter):
                                capture_output=True, text=True, timeout=timeout + 60)
             except subprocess.TimeoutExpired:
                 pass
-            rf = logs / "verifier" / "reward.json"
-            out[instance] = (float(json.loads(rf.read_text()).get("reward", 0.0))
-                             if rf.exists() else 0.0)
+            reward = 0.0
+            rj = logs / "verifier" / "reward.json"
+            rt = logs / "verifier" / "reward.txt"
+            if rj.exists():
+                reward = float(json.loads(rj.read_text()).get("reward", 0.0))
+            elif rt.exists():
+                try:
+                    reward = float(rt.read_text().strip())
+                except ValueError:
+                    reward = 0.0
+            # diagnostic pass-fraction from the CTRF report when present
+            ctrf = logs / "verifier" / "ctrf.json"
+            if ctrf.exists():
+                try:
+                    t = json.loads(ctrf.read_text())["results"]["summary"]
+                    out[instance + "__tests"] = f"{t.get('passed',0)}/{t.get('tests',0)}"
+                except Exception:  # noqa: BLE001
+                    pass
+            out[instance] = reward
         return out

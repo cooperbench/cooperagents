@@ -68,6 +68,12 @@ pilot). Categories span science, GPU, databases, crypto, CAD, finance.
 - [x] Harbor CLI installed (0.21.0); dataset downloaded to ~/terminalbench
 - [x] Task anatomy inspected (single vs compose census: 62/12)
 - [x] Adapter skeleton: src/cooperagents/adapters/terminalbench.py
-- [ ] Runner wiring (--benchmark terminalbench in bench runner)
-- [ ] Verifier harness (build tests image, artifact extraction, reward read)
-- [ ] Pilot (blocked on: q27b batch completing; user go-ahead on budget)
+- [x] Runner wiring (COOPER_BENCHMARK env in bench runner)
+- [x] Verifier harness verified end-to-end (smoke: 60/103 tests, reward 0.0
+      binary). Five integration bugs found+fixed by the smoke iterations:
+      no git in task images (git layer), base-commit capture ordering,
+      agents stashing their submission away (prompt + stash recovery),
+      share-fallback collection (agents wiping trees), relative docker -v
+      paths in evaluate. Rewards are ALL-OR-NOTHING per task (reward.txt
+      from pytest rc); pass-fraction captured as diagnostic from ctrf.json.
+- [x] Batch running: first 10 tasks x solo/t2/t3/t4 (runs/tb3_shepherd.sh)
