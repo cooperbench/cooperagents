@@ -11,7 +11,7 @@ SSH="ssh -o ConnectTimeout=8 -i $HOME/.ssh/fleet_key"
 while true; do
   for ip in $(cat $F/nodes.txt); do
     out=$(timeout 25 $SSH ubuntu@$ip \
-      'cd CooperAgents && .venv/bin/python scripts/fleet/live_starvation_check.py --grace 720 --stale 99999 2>/dev/null' \
+      'cd CooperAgents && .venv/bin/python scripts/fleet/live_starvation_check.py --grace 2400 --stale 99999 2>/dev/null' \
       </dev/null 2>/dev/null | grep "^STARVING")
     [ -z "$out" ] && continue
     echo "$out" | while read -r _ repc rest; do

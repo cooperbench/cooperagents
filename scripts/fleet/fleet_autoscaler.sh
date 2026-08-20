@@ -16,6 +16,12 @@ DRY=${1:-}
 MAX_EXTRA=15          # hard cap on autoscaled nodes
 IDLE_MIN=10           # consecutive idle checks (x120s) before terminating
 REF_IP=$(head -1 $F/nodes.txt)
+UDATA_FILE=/tmp/cooper_fleet_udata.sh
+{ echo '#!/bin/bash'
+  echo 'mkdir -p /home/ubuntu/.ssh'
+  echo "echo '$(cat $HOME/.ssh/fleet_key.pub)' >> /home/ubuntu/.ssh/authorized_keys"
+  echo 'chown -R ubuntu:ubuntu /home/ubuntu/.ssh'
+} > $UDATA_FILE
 log() { echo "$(date -u +%H:%M) $*"; }
 
 ref_json=""
@@ -34,13 +40,16 @@ node_busy() {  # 0 = busy/unreachable, 1 = idle
   [ "$n" = "0" ] && return 1 || return 0
 }
 
-bootstrap() {  # rsync workload onto a fresh node
+bootstrap() {  # rsync workload onto a fresh node; FAILS unless verified
   ip=$1
-  for i in $(seq 1 60); do timeout 15 $SSH ubuntu@$ip true </dev/null 2>/dev/null && break; sleep 10; done
-  timeout 600 rsync -az -e "$SSH" --exclude runs --exclude .git ~/CooperAgents ubuntu@$ip: 2>/dev/null
-  timeout 600 rsync -az -e "$SSH" ~/terminalbench ubuntu@$ip: 2>/dev/null
+  up=0
+  for i in $(seq 1 60); do timeout 15 $SSH ubuntu@$ip true </dev/null 2>/dev/null && { up=1; break; }; sleep 10; done
+  [ "$up" = "1" ] || { log "BOOTSTRAP FAILED $ip: ssh never came up"; return 1; }
+  timeout 600 rsync -az -e "$SSH" --exclude runs --exclude .git ~/CooperAgents ubuntu@$ip: 2>/dev/null || return 1
+  timeout 600 rsync -az -e "$SSH" ~/terminalbench ubuntu@$ip: 2>/dev/null || return 1
   timeout 300 rsync -az -e "$SSH" ~/ProgramBench ubuntu@$ip: 2>/dev/null || true
-  $SSH ubuntu@$ip 'mkdir -p CooperAgents/runs; command -v docker >/dev/null || echo NODOCKER' </dev/null 2>/dev/null
+  ok=$(timeout 20 $SSH ubuntu@$ip 'mkdir -p CooperAgents/runs && command -v docker >/dev/null && test -f CooperAgents/scripts/bench_programbench.py && echo OK' </dev/null 2>/dev/null)
+  [ "$ok" = "OK" ] || { log "BOOTSTRAP FAILED $ip: verification"; return 1; }
 }
 
 declare -A idle_count
@@ -60,23 +69,23 @@ while :; do
   want=$(( q - free ))
   if [ "$want" -gt 0 ] && [ "$n_extra" -lt "$MAX_EXTRA" ]; then
     add=$(( want < (MAX_EXTRA - n_extra) ? want : (MAX_EXTRA - n_extra) ))
-    [ "$add" -gt 3 ] && add=3   # ramp gently, 3 per cycle
+    add=1   # account vCPU limit is tight: probe one node at a time
     cfg=$(ref)
     ami=$(echo "$cfg" | python3 -c "import json,sys; print(json.load(sys.stdin)['ami'])" 2>/dev/null)
     if [ -n "$ami" ]; then
       if [ "$DRY" = "--dry-run" ]; then
         log "DRY: would launch $add nodes ($ami)"
       else
-        type=$(echo "$cfg" | python3 -c "import json,sys; print(json.load(sys.stdin)['type'])")
+        type="m6i.2xlarge"  # smaller than base nodes: fits the account vCPU limit
         sg=$(echo "$cfg" | python3 -c "import json,sys; print(json.load(sys.stdin)['sg'])")
         subnet=$(echo "$cfg" | python3 -c "import json,sys; print(json.load(sys.stdin)['subnet'])")
         key=$(echo "$cfg" | python3 -c "import json,sys; print(json.load(sys.stdin)['key'])")
         out=$(aws ec2 run-instances --image-id "$ami" --instance-type "$type" \
           --security-group-ids "$sg" --subnet-id "$subnet" --key-name "$key" \
-          --count "$add" --associate-public-ip-address \
+          --count "$add" --associate-public-ip-address --user-data "file://$UDATA_FILE" \
           --tag-specifications 'ResourceType=instance,Tags=[{Key=cooper-autoscale,Value=1},{Key=Name,Value=cooper-fleet-auto}]' \
           --query "Instances[].InstanceId" --output text 2>&1)
-        log "SCALE-UP launched: $out"
+        case "$out" in *VcpuLimitExceeded*) log "SCALE-UP blocked: account vCPU limit; backing off 15min"; sleep 780;; *) log "SCALE-UP launched: $out";; esac
         sleep 45
         for id in $out; do
           nip=$(aws ec2 describe-instances --instance-ids "$id" \

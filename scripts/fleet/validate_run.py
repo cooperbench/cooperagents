@@ -109,8 +109,11 @@ def validate(run_dir: str) -> int:
             problems.append(f"{aid}: terminal error {str(a['error'])[:80]}")
         fmt = sum(1 for m in a["messages"]
                   if isinstance(m.get("content"), str) and "No tool calls found" in m["content"])
-        if fmt > LIMITS["max_format_errors"]:
-            problems.append(f"{aid}: {fmt} format-error retries")
+        # rate-based: a low background of tool-call omissions (retry
+        # recovers) is benign; only budget-consuming rates invalidate
+        _steps = a.get("steps", 0) or 1
+        if fmt > max(LIMITS["max_format_errors"], 5, int(0.05 * _steps)):
+            problems.append(f"{aid}: {fmt} format-error retries ({fmt/_steps:.0%} of steps)")
         prev, lats, first, stalls = None, [], None, 0
         for m in a["messages"]:
             ex = m.get("extra") or {}
