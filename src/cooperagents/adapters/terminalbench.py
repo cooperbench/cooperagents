@@ -143,7 +143,7 @@ class TerminalBenchAdapter(BenchmarkAdapter):
             art_root = out_dir / "artifacts"
             for a in self.artifacts(instance):
                 listing = env.execute(
-                    f"find {a} -type f 2>/dev/null || true").stdout.split()
+                    f"find {a} -path '*/.git' -prune -o -type f -print 2>/dev/null || true").stdout.split()
                 for f in listing or []:
                     r = env.execute(f"base64 -w0 '{f}' 2>/dev/null")
                     if r.exit_code == 0 and r.stdout.strip():
