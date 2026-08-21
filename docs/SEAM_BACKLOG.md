@@ -1402,3 +1402,34 @@ Flash — with model and tasks held constant. Frontier models also show large
 single-run variance across their own effort variants (e.g. GPT5.6Sol zoxide
 1.1 vs xhigh 90.2; GPT5.5 chroma high 41.7 vs xhigh 13.1), supporting the
 ±6-10pt noise band for single-cell comparisons.
+
+--- 2026-08-21: TERMINAL-BENCH 3.0 FIN-CONFIG EVALUATION COMPLETE (40/40 valid) ---
+coopgitc2-fin-min exact config (teams: repair+gate+brief+presub-merge; solo:
+repair), Qwen3.8-27B on held B200, 4h budgets, first 10 single-container tasks.
+Official rewards (all-or-nothing): 0 on every cell — no full solves, matching
+the frontier profile (leaderboard Opus 4.6: 0% resolved on TB).
+PASS-FRACTION table (%):
+| task (tests)      | solo |  t2  |  t3  |  t4  |
+| bun-sourcemap(36)   63.9  72.2  69.4  19.4 |  MEANS: 15.1 -> 15.9 -> 20.7 -> 16.4
+| dedup(13)           53.8  53.8  53.8  53.8 |  t3 leads via the atrx unlock.
+| cargo(27)           33.3  33.3  33.3  33.3 |
+| atrx-vep(16)         0     0    50.0  37.5 |  THREE REGIMES: capability plateaus
+| batched-eval(5)      0     0     0    20.0 |  (dedup/cargo: identical in every arm
+| cli-simplex(103)     0     0     0     0   |  and config); variance/merge tasks
+| biped(3)             0     0     0     0   |  (bun t4 semantic merge loss through a
+| cad-model(8)         0     0     0     0   |  fact-less gate; cli all-or-nothing
+| coq(1)               0     0     0     0   |  numerics, smoke t2 hit 58%); team-
+| data-anon(8)         0     0     0     0   |  unlock tasks (atrx t3/t4, batched t4).
+GATE EFFECT (vs stripped-config ablation): conflict markers eliminated
+(bun t3 0->25, t4 0->7; zero markers in all 40 patches); solo/t2 reproduce
+within noise; all cells submitted real work (collection stack held).
+FAILURE TAXONOMY (teams): semantic merge loss passing a fact-less gate
+(bun-t4); budget exhaustion pre-submission (atrx-t2, both agents status=limit,
+0 gate attempts); solution-quality variance (cli teams 0/103 with clean 72-83KB
+patches vs smoke's 60/103); format-error burn on long-prompt tasks (2 cells,
+rate-validator quarantined, re-runs clean).
+NEXT (designed, committed, not yet run): TB verification facts — Tier 1
+artifact existence+parse gate, Tier 2 instruction-example behavioral probe
+(oracle-calibrated offline), harness-owned via verification.*; plus the
+in-loop verification hint now in the adapter prompt. Each becomes its own
+measured delta.
