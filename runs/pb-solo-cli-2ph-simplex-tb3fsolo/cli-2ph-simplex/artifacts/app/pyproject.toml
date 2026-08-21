@@ -1,0 +1,19 @@
+[project]
+name = "lp-solve-cli"
+version = "0.1.0"
+requires-python = ">=3.11"
+description = "Two-phase simplex CLI starter project"
+
+[project.scripts]
+lp_solve = "simplex.parser:main"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["lp_solve"]
+packages = ["simplex"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

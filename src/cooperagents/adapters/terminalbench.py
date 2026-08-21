@@ -81,7 +81,22 @@ class TerminalBenchAdapter(BenchmarkAdapter):
         return tag
 
     def task_for(self, instance: str, agent_index: int = 0, team_size: int = 1) -> str:
-        return (_task_dir(instance) / "instruction.md").read_text() + (
+        arts = self.artifacts(instance)
+        art_note = ""
+        if arts:
+            art_note = (
+                "\n\n## Verify before finishing\n\n"
+                "Grading consumes these exact paths — before you finish, confirm "
+                "each one exists and is well-formed (parse JSON with python, "
+                "syntax-check code files, run executables):\n"
+                + "".join(f"- {a}\n" for a in arts) +
+                "If the task statement shows an example invocation, RUN IT "
+                "exactly as written and check that it exits 0 and produces its "
+                "output files — a submission whose own example fails will score "
+                "zero. If you merge teammates' work, re-run these checks on the "
+                "merged tree before finishing.\n"
+            )
+        return (_task_dir(instance) / "instruction.md").read_text() + art_note + (
             "\n\n## Submission convention\n\n"
             "Your final WORKING TREE is your submission — the files as they sit "
             "in the workspace when you finish. Do NOT `git stash`, `git reset`, "

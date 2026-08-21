@@ -1,0 +1,2058 @@
+diff --git a/basic_variables.pkl b/basic_variables.pkl
+new file mode 100644
+index 0000000..b3d5cda
+Binary files /dev/null and b/basic_variables.pkl differ
+diff --git a/bv2.pkl b/bv2.pkl
+new file mode 100644
+index 0000000..b3d5cda
+Binary files /dev/null and b/bv2.pkl differ
+diff --git a/degen2.pkl b/degen2.pkl
+new file mode 100644
+index 0000000..203e5de
+Binary files /dev/null and b/degen2.pkl differ
+diff --git a/degeneracy_report.pkl b/degeneracy_report.pkl
+new file mode 100644
+index 0000000..203e5de
+Binary files /dev/null and b/degeneracy_report.pkl differ
+diff --git a/lp_solve b/lp_solve
+index 8568e8a..b3720c4 100755
+--- a/lp_solve
++++ b/lp_solve
+@@ -1,6 +1,7 @@
+ #!/usr/bin/env python3
++import sys
+ from simplex.parser import main
+ 
+ 
+ if __name__ == "__main__":
+-    main()
++    sys.exit(main())
+diff --git a/output.pkl b/output.pkl
+new file mode 100644
+index 0000000..d0b3473
+Binary files /dev/null and b/output.pkl differ
+diff --git a/patch.txt b/patch.txt
+new file mode 100644
+index 0000000..c1a92d1
+--- /dev/null
++++ b/patch.txt
+@@ -0,0 +1,992 @@
++diff --git a/lp_solve b/lp_solve
++index 8568e8a..b3720c4 100755
++--- a/lp_solve
+++++ b/lp_solve
++@@ -1,6 +1,7 @@
++ #!/usr/bin/env python3
+++import sys
++ from simplex.parser import main
++ 
++ 
++ if __name__ == "__main__":
++-    main()
+++    sys.exit(main())
++diff --git a/simplex/parser.py b/simplex/parser.py
++index ef1517e..737780b 100644
++--- a/simplex/parser.py
+++++ b/simplex/parser.py
++@@ -1,37 +1,211 @@
+++"""Command-line interface for the two-phase simplex solver.
+++
+++The CLI accepts Python-literal formatted arguments, runs the two-phase
+++simplex algorithm, and writes:
+++
+++* the final simplex tableau (pickle, ``list[list[float]]``);
+++* a degeneracy report (pickle, ``{"degenerate": bool}``);
+++* a UTF-8 text representation of the *parsed* input LP;
+++* a basic-variable report (pickle, ``{"basic_variables": dict[str, float]}``);
+++* (when ``--initial_pivots`` is given) a pivot log (UTF-8 JSON Lines).
+++
+++Exception discipline
+++--------------------
+++All computation (parsing the problem, solving, and building the reports)
+++happens *before* any output file is written.  If any exception is raised
+++during that computation (e.g. an invalid relational operator, an unbounded
+++problem, ...), none of the output files is created and Python prints the
+++exact traceback to ``stderr``.
+++"""
+++
++ import argparse
++ import ast
++-import sys
+++import json
++ import pickle
+++import sys
+++
++ from simplex.phases import two_phase_simplex
++-from simplex.schema import FinalTableau, as_float_tableau
+++from simplex.schema import (
+++    as_float_tableau,
+++    build_problem_report,
+++)
+++
+++# Tolerance used for unit-column / degeneracy tests on the final tableau.
+++EPS = 1e-9
+++
++ 
++ def parse_list_literal(literal: str):
+++    """Parse ``literal`` as a Python literal (used for all list arguments)."""
++     try:
++         return ast.literal_eval(literal)
++-    except:
++-        raise ValueError("Invalid Python literal for list: " + literal)
+++    except Exception:
+++        raise ValueError("Invalid Python literal: " + literal)
++ 
++-def main():
++-    parser = argparse.ArgumentParser(description="Two-Phase Simplex Algorithm CLI")
++-    parser.add_argument('--objective_coeff', required=True, type=parse_list_literal, help='Objective coefficients as Python literal list')
++-    parser.add_argument('--constraints_coeff', required=True, type=parse_list_literal, help='Constraints coefficients as Python literal list of lists')
++-    parser.add_argument('--constraints_relational_operators', required=True, type=parse_list_literal, help='Constraints relational operators as Python literal list of strings')
++-    parser.add_argument('--constraints_rhs', required=True, type=parse_list_literal, help='Constraints RHS values as Python literal list')
++-    parser.add_argument('--output_file', required=True, help='Output file to save the final tableau in pickle format')
++ 
++-    args = parser.parse_args()
+++# ---------------------------------------------------------------------------
+++# Report computation
+++# ---------------------------------------------------------------------------
+++def _compute_basic_variables(final_tableau, n, m, eps=EPS):
+++    """Return ``{"name": value}`` for the basic variables of the final tableau.
++ 
++-    try:
++-        final_tableau = two_phase_simplex(
++-            args.objective_coeff,
++-            args.constraints_coeff,
++-            args.constraints_relational_operators,
++-            args.constraints_rhs
+++    ``final_tableau`` has layout ``[Z, x1..xn, s1..sm, RHS]`` with ``m``
+++    constraint rows followed by the objective row.  For each constraint row
+++    the basic variable is the first variable column (decision variables
+++    first, then slack/surplus) that forms a unit column in the constraint
+++    block; its value is that row's ``RHS``.
+++    """
+++    basic = {}
+++    num_rows = len(final_tableau)
+++    # The last row is the objective row; constraint rows are 0 .. num_rows-2.
+++    constraint_rows = num_rows - 1
+++    for r in range(constraint_rows):
+++        row = final_tableau[r]
+++        chosen = None
+++        # x1..xn occupy columns 1..n, s1..sm occupy columns (1+n) .. (1+n+m-1).
+++        for j in range(1, 1 + n + m):
+++            if abs(row[j] - 1.0) >= eps:
+++                continue
+++            # Confirm the column is ~0 in every other constraint row.
+++            is_unit = True
+++            for i in range(constraint_rows):
+++                if i == r:
+++                    continue
+++                if abs(final_tableau[i][j]) >= eps:
+++                    is_unit = False
+++                    break
+++            if not is_unit:
+++                continue
+++            if j <= n:
+++                chosen = "x%d" % j
+++            else:
+++                chosen = "s%d" % (j - n)
+++            break
+++        if chosen is not None:
+++            basic[chosen] = float(final_tableau[r][-1])
+++    return basic
+++
+++
+++def _check_degeneracy(final_tableau, m, eps=EPS):
+++    """Return ``True`` if any constraint row has an ``RHS`` of ~0.
+++
+++    The objective row is never considered.
+++    """
+++    for i in range(m):
+++        if abs(final_tableau[i][-1]) < eps:
+++            return True
+++    return False
+++
+++
+++# ---------------------------------------------------------------------------
+++# CLI
+++# ---------------------------------------------------------------------------
+++def main(argv=None):
+++    parser = argparse.ArgumentParser(
+++        description="Two-Phase Simplex Algorithm CLI"
+++    )
+++    parser.add_argument(
+++        "--objective_coeff", required=True, type=parse_list_literal,
+++        help="Objective coefficients as a Python literal list[float]",
+++    )
+++    parser.add_argument(
+++        "--constraints_coeff", required=True, type=parse_list_literal,
+++        help="Constraint coefficients as a Python literal list[list[float]]",
+++    )
+++    parser.add_argument(
+++        "--constraints_relational_operators", required=True, type=parse_list_literal,
+++        help="Constraint relational operators as a Python literal list[str]",
+++    )
+++    parser.add_argument(
+++        "--constraints_rhs", required=True, type=parse_list_literal,
+++        help="Constraint right-hand-sides as a Python literal list[float]",
+++    )
+++    parser.add_argument(
+++        "--output_file", required=True,
+++        help="Path for the final tableau (pickle, list[list[float]])",
+++    )
+++    parser.add_argument(
+++        "--degeneracy_report_file", required=True,
+++        help="Path for the degeneracy report (pickle, {degenerate: bool})",
+++    )
+++    parser.add_argument(
+++        "--problem_report_file", required=True,
+++        help="Path for the parsed-LP report (UTF-8 text)",
+++    )
+++    parser.add_argument(
+++        "--basic_variables_file", required=True,
+++        help="Path for the basic-variable report (pickle, {basic_variables: dict})",
+++    )
+++    parser.add_argument(
+++        "--initial_pivots", type=parse_list_literal, default=None,
+++        help="Optional Phase-1 pivots as a Python literal list of dicts "
+++             "with keys 'enter_column' and 'leave_row'",
+++    )
+++    parser.add_argument(
+++        "--pivot_log_file", default=None,
+++        help="Path for the pivot log (UTF-8 JSON Lines); required when "
+++             "--initial_pivots is provided",
+++    )
+++
+++    args = parser.parse_args(argv)
+++
+++    objective_coeff = args.objective_coeff
+++    constraints_coeff = args.constraints_coeff
+++    operators = args.constraints_relational_operators
+++    rhs = args.constraints_rhs
+++    initial_pivots = args.initial_pivots
+++
+++    if initial_pivots is not None and args.pivot_log_file is None:
+++        # --pivot_log_file is required whenever --initial_pivots is present.
+++        raise ValueError(
+++            "--pivot_log_file is required when --initial_pivots is provided"
++         )
++ 
++-        with open(args.output_file, 'wb') as f:
++-            pickle.dump(as_float_tableau(final_tableau), f)
+++    # --- Computation (may raise; on failure no file is written below) ------
+++    final_tableau, pivot_log = two_phase_simplex(
+++        objective_coeff,
+++        constraints_coeff,
+++        operators,
+++        rhs,
+++        initial_pivots=initial_pivots,
+++    )
+++    final_tableau = as_float_tableau(final_tableau)
+++
+++    n = len(objective_coeff)
+++    m = len(constraints_coeff)
+++
+++    problem_report = build_problem_report(
+++        objective_coeff, constraints_coeff, operators, rhs
+++    )
+++    degenerate = _check_degeneracy(final_tableau, m)
+++    basic_variables = _compute_basic_variables(final_tableau, n, m)
+++
+++    # --- Writes (reached only if the computation above succeeded) ---------
+++    with open(args.output_file, "wb") as f:
+++        pickle.dump(final_tableau, f)
+++
+++    with open(args.degeneracy_report_file, "wb") as f:
+++        pickle.dump({"degenerate": degenerate}, f)
+++
+++    with open(args.problem_report_file, "w", encoding="utf-8") as f:
+++        f.write(problem_report)
+++
+++    with open(args.basic_variables_file, "wb") as f:
+++        pickle.dump({"basic_variables": basic_variables}, f)
+++
+++    if initial_pivots is not None:
+++        with open(args.pivot_log_file, "w", encoding="utf-8") as f:
+++            for entry in pivot_log:
+++                record = {
+++                    "step": int(entry["step"]),
+++                    "phase": int(entry["phase"]),
+++                    "enter_column": str(entry["enter_column"]),
+++                    "leave_row": str(entry["leave_row"]),
+++                    "tableau": as_float_tableau(entry["tableau"]),
+++                }
+++                f.write(json.dumps(record) + "\n")
+++
+++    return 0
+++
++ 
++-    except Exception as e:
++-        print(f"An error occurred during execution: {str(e)}", file=sys.stderr)
++-        raise
++\ No newline at end of file
+++if __name__ == "__main__":
+++    sys.exit(main())
++diff --git a/simplex/phases.py b/simplex/phases.py
++index 6dd6485..72af205 100644
++--- a/simplex/phases.py
+++++ b/simplex/phases.py
++@@ -1,29 +1,267 @@
++-from simplex.tableau import build_initial_tableau, pivot_tableau, is_optimal, extract_solution
++-
++-def two_phase_simplex(objective_coeff, constraints_coeff, constraints_relational_operators, constraints_rhs):
++-    # Phase 1: Get into feasible region
++-    tableau, artificial_vars = build_initial_tableau(objective_coeff, constraints_coeff, constraints_relational_operators, constraints_rhs)
++-    tableau = perform_simplex_phase(tableau, objective_coeff, is_phase_one=True)
++-
++-    # Check for feasibility
++-    if any(tableau[row][-1] < 0 for row in range(len(tableau) - 1)):
++-        raise Exception("Infeasible solution")
++-
++-    # Phase 2: Optimize the original objective
++-    tableau = remove_artificial_vars(tableau, artificial_vars)
++-    final_tableau = perform_simplex_phase(tableau, objective_coeff)
++-
++-    return final_tableau
++-
++-def perform_simplex_phase(tableau, objective_coeff, is_phase_one=False):
++-    while not is_optimal(tableau):
++-        pivot_tableau(tableau)
++-    return tableau
++-
++-def remove_artificial_vars(tableau, artificial_vars):
++-    # Remove artificial variables from the tableau for phase 2
++-    filtered_tableau = []
++-    for row in tableau:
++-        filtered_row = [value for j, value in enumerate(row) if j not in artificial_vars]
++-        filtered_tableau.append(filtered_row)
++-    return filtered_tableau
++\ No newline at end of file
+++"""Two-phase simplex algorithm and minimum-pivot planning.
+++
+++Public entry point : :func:`two_phase_simplex`
+++"""
+++
+++from copy import deepcopy
+++from collections import deque
+++
+++from simplex.tableau import (
+++    EPS,
+++    build_phase1_tableau,
+++    canonicalize_objective,
+++    setup_phase2_objective,
+++    is_optimal,
+++    select_entering,
+++    select_leaving,
+++    min_ratio_rows,
+++    all_valid_pivots,
+++    pivot,
+++    variable_columns,
+++    objective_value,
+++)
+++
+++
+++# ---------------------------------------------------------------------------
+++# Helpers
+++# ---------------------------------------------------------------------------
+++def _apply_pivot(rows, basis, j, r):
+++    """Pivot column ``j`` into row ``r`` and update the basis in place."""
+++    pivot(rows, r, j)
+++    basis[r] = j
+++
+++
+++def _run_bland(rows, col_names, basis):
+++    """Run a single phase using Bland's rule until optimality.
+++
+++    Raises :class:`Exception` if the phase is unbounded.
+++    """
+++    while not is_optimal(rows, col_names):
+++        j = select_entering(rows, col_names)
+++        if j < 0:
+++            break
+++        r = select_leaving(rows, j)
+++        if r < 0:
+++            # No leaving row -> the objective is unbounded.
+++            raise Exception("The problem is unbounded.")
+++        _apply_pivot(rows, basis, j, r)
+++    return rows, basis
+++
+++
+++def _transition_to_phase2(rows, col_names, basis, artificial_col, objective_coeff):
+++    """Move from a feasible phase-1 state to a phase-2 state.
+++
+++    De-basic any artificial that is still a basic variable (degenerate
+++    feasibility), drop the artificial columns, install the original
+++    objective, and canonicalise it.  Returns ``(rows, col_names, basis)``.
+++    """
+++    art_indices = set(artificial_col.values())
+++
+++    # De-basic any artificial that is still a basic variable.
+++    for row_idx in range(len(rows) - 1):
+++        if basis[row_idx] in art_indices:
+++            chosen = None
+++            for j in variable_columns(col_names):
+++                if j not in art_indices and abs(rows[row_idx][j]) > EPS:
+++                    chosen = j
+++                    break
+++            if chosen is not None:
+++                pivot(rows, row_idx, chosen)
+++                basis[row_idx] = chosen
+++            # If no non-artificial column is available the row is redundant;
+++            # the artificial stays (it will be removed below).
+++
+++    # Drop the artificial columns.
+++    new_rows = [[row[k] for k in range(len(row)) if k not in art_indices] for row in rows]
+++    new_col_names = [c for k, c in enumerate(col_names) if k not in art_indices]
+++
+++    # Basis columns for x/s are unchanged when artificial columns are dropped.
+++    new_basis = list(basis)
+++    setup_phase2_objective(new_rows, objective_coeff, new_basis, new_col_names)
+++    return new_rows, new_col_names, new_basis
+++
+++
+++# ---------------------------------------------------------------------------
+++# Core solver (no initial pivots) -- uses Bland's rule
+++# ---------------------------------------------------------------------------
+++def _solve(objective_coeff, constraints_coeff, ops, rhs):
+++    """Solve the LP, returning ``(final_tableau, col_names, basis)``.
+++
+++    Raises :class:`Exception` if the problem is unbounded.  Infeasible problems
+++    return the best-effort (last) tableau without raising.
+++    """
+++    rows, col_names, basis, artificial_col, _ = build_phase1_tableau(
+++        objective_coeff, constraints_coeff, ops, rhs
+++    )
+++    canonicalize_objective(rows, basis)
+++
+++    # Phase 1.
+++    _run_bland(rows, col_names, basis)
+++
+++    # Feasibility: phase-1 objective value (=-sum(artificials)) must be >= -EPS.
+++    feasible = objective_value(rows) >= -EPS
+++
+++    # Phase 2.
+++    rows2, col2, basis2 = _transition_to_phase2(
+++        rows, col_names, basis, artificial_col, objective_coeff
+++    )
+++    if feasible:
+++        _run_bland(rows2, col2, basis2)
+++    # If infeasible we still return the best-effort phase-2 tableau.
+++    return rows2, col2, basis2
+++
+++
+++# ---------------------------------------------------------------------------
+++# Minimum-pivot planning (with --initial_pivots)
+++# ---------------------------------------------------------------------------
+++def _debasic_and_remove(rows, col_names, basis, artificial_col, objective_coeff):
+++    """Transition to phase 2 (de-basic, drop artificials, install objective)."""
+++    return _transition_to_phase2(rows, col_names, basis, artificial_col, objective_coeff)
+++
+++
+++def _min_path(rows, col_names, basis, artificial_col, objective_coeff):
+++    """Find the minimum-pivot continuation to a phase-2 optimal tableau.
+++
+++    ``rows`` is the phase-1 state *after* any provided initial pivots.  Returns
+++    a list of pivot records, each a dict with keys ``phase``,
+++    ``enter_column`` and ``leave_row`` plus the resulting tableau (a deep
+++    copy) under ``tableau``.  The phase-1 -> phase-2 transition (de-basic and
+++    artificial-column removal) is a free operation and is not itself logged.
+++    """
+++    # Each BFS node carries the live state.  Edges are valid pivots (cost 1)
+++    # or a free phase transition (cost 0).  We BFS so the first goal reached is
+++    # at the minimum number of continuation pivots.
+++    start = {
+++        "rows": rows,
+++        "col_names": col_names,
+++        "basis": list(basis),
+++        "artificial_col": artificial_col,
+++        "phase": 1,
+++    }
+++    visited = {(1, tuple(basis))}
+++    queue = deque()
+++    queue.append((start, []))
+++
+++    while queue:
+++        state, path = queue.popleft()
+++        rows_ = state["rows"]
+++        col_names_ = state["col_names"]
+++        basis_ = state["basis"]
+++        phase = state["phase"]
+++
+++        if phase == 2:
+++            if is_optimal(rows_, col_names_):
+++                return path, state
+++            for (j, r) in all_valid_pivots(rows_, col_names_):
+++                new_rows = deepcopy(rows_)
+++                new_basis = list(basis_)
+++                _apply_pivot(new_rows, new_basis, j, r)
+++                nkey = (2, tuple(new_basis))
+++                if nkey in visited:
+++                    continue
+++                visited.add(nkey)
+++                queue.append((
+++                    {"rows": new_rows, "col_names": col_names_,
+++                     "basis": new_basis, "artificial_col": artificial_col,
+++                     "phase": 2},
+++                    path + [{"phase": 2, "enter_column": col_names_[j],
+++                            "leave_row": r, "tableau": deepcopy(new_rows)}],
+++                ))
+++            continue
+++
+++        # phase 1
+++        if not is_optimal(rows_, col_names_):
+++            for (j, r) in all_valid_pivots(rows_, col_names_):
+++                new_rows = deepcopy(rows_)
+++                new_basis = list(basis_)
+++                _apply_pivot(new_rows, new_basis, j, r)
+++                nkey = (1, tuple(new_basis))
+++                if nkey in visited:
+++                    continue
+++                visited.add(nkey)
+++                queue.append((
+++                    {"rows": new_rows, "col_names": col_names_,
+++                     "basis": new_basis, "artificial_col": artificial_col,
+++                     "phase": 1},
+++                    path + [{"phase": 1, "enter_column": col_names_[j],
+++                            "leave_row": r, "tableau": deepcopy(new_rows)}],
+++                ))
+++        else:
+++            # Phase 1 is optimal: transition (free) to phase 2.
+++            rows2, col2, basis2 = _transition_to_phase2(
+++                deepcopy(rows_), list(col_names_), list(basis_),
+++                artificial_col, objective_coeff,
+++            )
+++            nkey = (2, tuple(basis2))
+++            if nkey in visited:
+++                continue
+++            visited.add(nkey)
+++            queue.append((
+++                {"rows": rows2, "col_names": col2, "basis": basis2,
+++                 "artificial_col": artificial_col, "phase": 2},
+++                list(path),
+++            ))
+++    return [], start
+++
+++
+++# ---------------------------------------------------------------------------
+++# Public entry points
+++# ---------------------------------------------------------------------------
+++def two_phase_simplex(objective_coeff, constraints_coeff, ops, rhs, initial_pivots=None):
+++    """Solve the LP; return ``(final_tableau, pivot_log)``.
+++
+++    ``pivot_log`` is ``None`` when no initial pivots were supplied, otherwise a
+++    list of pivot-record dicts::
+++
+++        {"step": int, "phase": int, "enter_column": str,
+++         "leave_row": str, "tableau": list[list[float]]}
+++    """
+++    if initial_pivots is None:
+++        rows, col_names, basis = _solve(
+++            objective_coeff, constraints_coeff, ops, rhs
+++        )
+++        return rows, None
+++
+++    # ---- initial_pivots path ----------------------------------------------
+++    n = len(objective_coeff)
+++    m = len(constraints_coeff)
+++
+++    rows, col_names, basis, artificial_col, _ = build_phase1_tableau(
+++        objective_coeff, constraints_coeff, ops, rhs
+++    )
+++    canonicalize_objective(rows, basis)
+++
+++    log = []
+++
+++    def _row_index(label):
+++        return int(label[1:])
+++
+++    # Apply the provided initial pivots (a required prefix) and log them.
+++    for spec in initial_pivots:
+++        enter_name = spec["enter_column"]
+++        leave_label = spec["leave_row"]
+++        j = col_names.index(enter_name)
+++        r = _row_index(leave_label)
+++        _apply_pivot(rows, basis, j, r)
+++        log.append({
+++            "step": len(log) + 1,
+++            "phase": 1,
+++            "enter_column": enter_name,
+++            "leave_row": leave_label,
+++            "tableau": deepcopy(rows),
+++        })
+++
+++    # Minimum-pivot continuation.
+++    cont, final_state = _min_path(
+++        rows, col_names, basis, artificial_col, objective_coeff
+++    )
+++    for rec in cont:
+++        log.append({
+++            "step": len(log) + 1,
+++            "phase": rec["phase"],
+++            "enter_column": rec["enter_column"],
+++            "leave_row": "R%d" % rec["leave_row"],
+++            "tableau": rec["tableau"],
+++        })
+++
+++    return final_state["rows"], log
++diff --git a/simplex/schema.py b/simplex/schema.py
++index 76e7f70..ef43026 100644
++--- a/simplex/schema.py
+++++ b/simplex/schema.py
++@@ -1,4 +1,125 @@
++-FinalTableau = list[list[float]]
+++"""Schema, numeric helpers, and report formatting for the two-phase simplex CLI.
++ 
++-def as_float_tableau(tableau: list[list[float]]) -> FinalTableau:
++-    return [[float(value) for value in row] for row in tableau]
++\ No newline at end of file
+++Public names
+++-------------
+++* :data:`FinalTableau` -- the type alias for the final simplex tableau.
+++* :func:`as_float_tableau` -- coerce a tableau to a list of lists of floats.
+++* :func:`round_half_up` -- half-up decimal rounding to 2 places.
+++* :func:`build_problem_report` -- text representation of the *parsed* input LP.
+++"""
+++
+++from decimal import Decimal, ROUND_HALF_UP
+++
+++# The final simplex tableau is a 2D array of floats.
+++FinalTableau = list  # list[list[float]]
+++
+++
+++# ---------------------------------------------------------------------------
+++# Numeric helpers
+++# ---------------------------------------------------------------------------
+++def as_float_tableau(tableau):
+++    """Return a deep copy of ``tableau`` with every entry coerced to ``float``."""
+++    return [[float(value) for value in row] for row in tableau]
+++
+++
+++def _to_decimal(value):
+++    """Convert a numeric value to a :class:`Decimal` without binary artefacts."""
+++    text = repr(float(value))
+++    return Decimal(text)
+++
+++
+++def round_half_up(value):
+++    """Round ``value`` to 2 decimal places using half-up (away from zero) rounding.
+++
+++    Returns a :class:`Decimal` quantized to two places.
+++    """
+++    return _to_decimal(value).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+++
+++
+++def _format_number(quantized):
+++    """Format a quantized :class:`Decimal`.
+++
+++    Zero (including ``-0.00``) is rendered as a positive ``0.00``; any other
+++    value keeps its sign and is rendered with two decimals.
+++    """
+++    if quantized == 0:
+++        return "0.00"
+++    return format(quantized, "f")
+++
+++
+++# ---------------------------------------------------------------------------
+++# Problem report
+++# ---------------------------------------------------------------------------
+++def _render_terms(coefficients):
+++    """Render a list of coefficients (for ``x1..xn``) into a term string.
+++
+++    Positive terms come first, then negative, then zero; within each group the
+++    variable index order is preserved.  The first term carries no separator; a
+++    leading negative term therefore starts with ``-`` and no space, while later
+++    negative terms use `` - ``.  Positive/zero later terms use `` + ``.
+++    """
+++    positive, negative, zero = [], [], []
+++    for index, coeff in enumerate(coefficients):
+++        quantized = round_half_up(coeff)
+++        if quantized > 0:
+++            positive.append((quantized, index))
+++        elif quantized < 0:
+++            negative.append((quantized, index))
+++        else:
+++            zero.append((quantized, index))
+++
+++    parts = []
+++    first = True
+++    for group in (positive, negative, zero):
+++        for quantized, index in group:
+++            name = "x%d" % (index + 1)
+++            if quantized > 0:
+++                magnitude = _format_number(quantized)
+++                body = magnitude + "*" + name
+++            elif quantized < 0:
+++                magnitude = _format_number(-quantized)
+++                body = magnitude + "*" + name
+++            else:
+++                body = "0.00*" + name
+++            if first:
+++                if quantized < 0:
+++                    parts.append("-" + body)
+++                else:
+++                    parts.append(body)
+++                first = False
+++            else:
+++                sep = " - " if quantized < 0 else " + "
+++                parts.append(sep + body)
+++    return "".join(parts)
+++
+++
+++def _render_rhs(value):
+++    """Render a right-hand-side value (its sign is preserved)."""
+++    return _format_number(round_half_up(value))
+++
+++
+++def build_problem_report(objective_coeff, constraints_coeff, operators, rhs):
+++    """Return a UTF-8 text representation of the *parsed* input LP.
+++
+++    The report starts with the ``maximize`` line, then a blank line, then
+++    ``subject to:`` followed by one indented constraint line per input
+++    constraint (in input order), and finally the nonnegativity line.  No
+++    trailing newline is added.
+++    """
+++    n = len(objective_coeff)
+++    m = len(constraints_coeff)
+++
+++    lines = []
+++    lines.append("maximize " + _render_terms(objective_coeff))
+++    lines.append("")
+++    lines.append("subject to:")
+++
+++    for i in range(m):
+++        left = _render_terms(constraints_coeff[i])
+++        right = _render_rhs(rhs[i])
+++        lines.append("    " + left + " " + operators[i] + " " + right)
+++
+++    variables = ", ".join("x%d" % (index + 1) for index in range(n))
+++    lines.append("    " + variables + " >= 0")
+++
+++    return "\n".join(lines)
++diff --git a/simplex/tableau.py b/simplex/tableau.py
++index bd5a5e6..b4c4d9f 100644
++--- a/simplex/tableau.py
+++++ b/simplex/tableau.py
++@@ -1,68 +1,229 @@
++-def build_initial_tableau(objective_coeff, constraints_coeff, constraints_relational_operators, constraints_rhs):
++-    num_vars = len(objective_coeff)
++-    num_constraints = len(constraints_coeff)
++-    tableau = []
++-    artificial_vars = []
++-
++-    for i in range(num_constraints):
++-        row = constraints_coeff[i] + [0] * num_constraints + [constraints_rhs[i]]
++-        if constraints_relational_operators[i] == '<=':
++-            row[num_vars + i] = 1
++-        elif constraints_relational_operators[i] == '>=':
++-            row[num_vars + i] = -1
++-            row.append(1)
++-            artificial_vars.append(len(row) - 1)
++-        elif constraints_relational_operators[i] == '=':
++-            row.append(1)
++-            artificial_vars.append(len(row) - 1)
++-        tableau.append(row)
++-
++-    # Add objective row for phase 1
++-    phase1_objective = [0] * (len(tableau[0]) - 1)
++-    for i in artificial_vars:
++-        phase1_objective[i] = 1
++-    tableau.append(phase1_objective + [0])
++-
++-    return tableau, artificial_vars
++-
++-def pivot_tableau(tableau):
++-    pivot_column = select_pivot_column(tableau)
++-    pivot_row = select_pivot_row(tableau, pivot_column)
++-    pivot_on(tableau, pivot_row, pivot_column)
++-
++-def is_optimal(tableau):
++-    # Check if all values in the last row (objective row) are non-negative
++-    return all(value >= 0 for value in tableau[-1][:-1])
++-
++-def select_pivot_column(tableau):
++-    # Use Bland's Rule to avoid cycling: Pick the first most negative coefficient in the objective row
++-    min_value = 0
++-    pivot_column = -1
++-    for j in range(len(tableau[0]) - 1):
++-        if tableau[-1][j] < min_value:
++-            min_value = tableau[-1][j]
++-            pivot_column = j
++-    return pivot_column
++-
++-def select_pivot_row(tableau, pivot_column):
++-    min_ratio = float('Inf')
++-    pivot_row = -1
++-    for i in range(len(tableau) - 1):
++-        if tableau[i][pivot_column] > 0:
++-            ratio = tableau[i][-1] / tableau[i][pivot_column]
++-            if ratio < min_ratio:
++-                min_ratio = ratio
++-                pivot_row = i
++-    return pivot_row
++-
++-def pivot_on(tableau, pivot_row, pivot_column):
++-    pivot_value = tableau[pivot_row][pivot_column]
++-    tableau[pivot_row] = [value / pivot_value for value in tableau[pivot_row]]
++-    for i in range(len(tableau)):
++-        if i != pivot_row:
++-            row_factor = tableau[i][pivot_column]
++-            tableau[i] = [curr - row_factor * pivot for curr, pivot in zip(tableau[i], tableau[pivot_row])]
++-
++-def extract_solution(tableau):
++-    # Extract the solution from the final tableau
++-    return tableau
++\ No newline at end of file
+++"""Tableau construction and simplex pivoting for the two-phase simplex method.
+++
+++Column layout
+++-------------
+++Phase 1 (artificials present) : ``[Z, x1..xn, s1..sm, a1..ar, RHS]``
+++Phase 2 / final              : ``[Z, x1..xn, s1..sm, RHS]``
+++
+++``Z`` is always index 0 and ``RHS`` is always the last column.
+++
+++The objective row is the **last** row of the tableau.  It is stored in the
+++canonical maximization form::
+++
+++    Z - sum(c_j * x_j) = 0
+++
+++so an optimal tableau has every variable-column entry ``>= -EPS`` and the
+++objective value is ``-tableau[-1][RHS]``.
+++"""
+++
+++EPS = 1e-9
+++# Small tolerance for "is this entry effectively zero".
+++ZERO = 1e-12
+++
+++# Constraint-row label for the i-th original constraint (zero based).
+++ROW_LABEL = "R"  # R0, R1, ...
+++
+++
+++# ---------------------------------------------------------------------------
+++# Construction
+++# ---------------------------------------------------------------------------
+++def build_phase1_tableau(objective_coeff, constraints_coeff, ops, rhs):
+++    """Build the phase-1 tableau.
+++
+++    Parameters
+++    ----------
+++    objective_coeff : list[float]
+++    constraints_coeff : list[list[float]]
+++    ops : list[str] -- one of ``<=``, ``>=``, ``=`` per constraint.
+++    rhs : list[float]
+++
+++    Returns
+++    -------
+++    rows : list[list[float]]
+++        Constraint rows followed by the (canonical phase-1) objective row.
+++    col_names : list[str]
+++        Column names ``[Z, x1..xn, s1..sm, a1..ar, RHS]``.
+++    basis : list[int]
+++        Column index of the basic variable of each constraint row.
+++    artificial_col : dict[int, int]
+++        Maps a constraint row index to its artificial column index.
+++    artificial_constraints : list[int]
+++        Constraint indices that received an artificial variable.
+++    """
+++    valid = {"<=", ">=", "="}
+++    for op in ops:
+++        if op not in valid:
+++            raise ValueError(
+++                "Invalid relational operator %r; expected one of <=, >=, =." % (op,)
+++            )
+++
+++    n = len(objective_coeff)
+++    m = len(constraints_coeff)
+++
+++    # Column names start with Z, the decision variables, then slack/surplus.
+++    col_names = ["Z"] + ["x%d" % (j + 1) for j in range(n)] + ["s%d" % (i + 1) for i in range(m)]
+++
+++    # Artificial columns (one for each >= or = constraint), in constraint order.
+++    artificial_col = {}
+++    artificial_constraints = []
+++    for i in range(m):
+++        if ops[i] in (">=", "="):
+++            artificial_col[i] = len(col_names)
+++            col_names.append("a%d" % (len(artificial_constraints) + 1))
+++            artificial_constraints.append(i)
+++
+++    col_names.append("RHS")
+++    width = len(col_names)
+++
+++    rows = []
+++    basis = []
+++    for i in range(m):
+++        row = [0.0] * width
+++        row[0] = 0.0  # Z
+++        # Decision-variable coefficients.
+++        for j in range(n):
+++            row[1 + j] = float(constraints_coeff[i][j])
+++        # Slack / surplus column for this constraint.
+++        row[1 + n + i] = 1.0 if ops[i] == "<=" else -1.0
+++        # RHS.
+++        row[-1] = float(rhs[i])
+++        if i in artificial_col:
+++            row[artificial_col[i]] = 1.0
+++        rows.append(row)
+++
+++        # Basic variable of this row.
+++        if ops[i] == "<=":
+++            basis.append(1 + n + i)
+++        else:  # >= or =
+++            basis.append(artificial_col[i])
+++
+++    # Phase-1 objective row: minimises sum(artificials)  <=>  max -sum(artificials).
+++    obj = [0.0] * width
+++    obj[0] = 1.0  # Z
+++    for art_col in artificial_col.values():
+++        obj[art_col] = 1.0
+++    rows.append(obj)
+++
+++    return rows, col_names, basis, artificial_col, artificial_constraints
+++
+++
+++def canonicalize_objective(rows, basis):
+++    """Eliminate the basic-variable columns from the (raw) objective row.
+++
+++    After this call every basic column has ``0`` in the objective row, which is
+++    required before an optimality / ratio test.
+++    """
+++    obj = rows[-1]
+++    for row_idx, col_idx in enumerate(basis):
+++        factor = obj[col_idx]
+++        if abs(factor) > ZERO:
+++            ref = rows[row_idx]
+++            for k in range(len(obj)):
+++                obj[k] = obj[k] - factor * ref[k]
+++
+++
+++def setup_phase2_objective(rows, objective_coeff, basis, col_names):
+++    """Replace the objective row with the original objective (canonicalised)."""
+++    ncols = len(col_names)
+++    obj = [0.0] * ncols
+++    obj[0] = 1.0  # Z
+++    n = len(objective_coeff)
+++    for j in range(n):
+++        # column index of x_{j+1} is 1 + j
+++        obj[1 + j] = -float(objective_coeff[j])
+++    rows[-1] = obj
+++    canonicalize_objective(rows, basis)
+++
+++
+++# ---------------------------------------------------------------------------
+++# Optimality / pivot selection
+++# ---------------------------------------------------------------------------
+++def variable_columns(col_names):
+++    """Indices of the variable columns (excluding ``Z`` at 0 and ``RHS`` at end)."""
+++    return list(range(1, len(col_names) - 1))
+++
+++
+++def is_optimal(rows, col_names, eps=EPS):
+++    """True when every reduced cost (variable column) is ``>= -eps``."""
+++    obj = rows[-1]
+++    for j in variable_columns(col_names):
+++        if obj[j] < -eps:
+++            return False
+++    return True
+++
+++
+++def select_entering(rows, col_names, eps=EPS):
+++    """Bland's rule: smallest-index column with a negative reduced cost."""
+++    obj = rows[-1]
+++    for j in variable_columns(col_names):
+++        if obj[j] < -eps:
+++            return j
+++    return -1
+++
+++
+++def min_ratio_rows(rows, j, eps=EPS):
+++    """All constraint rows attaining the minimum ratio for entering column ``j``.
+++
+++    Returns ``(candidates, best)`` where ``candidates`` is the list of row
+++    indices attaining the smallest ``RHS / rows[r][j]`` over rows with a
+++    positive pivot-column value, and ``best`` is that ratio (``inf`` if none).
+++    """
+++    best = None
+++    candidates = []
+++    for i in range(len(rows) - 1):
+++        val = rows[i][j]
+++        if val > eps:
+++            ratio = rows[i][-1] / val
+++            if best is None or ratio < best - eps:
+++                best = ratio
+++                candidates = [i]
+++            elif abs(ratio - best) <= eps:
+++                candidates.append(i)
+++    return candidates, (best if best is not None else float("inf"))
+++
+++
+++def select_leaving(rows, j, eps=EPS):
+++    """Bland's rule: smallest-index row attaining the minimum ratio."""
+++    candidates, _ = min_ratio_rows(rows, j, eps)
+++    return candidates[0] if candidates else -1
+++
+++
+++def all_valid_pivots(rows, col_names, eps=EPS):
+++    """Every simplex-valid pivot ``(entering column, leaving row)`` in this state.
+++
+++    The entering column must have a negative reduced cost; the leaving row must
+++    attain the minimum ratio (ties included).
+++    """
+++    obj = rows[-1]
+++    pivots = []
+++    for j in variable_columns(col_names):
+++        if obj[j] < -eps:
+++            candidates, _ = min_ratio_rows(rows, j, eps)
+++            for r in candidates:
+++                pivots.append((j, r))
+++    return pivots
+++
+++
+++def pivot(rows, r, j, eps=EPS):
+++    """Perform a simplex pivot on column ``j``, row ``r`` (in place)."""
+++    pivot_val = rows[r][j]
+++    if abs(pivot_val) < eps:
+++        raise Exception("Pivot element is (near) zero.")
+++    inv = 1.0 / pivot_val
+++    rows[r] = [v * inv for v in rows[r]]
+++    for i in range(len(rows)):
+++        if i != r:
+++            factor = rows[i][j]
+++            if abs(factor) > ZERO:
+++                ref = rows[r]
+++                rows[i] = [rows[i][k] - factor * ref[k] for k in range(len(rows[i]))]
+++    # Clean up residual numerical noise in the pivot column.
+++    for i in range(len(rows)):
+++        if i != r and abs(rows[i][j]) < ZERO:
+++            rows[i][j] = 0.0
+++    rows[r][j] = 1.0
+++
+++
+++def objective_value(rows):
+++    """RHS of the objective row (``-`` the maximization objective value)."""
+++    return rows[-1][-1]
+diff --git a/pr2.txt b/pr2.txt
+new file mode 100644
+index 0000000..6a99c91
+--- /dev/null
++++ b/pr2.txt
+@@ -0,0 +1,7 @@
++maximize 3.00*x1 + 5.00*x2
++
++subject to:
++    1.00*x1 + 0.00*x2 <= 4.00
++    2.00*x2 + 0.00*x1 <= 12.00
++    3.00*x1 + 2.00*x2 >= 18.00
++    x1, x2 >= 0
+\ No newline at end of file
+diff --git a/problem_report.txt b/problem_report.txt
+new file mode 100644
+index 0000000..6a99c91
+--- /dev/null
++++ b/problem_report.txt
+@@ -0,0 +1,7 @@
++maximize 3.00*x1 + 5.00*x2
++
++subject to:
++    1.00*x1 + 0.00*x2 <= 4.00
++    2.00*x2 + 0.00*x1 <= 12.00
++    3.00*x1 + 2.00*x2 >= 18.00
++    x1, x2 >= 0
+\ No newline at end of file
+diff --git a/simplex/__pycache__/__init__.cpython-311.pyc b/simplex/__pycache__/__init__.cpython-311.pyc
+new file mode 100644
+index 0000000..a075ea5
+Binary files /dev/null and b/simplex/__pycache__/__init__.cpython-311.pyc differ
+diff --git a/simplex/__pycache__/parser.cpython-311.pyc b/simplex/__pycache__/parser.cpython-311.pyc
+new file mode 100644
+index 0000000..9bb811b
+Binary files /dev/null and b/simplex/__pycache__/parser.cpython-311.pyc differ
+diff --git a/simplex/__pycache__/phases.cpython-311.pyc b/simplex/__pycache__/phases.cpython-311.pyc
+new file mode 100644
+index 0000000..5330600
+Binary files /dev/null and b/simplex/__pycache__/phases.cpython-311.pyc differ
+diff --git a/simplex/__pycache__/schema.cpython-311.pyc b/simplex/__pycache__/schema.cpython-311.pyc
+new file mode 100644
+index 0000000..d712d07
+Binary files /dev/null and b/simplex/__pycache__/schema.cpython-311.pyc differ
+diff --git a/simplex/__pycache__/tableau.cpython-311.pyc b/simplex/__pycache__/tableau.cpython-311.pyc
+new file mode 100644
+index 0000000..806c2d7
+Binary files /dev/null and b/simplex/__pycache__/tableau.cpython-311.pyc differ
+diff --git a/simplex/parser.py b/simplex/parser.py
+index ef1517e..737780b 100644
+--- a/simplex/parser.py
++++ b/simplex/parser.py
+@@ -1,37 +1,211 @@
++"""Command-line interface for the two-phase simplex solver.
++
++The CLI accepts Python-literal formatted arguments, runs the two-phase
++simplex algorithm, and writes:
++
++* the final simplex tableau (pickle, ``list[list[float]]``);
++* a degeneracy report (pickle, ``{"degenerate": bool}``);
++* a UTF-8 text representation of the *parsed* input LP;
++* a basic-variable report (pickle, ``{"basic_variables": dict[str, float]}``);
++* (when ``--initial_pivots`` is given) a pivot log (UTF-8 JSON Lines).
++
++Exception discipline
++--------------------
++All computation (parsing the problem, solving, and building the reports)
++happens *before* any output file is written.  If any exception is raised
++during that computation (e.g. an invalid relational operator, an unbounded
++problem, ...), none of the output files is created and Python prints the
++exact traceback to ``stderr``.
++"""
++
+ import argparse
+ import ast
+-import sys
++import json
+ import pickle
++import sys
++
+ from simplex.phases import two_phase_simplex
+-from simplex.schema import FinalTableau, as_float_tableau
++from simplex.schema import (
++    as_float_tableau,
++    build_problem_report,
++)
++
++# Tolerance used for unit-column / degeneracy tests on the final tableau.
++EPS = 1e-9
++
+ 
+ def parse_list_literal(literal: str):
++    """Parse ``literal`` as a Python literal (used for all list arguments)."""
+     try:
+         return ast.literal_eval(literal)
+-    except:
+-        raise ValueError("Invalid Python literal for list: " + literal)
++    except Exception:
++        raise ValueError("Invalid Python literal: " + literal)
+ 
+-def main():
+-    parser = argparse.ArgumentParser(description="Two-Phase Simplex Algorithm CLI")
+-    parser.add_argument('--objective_coeff', required=True, type=parse_list_literal, help='Objective coefficients as Python literal list')
+-    parser.add_argument('--constraints_coeff', required=True, type=parse_list_literal, help='Constraints coefficients as Python literal list of lists')
+-    parser.add_argument('--constraints_relational_operators', required=True, type=parse_list_literal, help='Constraints relational operators as Python literal list of strings')
+-    parser.add_argument('--constraints_rhs', required=True, type=parse_list_literal, help='Constraints RHS values as Python literal list')
+-    parser.add_argument('--output_file', required=True, help='Output file to save the final tableau in pickle format')
+ 
+-    args = parser.parse_args()
++# ---------------------------------------------------------------------------
++# Report computation
++# ---------------------------------------------------------------------------
++def _compute_basic_variables(final_tableau, n, m, eps=EPS):
++    """Return ``{"name": value}`` for the basic variables of the final tableau.
+ 
+-    try:
+-        final_tableau = two_phase_simplex(
+-            args.objective_coeff,
+-            args.constraints_coeff,
+-            args.constraints_relational_operators,
+-            args.constraints_rhs
++    ``final_tableau`` has layout ``[Z, x1..xn, s1..sm, RHS]`` with ``m``
++    constraint rows followed by the objective row.  For each constraint row
++    the basic variable is the first variable column (decision variables
++    first, then slack/surplus) that forms a unit column in the constraint
++    block; its value is that row's ``RHS``.
++    """
++    basic = {}
++    num_rows = len(final_tableau)
++    # The last row is the objective row; constraint rows are 0 .. num_rows-2.
++    constraint_rows = num_rows - 1
++    for r in range(constraint_rows):
++        row = final_tableau[r]
++        chosen = None
++        # x1..xn occupy columns 1..n, s1..sm occupy columns (1+n) .. (1+n+m-1).
++        for j in range(1, 1 + n + m):
++            if abs(row[j] - 1.0) >= eps:
++                continue
++            # Confirm the column is ~0 in every other constraint row.
++            is_unit = True
++            for i in range(constraint_rows):
++                if i == r:
++                    continue
++                if abs(final_tableau[i][j]) >= eps:
++                    is_unit = False
++                    break
++            if not is_unit:
++                continue
++            if j <= n:
++                chosen = "x%d" % j
++            else:
++                chosen = "s%d" % (j - n)
++            break
++        if chosen is not None:
++            basic[chosen] = float(final_tableau[r][-1])
++    return basic
++
++
++def _check_degeneracy(final_tableau, m, eps=EPS):
++    """Return ``True`` if any constraint row has an ``RHS`` of ~0.
++
++    The objective row is never considered.
++    """
++    for i in range(m):
++        if abs(final_tableau[i][-1]) < eps:
++            return True
++    return False
++
++
++# ---------------------------------------------------------------------------
++# CLI
++# ---------------------------------------------------------------------------
++def main(argv=None):
++    parser = argparse.ArgumentParser(
++        description="Two-Phase Simplex Algorithm CLI"
++    )
++    parser.add_argument(
++        "--objective_coeff", required=True, type=parse_list_literal,
++        help="Objective coefficients as a Python literal list[float]",
++    )
++    parser.add_argument(
++        "--constraints_coeff", required=True, type=parse_list_literal,
++        help="Constraint coefficients as a Python literal list[list[float]]",
++    )
++    parser.add_argument(
++        "--constraints_relational_operators", required=True, type=parse_list_literal,
++        help="Constraint relational operators as a Python literal list[str]",
++    )
++    parser.add_argument(
++        "--constraints_rhs", required=True, type=parse_list_literal,
++        help="Constraint right-hand-sides as a Python literal list[float]",
++    )
++    parser.add_argument(
++        "--output_file", required=True,
++        help="Path for the final tableau (pickle, list[list[float]])",
++    )
++    parser.add_argument(
++        "--degeneracy_report_file", required=True,
++        help="Path for the degeneracy report (pickle, {degenerate: bool})",
++    )
++    parser.add_argument(
++        "--problem_report_file", required=True,
++        help="Path for the parsed-LP report (UTF-8 text)",
++    )
++    parser.add_argument(
++        "--basic_variables_file", required=True,
++        help="Path for the basic-variable report (pickle, {basic_variables: dict})",
++    )
++    parser.add_argument(
++        "--initial_pivots", type=parse_list_literal, default=None,
++        help="Optional Phase-1 pivots as a Python literal list of dicts "
++             "with keys 'enter_column' and 'leave_row'",
++    )
++    parser.add_argument(
++        "--pivot_log_file", default=None,
++        help="Path for the pivot log (UTF-8 JSON Lines); required when "
++             "--initial_pivots is provided",
++    )
++
++    args = parser.parse_args(argv)
++
++    objective_coeff = args.objective_coeff
++    constraints_coeff = args.constraints_coeff
++    operators = args.constraints_relational_operators
++    rhs = args.constraints_rhs
++    initial_pivots = args.initial_pivots
++
++    if initial_pivots is not None and args.pivot_log_file is None:
++        # --pivot_log_file is required whenever --initial_pivots is present.
++        raise ValueError(
++            "--pivot_log_file is required when --initial_pivots is provided"
+         )
+ 
+-        with open(args.output_file, 'wb') as f:
+-            pickle.dump(as_float_tableau(final_tableau), f)
++    # --- Computation (may raise; on failure no file is written below) ------
++    final_tableau, pivot_log = two_phase_simplex(
++        objective_coeff,
++        constraints_coeff,
++        operators,
++        rhs,
++        initial_pivots=initial_pivots,
++    )
++    final_tableau = as_float_tableau(final_tableau)
++
++    n = len(objective_coeff)
++    m = len(constraints_coeff)
++
++    problem_report = build_problem_report(
++        objective_coeff, constraints_coeff, operators, rhs
++    )
++    degenerate = _check_degeneracy(final_tableau, m)
++    basic_variables = _compute_basic_variables(final_tableau, n, m)
++
++    # --- Writes (reached only if the computation above succeeded) ---------
++    with open(args.output_file, "wb") as f:
++        pickle.dump(final_tableau, f)
++
++    with open(args.degeneracy_report_file, "wb") as f:
++        pickle.dump({"degenerate": degenerate}, f)
++
++    with open(args.problem_report_file, "w", encoding="utf-8") as f:
++        f.write(problem_report)
++
++    with open(args.basic_variables_file, "wb") as f:
++        pickle.dump({"basic_variables": basic_variables}, f)
++
++    if initial_pivots is not None:
++        with open(args.pivot_log_file, "w", encoding="utf-8") as f:
++            for entry in pivot_log:
++                record = {
++                    "step": int(entry["step"]),
++                    "phase": int(entry["phase"]),
++                    "enter_column": str(entry["enter_column"]),
++                    "leave_row": str(entry["leave_row"]),
++                    "tableau": as_float_tableau(entry["tableau"]),
++                }
++                f.write(json.dumps(record) + "\n")
++
++    return 0
++
+ 
+-    except Exception as e:
+-        print(f"An error occurred during execution: {str(e)}", file=sys.stderr)
+-        raise
+\ No newline at end of file
++if __name__ == "__main__":
++    sys.exit(main())
+diff --git a/simplex/phases.py b/simplex/phases.py
+index 6dd6485..72af205 100644
+--- a/simplex/phases.py
++++ b/simplex/phases.py
+@@ -1,29 +1,267 @@
+-from simplex.tableau import build_initial_tableau, pivot_tableau, is_optimal, extract_solution
+-
+-def two_phase_simplex(objective_coeff, constraints_coeff, constraints_relational_operators, constraints_rhs):
+-    # Phase 1: Get into feasible region
+-    tableau, artificial_vars = build_initial_tableau(objective_coeff, constraints_coeff, constraints_relational_operators, constraints_rhs)
+-    tableau = perform_simplex_phase(tableau, objective_coeff, is_phase_one=True)
+-
+-    # Check for feasibility
+-    if any(tableau[row][-1] < 0 for row in range(len(tableau) - 1)):
+-        raise Exception("Infeasible solution")
+-
+-    # Phase 2: Optimize the original objective
+-    tableau = remove_artificial_vars(tableau, artificial_vars)
+-    final_tableau = perform_simplex_phase(tableau, objective_coeff)
+-
+-    return final_tableau
+-
+-def perform_simplex_phase(tableau, objective_coeff, is_phase_one=False):
+-    while not is_optimal(tableau):
+-        pivot_tableau(tableau)
+-    return tableau
+-
+-def remove_artificial_vars(tableau, artificial_vars):
+-    # Remove artificial variables from the tableau for phase 2
+-    filtered_tableau = []
+-    for row in tableau:
+-        filtered_row = [value for j, value in enumerate(row) if j not in artificial_vars]
+-        filtered_tableau.append(filtered_row)
+-    return filtered_tableau
+\ No newline at end of file
++"""Two-phase simplex algorithm and minimum-pivot planning.
++
++Public entry point : :func:`two_phase_simplex`
++"""
++
++from copy import deepcopy
++from collections import deque
++
++from simplex.tableau import (
++    EPS,
++    build_phase1_tableau,
++    canonicalize_objective,
++    setup_phase2_objective,
++    is_optimal,
++    select_entering,
++    select_leaving,
++    min_ratio_rows,
++    all_valid_pivots,
++    pivot,
++    variable_columns,
++    objective_value,
++)
++
++
++# ---------------------------------------------------------------------------
++# Helpers
++# ---------------------------------------------------------------------------
++def _apply_pivot(rows, basis, j, r):
++    """Pivot column ``j`` into row ``r`` and update the basis in place."""
++    pivot(rows, r, j)
++    basis[r] = j
++
++
++def _run_bland(rows, col_names, basis):
++    """Run a single phase using Bland's rule until optimality.
++
++    Raises :class:`Exception` if the phase is unbounded.
++    """
++    while not is_optimal(rows, col_names):
++        j = select_entering(rows, col_names)
++        if j < 0:
++            break
++        r = select_leaving(rows, j)
++        if r < 0:
++            # No leaving row -> the objective is unbounded.
++            raise Exception("The problem is unbounded.")
++        _apply_pivot(rows, basis, j, r)
++    return rows, basis
++
++
++def _transition_to_phase2(rows, col_names, basis, artificial_col, objective_coeff):
++    """Move from a feasible phase-1 state to a phase-2 state.
++
++    De-basic any artificial that is still a basic variable (degenerate
++    feasibility), drop the artificial columns, install the original
++    objective, and canonicalise it.  Returns ``(rows, col_names, basis)``.
++    """
++    art_indices = set(artificial_col.values())
++
++    # De-basic any artificial that is still a basic variable.
++    for row_idx in range(len(rows) - 1):
++        if basis[row_idx] in art_indices:
++            chosen = None
++            for j in variable_columns(col_names):
++                if j not in art_indices and abs(rows[row_idx][j]) > EPS:
++                    chosen = j
++                    break
++            if chosen is not None:
++                pivot(rows, row_idx, chosen)
++                basis[row_idx] = chosen
++            # If no non-artificial column is available the row is redundant;
++            # the artificial stays (it will be removed below).
++
++    # Drop the artificial columns.
++    new_rows = [[row[k] for k in range(len(row)) if k not in art_indices] for row in rows]
++    new_col_names = [c for k, c in enumerate(col_names) if k not in art_indices]
++
++    # Basis columns for x/s are unchanged when artificial columns are dropped.
++    new_basis = list(basis)
++    setup_phase2_objective(new_rows, objective_coeff, new_basis, new_col_names)
++    return new_rows, new_col_names, new_basis
++
++
++# ---------------------------------------------------------------------------
++# Core solver (no initial pivots) -- uses Bland's rule
++# ---------------------------------------------------------------------------
++def _solve(objective_coeff, constraints_coeff, ops, rhs):
++    """Solve the LP, returning ``(final_tableau, col_names, basis)``.
++
++    Raises :class:`Exception` if the problem is unbounded.  Infeasible problems
++    return the best-effort (last) tableau without raising.
++    """
++    rows, col_names, basis, artificial_col, _ = build_phase1_tableau(
++        objective_coeff, constraints_coeff, ops, rhs
++    )
++    canonicalize_objective(rows, basis)
++
++    # Phase 1.
++    _run_bland(rows, col_names, basis)
++
++    # Feasibility: phase-1 objective value (=-sum(artificials)) must be >= -EPS.
++    feasible = objective_value(rows) >= -EPS
++
++    # Phase 2.
++    rows2, col2, basis2 = _transition_to_phase2(
++        rows, col_names, basis, artificial_col, objective_coeff
++    )
++    if feasible:
++        _run_bland(rows2, col2, basis2)
++    # If infeasible we still return the best-effort phase-2 tableau.
++    return rows2, col2, basis2
++
++
++# ---------------------------------------------------------------------------
++# Minimum-pivot planning (with --initial_pivots)
++# ---------------------------------------------------------------------------
++def _debasic_and_remove(rows, col_names, basis, artificial_col, objective_coeff):
++    """Transition to phase 2 (de-basic, drop artificials, install objective)."""
++    return _transition_to_phase2(rows, col_names, basis, artificial_col, objective_coeff)
++
++
++def _min_path(rows, col_names, basis, artificial_col, objective_coeff):
++    """Find the minimum-pivot continuation to a phase-2 optimal tableau.
++
++    ``rows`` is the phase-1 state *after* any provided initial pivots.  Returns
++    a list of pivot records, each a dict with keys ``phase``,
++    ``enter_column`` and ``leave_row`` plus the resulting tableau (a deep
++    copy) under ``tableau``.  The phase-1 -> phase-2 transition (de-basic and
++    artificial-column removal) is a free operation and is not itself logged.
++    """
++    # Each BFS node carries the live state.  Edges are valid pivots (cost 1)
++    # or a free phase transition (cost 0).  We BFS so the first goal reached is
++    # at the minimum number of continuation pivots.
++    start = {
++        "rows": rows,
++        "col_names": col_names,
++        "basis": list(basis),
++        "artificial_col": artificial_col,
++        "phase": 1,
++    }
++    visited = {(1, tuple(basis))}
++    queue = deque()
++    queue.append((start, []))
++
++    while queue:
++        state, path = queue.popleft()
++        rows_ = state["rows"]
++        col_names_ = state["col_names"]
++        basis_ = state["basis"]
++        phase = state["phase"]
++
++        if phase == 2:
++            if is_optimal(rows_, col_names_):
++                return path, state
++            for (j, r) in all_valid_pivots(rows_, col_names_):
++                new_rows = deepcopy(rows_)
++                new_basis = list(basis_)
++                _apply_pivot(new_rows, new_basis, j, r)
++                nkey = (2, tuple(new_basis))
++                if nkey in visited:
++                    continue
++                visited.add(nkey)
++                queue.append((
++                    {"rows": new_rows, "col_names": col_names_,
++                     "basis": new_basis, "artificial_col": artificial_col,
++                     "phase": 2},
++                    path + [{"phase": 2, "enter_column": col_names_[j],
++                            "leave_row": r, "tableau": deepcopy(new_rows)}],
++                ))
++            continue
++
++        # phase 1
++        if not is_optimal(rows_, col_names_):
++            for (j, r) in all_valid_pivots(rows_, col_names_):
++                new_rows = deepcopy(rows_)
++                new_basis = list(basis_)
++                _apply_pivot(new_rows, new_basis, j, r)
++                nkey = (1, tuple(new_basis))
++                if nkey in visited:
++                    continue
++                visited.add(nkey)
++                queue.append((
++                    {"rows": new_rows, "col_names": col_names_,
++                     "basis": new_basis, "artificial_col": artificial_col,
++                     "phase": 1},
++                    path + [{"phase": 1, "enter_column": col_names_[j],
++                            "leave_row": r, "tableau": deepcopy(new_rows)}],
++                ))
++        else:
++            # Phase 1 is optimal: transition (free) to phase 2.
++            rows2, col2, basis2 = _transition_to_phase2(
++                deepcopy(rows_), list(col_names_), list(basis_),
++                artificial_col, objective_coeff,
++            )
++            nkey = (2, tuple(basis2))
++            if nkey in visited:
++                continue
++            visited.add(nkey)
++            queue.append((
++                {"rows": rows2, "col_names": col2, "basis": basis2,
++                 "artificial_col": artificial_col, "phase": 2},
++                list(path),
++            ))
++    return [], start
++
++
++# ---------------------------------------------------------------------------
++# Public entry points
++# ---------------------------------------------------------------------------
++def two_phase_simplex(objective_coeff, constraints_coeff, ops, rhs, initial_pivots=None):
++    """Solve the LP; return ``(final_tableau, pivot_log)``.
++
++    ``pivot_log`` is ``None`` when no initial pivots were supplied, otherwise a
++    list of pivot-record dicts::
++
++        {"step": int, "phase": int, "enter_column": str,
++         "leave_row": str, "tableau": list[list[float]]}
++    """
++    if initial_pivots is None:
++        rows, col_names, basis = _solve(
++            objective_coeff, constraints_coeff, ops, rhs
++        )
++        return rows, None
++
++    # ---- initial_pivots path ----------------------------------------------
++    n = len(objective_coeff)
++    m = len(constraints_coeff)
++
++    rows, col_names, basis, artificial_col, _ = build_phase1_tableau(
++        objective_coeff, constraints_coeff, ops, rhs
++    )
++    canonicalize_objective(rows, basis)
++
++    log = []
++
++    def _row_index(label):
++        return int(label[1:])
++
++    # Apply the provided initial pivots (a required prefix) and log them.
++    for spec in initial_pivots:
++        enter_name = spec["enter_column"]
++        leave_label = spec["leave_row"]
++        j = col_names.index(enter_name)
++        r = _row_index(leave_label)
++        _apply_pivot(rows, basis, j, r)
++        log.append({
++            "step": len(log) + 1,
++            "phase": 1,
++            "enter_column": enter_name,
++            "leave_row": leave_label,
++            "tableau": deepcopy(rows),
++        })
++
++    # Minimum-pivot continuation.
++    cont, final_state = _min_path(
++        rows, col_names, basis, artificial_col, objective_coeff
++    )
++    for rec in cont:
++        log.append({
++            "step": len(log) + 1,
++            "phase": rec["phase"],
++            "enter_column": rec["enter_column"],
++            "leave_row": "R%d" % rec["leave_row"],
++            "tableau": rec["tableau"],
++        })
++
++    return final_state["rows"], log
+diff --git a/simplex/schema.py b/simplex/schema.py
+index 76e7f70..ef43026 100644
+--- a/simplex/schema.py
++++ b/simplex/schema.py
+@@ -1,4 +1,125 @@
+-FinalTableau = list[list[float]]
++"""Schema, numeric helpers, and report formatting for the two-phase simplex CLI.
+ 
+-def as_float_tableau(tableau: list[list[float]]) -> FinalTableau:
+-    return [[float(value) for value in row] for row in tableau]
+\ No newline at end of file
++Public names
++-------------
++* :data:`FinalTableau` -- the type alias for the final simplex tableau.
++* :func:`as_float_tableau` -- coerce a tableau to a list of lists of floats.
++* :func:`round_half_up` -- half-up decimal rounding to 2 places.
++* :func:`build_problem_report` -- text representation of the *parsed* input LP.
++"""
++
++from decimal import Decimal, ROUND_HALF_UP
++
++# The final simplex tableau is a 2D array of floats.
++FinalTableau = list  # list[list[float]]
++
++
++# ---------------------------------------------------------------------------
++# Numeric helpers
++# ---------------------------------------------------------------------------
++def as_float_tableau(tableau):
++    """Return a deep copy of ``tableau`` with every entry coerced to ``float``."""
++    return [[float(value) for value in row] for row in tableau]
++
++
++def _to_decimal(value):
++    """Convert a numeric value to a :class:`Decimal` without binary artefacts."""
++    text = repr(float(value))
++    return Decimal(text)
++
++
++def round_half_up(value):
++    """Round ``value`` to 2 decimal places using half-up (away from zero) rounding.
++
++    Returns a :class:`Decimal` quantized to two places.
++    """
++    return _to_decimal(value).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
++
++
++def _format_number(quantized):
++    """Format a quantized :class:`Decimal`.
++
++    Zero (including ``-0.00``) is rendered as a positive ``0.00``; any other
++    value keeps its sign and is rendered with two decimals.
++    """
++    if quantized == 0:
++        return "0.00"
++    return format(quantized, "f")
++
++
++# ---------------------------------------------------------------------------
++# Problem report
++# ---------------------------------------------------------------------------
++def _render_terms(coefficients):
++    """Render a list of coefficients (for ``x1..xn``) into a term string.
++
++    Positive terms come first, then negative, then zero; within each group the
++    variable index order is preserved.  The first term carries no separator; a
++    leading negative term therefore starts with ``-`` and no space, while later
++    negative terms use `` - ``.  Positive/zero later terms use `` + ``.
++    """
++    positive, negative, zero = [], [], []
++    for index, coeff in enumerate(coefficients):
++        quantized = round_half_up(coeff)
++        if quantized > 0:
++            positive.append((quantized, index))
++        elif quantized < 0:
++            negative.append((quantized, index))
++        else:
++            zero.append((quantized, index))
++
++    parts = []
++    first = True
++    for group in (positive, negative, zero):
++        for quantized, index in group:
++            name = "x%d" % (index + 1)
++            if quantized > 0:
++                magnitude = _format_number(quantized)
++                body = magnitude + "*" + name
++            elif quantized < 0:
++                magnitude = _format_number(-quantized)
++                body = magnitude + "*" + name
++            else:
++                body = "0.00*" + name
++            if first:
++                if quantized < 0:
++                    parts.append("-" + body)
++                else:
++                    parts.append(body)
++                first = False
++            else:
++                sep = " - " if quantized < 0 else " + "
++                parts.append(sep + body)
++    return "".join(parts)
++
++
++def _render_rhs(value):
++    """Render a right-hand-side value (its sign is preserved)."""
++    return _format_number(round_half_up(value))
++
++
++def build_problem_report(objective_coeff, constraints_coeff, operators, rhs):
++    """Return a UTF-8 text representation of the *parsed* input LP.
++
++    The report starts with the ``maximize`` line, then a blank line, then
++    ``subject to:`` followed by one indented constraint line per input
++    constraint (in input order), and finally the nonnegativity line.  No
++    trailing newline is added.
++    """
++    n = len(objective_coeff)
++    m = len(constraints_coeff)
++
++    lines = []
++    lines.append("maximize " + _render_terms(objective_coeff))
++    lines.append("")
++    lines.append("subject to:")
++
++    for i in range(m):
++        left = _render_terms(constraints_coeff[i])
++        right = _render_rhs(rhs[i])
++        lines.append("    " + left + " " + operators[i] + " " + right)
++
++    variables = ", ".join("x%d" % (index + 1) for index in range(n))
++    lines.append("    " + variables + " >= 0")
++
++    return "\n".join(lines)
+diff --git a/simplex/tableau.py b/simplex/tableau.py
+index bd5a5e6..b4c4d9f 100644
+--- a/simplex/tableau.py
++++ b/simplex/tableau.py
+@@ -1,68 +1,229 @@
+-def build_initial_tableau(objective_coeff, constraints_coeff, constraints_relational_operators, constraints_rhs):
+-    num_vars = len(objective_coeff)
+-    num_constraints = len(constraints_coeff)
+-    tableau = []
+-    artificial_vars = []
+-
+-    for i in range(num_constraints):
+-        row = constraints_coeff[i] + [0] * num_constraints + [constraints_rhs[i]]
+-        if constraints_relational_operators[i] == '<=':
+-            row[num_vars + i] = 1
+-        elif constraints_relational_operators[i] == '>=':
+-            row[num_vars + i] = -1
+-            row.append(1)
+-            artificial_vars.append(len(row) - 1)
+-        elif constraints_relational_operators[i] == '=':
+-            row.append(1)
+-            artificial_vars.append(len(row) - 1)
+-        tableau.append(row)
+-
+-    # Add objective row for phase 1
+-    phase1_objective = [0] * (len(tableau[0]) - 1)
+-    for i in artificial_vars:
+-        phase1_objective[i] = 1
+-    tableau.append(phase1_objective + [0])
+-
+-    return tableau, artificial_vars
+-
+-def pivot_tableau(tableau):
+-    pivot_column = select_pivot_column(tableau)
+-    pivot_row = select_pivot_row(tableau, pivot_column)
+-    pivot_on(tableau, pivot_row, pivot_column)
+-
+-def is_optimal(tableau):
+-    # Check if all values in the last row (objective row) are non-negative
+-    return all(value >= 0 for value in tableau[-1][:-1])
+-
+-def select_pivot_column(tableau):
+-    # Use Bland's Rule to avoid cycling: Pick the first most negative coefficient in the objective row
+-    min_value = 0
+-    pivot_column = -1
+-    for j in range(len(tableau[0]) - 1):
+-        if tableau[-1][j] < min_value:
+-            min_value = tableau[-1][j]
+-            pivot_column = j
+-    return pivot_column
+-
+-def select_pivot_row(tableau, pivot_column):
+-    min_ratio = float('Inf')
+-    pivot_row = -1
+-    for i in range(len(tableau) - 1):
+-        if tableau[i][pivot_column] > 0:
+-            ratio = tableau[i][-1] / tableau[i][pivot_column]
+-            if ratio < min_ratio:
+-                min_ratio = ratio
+-                pivot_row = i
+-    return pivot_row
+-
+-def pivot_on(tableau, pivot_row, pivot_column):
+-    pivot_value = tableau[pivot_row][pivot_column]
+-    tableau[pivot_row] = [value / pivot_value for value in tableau[pivot_row]]
+-    for i in range(len(tableau)):
+-        if i != pivot_row:
+-            row_factor = tableau[i][pivot_column]
+-            tableau[i] = [curr - row_factor * pivot for curr, pivot in zip(tableau[i], tableau[pivot_row])]
+-
+-def extract_solution(tableau):
+-    # Extract the solution from the final tableau
+-    return tableau
+\ No newline at end of file
++"""Tableau construction and simplex pivoting for the two-phase simplex method.
++
++Column layout
++-------------
++Phase 1 (artificials present) : ``[Z, x1..xn, s1..sm, a1..ar, RHS]``
++Phase 2 / final              : ``[Z, x1..xn, s1..sm, RHS]``
++
++``Z`` is always index 0 and ``RHS`` is always the last column.
++
++The objective row is the **last** row of the tableau.  It is stored in the
++canonical maximization form::
++
++    Z - sum(c_j * x_j) = 0
++
++so an optimal tableau has every variable-column entry ``>= -EPS`` and the
++objective value is ``-tableau[-1][RHS]``.
++"""
++
++EPS = 1e-9
++# Small tolerance for "is this entry effectively zero".
++ZERO = 1e-12
++
++# Constraint-row label for the i-th original constraint (zero based).
++ROW_LABEL = "R"  # R0, R1, ...
++
++
++# ---------------------------------------------------------------------------
++# Construction
++# ---------------------------------------------------------------------------
++def build_phase1_tableau(objective_coeff, constraints_coeff, ops, rhs):
++    """Build the phase-1 tableau.
++
++    Parameters
++    ----------
++    objective_coeff : list[float]
++    constraints_coeff : list[list[float]]
++    ops : list[str] -- one of ``<=``, ``>=``, ``=`` per constraint.
++    rhs : list[float]
++
++    Returns
++    -------
++    rows : list[list[float]]
++        Constraint rows followed by the (canonical phase-1) objective row.
++    col_names : list[str]
++        Column names ``[Z, x1..xn, s1..sm, a1..ar, RHS]``.
++    basis : list[int]
++        Column index of the basic variable of each constraint row.
++    artificial_col : dict[int, int]
++        Maps a constraint row index to its artificial column index.
++    artificial_constraints : list[int]
++        Constraint indices that received an artificial variable.
++    """
++    valid = {"<=", ">=", "="}
++    for op in ops:
++        if op not in valid:
++            raise ValueError(
++                "Invalid relational operator %r; expected one of <=, >=, =." % (op,)
++            )
++
++    n = len(objective_coeff)
++    m = len(constraints_coeff)
++
++    # Column names start with Z, the decision variables, then slack/surplus.
++    col_names = ["Z"] + ["x%d" % (j + 1) for j in range(n)] + ["s%d" % (i + 1) for i in range(m)]
++
++    # Artificial columns (one for each >= or = constraint), in constraint order.
++    artificial_col = {}
++    artificial_constraints = []
++    for i in range(m):
++        if ops[i] in (">=", "="):
++            artificial_col[i] = len(col_names)
++            col_names.append("a%d" % (len(artificial_constraints) + 1))
++            artificial_constraints.append(i)
++
++    col_names.append("RHS")
++    width = len(col_names)
++
++    rows = []
++    basis = []
++    for i in range(m):
++        row = [0.0] * width
++        row[0] = 0.0  # Z
++        # Decision-variable coefficients.
++        for j in range(n):
++            row[1 + j] = float(constraints_coeff[i][j])
++        # Slack / surplus column for this constraint.
++        row[1 + n + i] = 1.0 if ops[i] == "<=" else -1.0
++        # RHS.
++        row[-1] = float(rhs[i])
++        if i in artificial_col:
++            row[artificial_col[i]] = 1.0
++        rows.append(row)
++
++        # Basic variable of this row.
++        if ops[i] == "<=":
++            basis.append(1 + n + i)
++        else:  # >= or =
++            basis.append(artificial_col[i])
++
++    # Phase-1 objective row: minimises sum(artificials)  <=>  max -sum(artificials).
++    obj = [0.0] * width
++    obj[0] = 1.0  # Z
++    for art_col in artificial_col.values():
++        obj[art_col] = 1.0
++    rows.append(obj)
++
++    return rows, col_names, basis, artificial_col, artificial_constraints
++
++
++def canonicalize_objective(rows, basis):
++    """Eliminate the basic-variable columns from the (raw) objective row.
++
++    After this call every basic column has ``0`` in the objective row, which is
++    required before an optimality / ratio test.
++    """
++    obj = rows[-1]
++    for row_idx, col_idx in enumerate(basis):
++        factor = obj[col_idx]
++        if abs(factor) > ZERO:
++            ref = rows[row_idx]
++            for k in range(len(obj)):
++                obj[k] = obj[k] - factor * ref[k]
++
++
++def setup_phase2_objective(rows, objective_coeff, basis, col_names):
++    """Replace the objective row with the original objective (canonicalised)."""
++    ncols = len(col_names)
++    obj = [0.0] * ncols
++    obj[0] = 1.0  # Z
++    n = len(objective_coeff)
++    for j in range(n):
++        # column index of x_{j+1} is 1 + j
++        obj[1 + j] = -float(objective_coeff[j])
++    rows[-1] = obj
++    canonicalize_objective(rows, basis)
++
++
++# ---------------------------------------------------------------------------
++# Optimality / pivot selection
++# ---------------------------------------------------------------------------
++def variable_columns(col_names):
++    """Indices of the variable columns (excluding ``Z`` at 0 and ``RHS`` at end)."""
++    return list(range(1, len(col_names) - 1))
++
++
++def is_optimal(rows, col_names, eps=EPS):
++    """True when every reduced cost (variable column) is ``>= -eps``."""
++    obj = rows[-1]
++    for j in variable_columns(col_names):
++        if obj[j] < -eps:
++            return False
++    return True
++
++
++def select_entering(rows, col_names, eps=EPS):
++    """Bland's rule: smallest-index column with a negative reduced cost."""
++    obj = rows[-1]
++    for j in variable_columns(col_names):
++        if obj[j] < -eps:
++            return j
++    return -1
++
++
++def min_ratio_rows(rows, j, eps=EPS):
++    """All constraint rows attaining the minimum ratio for entering column ``j``.
++
++    Returns ``(candidates, best)`` where ``candidates`` is the list of row
++    indices attaining the smallest ``RHS / rows[r][j]`` over rows with a
++    positive pivot-column value, and ``best`` is that ratio (``inf`` if none).
++    """
++    best = None
++    candidates = []
++    for i in range(len(rows) - 1):
++        val = rows[i][j]
++        if val > eps:
++            ratio = rows[i][-1] / val
++            if best is None or ratio < best - eps:
++                best = ratio
++                candidates = [i]
++            elif abs(ratio - best) <= eps:
++                candidates.append(i)
++    return candidates, (best if best is not None else float("inf"))
++
++
++def select_leaving(rows, j, eps=EPS):
++    """Bland's rule: smallest-index row attaining the minimum ratio."""
++    candidates, _ = min_ratio_rows(rows, j, eps)
++    return candidates[0] if candidates else -1
++
++
++def all_valid_pivots(rows, col_names, eps=EPS):
++    """Every simplex-valid pivot ``(entering column, leaving row)`` in this state.
++
++    The entering column must have a negative reduced cost; the leaving row must
++    attain the minimum ratio (ties included).
++    """
++    obj = rows[-1]
++    pivots = []
++    for j in variable_columns(col_names):
++        if obj[j] < -eps:
++            candidates, _ = min_ratio_rows(rows, j, eps)
++            for r in candidates:
++                pivots.append((j, r))
++    return pivots
++
++
++def pivot(rows, r, j, eps=EPS):
++    """Perform a simplex pivot on column ``j``, row ``r`` (in place)."""
++    pivot_val = rows[r][j]
++    if abs(pivot_val) < eps:
++        raise Exception("Pivot element is (near) zero.")
++    inv = 1.0 / pivot_val
++    rows[r] = [v * inv for v in rows[r]]
++    for i in range(len(rows)):
++        if i != r:
++            factor = rows[i][j]
++            if abs(factor) > ZERO:
++                ref = rows[r]
++                rows[i] = [rows[i][k] - factor * ref[k] for k in range(len(rows[i]))]
++    # Clean up residual numerical noise in the pivot column.
++    for i in range(len(rows)):
++        if i != r and abs(rows[i][j]) < ZERO:
++            rows[i][j] = 0.0
++    rows[r][j] = 1.0
++
++
++def objective_value(rows):
++    """RHS of the objective row (``-`` the maximization objective value)."""
++    return rows[-1][-1]
