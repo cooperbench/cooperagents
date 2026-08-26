@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import base64
 import json
+import shutil
 import subprocess
 import tomllib
 import os
@@ -170,10 +171,22 @@ class TerminalBenchAdapter(BenchmarkAdapter):
             logs = inst_dir / "verifier_logs"
             (logs / "verifier").mkdir(parents=True, exist_ok=True)
             mounts = ["-v", f"{logs}:/logs"]
+            # Stage artifacts into a scratch copy and mount writable: task
+            # verifiers run against the agent's live filesystem in Harbor and
+            # may write into it (a read-only mount fails them with EROFS).
+            stage = inst_dir / "verifier_logs" / "stage"
+            if stage.exists():
+                shutil.rmtree(stage)
             for a in self.artifacts(instance):
                 src = inst_dir / "artifacts" / a.lstrip("/")
                 if src.exists():
-                    mounts += ["-v", f"{src}:{a}:ro"]
+                    dst = stage / a.lstrip("/")
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    if src.is_dir():
+                        shutil.copytree(src, dst)
+                    else:
+                        shutil.copy2(src, dst)
+                    mounts += ["-v", f"{dst}:{a}"]
             timeout = int(_manifest(instance).get("verifier", {}).get("timeout_sec", 600))
             try:
                 subprocess.run(["docker", "run", "--rm", *mounts, vtag,

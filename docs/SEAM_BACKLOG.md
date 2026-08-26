@@ -1433,3 +1433,41 @@ artifact existence+parse gate, Tier 2 instruction-example behavioral probe
 (oracle-calibrated offline), harness-owned via verification.*; plus the
 in-loop verification hint now in the adapter prompt. Each becomes its own
 measured delta.
+
+--- 2026-08-26: TB3 EASY-3 BATCH COMPLETE (12/12 valid; 3 frontier-solvable tasks x solo/t2/t3/t4) ---
+Tasks picked from the scraped frontier per-task solve map (react-lead-form
+12/12 models solve, gpt2-codegolf 75%, coq-block-bound 70%). Same fin config
++ the in-loop verification hint (adapter HEAD) — config delta vs the 08-21
+batch. H100 4-pod endpoint, 12-stream cap, queue shepherd; 3 cells starvation-
+invalidated and re-run clean (retries reproduced the originals exactly).
+OFFICIAL REWARDS (all-or-nothing):
+| task            | solo | t2  | t3  | t4  |
+| react-lead-form |  0   | 1.0 |  0  |  0  |  FIRST OFFICIAL TB3 SOLVE (t2).
+| gpt2-codegolf   |  0   |  0  |  0  |  0  |
+| coq-block-bound |  0   |  0  |  0  |  0  |  (every arm exactly 2/3 tests)
+REACT REQUIREMENT-LEVEL GRADIENT: solo 2 behavior gaps (duplicate recording,
+stale-file cleanup) -> t2 full pass -> t3 1 gap (idempotent rewrite) -> t4 6
+gaps. Team value peaks at t2 and degrades with size — the ProgramBench
+saturation shape reproduced at per-requirement granularity; larger teams
+merged away more duplicate/conflict semantics.
+COQ: all arms (incl. both retries) converge to exactly 2/3 — one proof
+obligation beyond the 27B at any team size; team size changes nothing.
+GPT2: 0 across arms with three distinct mechanisms: (a) t2/t3 share-sync
+starvation on heavy workspaces — model ckpt + safetensors in /app meant
+agent branches never received a single sync commit; integration picked the
+only nonempty tree (ref-file noise, chosen=0) while agent2's real gpt2.c
+(golfed 7361->5106B) died with its container; (b) counterfactual verifier run
+on the recovered 5106B source: still fails the <2000B size assert — capability
+gap independent of (a); (c) solo submitted a build recipe (gpt2.py/build.py +
+.gitignore of build/) instead of the /app/gpt2.c artifact.
+EVALUATE() BUG FOUND+FIXED: verifier artifacts were mounted read-only; tasks
+whose verifier writes into /app (react) failed with EROFS => false 0. Fix:
+stage artifacts to a scratch copy, mount writable. Re-scored the 08-21 batch
+(41 cells): no zeros flipped, pass-fractions unchanged — react was the first
+task on the write path.
+EFFICIENCY: duration roughly flat across arms (3-6h/cell); steps scale with
+team size (react 83/222/355/551) — same cost-per-cell shape as ProgramBench.
+NEW SEAM DELTAS QUEUED: (S-sync) exclude large binaries from the 45s share
+sync so member work propagates on heavy workspaces; (S-select) rank member
+trees with the Tier-1/2 verification facts instead of nonemptiness at
+select_integration.
