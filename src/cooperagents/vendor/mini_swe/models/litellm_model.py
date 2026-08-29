@@ -24,6 +24,33 @@ logger = logging.getLogger("litellm_model")
 
 
 
+def _toolcalls_from_xml(content: str) -> list:
+    """Fallback: parse Qwen-style <tool_call> XML out of raw content.
+
+    OpenAI-compatible servers without a tool parser (e.g. Tinker's shim)
+    return the model's tool-call markup verbatim in message.content; vLLM's
+    hermes parser would have converted it to tool_calls. Returns objects with
+    the same .function.name / .function.arguments shape litellm produces.
+    """
+    import re
+    from types import SimpleNamespace
+
+    calls = []
+    for block in re.findall(r"<tool_call>\s*(.*?)\s*</tool_call>", content, re.S):
+        m = re.match(r"<function=([\w-]+)>\s*(.*?)\s*</function>\s*$", block, re.S)
+        if not m:
+            continue
+        name, body = m.group(1), m.group(2)
+        args = {}
+        for pm in re.finditer(r"<parameter=([\w-]+)>\n?(.*?)\n?</parameter>", body, re.S):
+            v = pm.group(2)
+            args[pm.group(1)] = {"true": True, "false": False}.get(v.strip().lower(), v)
+        calls.append(SimpleNamespace(
+            id=f"xmlcall-{len(calls)}", type="function",
+            function=SimpleNamespace(name=name, arguments=json.dumps(args))))
+    return calls
+
+
 def _strip_think(text: str) -> str:
     """Remove <think>...</think> chain-of-thought from a plain-text completion.
 
@@ -269,6 +296,11 @@ class LitellmModel:
     def _parse_actions(self, response) -> list[dict]:
         """Parse tool calls from the response. Raises FormatError if unknown tool."""
         tool_calls = response.choices[0].message.tool_calls or []
+        if not tool_calls:
+            # Some OpenAI-compatible servers (e.g. Tinker's shim) return the
+            # model's raw <tool_call> XML in content instead of parsing it
+            # into tool_calls the way vLLM's hermes parser does.
+            tool_calls = _toolcalls_from_xml(response.choices[0].message.content or "")
         return parse_toolcall_actions(tool_calls, format_error_template=self.config.format_error_template)
 
     def format_message(self, **kwargs) -> dict:

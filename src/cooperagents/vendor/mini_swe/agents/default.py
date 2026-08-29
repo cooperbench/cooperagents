@@ -390,7 +390,8 @@ class DefaultAgent:
                 # fx/zoxide team agents). Fall back to mechanical truncation.
                 es = str(e).lower()
                 if ("ContextWindow" not in type(e).__name__
-                        and "context length" not in es and "contextwindow" not in es):
+                        and "context length" not in es and "contextwindow" not in es
+                        and "context window" not in es):
                     raise
                 self._emergency_truncate()
         self.n_calls += 1
@@ -401,7 +402,8 @@ class DefaultAgent:
             # writing a whole file adds >10k tokens at once). On a context
             # overflow, mechanically truncate history — a summarize call would
             # itself overflow — and retry once.
-            if "ContextWindow" not in type(e).__name__ and "context length" not in str(e).lower():
+            if ("ContextWindow" not in type(e).__name__ and "context length" not in str(e).lower()
+                    and "context window" not in str(e).lower()):
                 raise
             # One truncation can be insufficient when the kept recent turns are
             # themselves huge (observed: solo-i3style-i6c died at step 324 on
@@ -417,7 +419,8 @@ class DefaultAgent:
                     break
                 except Exception as e2:  # noqa: BLE001
                     last_err = e2
-                    if "ContextWindow" not in type(e2).__name__ and "context length" not in str(e2).lower():
+                    if ("ContextWindow" not in type(e2).__name__ and "context length" not in str(e2).lower()
+                        and "context window" not in str(e2).lower()):
                         self.config.compaction_keep_recent_turns = keep
                         raise
             else:
