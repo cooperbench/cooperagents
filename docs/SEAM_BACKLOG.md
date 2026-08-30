@@ -1471,3 +1471,31 @@ NEW SEAM DELTAS QUEUED: (S-sync) exclude large binaries from the 45s share
 sync so member work propagates on heavy workspaces; (S-select) rank member
 trees with the Tier-1/2 verification facts instead of nonemptiness at
 select_integration.
+
+--- 2026-08-30: FACTORY-23 PLAIN-SOLO BASELINE COMPLETE (23/23 valid; Tinker-hosted 27B) ---
+The 23 ProgramBench tasks from the Factory.ai validation-separation study
+(zero overlap with our 10-task slice; large-repo heavyweights). Plain solo
+per the official leaderboard convention: NO --repair, mini-swe unmodified,
+1000 steps / 4h, Qwen3.8-27B via Tinker OAI endpoint (Qwen/Qwen3.8-27B:
+peft:262144, 256K ctx; temp 1.0 / top_p 0.95 / max_tokens 32768).
+RESULT: mean behavioral pass rate 0.48%. 21/23 cells = 0, all at the
+compile gate (submission's compile.sh fails or patch empty => every hidden
+test not_run). Nonzero: stgit 146/2289 (6.4%), bedtools2 51/1093 (4.7%) —
+the only two submissions that built. Context: Factory frontier baselines
+on these tasks are 9-62% (their system lifts Fable 5 to median 89.3%).
+READING: the compile gate is the binding constraint for the 27B at this
+scale — the model writes hundreds of KB of source (up to 515KB patches)
+that does not build. This is exactly the surface our team-side machinery
+(build gate + repair, and the planned pre-authored completion criteria)
+targets; the harness deltas on these tasks now have a clean floor to
+measure against.
+SERVING INCIDENTS (Tinker OAI endpoint, all fixed and committed 6fad49a):
+no server-side tool-call parsing (XML fallback parser added); 'context
+window' overflow phrasing missed by truncation matcher (widened); 64K
+default window (switched to :peft:262144); in-flight 429 storms + slow
+per-stream generation under 23-way load (retry cap 10->25, hard call cap
+600->1200s). 15/23 cells needed one clean re-run under hardened settings.
+COST: round-6 tokens 82M prefill + 24M sample ≈ $386; false starts
+(rounds 1-5) ≈ $250-350; EC2 ≈ $60. Probe: sustained 24-concurrent clean
+on short calls, but long-prompt full-batch load hits in-flight caps —
+Tinker beta is fine for ~12-15 effective streams, not 23 heavy ones.
