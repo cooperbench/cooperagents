@@ -1499,3 +1499,24 @@ COST: round-6 tokens 82M prefill + 24M sample ≈ $386; false starts
 (rounds 1-5) ≈ $250-350; EC2 ≈ $60. Probe: sustained 24-concurrent clean
 on short calls, but long-prompt full-batch load hits in-flight caps —
 Tinker beta is fine for ~12-15 effective streams, not 23 heavy ones.
+
+--- 2026-08-31: FACTORY-23 T2 ARM COMPLETE (23/23 valid, zero invalidations) ---
+Same 23 tasks, same model/endpoint/budgets as the 08-30 plain-solo baseline;
+t2 = coopgitc2 fin config (repair + completion-gate + env-brief + presub-
+merge), 6 concurrent cells (12-stream Tinker cap), 4 waves, ~22h wall.
+RESULT: mean 0.95% vs solo 0.48% (2x, small absolute); submissions that
+BUILD: 5/23 vs solo 2/23.
+Build ledger vs solo: +4 flips to building (7zip 0->1.5, delta 0->5.8,
+proj 0->0.1, sox 0->4.6), -1 reversal (bedtools2 4.7->0: integration
+produced a non-building tree where solo built — semantic merge loss, same
+mechanism as TB3 bun-t4), stgit both built with t2 ahead (6.4->9.8, the
+only beyond-the-gate quality comparison available).
+READING: the harness's value on large-repo rebuilds concentrates exactly
+at the compile gate (predicted by the solo round): repair+gate flipped 4
+tasks to building, and on the one dual-build task t2 also passed more
+tests. Both arms remain 0 on the 14 heavyweight builds (gdal/ffmpeg/
+duckdb class) — model capability, not harness, binds there. The bedtools2
+reversal is the standing S-select/S-verify gap: integration selection has
+no build-fact ranking on this benchmark path either.
+COST: t2 tokens 183M prefill + 60M sample ≈ $899; EC2 ≈ $100. Cumulative
+Factory-23 (solo + t2 incl. false starts) ≈ $1.8k.
