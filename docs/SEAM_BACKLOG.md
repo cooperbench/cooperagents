@@ -1520,3 +1520,25 @@ reversal is the standing S-select/S-verify gap: integration selection has
 no build-fact ranking on this benchmark path either.
 COST: t2 tokens 183M prefill + 60M sample ≈ $899; EC2 ≈ $100. Cumulative
 Factory-23 (solo + t2 incl. false starts) ≈ $1.8k.
+
+--- 2026-09-02: FACTORY-23 T3 ARM COMPLETE (23/23 valid) — SCALING SERIES DONE ---
+Same protocol as solo/t2; t3 = fin config --team-size 3, 4 concurrent cells
+(12-stream cap), ~31h wall.
+MEANS: solo 0.48% (2/23 built) -> t2 0.95% (5/23) -> t3 1.83% (5/23).
+Mean doubles per size step, but built-count is FLAT at 5 from t2->t3 and the
+build sets barely overlap: t2 built {7zip delta proj sox stgit}, t3 built
+{pandoc samtools lnav typst stgit}. Only stgit builds in all three arms and
+scales monotonically: 6.4 -> 9.8 -> 28.2 (t3 = 4.4x solo; 646/2291 tests) —
+the strongest beyond-the-gate quality effect measured in this program.
+READING: (a) which tasks clear the compile gate is near-random per cell
+(repair-candidate variance), so per-task flips reshuffle; (b) mean growth is
+real but concentrated (stgit + the Haskell/bioinformatics unlocks); (c) team
+scaling helps where a build already exists (stgit), consistent with
+value=separability once the binding constraint is passed.
+INCIDENTS: stgit-t3 eval initially scored 0 on a containerd commit race —
+re-eval recovered 28.2 (transient infra; validator taxonomy note: eval
+RuntimeError lines are re-eval triggers, never real zeros). One duplicate
+cell from a stash-swallowed .disp marker was caught and killed pre-collect;
+rule: never stash untracked files while shepherds run.
+COST: t3 tokens 324M prefill + 108M sample ≈ $1606; EC2 ≈ $160. Factory-23
+program total (3 arms + false starts) ≈ $3.6k.
