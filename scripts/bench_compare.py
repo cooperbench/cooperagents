@@ -30,8 +30,8 @@ from cooperagents.harness import UnifiedHarness
 from cooperagents.types import Assignment, TeamSpec
 
 
-def _load_env(path: str = ".env") -> None:
-    p = Path(path)
+def _load_env(path: str | None = None) -> None:
+    p = Path(path or os.getenv("ENV_FILE", ".env"))
     if not p.is_file():
         return
     for line in p.read_text().splitlines():
@@ -311,8 +311,11 @@ def read_eval(logs_dir: Path, run_name: str, setting: str, item: WorkItem) -> tu
 
 def main() -> None:
     _load_env()
+    global MODEL
+    MODEL = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-5.5-hao")
     ap = argparse.ArgumentParser()
-    ap.add_argument("--limit", type=int, default=2)
+    ap.add_argument("--limit", type=int, default=None, help="cap number of pairs (default: no limit)")
+    ap.add_argument("--subset", default="flash", help="CooperBench subset to load when --pairs is not given (default: flash; use 'all' for all 652 pairs)")
     ap.add_argument("--pairs", nargs="*", default=None, help="repo:task:f1,f2 ...")
     ap.add_argument("--max-agents", type=int, default=3)
     ap.add_argument("--step-limit", type=int, default=30)
@@ -369,6 +372,7 @@ def main() -> None:
     ap.add_argument("--solo-name", default="cmp-solo")
     ap.add_argument("--team-name", default="cmp-team")
     ap.add_argument("--solo-only", action="store_true", help="skip the team arm (e.g. solo calibration sweeps)")
+    ap.add_argument("--resume", action="store_true", help="skip pairs that already have a result.json on disk")
     args = ap.parse_args()
 
     if args.pairs:
@@ -377,19 +381,30 @@ def main() -> None:
             repo, task, feats = spec.split(":")
             items.append(WorkItem(repo=repo, task_id=int(task), features=[int(x) for x in feats.split(",")]))
     else:
-        items = load_subset("flash")[: args.limit]
+        items = load_subset(args.subset)
+    if args.limit is not None:
+        items = items[: args.limit]
 
     logs_dir = Path(args.log_dir).resolve()
+
+    def _result_exists(run_name: str, setting: str, item: WorkItem) -> bool:
+        feature_str = "_".join(f"f{f}" for f in sorted(item.features))
+        return (logs_dir / run_name / setting / item.repo / str(item.task_id) / feature_str / "result.json").is_file()
 
     def do_pair(item):
         tag = f"{item.repo}/{item.task_id} {sorted(item.features)}"
         t0 = time.time()
         s = {"duration": 0.0, "steps": 0, "tokens": 0}
+        t = {"duration": 0.0, "steps": 0, "tokens": 0}
+        solo_skip = args.resume and not args.team_only and _result_exists(args.solo_name, "solo", item)
+        team_skip = args.resume and not args.solo_only and _result_exists(args.team_name, "team", item)
+        if solo_skip and (args.solo_only or team_skip):
+            print(f"  skip (done) {tag}", flush=True)
+            return (item, s, t, 0.0)
         try:
-            if not args.team_only:
+            if not args.team_only and not solo_skip:
                 s = run_solo(item, run_name=args.solo_name, logs_dir=logs_dir, step_limit=args.step_limit)
-            t = {"duration": 0.0, "steps": 0, "tokens": 0}
-            if not args.solo_only:
+            if not args.solo_only and not team_skip:
                 t = run_team(
                 item,
                 run_name=args.team_name,
