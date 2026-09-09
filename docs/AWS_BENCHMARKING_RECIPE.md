@@ -388,6 +388,35 @@ curl http://localhost:8000/v1/models
 | `--tool-call-parser qwen3_xml` | Qwen3 emits `<tool_call>` XML; this converts it to OpenAI tool_calls format |
 | `--max-model-len 262144` | YaRN-extended context matching the Factory-23 256K setup |
 
+### 8c. Set up automatic disk cleanup
+
+Each Docker container run leaves behind a writable layer (~1–2 GB including the `pip install transformers` step). Over a 652-task run these accumulate and will fill the 300 GB volume. Set up a cron job to prune stopped containers and dangling layers every hour:
+
+```bash
+crontab -e
+```
+
+Add this line (then save and exit):
+
+```
+0 * * * * docker system prune -f >> /tmp/docker_prune.log 2>&1
+```
+
+Verify:
+
+```bash
+crontab -l
+```
+
+`docker system prune -f` (without `-a`) only removes stopped containers, dangling images, and unused build cache — it does **not** touch the running vLLM container or its image. Safe to run while the server is up.
+
+If the disk fills anyway, run manually:
+
+```bash
+docker system prune -f
+df -h /
+```
+
 ---
 
 ## 9. Run the Benchmark
