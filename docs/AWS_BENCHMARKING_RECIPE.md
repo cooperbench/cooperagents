@@ -327,9 +327,16 @@ EOF
 
 vLLM is served via Docker. The Docker image bundles the right CUDA runtime and transformers version to avoid conflicts with the host's conda environment.
 
-### 8a. Patch the model config for 256K context (YaRN RoPE scaling)
+### 8a. Verify the model config supports 262K context
 
-The base model has a 65,536-token context window, which is insufficient for many tasks (prompt + 32K output tokens exceeds 65K). Patch the model config to enable YaRN RoPE scaling to 262,144 tokens — matching the Tinker 256K PEFT setup used in Factory-23:
+The official `Qwen/Qwen3.8-27B` config has `max_position_embeddings: 262144` natively (using a high `rope_theta` of 10M with default rope type). Verify before starting vLLM:
+
+```bash
+python3 -c "import json; c=json.load(open('$HOME/models/Qwen3.8-27B/config.json')); print('max_pos:', c.get('max_position_embeddings'))"
+# Expected: max_pos: 262144
+```
+
+If it shows `262144`, no patching needed — proceed to 8b. If it shows `65536` (older download), apply the YaRN patch:
 
 ```bash
 cd ~/models/Qwen3.8-27B
@@ -342,8 +349,6 @@ json.dump(cfg, open('config.json', 'w'), indent=2)
 print('Done')
 "
 ```
-
-**Note**: YaRN is an approximation of the fine-tuned 256K PEFT variant. Quality at very long contexts may differ slightly from the Tinker setup. Note this in the paper.
 
 ### 8b. Start the server
 
