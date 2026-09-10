@@ -195,37 +195,36 @@ tmux new -s main
 
 ## 4. Fix the NVIDIA Driver and Fabric Manager
 
-The DLAMI ships with driver 550 (CUDA 12.4). The p5.48xlarge uses NVLink which requires the NVIDIA Fabric Manager to match the driver exactly. This section upgrades both to driver 570 (CUDA 12.8) — the highest version for which the Fabric Manager package is available.
+**Check first — newer DLAMIs may already be configured correctly.**
 
-### Add the NVIDIA CUDA repo and graphics PPA
+```bash
+nvidia-smi | head -3
+sudo systemctl status nvidia-fabricmanager
+```
+
+If the driver and fabricmanager versions match and fabricmanager shows `active (running)` with "Successfully configured all the available NVSwitches", skip this section entirely.
+
+The Ubuntu 22.04 DLAMI (AMI name: `Deep Learning OSS Nvidia Driver AMI GPU PyTorch 2.7 (Ubuntu 22.04)`) ships with driver 580 (CUDA 13.0) and a matching fabricmanager 580 — no upgrade needed.
+
+The Ubuntu 20.04 DLAMI ships with driver 550 (CUDA 12.4) and fabricmanager 550 — these must be upgraded to 570.
+
+### Ubuntu 20.04 only: upgrade to driver 570
+
+The driver and fabric manager versions must be identical. The Ubuntu 22.04 DLAMI does not need this.
 
 ```bash
 # CUDA repo (for fabricmanager packages)
 wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/cuda-keyring_1.1-1_all.deb
 sudo dpkg -i cuda-keyring_1.1-1_all.deb
 
-# Graphics drivers PPA (for newer driver versions)
+# Graphics drivers PPA
 sudo add-apt-repository ppa:graphics-drivers/ppa
 sudo apt-get update
-```
 
-### Remove the old fabric manager (it is held and blocks the upgrade)
-
-```bash
+# Remove the held fabricmanager-550
 sudo apt-get purge -y --allow-change-held-packages nvidia-fabricmanager-550
-```
 
-### Install driver 570 and the matching fabric manager
-
-The driver and fabric manager versions must be identical down to the patch number. Check what version of driver 570 apt will install:
-
-```bash
-apt-cache policy nvidia-driver-570 | grep Candidate
-```
-
-Note the version string (e.g. `570.211.01`). Then install both packages pinning the fabricmanager to the same version:
-
-```bash
+# Install driver 570 and matching fabricmanager (pin to same patch version)
 sudo apt-get install -y nvidia-driver-570 "nvidia-fabricmanager-570=570.211.01-1"
 sudo systemctl enable nvidia-fabricmanager
 sudo reboot
@@ -237,7 +236,8 @@ sudo reboot
 
 ```bash
 nvidia-smi | head -3
-# Expected: Driver Version: 570.211.01   CUDA Version: 12.8
+# Ubuntu 22.04: Driver Version: 580.126.09   CUDA Version: 13.0
+# Ubuntu 20.04: Driver Version: 570.211.01   CUDA Version: 12.8
 
 sudo systemctl status nvidia-fabricmanager
 # Expected: Active: active (running)
@@ -258,9 +258,18 @@ git clone --branch sagemaker https://github.com/cooperbench/cooperagents.git ~/c
 git clone https://github.com/cooperbench/CooperBench.git ~/CooperBench
 
 # Install cooperagents with mini-swe deps
+# Ubuntu 22.04 (no conda): requires sudo to write to /usr/local/lib/python3.12
+# Ubuntu 20.04 (has conda): run without sudo after `conda activate pytorch`
 cd ~/cooperagents
-uv pip install --system -e ".[mini]"
+sudo /home/ubuntu/.local/bin/uv pip install --system -e ".[mini]"
 ```
+
+**AMI differences**
+
+| AMI | Python | Install command |
+|---|---|---|
+| Ubuntu 22.04 DLAMI | System Python 3.12 (no conda) | `sudo /home/ubuntu/.local/bin/uv pip install --system -e ".[mini]"` |
+| Ubuntu 20.04 DLAMI | conda `pytorch` env | `conda activate pytorch && uv pip install --system -e ".[mini]"` |
 
 ---
 
@@ -425,14 +434,15 @@ Open another tmux window:
 
 ```bash
 tmux new-window -n bench
-conda activate pytorch
 cd ~/cooperagents
 ```
 
-Run solo evaluation on all 652 CooperBench pairs:
+**Note on Python command**: use `python3.12` on Ubuntu 22.04 (no conda). On Ubuntu 20.04 run `conda activate pytorch` first and use `python`.
+
+### 9a. Solo run (all 652 pairs)
 
 ```bash
-ENV_FILE=.env.qwen38aws uv run python scripts/bench_compare.py \
+ENV_FILE=.env.qwen38aws python3.12 scripts/bench_compare.py \
   --solo-only \
   --subset all \
   --step-limit 1000 \
@@ -441,25 +451,62 @@ ENV_FILE=.env.qwen38aws uv run python scripts/bench_compare.py \
   --solo-name qwen3-27b-solo
 ```
 
+### 9b. Team runs
+
+The team flags below are specific to `bench_compare.py` (CooperBench). They are **not** the same as the Factory-23 ProgramBench flags (`--repair --completion-gate --env-brief --presub-merge`) — those belong to `bench_programbench.py`, a separate script for a different benchmark. Do not mix them.
+
+The validated CooperBench team configuration is `--no-seed --coop-tools` (confirmed solo 30% / team 50% on flash).
+
+**2-agent team:**
+```bash
+ENV_FILE=.env.qwen38aws python3.12 scripts/bench_compare.py \
+  --team-only \
+  --subset all \
+  --step-limit 1000 \
+  --concurrency 8 \
+  --max-agents 2 \
+  --no-seed \
+  --coop-tools \
+  --resume \
+  --team-name qwen3-27b-t2
+```
+
+**3-agent team:**
+```bash
+ENV_FILE=.env.qwen38aws python3.12 scripts/bench_compare.py \
+  --team-only \
+  --subset all \
+  --step-limit 1000 \
+  --concurrency 8 \
+  --max-agents 3 \
+  --no-seed \
+  --coop-tools \
+  --resume \
+  --team-name qwen3-27b-t3
+```
+
 Detach (`Ctrl+B, D`). Check progress at any time:
 
 ```bash
 # Count completed pairs (target: 652)
-find ~/cooperagents/logs/qwen3-27b-solo -name "result.json" | wc -l
+COUNT=$(find ~/cooperagents/logs/<run-name> -name "result.json" | wc -l)
+echo "$COUNT / 652 ($(( COUNT * 100 / 652 ))%)"
 ```
 
 **Flags explained**
 
 | Flag | Value | Reason |
 |---|---|---|
-| `--solo-only` | — | Runs only the solo arm (single agent implements both features) |
+| `--solo-only` / `--team-only` | — | Run only the solo or team arm |
 | `--subset all` | all | All 652 CooperBench pairs across 30 tasks and 12 repos |
 | `--step-limit` | 1000 | Matches the Factory-23 reproduction protocol |
 | `--concurrency` | 8 | One parallel worker per GPU stream |
+| `--max-agents` | 2 or 3 | Number of agents per pair in team mode |
+| `--no-seed` | — | Independent agents with integrator merge |
+| `--coop-tools` | — | CooperBench team-harness shape (bus messaging between agents) |
 | `--resume` | — | Skips pairs that already have a `result.json`; safe to restart after interruption |
-| `--solo-name` | qwen3-27b-solo | Output directory under `logs/` |
 
-**Expected runtime**: ~20 hours on H100. Estimated cost at ~$22/hr spot: ~$440.
+**Expected runtime**: ~38 hours on H100 for the full 652 pairs (measured; original 20h estimate was optimistic for this task set). Estimated cost at ~$21/hr spot: ~$800.
 
 If the instance is interrupted by AWS, it stops (not terminates) due to the persistent spot configuration. Restart:
 ```bash
