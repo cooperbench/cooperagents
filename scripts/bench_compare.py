@@ -28,6 +28,7 @@ from cooperagents.eval.cooperbench import run_eval, write_run_outputs
 from cooperagents.eval.dataset import WorkItem, image_name, load_subset, read_feature
 from cooperagents.harness import UnifiedHarness
 from cooperagents.types import Assignment, TeamSpec
+from cooperagents import verification as _verification
 
 
 def _load_env(path: str | None = None) -> None:
@@ -213,6 +214,9 @@ def run_team(
     claim_mode: bool = False,
     allow_spawn: bool = False,
     n_agents: int = 2,
+    completion_gate: bool = False,
+    presub_merge: bool = False,
+    repair_attempts: int = 1,
 ) -> dict:
     feats = sorted(item.features)
     if reverse_order:
@@ -281,6 +285,13 @@ def run_team(
         apply_chain_merge=apply_merge,
         claim_mode=claim_mode,
         allow_spawn_tool=allow_spawn,
+        repair_attempts=repair_attempts,
+        completion_gate=(
+            lambda env, _m=presub_merge: _verification.validate(env, merged=_m)
+        ) if (completion_gate or presub_merge) else None,
+        select_integration=(
+            lambda patches: max(range(len(patches)), key=lambda i: len(patches[i]))
+        ) if presub_merge else None,
     )
     harness = UnifiedHarness(bus=InMemoryBus(run_id), step_limit=step_limit, command_timeout=300)
     img = image_name(item.repo, item.task_id)
@@ -358,6 +369,16 @@ def main() -> None:
     ap.add_argument("--repair-steps", type=int, default=25, help="step cap for the Q5 merge-repair agent")
     ap.add_argument("--repair-integrator", action="store_true",
                     help="Q5: health-gate the no-seed merge; run one repair agent only when broken")
+    ap.add_argument("--completion-gate", action="store_true",
+                    help="Reject each agent's finish until verification.validate() passes in the agent's own container "
+                         "(equivalent to ProgramBench --completion-gate; up to 3 rejections per agent)")
+    ap.add_argument("--presub-merge", action="store_true",
+                    help="Before finishing, each agent merges all teammate branches and the completion gate checks the "
+                         "merged tree; integration then selects the best member patch instead of re-merging "
+                         "(equivalent to ProgramBench --presub-merge; requires --git-share)")
+    ap.add_argument("--repair-attempts", type=int, default=1,
+                    help="Maximum sequential repair passes on the merged tree (stops early once healthy); "
+                         "equivalent to ProgramBench's up-to-2-repair-agents loop (default 1)")
     ap.add_argument("--coop-tools", action="store_true",
                     help="Q4: concurrent agents + bus send_message tool (CooperBench team-harness shape); use with --no-seed")
     ap.add_argument("--diversity-temp", type=float, default=None,
@@ -445,6 +466,9 @@ def main() -> None:
                 claim_mode=args.claim_mode,
                 allow_spawn=args.allow_spawn,
                 n_agents=args.agents,
+                completion_gate=args.completion_gate,
+                presub_merge=args.presub_merge,
+                repair_attempts=args.repair_attempts,
             )
         except Exception as e:  # noqa: BLE001 - one bad pair (e.g. missing/arch-incompatible image) must not abort the run
             print(f"  SKIP {tag}: {type(e).__name__}: {str(e)[:160]}", flush=True)

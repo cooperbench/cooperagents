@@ -458,9 +458,21 @@ ENV_FILE=.env.qwen38aws python3.12 scripts/bench_compare.py \
 
 ### 9b. Team runs
 
-The team flags below are specific to `bench_compare.py` (CooperBench). They are **not** the same as the Factory-23 ProgramBench flags (`--repair --completion-gate --env-brief --presub-merge`) — those belong to `bench_programbench.py`, a separate script for a different benchmark. Do not mix them.
+The team flags for `bench_compare.py` (CooperBench) map to the Factory-23 ProgramBench flags as follows:
 
-The validated CooperBench team configuration is `--no-seed --coop-tools` (confirmed solo 30% / team 50% on flash).
+| ProgramBench (`bench_programbench.py`) | CooperBench (`bench_compare.py`) | Function |
+|---|---|---|
+| `--repair` | `--repair-integrator` | Health-gate the merged tree; run a repair agent if broken |
+| `--repair` + evidence gathering | `--repair-integrator --focused-repair` | Same, plus feeds located conflict markers into the repair brief |
+| up-to-2-repair-agents loop | `--repair-attempts 2` | Maximum sequential repair passes; stops early when tree is healthy |
+| `--completion-gate` | `--completion-gate` | Reject each agent's patch until `verification.validate()` passes |
+| `--presub-merge` | `--presub-merge` | Each agent merges teammates' branches before finishing; gate checks merged tree |
+| `--env-brief` | no equivalent | ProgramBench-specific environment brief injected into agent prompt |
+| `git_share=True` | `--git-share` | Shared git remote volume between parallel agents |
+| `coordinator=True` | `--coordinator` | Designates agent1 as lead coordinator |
+
+The full CooperBench equivalent of ProgramBench's `coopgitc2` arm:
+`--no-seed --coop-tools --git-share --coordinator --repair-integrator --focused-repair --repair-attempts 2 --completion-gate --presub-merge`
 
 **2-agent team:**
 ```bash
@@ -472,6 +484,13 @@ ENV_FILE=.env.qwen38aws python3.12 scripts/bench_compare.py \
   --max-agents 2 \
   --no-seed \
   --coop-tools \
+  --git-share \
+  --coordinator \
+  --repair-integrator \
+  --focused-repair \
+  --repair-attempts 2 \
+  --completion-gate \
+  --presub-merge \
   --resume \
   --team-name qwen3-27b-t2
 ```
@@ -486,6 +505,13 @@ ENV_FILE=.env.qwen38aws python3.12 scripts/bench_compare.py \
   --max-agents 3 \
   --no-seed \
   --coop-tools \
+  --git-share \
+  --coordinator \
+  --repair-integrator \
+  --focused-repair \
+  --repair-attempts 2 \
+  --completion-gate \
+  --presub-merge \
   --resume \
   --team-name qwen3-27b-t3
 ```
@@ -509,6 +535,13 @@ echo "$COUNT / 652 ($(( COUNT * 100 / 652 ))%)"
 | `--max-agents` | 2 or 3 | Number of agents per pair in team mode |
 | `--no-seed` | — | Independent agents with integrator merge |
 | `--coop-tools` | — | CooperBench team-harness shape (bus messaging between agents) |
+| `--repair-integrator` | — | Health-gate the merged tree; run repair agent(s) if merge left conflict markers or broken syntax (equivalent to ProgramBench `--repair`) |
+| `--focused-repair` | — | Enhances repair by feeding located conflict markers directly into the repair agent's brief |
+| `--repair-attempts` | 2 | Maximum sequential repair passes (stops early once healthy); equivalent to ProgramBench's up-to-2-repair-agents loop |
+| `--git-share` | — | Shared git remote volume between parallel agents (equivalent to ProgramBench `git_share=True`) |
+| `--coordinator` | — | Designates agent1 as lead coordinator (equivalent to ProgramBench `coordinator=True` on `coopgitc2` arm) |
+| `--completion-gate` | — | Reject each agent's finish until `verification.validate()` passes in the agent's own container (equivalent to ProgramBench `--completion-gate`) |
+| `--presub-merge` | — | Before finishing, each agent merges all teammate branches and the completion gate checks the merged tree; integration selects the best member patch instead of re-merging (equivalent to ProgramBench `--presub-merge`; requires `--git-share`) |
 | `--resume` | — | Skips pairs that already have a `result.json`; safe to restart after interruption |
 
 **Expected runtime**: ~38 hours on H100 for the full 652 pairs (measured; original 20h estimate was optimistic for this task set). Estimated cost at ~$21/hr spot: ~$800.
