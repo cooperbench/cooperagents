@@ -1,7 +1,5 @@
 """Offline request parity: real SDK serialization, no paid/network calls."""
 
-from pathlib import Path
-
 import httpx
 import openai
 import pytest
@@ -18,11 +16,16 @@ def test_worker_coordinator_profile_parity(monkeypatch):
     for key in os.environ:
         if key.startswith("COOPER_"):
             monkeypatch.delenv(key)
-    profile = Path(__file__).resolve().parents[1] / "configs/qwen35-9b-openrouter.env.example"
-    for line in profile.read_text().splitlines():
-        if line and not line.startswith("#"):
-            key, value = line.split("=", 1)
-            monkeypatch.setenv(key, value)
+    profile = {
+        "OPENAI_BASE_URL": "https://openrouter.ai/api/v1",
+        "COOPER_TEMPERATURE_FORCE": "1.0", "COOPER_TOP_P": "0.95",
+        "COOPER_TOP_K": "20", "COOPER_MIN_P": "0.0",
+        "COOPER_PRESENCE_PENALTY": "1.5", "COOPER_REPETITION_PENALTY": "1.0",
+        "COOPER_REASONING_ENABLED": "false", "COOPER_REQUIRE_PARAMETERS": "true",
+        "COOPER_PROVIDER_ONLY": "venice",
+    }
+    for key, value in profile.items():
+        monkeypatch.setenv(key, value)
     monkeypatch.setenv("OPENAI_API_KEY", "test-only")
     monkeypatch.setenv("COOPER_MAX_TOKENS", "4096")
     worker = build_model("qwen/qwen3.5-9b", temperature=0.0)
@@ -59,7 +62,7 @@ def test_worker_coordinator_profile_parity(monkeypatch):
             "model": "qwen/qwen3.5-9b", "temperature": 1.0, "top_p": 0.95,
             "top_k": 20, "min_p": 0.0, "presence_penalty": 1.5,
             "repetition_penalty": 1.0, "reasoning": {"enabled": False},
-            "provider": {"require_parameters": True}, "max_tokens": 4096,
+            "provider": {"require_parameters": True, "only": ["venice"], "allow_fallbacks": False}, "max_tokens": 4096,
         }
     client.close()
 
@@ -67,4 +70,11 @@ def test_worker_coordinator_profile_parity(monkeypatch):
 def test_invalid_sampling_is_rejected(monkeypatch):
     monkeypatch.setenv("COOPER_TOP_P", "nan")
     with pytest.raises(ValueError, match="COOPER_TOP_P"):
+        sampling_kwargs()
+
+
+@pytest.mark.parametrize("value", ["", "  ", "venice other"])
+def test_invalid_provider_is_rejected(monkeypatch, value):
+    monkeypatch.setenv("COOPER_PROVIDER_ONLY", value)
+    with pytest.raises(ValueError, match="COOPER_PROVIDER_ONLY"):
         sampling_kwargs()

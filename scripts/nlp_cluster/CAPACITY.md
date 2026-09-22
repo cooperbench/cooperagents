@@ -107,3 +107,12 @@ campaign creation. Pending NLP qualification jobs 17548903–17548905 were
 cancelled; the existing ten-minute monitor now follows this VM campaign.
 VM concurrency is an empirical smoke configuration, not a demonstrated capacity
 for 18 pairs; assess memory, elapsed time and task failures before scaling.
+
+Provider pinning is supported through `COOPER_PROVIDER_ONLY=venice`. Both worker
+and coordinator then send `provider.only=["venice"]` and
+`provider.allow_fallbacks=false`, preserving `require_parameters`. This applies
+to newly launched processes only. The already-running `9eba828` smoke remains
+unpinned. As checked on 2026-09-22, Venice's Qwen3.5-9B endpoint advertises neither
+`min_p` nor `repetition_penalty`; resolve those profile fields before enabling
+strict Venice routing. Do not silently disable parameter validation or restart
+the current paid campaign to change providers.

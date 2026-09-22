@@ -42,6 +42,13 @@ def sampling_kwargs(temperature: float | None = None) -> dict[str, Any]:
                 raise ValueError(f"{key} must be true/false or 1/0")
             enabled = raw.lower() in ("true", "1")
             extra[field] = {"enabled" if field == "reasoning" else "require_parameters": enabled}
+    provider = os.getenv("COOPER_PROVIDER_ONLY")
+    if provider is not None:
+        if not provider.strip() or any(c.isspace() for c in provider.strip()):
+            raise ValueError("COOPER_PROVIDER_ONLY must be a single provider slug")
+        extra.setdefault("provider", {}).update(
+            only=[provider.strip()], allow_fallbacks=False,
+        )
     if extra:
         result["extra_body"] = extra
     return result
