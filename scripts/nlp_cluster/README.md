@@ -59,3 +59,18 @@ of reasoning/sampling settings, tool behavior, token limits and model performanc
 still require a real API smoke. Dummy transport verifies outgoing parameters only.
 Use `--pairs repo:task:f1,f2 ...` for explicit real-run pairs; prepare their images
 first. The fixed dummy scenario is `go_chi_task:27:3,4`.
+
+## Verified result
+
+Job **17547514**, john8, source **b6fb39d3**, completed with exit **0:0** in
+4m48s. All dummy assertions passed: seven HTTP requests, three steps per worker,
+one gate rejection followed by normal completion each, shared Git pushes, both
+markers in the merged patch, and exact worker/coordinator sampling payloads.
+Official gold feature 3 passed **3/3**, feature 4 passed **4/4** tests.
+The deliberately unimplemented dummy patch scored 0/2 without evaluator errors.
+
+Record: `/nlp/scr/chency/projects/cooperagents/runs/20260922T022723Z-cooperbench-b6fb39d3`.
+This qualifies the Go task27 image and complete runtime path, not every benchmark
+image or real provider behavior. Local focused checks: 29 passed, 2 optional
+integration skips; two repair-integrator tests also fail on clean upstream HEAD
+in this local environment (repair is disabled in this experiment).

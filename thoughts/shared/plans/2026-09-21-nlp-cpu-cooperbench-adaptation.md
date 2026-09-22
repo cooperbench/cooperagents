@@ -6,7 +6,7 @@ branch: slurm-cooperbench
 git_commit: 37766c6b7cd32fabc7778a6ff683cd5517be4244
 upstream_branch: sagemaker
 cooperbench_inspected_commit: 63b9d44d9f39a02fccf5bf0052db48a917a011fd
-status: implementing-dummy-validation
+status: dummy-smoke-validated-real-api-deferred
 ---
 
 # NLP CPU CooperBench adaptation plan
@@ -190,7 +190,19 @@ pairs. Image job 17547420 completed on john17. Dummy development runs identified
 and fixed missing evaluator import dependencies and unavailable make discovery.
 Run 17547498 exercised one deliberate gate rejection followed by successful
 completion per worker, and confirmed every selected sampling field on the wire.
-Final committed-source smoke and gold evaluator checks are pending.
+Final committed-source smoke 17547514 passed on john8 (4 CPUs, 16 GB),
+Slurm COMPLETED / exit 0:0 / elapsed 4m48s, from source b6fb39d3.
+The fixed scenario is go_chi_task:27:3,4. Seven loopback HTTP requests exercised
+one coordinator composition and three steps per worker. Both workers submitted
+normally after one deliberate completion-gate rejection each. Their changes were
+verified on shared Git branches and in the mechanical merged patch. The official
+scorer returned 0/2 for the dummy patch without an infrastructure error; official
+gold patches passed 3/3 and 4/4 tests respectively.
+
+Run record: /nlp/scr/chency/projects/cooperagents/runs/20260922T022723Z-cooperbench-b6fb39d3.
+Contains smoke.json, gold-eval.json, official eval.json/eval_summary.json,
+synthetic request traces, exact arguments, dependency versions, source/data pin,
+SIF SHA256 and evaluator patch provenance. No real model API call was made.
 
 Local focused adapter/sampling/planner/eval checks: 29 passed, 2 integration skips.
 Two repair-integrator harness tests fail identically on clean sagemaker HEAD and
