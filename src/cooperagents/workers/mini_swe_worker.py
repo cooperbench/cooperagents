@@ -24,6 +24,7 @@ from typing import Any
 import yaml
 
 from cooperagents.env.base import Environment
+from cooperagents.sampling import sampling_kwargs
 from cooperagents.types import AgentResult
 from cooperagents.vendor.mini_swe.agents.default import DefaultAgent
 from cooperagents.vendor.mini_swe.exceptions import LimitsExceeded, Submitted
@@ -272,22 +273,7 @@ def build_model(
         model_kwargs["api_base"] = base_url
     if api_key:
         model_kwargs["api_key"] = api_key
-    # Pin sampling for measurement runs (unset = provider default). Without
-    # this, small-model runs vary wildly between identical configs (observed:
-    # team 6/26 vs 11/28 features on the same set), drowning seam deltas.
-    if os.getenv("COOPER_TEMPERATURE"):
-        model_kwargs["temperature"] = float(os.environ["COOPER_TEMPERATURE"])
-    if temperature is not None:  # explicit per-call override (e.g. Q3 diversity)
-        model_kwargs["temperature"] = temperature
-    # Per-model sampling profile via env (e.g. Qwen3.8-27B thinking mode wants
-    # temperature=1.0 top_p=0.95 per model card; 9B stays pinned at 0.0).
-    # COOPER_TEMPERATURE_FORCE outranks the per-call pin above.
-    if os.getenv("COOPER_TEMPERATURE_FORCE"):
-        model_kwargs["temperature"] = float(os.environ["COOPER_TEMPERATURE_FORCE"])
-    if os.getenv("COOPER_TOP_P"):
-        model_kwargs["top_p"] = float(os.environ["COOPER_TOP_P"])
-    if os.getenv("COOPER_MAX_TOKENS"):
-        model_kwargs["max_tokens"] = int(os.environ["COOPER_MAX_TOKENS"])
+    model_kwargs.update(sampling_kwargs(temperature))
     # Short request timeout: the litellm/httpx default (~600s) makes an agent
     # hang 10 minutes on a dead pooled connection (socket to a scaled-down
     # serving container that vanished without RST) before retrying onto a

@@ -845,6 +845,8 @@ class UnifiedHarness:
                     return strip_test_sections(r.stdout)
                 # last resort: the agent destroyed even its .git — read the
                 # share volume directly with a throwaway container
+                if hasattr(env, "recover_shared_diff"):
+                    return strip_test_sections(env.recover_shared_diff(aid))
                 vol = next((v.split(":")[0] for v in getattr(env, "volumes", None) or []
                             if v.endswith(":/cbshared")), None)
                 if vol and base != "HEAD":
@@ -958,12 +960,12 @@ class UnifiedHarness:
                             team_lead_patch = diff
                         prior.append(f"feature {roster[aid].feature_id}" if roster[aid].feature_id is not None else roster[aid].role)
             finally:
+                if gitsync is not None:
+                    gitsync.stop()
+                if coordinator is not None:
+                    coordinator.stop()
                 for _e in coop_envs.values():
                     _e.cleanup()
-            if gitsync is not None:
-                gitsync.stop()
-            if coordinator is not None:
-                coordinator.stop()
             for th in spawn_threads:
                 th.join(timeout=1200)
             member_patches.extend(p for p in helper_patches if p.strip())

@@ -22,6 +22,7 @@ import os
 from collections.abc import Callable
 
 from cooperagents.eval.judge import _parse_json
+from cooperagents.sampling import sampling_kwargs
 from cooperagents.types import SubTask
 
 _PLAN_PROMPT = """You are the PLANNER of a multi-agent coding team. You decompose work into subtasks for
@@ -135,7 +136,10 @@ def _default_planner_complete(model, base_url, api_key) -> Callable[[str], str] 
         client = OpenAI(base_url=b, api_key=k)
 
         def complete(prompt: str) -> str:
-            resp = client.chat.completions.create(model=m, messages=[{"role": "user", "content": prompt}], max_completion_tokens=2000)
+            kwargs = sampling_kwargs()
+            if "max_tokens" not in kwargs:
+                kwargs["max_completion_tokens"] = 2000
+            resp = client.chat.completions.create(model=m, messages=[{"role": "user", "content": prompt}], **kwargs)
             from cooperagents.vendor.mini_swe.models.litellm_model import _strip_think
 
             return _strip_think(resp.choices[0].message.content or "")
@@ -210,8 +214,11 @@ def plan_decomposition(
             _client = OpenAI(base_url=b, api_key=k)
 
             def complete_fn(prompt: str) -> str:
+                kwargs = sampling_kwargs()
+                if "max_tokens" not in kwargs:
+                    kwargs["max_completion_tokens"] = 4000
                 resp = _client.chat.completions.create(
-                    model=m, messages=[{"role": "user", "content": prompt}], max_completion_tokens=4000
+                    model=m, messages=[{"role": "user", "content": prompt}], **kwargs
                 )
                 return resp.choices[0].message.content or ""
         except Exception:  # noqa: BLE001 - no creds / no lib → fallback

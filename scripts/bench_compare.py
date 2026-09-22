@@ -23,7 +23,7 @@ import uuid
 from pathlib import Path
 
 from cooperagents.bus.memory import InMemoryBus
-from cooperagents.env.docker import DockerEnv
+from cooperagents.env.runtime import task_environment
 from cooperagents.eval.cooperbench import run_eval, write_run_outputs
 from cooperagents.eval.dataset import WorkItem, image_name, load_subset, read_feature
 from cooperagents.harness import UnifiedHarness
@@ -64,7 +64,7 @@ def run_solo(item: WorkItem, *, run_name: str, logs_dir: Path, step_limit: int) 
     )
     harness = UnifiedHarness(bus=InMemoryBus(run_id), step_limit=step_limit, command_timeout=300)
     img = image_name(item.repo, item.task_id)
-    res = harness.run(spec, env_factory=lambda _id, _i=img: DockerEnv(_i))
+    res = harness.run(spec, env_factory=lambda _id, _i=img: task_environment(_i))
     write_run_outputs(res, run_name=run_name, logs_dir=logs_dir, setting="solo", model=MODEL)
     return {"duration": res.duration_seconds, "steps": res.total_steps, "tokens": 0}
 
@@ -126,7 +126,7 @@ def _mechanical_selector(img: str):
                 if not patch.strip():
                     envs.append(None)
                     continue
-                env = DockerEnv(img)
+                env = task_environment(img)
                 envs.append(env)
                 _seed_patch(env, patch)
                 names = env.execute("ls .cb_checks/*.py 2>/dev/null").stdout.split()
@@ -300,7 +300,7 @@ def run_team(
         selector = _mechanical_selector(image_name(item.repo, item.task_id)) if select == "mechanical" else _judge_selector(spec_bundle)
     vols = ([f"cbs{run_id}:/cbshared"] if git_share else []) + ([f"cbt{run_id}:/workspace/shared"] if team_roles else [])
     vols = vols or None
-    res = harness.run(spec, env_factory=lambda _id, _i=img, _v=vols: DockerEnv(_i, volumes=_v), selector=selector)
+    res = harness.run(spec, env_factory=lambda _id, _i=img, _v=vols: task_environment(_i, volumes=_v), selector=selector)
     write_run_outputs(res, run_name=run_name, logs_dir=logs_dir, setting="team", model=MODEL)
     return {"duration": res.duration_seconds, "steps": res.total_steps, "tokens": 0, "helpers": len(res.helpers)}
 
@@ -394,6 +394,7 @@ def main() -> None:
     ap.add_argument("--team-name", default="cmp-team")
     ap.add_argument("--solo-only", action="store_true", help="skip the team arm (e.g. solo calibration sweeps)")
     ap.add_argument("--resume", action="store_true", help="skip pairs that already have a result.json on disk")
+    ap.add_argument("--skip-eval", action="store_true", help="write generation artifacts without scoring")
     args = ap.parse_args()
 
     if args.pairs:
@@ -486,15 +487,20 @@ def main() -> None:
         rows = [do_pair(item) for item in items]
 
     rows = [r for r in rows if r is not None]  # drop skipped pairs (bad/incompatible images)
-    if not rows:
-        print("no pairs completed.")
+    if not rows or len(rows) != len(items):
+        raise RuntimeError(f"Incomplete generation: {len(rows)}/{len(items)} pairs completed")
+    if args.skip_eval:
+        print("generation complete; official evaluation not run")
         return
 
     print("\nscoring with CooperBench (this builds/pulls images + runs tests)...")
-    if not args.team_only:
-        run_eval(args.solo_name, logs_dir=logs_dir, backend="docker", force=True, concurrency=args.eval_concurrency)
-    if not args.solo_only:
-        run_eval(args.team_name, logs_dir=logs_dir, backend="docker", force=True, concurrency=args.eval_concurrency)
+    for enabled, name in ((not args.team_only, args.solo_name), (not args.solo_only, args.team_name)):
+        if enabled:
+            evaluation = run_eval(name, logs_dir=logs_dir, backend=os.getenv("COOPER_RUNTIME", "docker"),
+                                  force=True, concurrency=args.eval_concurrency)
+            print(evaluation.stdout or "", flush=True)
+            print(evaluation.stderr or "", flush=True)
+            evaluation.check_returncode()
 
     print("\n================ RESULTS ================")
     solo_pass = team_pass = solo_feats = team_feats = 0
