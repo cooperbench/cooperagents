@@ -6,7 +6,7 @@ trap 'code=$?; if [ "$code" = 0 ]; then echo completed; else echo failed:$code; 
 echo running > "$COOPER_RUN/status.txt"
 export COOPER_RUNTIME=apptainer
 export COOPER_SCRATCH="${SLURM_TMPDIR:-/scr/$USER}/cooperagents/${SLURM_JOB_ID:?}"
-export APPTAINER_CACHEDIR="/nlp/scr/$USER/apptainer-cache"
+export APPTAINER_CACHEDIR="$COOPER_SCRATCH/cache"
 export APPTAINER_TMPDIR="$COOPER_SCRATCH/build"
 mkdir -p "$COOPER_SCRATCH" "$APPTAINER_TMPDIR"
 cd "$COOPER_CODE"
@@ -28,6 +28,10 @@ for image, path in images.items():
     with open(path, 'rb') as handle:
         checksums[image] = hashlib.file_digest(handle, 'sha256').hexdigest()
 (Path(os.environ['COOPER_RUN']) / 'data/images.sha256.json').write_text(json.dumps(checksums, indent=2))
+metadata = json.loads((Path(os.environ['COOPER_RUN']) / 'metadata.json').read_text())
+qualification = metadata.get('qualification')
+if qualification and checksums.get(qualification['image']) != qualification['sha256']:
+    raise RuntimeError('Task image no longer matches its qualification report')
 PYHASH
 cp scripts/nlp_cluster/patches/cooperbench-backend.patch "$COOPER_RUN/data/"
 sha256sum scripts/nlp_cluster/patches/cooperbench-backend.patch > "$COOPER_RUN/data/evaluator-patch.sha256"

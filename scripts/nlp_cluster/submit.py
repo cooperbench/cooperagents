@@ -19,7 +19,19 @@ def main():
     parser.add_argument("--mode", choices=["dummy", "real"], default="dummy")
     parser.add_argument("--env-file", help="Existing cluster credential file; never copied into records")
     parser.add_argument("--pairs", nargs="+", default=["go_chi_task:27:3,4"])
+    parser.add_argument("--cpus", type=int, default=4)
+    parser.add_argument("--memory", default="16G")
+    parser.add_argument("--qualification-report", type=Path, help="Passed local report; pins the job to its image's node")
     args = parser.parse_args()
+    if args.cpus < 1:
+        parser.error("--cpus must be positive")
+    qualification = None
+    if args.qualification_report:
+        qualification = json.loads(args.qualification_report.read_text())
+        task = qualification["task"]
+        permitted = {f"{task['repo']}:{task['task_id']}:{','.join(map(str, sorted(pair)))}" for pair in task["pairs"]}
+        if not qualification.get("passed") or not set(args.pairs) <= permitted:
+            parser.error("Qualification must have passed and cover every requested pair")
     if args.mode == "real" and not args.env_file:
         parser.error("--env-file is required for real runs")
     repo = Path(__file__).resolve().parents[2]
@@ -40,19 +52,23 @@ def main():
         pairs=args.pairs,
         runtime="apptainer",
         partition=args.partition,
-        cpus=4,
+        cpus=args.cpus,
         step_limit=1000 if args.mode == "real" else 8,
         agent_time_limit=3600 if args.mode == "real" else None,
         wall_time=wall_time,
-        memory="16G",
+        memory=args.memory,
+        qualification=qualification,
     )
     buffer = io.BytesIO(archive)
     with tarfile.open(fileobj=buffer, mode="a") as tar:
-        for name, value in {
+        records = {
             "metadata.json": json.dumps(metadata, indent=2),
             "variant.toml": "workers = 2\ncoordinator = true\ncompletion_gate = true\npresub_merge = false\nrepair = false\n",
             "checkpoint.json": '{"applicable":false}',
-        }.items():
+        }
+        if qualification:
+            records["images.json"] = json.dumps({qualification["image"]: qualification["image_path"]})
+        for name, value in records.items():
             data = value.encode()
             info = tarfile.TarInfo(f"_run/{name}")
             info.size = len(data)
@@ -70,7 +86,7 @@ def main():
         COOPER_CODE=code,
         COOPER_RUN=run,
         COOPERBENCH_DIR=f"{args.root}/runtime/cooperbench-63b9d44",
-        COOPER_IMAGE_MANIFEST=f"{args.root}/runtime/images.json",
+        COOPER_IMAGE_MANIFEST=f"{run}/images.json" if qualification else f"{args.root}/runtime/images.json",
         COOPER_MODE=args.mode,
         COOPER_PAIRS=" ".join(args.pairs),
         COOPER_CREDENTIAL_FILE=args.env_file or "",
@@ -86,8 +102,9 @@ def main():
                 "--account=nlp",
                 f"--partition={args.partition}",
                 "--ntasks=1",
-                "--cpus-per-task=4",
-                "--mem=16G",
+                f"--cpus-per-task={args.cpus}",
+                f"--mem={args.memory}",
+                *([f"--nodelist={qualification['node'].split('.')[0]}"] if qualification else []),
                 f"--time={wall_time}",
                 "--job-name=ca-dummy" if args.mode == "dummy" else "--job-name=ca-real",
                 f"--output={run}/logs/slurm-%j.out",
@@ -104,8 +121,9 @@ def main():
                 "--account=nlp",
                 f"--partition={args.partition}",
                 "--ntasks=1",
-                "--cpus-per-task=4",
-                "--mem=16G",
+                f"--cpus-per-task={args.cpus}",
+                f"--mem={args.memory}",
+                *([f"--nodelist={qualification['node'].split('.')[0]}"] if qualification else []),
                 f"--time={wall_time}",
                 f"{code}/scripts/nlp_cluster/job.sh",
             ]
