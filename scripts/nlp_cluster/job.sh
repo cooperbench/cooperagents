@@ -40,7 +40,7 @@ else
   source "$COOPER_CREDENTIAL_FILE"
   set +a
   : "${OPENAI_API_KEY:?}"
-  export ENV_FILE="$COOPER_CODE/configs/qwen35-9b-openrouter.env.example"
+  export ENV_FILE="$COOPER_CREDENTIAL_FILE"
   read -ra pairs <<< "${COOPER_PAIRS:?}"
   args=(--pairs "${pairs[@]}" --team-only --max-agents 2 --no-seed --coop-tools --git-share
         --coordinator --completion-gate --step-limit 30 --eval-concurrency 1

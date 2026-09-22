@@ -54,7 +54,8 @@ After the dummy smoke passes and an API key is available, place the exported
 python3 scripts/nlp_cluster/submit.py --mode real --env-file /private/path/model.env
 ```
 
-The real path loads `configs/qwen35-9b-openrouter.env.example`. Provider acceptance
+The real path loads the private file passed through `--env-file`, including its
+model and sampling settings. Provider acceptance
 of reasoning/sampling settings, tool behavior, token limits and model performance
 still require a real API smoke. Dummy transport verifies outgoing parameters only.
 Use `--pairs repo:task:f1,f2 ...` for explicit real-run pairs; prepare their images

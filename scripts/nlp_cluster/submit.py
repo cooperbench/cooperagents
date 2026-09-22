@@ -30,7 +30,7 @@ def main():
     run_id = f"{datetime.now(UTC):%Y%m%dT%H%M%SZ}-cooperbench-{sha[:8]}"
     code = f"{args.root}/code/cooperagents-{run_id}"
     run = f"{args.root}/runs/{run_id}"
-    archive = subprocess.check_output(["git", "archive", "--format=tar", "HEAD", "src", "scripts", "configs", "pyproject.toml"], cwd=repo)
+    archive = subprocess.check_output(["git", "archive", "--format=tar", "HEAD", "src", "scripts", "pyproject.toml"], cwd=repo)
     metadata = dict(
         run_id=run_id,
         git_commit=sha,
