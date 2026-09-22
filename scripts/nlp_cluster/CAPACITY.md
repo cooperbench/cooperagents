@@ -164,3 +164,22 @@ The original ten results and these 26 use different provider routing profiles;
 they must not be described as a homogeneous fixed-provider evaluation round.
 Existing integration failures remain part of the unchanged harness; no repair,
 benchmark-test edits, or paid retries are authorized by this continuation.
+
+### Remaining-26 terminal failure (2026-09-22 07:16 UTC check)
+
+Campaign failed after 32:02.51. OpenRouter returned insufficient credits to six
+recorded workers. Additionally, kernel logs confirm global OOM killed generation
+Python PID 432809 at 07:12:11 UTC (anonymous RSS 24,378,600 KiB). Process MaxRSS
+was 24,380,860 KiB (~23.25 GiB), excluding separate Docker memory. Thus ten-pair
+concurrency on this VM is not validated as reliably safe for longer runs.
+
+Only 22 pair records/scores exist: 38 workers submitted, six errored; four pairs
+have no final record (go_chi_task:56:1,5; pallets_jinja_task:1559:5,8;
+pallets_jinja_task:1621:4,6; samuelcolvin_dirty_equals_task:43:3,7). These missing
+workers must not be counted as submissions or scored failures. Official partial
+scores report six passing features out of the planned 52 and two passing pairs
+out of the planned 26, not a complete evaluation. Passing pairs are
+huggingface_datasets_task:6252:4,6 and pallets_jinja_task:1621:2,9. Pillow4,5 has
+an evaluator patch-transfer error. Recorded coordinator events total132
+(60 LOOP,72 COLLISION). Monitor paused; no paid retry launched. Both credit
+availability and memory pressure need resolution before an authorized retry.

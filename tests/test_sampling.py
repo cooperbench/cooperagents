@@ -79,3 +79,13 @@ def test_invalid_provider_is_rejected(monkeypatch, value):
     monkeypatch.setenv("COOPER_PROVIDER_ONLY", value)
     with pytest.raises(ValueError, match="COOPER_PROVIDER_ONLY"):
         sampling_kwargs()
+
+
+def test_sglang_nonthinking_profile(monkeypatch):
+    monkeypatch.delenv("COOPER_REASONING_ENABLED", raising=False)
+    monkeypatch.delenv("COOPER_REQUIRE_PARAMETERS", raising=False)
+    monkeypatch.delenv("COOPER_PROVIDER_ONLY", raising=False)
+    monkeypatch.setenv("COOPER_CHAT_TEMPLATE_ENABLE_THINKING", "false")
+    extra = sampling_kwargs()["extra_body"]
+    assert extra["chat_template_kwargs"] == {"enable_thinking": False}
+    assert "provider" not in extra and "reasoning" not in extra
