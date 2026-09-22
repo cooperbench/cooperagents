@@ -82,3 +82,28 @@ node and SHA256; requalify if an image disappears or changes.
    passes out of 20, both-feature passes out of 10, coordinator events and errors.
 5. The ten-job smoke precedes the two full rounds on cb-mixture-36. Keep each
    round's records separate; do not choose the better round as the reported score.
+
+### Docker VM smoke migration (2026-09-22 UTC)
+
+The user authorized starting `changyu-dev` (`soe-gemini-llm-agents`,
+`us-west1-a`) and running the fixed ten pairs directly with Docker.
+Observed capacity: 8 ARM64 vCPUs, 31 GiB usable RAM, about 200 GiB free disk.
+All ten public task images were already present and passed a container-start,
+Git and `/workspace` check. This is not a gold-feature qualification result.
+
+Campaign: `/home/cameron_chen/cooperagents-smoke/runs/20260922-changyu-smoke10-9eba828`.
+Its manifest fixes the ten pairs, source `9eba828` and CooperBench `63b9d44`.
+Generation concurrency is 10 pairs (20 workers); official Docker evaluation
+concurrency is 2. Each worker retains 1,000 steps and 3,600 seconds, with
+Qwen3.5-9B non-thinking, coordinator and completion gate enabled, repair and
+presub-merge disabled. The outer process has a three-hour timeout.
+
+The initial startup failed authentication because the launcher did not source
+the shell profile; this was corrected before continuing the same campaign.
+Credentials remain outside source/run records, directory 700 and file 600.
+`launcher.pid`, `status.txt`, `console.log`, `resources.txt`, and official
+`eval.json` files are the monitoring sources. A dispatch lock prevents duplicate
+campaign creation. Pending NLP qualification jobs 17548903–17548905 were
+cancelled; the existing ten-minute monitor now follows this VM campaign.
+VM concurrency is an empirical smoke configuration, not a demonstrated capacity
+for 18 pairs; assess memory, elapsed time and task failures before scaling.
