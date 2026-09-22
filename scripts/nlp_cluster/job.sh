@@ -43,7 +43,7 @@ else
   export ENV_FILE="$COOPER_CREDENTIAL_FILE"
   read -ra pairs <<< "${COOPER_PAIRS:?}"
   args=(--pairs "${pairs[@]}" --team-only --max-agents 2 --no-seed --coop-tools --git-share
-        --coordinator --completion-gate --step-limit 30 --eval-concurrency 1
+        --coordinator --completion-gate --step-limit 1000 --agent-time-limit 3600 --eval-concurrency 1
         --team-name real --log-dir "$COOPER_RUN/logs")
   printf '%s\n' "${args[@]}" > "$COOPER_RUN/training-args.txt"
   python scripts/bench_compare.py "${args[@]}"

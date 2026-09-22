@@ -31,6 +31,7 @@ def main():
     code = f"{args.root}/code/cooperagents-{run_id}"
     run = f"{args.root}/runs/{run_id}"
     archive = subprocess.check_output(["git", "archive", "--format=tar", "HEAD", "src", "scripts", "pyproject.toml"], cwd=repo)
+    wall_time = "00:30:00" if args.mode == "dummy" else "02:00:00"
     metadata = dict(
         run_id=run_id,
         git_commit=sha,
@@ -40,6 +41,9 @@ def main():
         runtime="apptainer",
         partition=args.partition,
         cpus=4,
+        step_limit=1000 if args.mode == "real" else 8,
+        agent_time_limit=3600 if args.mode == "real" else None,
+        wall_time=wall_time,
         memory="16G",
     )
     buffer = io.BytesIO(archive)
@@ -84,7 +88,7 @@ def main():
                 "--ntasks=1",
                 "--cpus-per-task=4",
                 "--mem=16G",
-                "--time=00:30:00",
+                f"--time={wall_time}",
                 "--job-name=ca-dummy" if args.mode == "dummy" else "--job-name=ca-real",
                 f"--output={run}/logs/slurm-%j.out",
                 f"{code}/scripts/nlp_cluster/job.sh",
@@ -102,7 +106,7 @@ def main():
                 "--ntasks=1",
                 "--cpus-per-task=4",
                 "--mem=16G",
-                "--time=00:30:00",
+                f"--time={wall_time}",
                 f"{code}/scripts/nlp_cluster/job.sh",
             ]
         )

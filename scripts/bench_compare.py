@@ -45,7 +45,7 @@ def _load_env(path: str | None = None) -> None:
 MODEL = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-5.5-hao")
 
 
-def run_solo(item: WorkItem, *, run_name: str, logs_dir: Path, step_limit: int) -> dict:
+def run_solo(item: WorkItem, *, run_name: str, logs_dir: Path, step_limit: int, agent_time_limit: int | None = None) -> dict:
     feats = sorted(item.features)
     objective = "\n\n---\n\n".join(f"## Feature {f}\n\n{read_feature(item.repo, item.task_id, f)}" for f in feats)
     run_id = uuid.uuid4().hex[:8]
@@ -56,6 +56,7 @@ def run_solo(item: WorkItem, *, run_name: str, logs_dir: Path, step_limit: int) 
         features=feats,
         objective=objective,
         team_size=1,
+        agent_time_limit=agent_time_limit,
         max_agents=1,
         allow_spawn=False,
         shared_workspace=True,
@@ -180,6 +181,7 @@ def run_team(
     logs_dir: Path,
     step_limit: int,
     max_agents: int,
+    agent_time_limit: int | None = None,
     verify_fix: bool = False,
     spec_fidelity: bool = False,
     teammate_context: bool = False,
@@ -251,6 +253,7 @@ def run_team(
         features=feats,
         assignments=assignments,
         max_agents=max_agents,
+        agent_time_limit=agent_time_limit,
         shared_workspace=True,
         worker="mini_swe",
         model=MODEL,
@@ -330,6 +333,7 @@ def main() -> None:
     ap.add_argument("--pairs", nargs="*", default=None, help="repo:task:f1,f2 ...")
     ap.add_argument("--max-agents", type=int, default=3)
     ap.add_argument("--step-limit", type=int, default=30)
+    ap.add_argument("--agent-time-limit", type=int, default=0, help="per-worker wall-clock seconds; 0 disables")
     ap.add_argument("--concurrency", type=int, default=1, help="pairs to run in parallel")
     ap.add_argument("--eval-concurrency", type=int, default=4, help="parallel evals (lower under emulation)")
     ap.add_argument("--verify-fix", action="store_true", help="S5: team verify-and-fix integrator pass")
@@ -425,13 +429,15 @@ def main() -> None:
             return (item, s, t, 0.0)
         try:
             if not args.team_only and not solo_skip:
-                s = run_solo(item, run_name=args.solo_name, logs_dir=logs_dir, step_limit=args.step_limit)
+                s = run_solo(item, run_name=args.solo_name, logs_dir=logs_dir, step_limit=args.step_limit,
+                             agent_time_limit=args.agent_time_limit or None)
             if not args.solo_only and not team_skip:
                 t = run_team(
                 item,
                 run_name=args.team_name,
                 logs_dir=logs_dir,
                 step_limit=args.step_limit,
+                agent_time_limit=args.agent_time_limit or None,
                 max_agents=args.max_agents,
                 verify_fix=args.verify_fix,
                 spec_fidelity=args.spec_fidelity,
