@@ -90,3 +90,30 @@ free; provider billing was not independently checked.
 Record: `/nlp/scr/chency/projects/cooperagents/runs/20260922T040339Z-cooperbench-dff0f875`.
 Private credentials remain outside snapshots and records; file mode 600 and parent
 directory mode 700 were verified. No key is included in this document.
+
+## cb-mixture-36 budget and qualification
+
+The real launcher now uses **1000 steps and 3600 seconds per worker**, with
+non-thinking sampling unchanged. `bench_compare.py --agent-time-limit` reaches
+both solo and team workers. The deadline is checked before calls/actions; an
+in-flight operation can overrun it. Real Slurm jobs have a 2-hour outer limit to
+leave time for setup, final merge and evaluation. Submit one pair per job at this
+budget; do not pass all 36 pairs to a single 2-hour serial job.
+
+Qualification array **17548790** tests all 17 task images and every selected gold
+feature without any model calls, up to three jobs concurrently (4 CPU / 16 GB
+each). Reports: `/nlp/scr/chency/projects/cooperagents/runs/qualification-cb-mixture-36-20260922`.
+Source: `8ecd950`. SIFs and builds use job-owned node-local scratch because the
+persistent project filesystem has only about 13 GB free. Reports record each
+image's node, path and SHA256; these images are node-affine, not durable storage.
+Qualification was submitted; completion and pass counts must be checked before
+launching the two evaluation rounds.
+
+Read-only GCP inspection: changyu-dev is n4a-standard-8, ARM64, 8 vCPU / 32 GiB,
+currently TERMINATED (not started by this work). The user's 10-pair concurrency
+on that VM is a baseline, not a measured NLP limit. An initial NLP estimate is
+10 concurrent pair jobs at 2 CPU / 8 GB each, across nodes (20 CPU / 80 GB total).
+Typical john nodes expose 32 CPU and 120/240 GB; john17 exposes 20 CPU and 720 GB.
+Actual launch concurrency remains subject to scheduling, task-specific peak
+memory/compilation demand and external inference rate limits. Prior Go smoke
+MaxRSS was only 0.65–0.78 GB, which does not qualify the other toolchains.
