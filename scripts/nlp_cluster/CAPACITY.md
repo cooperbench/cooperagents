@@ -113,6 +113,13 @@ and coordinator then send `provider.only=["venice"]` and
 `provider.allow_fallbacks=false`, preserving `require_parameters`. This applies
 to newly launched processes only. The already-running `9eba828` smoke remains
 unpinned. As checked on 2026-09-22, Venice's Qwen3.5-9B endpoint advertises neither
-`min_p` nor `repetition_penalty`; resolve those profile fields before enabling
-strict Venice routing. Do not silently disable parameter validation or restart
+`min_p` nor `repetition_penalty`; the user approved omitting these neutral-valued fields. The local and VM
+private profiles now set `COOPER_PROVIDER_ONLY=venice` and omit both fields. Do not silently disable parameter validation or restart
 the current paid campaign to change providers.
+
+The real API probe on `changyu-dev` passed through both production client paths:
+worker 0.97 s and coordinator 0.54 s, both returned `OK` and reported provider
+`Venice`. Strict parameter checking and disabled reasoning were retained.
+Probe record: `/home/cameron_chen/cooperagents-smoke/runs/venice-probe-2a8e7f9.json`.
+These are connectivity/routing checks, not benchmark quality or load tests.
+The active ten-pair smoke keeps its already-loaded original profile.

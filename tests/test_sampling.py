@@ -19,8 +19,8 @@ def test_worker_coordinator_profile_parity(monkeypatch):
     profile = {
         "OPENAI_BASE_URL": "https://openrouter.ai/api/v1",
         "COOPER_TEMPERATURE_FORCE": "1.0", "COOPER_TOP_P": "0.95",
-        "COOPER_TOP_K": "20", "COOPER_MIN_P": "0.0",
-        "COOPER_PRESENCE_PENALTY": "1.5", "COOPER_REPETITION_PENALTY": "1.0",
+        "COOPER_TOP_K": "20",
+        "COOPER_PRESENCE_PENALTY": "1.5",
         "COOPER_REASONING_ENABLED": "false", "COOPER_REQUIRE_PARAMETERS": "true",
         "COOPER_PROVIDER_ONLY": "venice",
     }
@@ -55,13 +55,14 @@ def test_worker_coordinator_profile_parity(monkeypatch):
     monkeypatch.setattr("litellm.completion", worker_completion)
     worker._query_inner([{"role": "user", "content": "work"}])
     for payload in captured:
+        assert "min_p" not in payload and "repetition_penalty" not in payload
         assert {key: payload[key] for key in (
-            "model", "temperature", "top_p", "top_k", "min_p", "presence_penalty",
-            "repetition_penalty", "reasoning", "provider", "max_tokens",
+            "model", "temperature", "top_p", "top_k", "presence_penalty",
+            "reasoning", "provider", "max_tokens",
         )} == {
             "model": "qwen/qwen3.5-9b", "temperature": 1.0, "top_p": 0.95,
-            "top_k": 20, "min_p": 0.0, "presence_penalty": 1.5,
-            "repetition_penalty": 1.0, "reasoning": {"enabled": False},
+            "top_k": 20, "presence_penalty": 1.5,
+            "reasoning": {"enabled": False},
             "provider": {"require_parameters": True, "only": ["venice"], "allow_fallbacks": False}, "max_tokens": 4096,
         }
     client.close()
