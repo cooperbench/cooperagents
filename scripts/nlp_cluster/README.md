@@ -75,3 +75,18 @@ This qualifies the Go task27 image and complete runtime path, not every benchmar
 image or real provider behavior. Local focused checks: 29 passed, 2 optional
 integration skips; two repair-integrator tests also fail on clean upstream HEAD
 in this local environment (repair is disabled in this experiment).
+
+## Real API smoke (2026-09-21)
+
+Job **17548220**, john17, source **dff0f875**, completed with exit **0:0** in
+3m12s. OpenRouter authentication succeeded. The selected Qwen3.5-9B profile
+produced real tool calls; generation took 106s. Both workers reached the 30-step
+limit (neither submitted normally); the coordinator recorded four LOOP events.
+Official evaluation completed without infrastructure errors and scored **0/2**.
+This validates connectivity and execution, not satisfactory task performance.
+Do not interpret the harness's reported zero cost as proof that API calls were
+free; provider billing was not independently checked.
+
+Record: `/nlp/scr/chency/projects/cooperagents/runs/20260922T040339Z-cooperbench-dff0f875`.
+Private credentials remain outside snapshots and records; file mode 600 and parent
+directory mode 700 were verified. No key is included in this document.
