@@ -11,8 +11,12 @@ exercised in live runs; the test suite uses :class:`LocalEnv`.
 
 from __future__ import annotations
 
+import json
+import os
 import subprocess
+import time
 import uuid
+from pathlib import Path
 
 from cooperagents.env.base import Environment, ExecResult
 
@@ -76,6 +80,24 @@ class DockerEnv(Environment):
         return res.stdout.strip() if res.exit_code == 0 else ""
 
     def execute(self, command: str, *, timeout: int = 60) -> ExecResult:
+        # Diagnostic runs retain the exact command before an OOM can kill the
+        # process. Each call has its own file because the two agents run in threads.
+        diag_dir = os.getenv("COOPER_DIAG_DIR")
+        trace = None
+        if diag_dir:
+            trace = Path(diag_dir) / f"exec-{uuid.uuid4().hex}.json"
+            trace.parent.mkdir(parents=True, exist_ok=True)
+            trace.write_text(
+                json.dumps(
+                    {
+                        "pid": os.getpid(),
+                        "container": self.name,
+                        "started_at": time.time(),
+                        "timeout": timeout,
+                        "command": command,
+                    }
+                )
+            )
         try:
             # Non-login shell: a login shell (-l) sources /etc/profile which
             # RESETS PATH, hiding image-provided toolchains from the agent
@@ -96,9 +118,30 @@ class DockerEnv(Environment):
                 errors="replace",  # agents probing binaries emit non-UTF8 bytes
                 timeout=timeout,
             )
+            if trace is not None:
+                with trace.open("a") as handle:
+                    handle.write(
+                        "\n"
+                        + json.dumps(
+                            {
+                                "finished_at": time.time(),
+                                "returncode": proc.returncode,
+                                "stdout_chars": len(proc.stdout or ""),
+                                "stderr_chars": len(proc.stderr or ""),
+                            }
+                        )
+                    )
             return ExecResult(stdout=(proc.stdout or "") + (proc.stderr or ""), exit_code=proc.returncode)
         except subprocess.TimeoutExpired:
+            if trace is not None:
+                with trace.open("a") as handle:
+                    handle.write("\n" + json.dumps({"finished_at": time.time(), "error": "timeout"}))
             return ExecResult(stdout=f"[timed out after {timeout}s]", exit_code=124)
+        except BaseException as error:
+            if trace is not None:
+                with trace.open("a") as handle:
+                    handle.write("\n" + json.dumps({"finished_at": time.time(), "error": type(error).__name__}))
+            raise
 
     def read_file(self, path: str) -> str:
         res = self.execute(f"cat {path}")
