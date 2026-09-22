@@ -123,3 +123,44 @@ worker 0.97 s and coordinator 0.54 s, both returned `OK` and reported provider
 Probe record: `/home/cameron_chen/cooperagents-smoke/runs/venice-probe-2a8e7f9.json`.
 These are connectivity/routing checks, not benchmark quality or load tests.
 The active ten-pair smoke keeps its already-loaded original profile.
+
+### Final smoke outcome (2026-09-22 UTC)
+
+The original unpinned campaign completed with process exit 0 in 1:02:35.
+All ten official score files exist: reported feature passes 2/20 and pair
+passes 1/10; eight pair failures and one evaluator error. The evaluator's
+11.1% display excludes its error case; the fixed campaign denominator is ten.
+The Go Chi feature1 output says `no tests to run`, so its recorded pass does
+not establish feature correctness. Seven pairs failed with merge-conflict
+markers in submitted code; Hugging Face datasets had an empty/invalid patch.
+Jinja failed transferring its 186,254-byte patch. Upstream sandbox.py sends
+base64 content in a single shell argument (~248 KB), consistent with Linux's
+single-argument size limit; no benchmark or reference patch was changed.
+
+Workers: 19 submitted and one hit its time limit (DSPy feature4, 558 steps;
+pair duration 3,623.8 seconds). Coordinator: 60 events, 35 COLLISION and 25 LOOP.
+Process MaxRSS was 354,556 KiB (~346 MiB), excluding Docker-container memory.
+Observed whole-VM memory use reached 5.7 GiB at polling points; this is not a
+measured peak. No OOM/resource failure was observed. Zero harness cost is not
+zero API expenditure. No paid retries or full evaluation rounds were launched.
+The periodic monitor was paused after terminal results; VM remains running.
+This smoke demonstrates execution capacity, not reliable final-merge quality.
+
+### Remaining 26 pairs authorized (2026-09-22 UTC)
+
+Coordinator enablement was verified in the original exact launch arguments and
+worker trajectories, including a delivered instruction to inspect a failed
+`sed` edit and edit `mux.go` manually. Event counts alone are not the evidence
+of delivery. Coordinator activity does not imply successful final integration.
+
+The user then authorized the set difference of the 36-pair manifest and the
+fixed ten-pair smoke list: exactly 26 new pairs, no repeats. Campaign path:
+`/home/cameron_chen/cooperagents-smoke/runs/20260922-changyu-remaining26-75dc1b2`.
+Source `75dc1b2`, Venice-only routing, neutral unsupported sampling fields omitted,
+strict parameters enabled. Pair concurrency remains ten and evaluator concurrency
+two, with the same coordinator/completion gate and per-worker 1000-step/3600-second
+limits. Outer campaign timeout is five hours to accommodate queued pair waves.
+The original ten results and these 26 use different provider routing profiles;
+they must not be described as a homogeneous fixed-provider evaluation round.
+Existing integration failures remain part of the unchanged harness; no repair,
+benchmark-test edits, or paid retries are authorized by this continuation.
