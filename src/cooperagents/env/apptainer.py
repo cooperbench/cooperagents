@@ -49,6 +49,8 @@ class ApptainerEnv(Environment):
                 "--cleanenv",
                 "--no-mount",
                 "hostfs,bind-paths",
+                "--bind",
+                "/etc/resolv.conf:/etc/resolv.conf:ro",
                 "--home",
                 f"{self.root / 'fs/home/agent'}:/home/agent",
                 "--bind",

@@ -19,13 +19,18 @@ def main():
     image = image_name(task["repo"], task["task_id"])
     root = Path(os.environ["COOPER_SCRATCH"])
     root.mkdir(parents=True, exist_ok=True)
-    sif = root / "task.sif"
-    report = dict(task=task, image=image, node=socket.gethostname(), image_path=str(sif), features={})
+    sif = Path(os.environ.get("COOPER_SOURCE_SIF", str(root / "task.sif")))
+    report = dict(task=task, image=image, node=socket.gethostname(), image_path=str(sif),
+                  job_id=os.environ["SLURM_JOB_ID"], features={})
     started = time.monotonic()
     output.mkdir(parents=True, exist_ok=True)
     destination = output / f"{task['repo']}-{task['task_id']}.json"
     try:
-        subprocess.run(["apptainer", "pull", "--arch", "amd64", str(sif), f"docker://{image}"], check=True, timeout=5400)
+        if "COOPER_SOURCE_SIF" in os.environ:
+            if not sif.is_file():
+                raise FileNotFoundError(sif)
+        else:
+            subprocess.run(["apptainer", "pull", "--arch", "amd64", str(sif), f"docker://{image}"], check=True, timeout=5400)
         with sif.open("rb") as handle:
             report["sha256"] = hashlib.file_digest(handle, "sha256").hexdigest()
         from cooperbench.eval.sandbox import run_patch_test
