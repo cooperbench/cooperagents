@@ -1,7 +1,6 @@
 """The Docker command trace survives a failed agent process."""
 
 import json
-import subprocess
 
 import pytest
 
@@ -20,7 +19,7 @@ def test_execute_records_command_before_subprocess_failure(monkeypatch, tmp_path
         assert json.loads(traces[0].read_text())["command"] == "produce huge output"
         raise MemoryError("simulated OOM")
 
-    monkeypatch.setattr(subprocess, "run", fail)
+    monkeypatch.setattr("cooperagents.env.docker.run_limited", fail)
     with pytest.raises(MemoryError):
         env.execute("produce huge output")
     records = [json.loads(line) for line in next(tmp_path.glob("exec-*.json")).read_text().splitlines()]

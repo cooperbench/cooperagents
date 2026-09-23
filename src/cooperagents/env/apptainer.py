@@ -6,13 +6,13 @@ import base64
 import os
 import shlex
 import shutil
-import signal
 import subprocess
 import tempfile
 import threading
 from pathlib import Path
 
 from cooperagents.env.base import Environment, ExecResult
+from cooperagents.env.limited_process import run_limited
 
 
 class ApptainerEnv(Environment):
@@ -76,23 +76,14 @@ class ApptainerEnv(Environment):
             if self._closed:
                 raise RuntimeError("Apptainer environment is closed")
             script = f"cd {shlex.quote(self.repo_path)} || exit 125\n{command}"
-            with subprocess.Popen(
+            result, _ = run_limited(
                 [*self._argv, "bash", "-s"],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                errors="replace",
+                input_text=script,
+                timeout=timeout,
                 env=self._host_env,
-                start_new_session=True,
-            ) as proc:
-                try:
-                    stdout, _ = proc.communicate(script, timeout=timeout)
-                    return ExecResult(stdout, proc.returncode)
-                except subprocess.TimeoutExpired:
-                    os.killpg(proc.pid, signal.SIGKILL)
-                    stdout, _ = proc.communicate()
-                    return ExecResult(stdout + f"\n[timed out after {timeout}s]", 124)
+                new_session=True,
+            )
+            return result
 
     def read_file(self, path: str) -> str:
         result = self.execute(f"cat -- {shlex.quote(path)}")

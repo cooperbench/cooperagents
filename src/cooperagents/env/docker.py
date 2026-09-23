@@ -19,6 +19,7 @@ import uuid
 from pathlib import Path
 
 from cooperagents.env.base import Environment, ExecResult
+from cooperagents.env.limited_process import run_limited
 
 CONTAINER_REPO = "/workspace/repo"
 
@@ -110,12 +111,9 @@ class DockerEnv(Environment):
                 # giant commands (e.g. an agent writing a whole file via one
                 # heredoc) must be streamed over stdin instead.
                 argv, stdin = ["docker", "exec", "-i", "-w", self.repo_path, self.name, "bash", "-s"], command
-            proc = subprocess.run(
+            result, truncated = run_limited(
                 argv,
-                input=stdin,
-                capture_output=True,
-                text=True,
-                errors="replace",  # agents probing binaries emit non-UTF8 bytes
+                input_text=stdin,
                 timeout=timeout,
             )
             if trace is not None:
@@ -125,18 +123,13 @@ class DockerEnv(Environment):
                         + json.dumps(
                             {
                                 "finished_at": time.time(),
-                                "returncode": proc.returncode,
-                                "stdout_chars": len(proc.stdout or ""),
-                                "stderr_chars": len(proc.stderr or ""),
+                                "returncode": result.exit_code,
+                                "stdout_chars": len(result.stdout),
+                                "truncated": truncated,
                             }
                         )
                     )
-            return ExecResult(stdout=(proc.stdout or "") + (proc.stderr or ""), exit_code=proc.returncode)
-        except subprocess.TimeoutExpired:
-            if trace is not None:
-                with trace.open("a") as handle:
-                    handle.write("\n" + json.dumps({"finished_at": time.time(), "error": "timeout"}))
-            return ExecResult(stdout=f"[timed out after {timeout}s]", exit_code=124)
+            return result
         except BaseException as error:
             if trace is not None:
                 with trace.open("a") as handle:

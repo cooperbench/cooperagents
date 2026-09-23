@@ -28,13 +28,14 @@ for image, path in images.items():
     with open(path, 'rb') as handle:
         checksums[image] = hashlib.file_digest(handle, 'sha256').hexdigest()
 (Path(os.environ['COOPER_RUN']) / 'data/images.sha256.json').write_text(json.dumps(checksums, indent=2))
-metadata = json.loads((Path(os.environ['COOPER_RUN']) / 'metadata.json').read_text())
-qualification = metadata.get('qualification')
-if qualification and checksums.get(qualification['image']) != qualification['sha256']:
-    raise RuntimeError('Task image no longer matches its qualification report')
+expected_path = Path(os.environ['COOPER_RUN']) / 'images.sha256.json'
+if expected_path.exists() and checksums != json.loads(expected_path.read_text()):
+    raise RuntimeError('Task images no longer match their qualification reports')
 PYHASH
 cp scripts/nlp_cluster/patches/cooperbench-backend.patch "$COOPER_RUN/data/"
 sha256sum scripts/nlp_cluster/patches/cooperbench-backend.patch > "$COOPER_RUN/data/evaluator-patch.sha256"
+cp scripts/nlp_cluster/patches/cooperbench-transport.patch "$COOPER_RUN/data/"
+sha256sum scripts/nlp_cluster/patches/cooperbench-transport.patch >> "$COOPER_RUN/data/evaluator-patch.sha256"
 if [ "${COOPER_MODE:-dummy}" = dummy ]; then
   python scripts/nlp_cluster/dummy_smoke.py "$COOPER_RUN"
 else
@@ -47,7 +48,8 @@ else
   export ENV_FILE="$COOPER_CREDENTIAL_FILE"
   read -ra pairs <<< "${COOPER_PAIRS:?}"
   args=(--pairs "${pairs[@]}" --team-only --max-agents 2 --no-seed --coop-tools --git-share
-        --coordinator --completion-gate --step-limit 1000 --agent-time-limit 3600 --eval-concurrency 1
+        --coordinator --completion-gate --step-limit 1000 --agent-time-limit 3600
+        --concurrency "${COOPER_CONCURRENCY:-1}" --eval-concurrency "${COOPER_EVAL_CONCURRENCY:-1}" --resume
         --team-name real --log-dir "$COOPER_RUN/logs")
   printf '%s\n' "${args[@]}" > "$COOPER_RUN/training-args.txt"
   python scripts/bench_compare.py "${args[@]}"

@@ -1,0 +1,18 @@
+--- sandbox.py
++++ sandbox.py
+@@ -431,9 +431,12 @@
+ def _write_patch(sb: Sandbox, filename: str, content: str) -> None:
+     """Write a patch file to the sandbox."""
+     encoded = base64.b64encode(content.encode()).decode()
+-    result = sb.exec("bash", "-c", f"echo '{encoded}' | base64 -d > /patches/{filename}")
+-    if result.returncode != 0:
+-        raise RuntimeError(f"Failed to write {filename}: {result.stderr_read()}")
++    for offset in range(0, max(1, len(encoded)), 65536):
++        chunk = encoded[offset:offset + 65536]
++        redirect = ">" if offset == 0 else ">>"
++        result = sb.exec("bash", "-c", f"echo '{chunk}' | base64 -d {redirect} /patches/{filename}")
++        if result.returncode != 0:
++            raise RuntimeError(f"Failed to write {filename}: {result.stderr_read()}")
+ 
+ 
+ def _setup_branches(sb: Sandbox) -> dict:

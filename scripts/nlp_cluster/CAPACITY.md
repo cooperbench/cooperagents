@@ -183,3 +183,76 @@ huggingface_datasets_task:6252:4,6 and pallets_jinja_task:1621:2,9. Pillow4,5 ha
 an evaluator patch-transfer error. Recorded coordinator events total132
 (60 LOOP,72 COLLISION). Monitor paused; no paid retry launched. Both credit
 availability and memory pressure need resolution before an authorized retry.
+
+### NLP inference recovery (2026-09-22)
+
+User authorized a new profile using the existing NLP SGLang service from task
+01a0c830-28f6-71f3-b532-77098e005c0d. Private local profile:
+`configs/qwen35-9b-nlp.env` (gitignored, mode600), mirrored to VM
+`~/.config/cooperagents/qwen35-9b-nlp.env`. Model `qwen3.5-9b`, temperature1,
+top_p0.95,top_k20,presence_penalty1.5; nonthinking uses
+`chat_template_kwargs.enable_thinking=false`. No OpenRouter routing fields.
+Worker XML tool-call parsing and coordinator text completion were verified live.
+
+Campaign `/home/cameron_chen/cooperagents-smoke/runs/20260922-nlp-recovery-61843a2`
+retries nine pairs (four missing and five containing API-error workers) and
+re-evaluates original Jinja1465 f1f7 without regenerating its submission.
+Two separate pair subprocesses run concurrently, releasing process memory on
+completion; each retains1000steps/3600seconds. Evaluation concurrency1; outer8h.
+The exact manifest, per-pair logs/exit codes and launch script are in the run.
+A copied upstream evaluator changes only large-patch transfer to 65,536-character
+base64 chunks; unicode/large/empty byte preservation was verified. The exact
+transport diff is retained in `data/evaluator-transport.patch`; benchmark tests,
+reference patches, scoring and original generated submissions are unchanged.
+
+VM cannot directly reach john8:61472. Loopback-only SSH forwarding connects
+VM127.0.0.1:61473 through this Mac to john8:61472 via sc. This depends on Mac
+connectivity, and is not an independent VM-to-cluster route. The existing
+inference-service monitor remains paused; this campaign's monitor is active.
+
+### NLP recovery terminal results (2026-09-22 19:34 UTC check)
+
+Campaign ended after 1:55:36 with exit1 because Jinja1559 f5f8's process was
+OOM-killed (PID1334081, kernel timestamp18:43:04 UTC). MaxRSS31,531,228KiB,
+about30.1GiB, demonstrates single-pair growth independent of concurrency.
+Eight new pairs completed with16 submitted workers, no recorded worker API
+errors or limits; the ninth pair has no final output. New results scored
+4/16 available features,0/8 available pairs (planned denominators18 and9;
+the missing pair remains unscored). All four passing features are in Jinja1559
+f4f7 (f4), Jinja1559 f7f9 (f7), Jinja1621 f4f6 (f6), dirty_equals43 f7f9 (f7).
+Recorded coordinator events for the eight new pairs:48 COLLISION.
+
+The evaluation-only original Jinja1465 f1f7 now scored successfully at the
+infrastructure level,0/2features due to a syntax error. Nine total eval.json
+files have no evaluator error; the transport repair resolves the prior patch
+write failure. Generated code still fails on merge markers and semantic tests.
+Periodic monitor paused after final collection; no generation rerun initiated.
+
+### Three-round NLP campaign (2026-09-23)
+
+The planned homogeneous evaluation is three independent rounds over the same 36
+pairs. Each round runs ten pairs concurrently: 20 mini-SWE workers, with up to
+ten event-triggered coordinator requests. Three simultaneous rounds target 30
+pairs and 60 workers, plus up to 30 coordinators. This is a client workload
+target, not a measured or configured SGLang request limit. The existing
+Qwen3.5-9B service has five healthy replicas; stage the three round launches and
+watch queueing and latency before reaching the full target.
+
+Request 20 CPU, 128 GiB, eight hours per round, or 60 CPU and 384 GiB total.
+The node must also hold 17 qualified task SIFs and separate writable sandboxes;
+use node-local `/scr`. At planning time the shared `visionlab-dgx1` node had
+76 unallocated CPUs, about 493 GiB Slurm memory and 6.2 TiB scratch, and a
+long-running small allocation. Scheduler availability can change. Pin each
+round to the node where all 17 gold-feature image qualifications passed and
+verify image checksums at start. Use `--no-requeue` to prevent an automatic
+repeat of paid model calls after preemption. If that node has insufficient
+capacity, wait or requalify images on another eligible node; do not silently
+split a round across nodes.
+
+The model profile talks directly to the NLP router (no VM tunnel): model
+`qwen3.5-9b`, temperature 1, top-p 0.95, top-k 20, presence penalty 1.5,
+`chat_template_kwargs.enable_thinking=false`, with the same sampling for
+workers and coordinator. Each worker has 1,000 steps and 3,600 seconds;
+completion gate is on, repair and presub-merge are off. Official evaluation
+uses one evaluator at a time per round. The three outputs must stay separate;
+report each round's feature and pair pass rates over 72 and 36 respectively.
