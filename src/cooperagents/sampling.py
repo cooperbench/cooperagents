@@ -7,11 +7,12 @@ import os
 from typing import Any
 
 
-def sampling_kwargs(temperature: float | None = None) -> dict[str, Any]:
+def sampling_kwargs(temperature: float | None = None, *, worker: bool = False) -> dict[str, Any]:
     """Read explicit settings; FORCE keeps precedence over per-call temperature.
 
     Nonstandard OpenAI fields go in extra_body so both OpenAI SDK and LiteLLM's
-    OpenAI-compatible transport send them unchanged to OpenRouter.
+    OpenAI-compatible transport send them unchanged. Workers may override only
+    the chat-template thinking switch; coordinator calls keep the shared value.
     """
     result: dict[str, Any] = {}
     extra: dict[str, Any] = {}
@@ -42,10 +43,13 @@ def sampling_kwargs(temperature: float | None = None) -> dict[str, Any]:
                 raise ValueError(f"{key} must be true/false or 1/0")
             enabled = raw.lower() in ("true", "1")
             extra[field] = {"enabled" if field == "reasoning" else "require_parameters": enabled}
-    thinking = os.getenv("COOPER_CHAT_TEMPLATE_ENABLE_THINKING")
+    thinking_key = "COOPER_CHAT_TEMPLATE_ENABLE_THINKING"
+    if worker and os.getenv("COOPER_WORKER_CHAT_TEMPLATE_ENABLE_THINKING") is not None:
+        thinking_key = "COOPER_WORKER_CHAT_TEMPLATE_ENABLE_THINKING"
+    thinking = os.getenv(thinking_key)
     if thinking is not None:
         if thinking.lower() not in ("true", "false", "1", "0"):
-            raise ValueError("COOPER_CHAT_TEMPLATE_ENABLE_THINKING must be true/false or 1/0")
+            raise ValueError(f"{thinking_key} must be true/false or 1/0")
         extra["chat_template_kwargs"] = {"enable_thinking": thinking.lower() in ("true", "1")}
     provider = os.getenv("COOPER_PROVIDER_ONLY")
     if provider is not None:

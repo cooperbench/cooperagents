@@ -273,7 +273,7 @@ def build_model(
         model_kwargs["api_base"] = base_url
     if api_key:
         model_kwargs["api_key"] = api_key
-    model_kwargs.update(sampling_kwargs(temperature))
+    model_kwargs.update(sampling_kwargs(temperature, worker=True))
     # Short request timeout: the litellm/httpx default (~600s) makes an agent
     # hang 10 minutes on a dead pooled connection (socket to a scaled-down
     # serving container that vanished without RST) before retrying onto a

@@ -65,6 +65,12 @@ def test_worker_coordinator_profile_parity(monkeypatch):
             "reasoning": {"enabled": False},
             "provider": {"require_parameters": True, "only": ["venice"], "allow_fallbacks": False}, "max_tokens": 4096,
         }
+    monkeypatch.setenv("COOPER_CHAT_TEMPLATE_ENABLE_THINKING", "false")
+    monkeypatch.setenv("COOPER_WORKER_CHAT_TEMPLATE_ENABLE_THINKING", "true")
+    build_model("qwen/qwen3.5-9b")._query_inner([{"role": "user", "content": "work"}])
+    coordinator("stalled")
+    assert captured[-2]["chat_template_kwargs"] == {"enable_thinking": True}
+    assert captured[-1]["chat_template_kwargs"] == {"enable_thinking": False}
     client.close()
 
 
