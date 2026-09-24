@@ -28,10 +28,11 @@ from cooperagents.eval.cooperbench import run_eval, write_run_outputs
 from cooperagents.eval.dataset import WorkItem, image_name, load_subset, read_feature
 from cooperagents.harness import UnifiedHarness
 from cooperagents.types import Assignment, TeamSpec
+from cooperagents import verification as _verification
 
 
-def _load_env(path: str = ".env") -> None:
-    p = Path(path)
+def _load_env(path: str | None = None) -> None:
+    p = Path(path or os.getenv("ENV_FILE", ".env"))
     if not p.is_file():
         return
     for line in p.read_text().splitlines():
@@ -213,6 +214,9 @@ def run_team(
     claim_mode: bool = False,
     allow_spawn: bool = False,
     n_agents: int = 2,
+    completion_gate: bool = False,
+    presub_merge: bool = False,
+    repair_attempts: int = 1,
 ) -> dict:
     feats = sorted(item.features)
     if reverse_order:
@@ -281,6 +285,13 @@ def run_team(
         apply_chain_merge=apply_merge,
         claim_mode=claim_mode,
         allow_spawn_tool=allow_spawn,
+        repair_attempts=repair_attempts,
+        completion_gate=(
+            lambda env, _m=presub_merge: _verification.validate(env, merged=_m)
+        ) if (completion_gate or presub_merge) else None,
+        select_integration=(
+            lambda patches: max(range(len(patches)), key=lambda i: len(patches[i]))
+        ) if presub_merge else None,
     )
     harness = UnifiedHarness(bus=InMemoryBus(run_id), step_limit=step_limit, command_timeout=300)
     img = image_name(item.repo, item.task_id)
@@ -311,8 +322,11 @@ def read_eval(logs_dir: Path, run_name: str, setting: str, item: WorkItem) -> tu
 
 def main() -> None:
     _load_env()
+    global MODEL
+    MODEL = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-5.5-hao")
     ap = argparse.ArgumentParser()
-    ap.add_argument("--limit", type=int, default=2)
+    ap.add_argument("--limit", type=int, default=None, help="cap number of pairs (default: no limit)")
+    ap.add_argument("--subset", default="flash", help="CooperBench subset to load when --pairs is not given (default: flash; use 'all' for all 652 pairs)")
     ap.add_argument("--pairs", nargs="*", default=None, help="repo:task:f1,f2 ...")
     ap.add_argument("--max-agents", type=int, default=3)
     ap.add_argument("--step-limit", type=int, default=30)
@@ -355,6 +369,16 @@ def main() -> None:
     ap.add_argument("--repair-steps", type=int, default=25, help="step cap for the Q5 merge-repair agent")
     ap.add_argument("--repair-integrator", action="store_true",
                     help="Q5: health-gate the no-seed merge; run one repair agent only when broken")
+    ap.add_argument("--completion-gate", action="store_true",
+                    help="Reject each agent's finish until verification.validate() passes in the agent's own container "
+                         "(equivalent to ProgramBench --completion-gate; up to 3 rejections per agent)")
+    ap.add_argument("--presub-merge", action="store_true",
+                    help="Before finishing, each agent merges all teammate branches and the completion gate checks the "
+                         "merged tree; integration then selects the best member patch instead of re-merging "
+                         "(equivalent to ProgramBench --presub-merge; requires --git-share)")
+    ap.add_argument("--repair-attempts", type=int, default=1,
+                    help="Maximum sequential repair passes on the merged tree (stops early once healthy); "
+                         "equivalent to ProgramBench's up-to-2-repair-agents loop (default 1)")
     ap.add_argument("--coop-tools", action="store_true",
                     help="Q4: concurrent agents + bus send_message tool (CooperBench team-harness shape); use with --no-seed")
     ap.add_argument("--diversity-temp", type=float, default=None,
@@ -369,6 +393,7 @@ def main() -> None:
     ap.add_argument("--solo-name", default="cmp-solo")
     ap.add_argument("--team-name", default="cmp-team")
     ap.add_argument("--solo-only", action="store_true", help="skip the team arm (e.g. solo calibration sweeps)")
+    ap.add_argument("--resume", action="store_true", help="skip pairs that already have a result.json on disk")
     args = ap.parse_args()
 
     if args.pairs:
@@ -377,19 +402,30 @@ def main() -> None:
             repo, task, feats = spec.split(":")
             items.append(WorkItem(repo=repo, task_id=int(task), features=[int(x) for x in feats.split(",")]))
     else:
-        items = load_subset("flash")[: args.limit]
+        items = load_subset(args.subset)
+    if args.limit is not None:
+        items = items[: args.limit]
 
     logs_dir = Path(args.log_dir).resolve()
+
+    def _result_exists(run_name: str, setting: str, item: WorkItem) -> bool:
+        feature_str = "_".join(f"f{f}" for f in sorted(item.features))
+        return (logs_dir / run_name / setting / item.repo / str(item.task_id) / feature_str / "result.json").is_file()
 
     def do_pair(item):
         tag = f"{item.repo}/{item.task_id} {sorted(item.features)}"
         t0 = time.time()
         s = {"duration": 0.0, "steps": 0, "tokens": 0}
+        t = {"duration": 0.0, "steps": 0, "tokens": 0}
+        solo_skip = args.resume and not args.team_only and _result_exists(args.solo_name, "solo", item)
+        team_skip = args.resume and not args.solo_only and _result_exists(args.team_name, "team", item)
+        if solo_skip and (args.solo_only or team_skip):
+            print(f"  skip (done) {tag}", flush=True)
+            return (item, s, t, 0.0)
         try:
-            if not args.team_only:
+            if not args.team_only and not solo_skip:
                 s = run_solo(item, run_name=args.solo_name, logs_dir=logs_dir, step_limit=args.step_limit)
-            t = {"duration": 0.0, "steps": 0, "tokens": 0}
-            if not args.solo_only:
+            if not args.solo_only and not team_skip:
                 t = run_team(
                 item,
                 run_name=args.team_name,
@@ -430,6 +466,9 @@ def main() -> None:
                 claim_mode=args.claim_mode,
                 allow_spawn=args.allow_spawn,
                 n_agents=args.agents,
+                completion_gate=args.completion_gate,
+                presub_merge=args.presub_merge,
+                repair_attempts=args.repair_attempts,
             )
         except Exception as e:  # noqa: BLE001 - one bad pair (e.g. missing/arch-incompatible image) must not abort the run
             print(f"  SKIP {tag}: {type(e).__name__}: {str(e)[:160]}", flush=True)

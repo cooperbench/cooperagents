@@ -1086,29 +1086,30 @@ class UnifiedHarness:
                 env.execute("find . -path ./.git -prune -o \\( -name '*.rej' -o -name '*.orig' \\) -print0 2>/dev/null | xargs -0 -r rm -f")
                 _gate = _tree_health_behavioral if spec.behavioral_gate else _tree_health
                 if spec.repair_integrator and not _gate(env):
-                    repair_brief = _merge_repair_task(assignments_all)
-                    if spec.focused_repair:
-                        ev = _gather_merge_evidence(env)
-                        if ev:
-                            repair_brief += (
-                                "\n\nEVIDENCE — the harness already located the damage; fix THESE "
-                                "directly instead of searching:\n\n" + ev
-                            )
-                    # Q5: repair ON DEMAND — only when the merge demonstrably broke
-                    # the tree (conflict markers / partial applies → syntax errors).
-                    # One agent, in the merged container, with a focused brief.
-                    seeds["integrator"] = run_on_shared(
-                        env,
-                        "integrator",
-                        "integrator",
-                        repair_brief,
-                        None,
-                        step_limit=spec.repair_step_limit,
-                        time_limit_s=spec.repair_time_limit,
-                    )
-                    env.execute(
-                        "find . -path ./.git -prune -o \\( -name '*.rej' -o -name '*.orig' \\) -print0 2>/dev/null | xargs -0 -r rm -f"
-                    )
+                    for _repair_attempt in range(max(1, spec.repair_attempts)):
+                        repair_brief = _merge_repair_task(assignments_all)
+                        if spec.focused_repair:
+                            ev = _gather_merge_evidence(env)
+                            if ev:
+                                repair_brief += (
+                                    "\n\nEVIDENCE — the harness already located the damage; fix THESE "
+                                    "directly instead of searching:\n\n" + ev
+                                )
+                        # Run ONE repair agent per attempt; stop early if the tree recovers.
+                        seeds[f"integrator{_repair_attempt + 1}"] = run_on_shared(
+                            env,
+                            f"integrator{_repair_attempt + 1}",
+                            "integrator",
+                            repair_brief,
+                            None,
+                            step_limit=spec.repair_step_limit,
+                            time_limit_s=spec.repair_time_limit,
+                        )
+                        env.execute(
+                            "find . -path ./.git -prune -o \\( -name '*.rej' -o -name '*.orig' \\) -print0 2>/dev/null | xargs -0 -r rm -f"
+                        )
+                        if _gate(env):
+                            break
                 integrated_patch = strip_test_sections(env.git_diff())
             finally:
                 env.cleanup()
