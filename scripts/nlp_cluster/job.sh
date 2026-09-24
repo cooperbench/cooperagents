@@ -48,9 +48,10 @@ else
   export ENV_FILE="$COOPER_CREDENTIAL_FILE"
   read -ra pairs <<< "${COOPER_PAIRS:?}"
   args=(--pairs "${pairs[@]}" --team-only --max-agents 2 --no-seed --coop-tools --git-share
-        --coordinator --completion-gate --step-limit 1000 --agent-time-limit 3600
+        --completion-gate --step-limit 1000 --agent-time-limit 3600
         --concurrency "${COOPER_CONCURRENCY:-1}" --eval-concurrency "${COOPER_EVAL_CONCURRENCY:-1}" --resume
         --team-name real --log-dir "$COOPER_RUN/logs")
+  if [[ "${COOPER_COORDINATOR:-1}" == 1 ]]; then args+=(--coordinator); fi
   printf '%s\n' "${args[@]}" > "$COOPER_RUN/training-args.txt"
   python scripts/bench_compare.py "${args[@]}"
 fi

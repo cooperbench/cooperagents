@@ -112,6 +112,7 @@ def test_multi_task_qualification_requires_one_passing_node(monkeypatch, tmp_pat
             "08:00:00",
             "--round",
             "1",
+            "--no-coordinator",
             "--pairs",
             "go_chi_task:26:1,2",
             "go_chi_task:27:1,2",
@@ -121,6 +122,7 @@ def test_multi_task_qualification_requires_one_passing_node(monkeypatch, tmp_pat
     with tarfile.open(fileobj=archive, mode="w"):
         pass
     calls = []
+    uploaded_archive = None
 
     def output(argv, **kwargs):
         calls.append(argv)
@@ -133,13 +135,23 @@ def test_multi_task_qualification_requires_one_passing_node(monkeypatch, tmp_pat
         return "12345\n"
 
     monkeypatch.setattr(module.subprocess, "check_output", output)
-    monkeypatch.setattr(module.subprocess, "run", lambda argv, **kwargs: calls.append(argv))
+
+    def run(argv, **kwargs):
+        nonlocal uploaded_archive
+        calls.append(argv)
+        if argv[0] == "ssh" and "tar -xf -" in argv[-1]:
+            uploaded_archive = kwargs["input"]
+
+    monkeypatch.setattr(module.subprocess, "run", run)
     module.main()
     submission = next(c[-1] for c in calls if c[0] == "ssh" and "sbatch --parsable" in c[-1])
     assert "--nodelist=visionlab-dgx1" in submission
     assert "--cpus-per-task=20" in submission and "--mem=128G" in submission
     assert "--time=08:00:00" in submission and "--no-requeue" in submission
     assert "COOPER_CONCURRENCY=10" in submission
+    assert "COOPER_COORDINATOR=0" in submission
+    with tarfile.open(fileobj=io.BytesIO(uploaded_archive)) as snapshot:
+        assert b"coordinator = false" in snapshot.extractfile("_run/variant.toml").read()
     (reports / "27.json").write_text(
         json.dumps(
             dict(

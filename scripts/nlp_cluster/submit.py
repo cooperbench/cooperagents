@@ -27,6 +27,7 @@ def main():
     parser.add_argument("--eval-concurrency", type=int, default=1)
     parser.add_argument("--wall-time", help="Slurm time limit, HH:MM:SS")
     parser.add_argument("--round", type=int, choices=(1, 2, 3))
+    parser.add_argument("--no-coordinator", action="store_true")
     parser.add_argument("--cooperbench-dir", help="Immutable patched CooperBench checkout on the cluster")
     args = parser.parse_args()
     if args.cpus < 1 or args.concurrency < 1 or args.eval_concurrency < 1:
@@ -89,12 +90,17 @@ def main():
         concurrency=args.concurrency,
         eval_concurrency=args.eval_concurrency,
         round=args.round,
+        coordinator=not args.no_coordinator,
     )
     buffer = io.BytesIO(archive)
     with tarfile.open(fileobj=buffer, mode="a") as tar:
         records = {
             "metadata.json": json.dumps(metadata, indent=2),
-            "variant.toml": "workers = 2\ncoordinator = true\ncompletion_gate = true\npresub_merge = false\nrepair = false\n",
+            "variant.toml": (
+                "workers = 2\n"
+                f"coordinator = {str(not args.no_coordinator).lower()}\n"
+                "completion_gate = true\npresub_merge = false\nrepair = false\n"
+            ),
             "checkpoint.json": '{"applicable":false}',
         }
         if reports:
@@ -123,6 +129,7 @@ def main():
         COOPER_PAIRS=" ".join(args.pairs),
         COOPER_CONCURRENCY=str(args.concurrency),
         COOPER_EVAL_CONCURRENCY=str(args.eval_concurrency),
+        COOPER_COORDINATOR="0" if args.no_coordinator else "1",
         COOPER_CREDENTIAL_FILE=args.env_file or "",
     )
     command = (
