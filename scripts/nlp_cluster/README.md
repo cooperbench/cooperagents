@@ -2,6 +2,8 @@
 
 The six completed Qwen3.5-9B runs and their exact thinking settings are recorded
 in [the cb-mixture-36 result report](RESULTS_2026-09-23.md).
+The three subsequent [no-coordinator ablation rounds](RESULTS_2026-09-24_NO_COORDINATOR.md)
+use the same non-thinking worker profile and keep the completion gate.
 
 This path runs the existing two-worker team in independent, writable Apptainer
 sandboxes. Messaging uses the existing in-memory bus; Git sharing uses one
