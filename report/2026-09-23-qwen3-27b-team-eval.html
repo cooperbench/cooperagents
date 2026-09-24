@@ -160,7 +160,19 @@
 </table>
 <p class="key">T2 Δ = team-2 minus solo on the same pairs. Blue = above solo; red = below solo; grey = tied.</p>
 
-<h2>3. Key findings</h2>
+<h2>3. Run latency</h2>
+<p>Wall-clock duration per run (solo = 1 agent; team-2 = 2 parallel agents; team-3 = 3 parallel agents).</p>
+<table>
+  <thead><tr><th>setting</th><th>n</th><th>p50</th><th>p75</th><th>p90</th><th>p99</th><th>max</th></tr></thead>
+  <tbody>
+  <tr class="baseline"><td>solo</td><td class="num">652</td><td class="num">0.26 h</td><td class="num">0.47 h</td><td class="num">0.78 h</td><td class="num">1.45 h</td><td class="num">2.75 h</td></tr>
+  <tr><td>team-2</td><td class="num">652</td><td class="num">0.53 h</td><td class="num">0.79 h</td><td class="num">1.12 h</td><td class="num">2.02 h</td><td class="num">3.15 h</td></tr>
+  <tr><td>team-3</td><td class="num">250</td><td class="num">1.03 h</td><td class="num">1.51 h</td><td class="num">1.90 h</td><td class="num">3.24 h</td><td class="num">6.75 h</td></tr>
+  </tbody>
+</table>
+<p class="key">Duration = total wall-clock from run start to completion, including all parallel agents. Team-2 ≈ 2× solo at every percentile; team-3 ≈ 2× team-2 at the median but grows more slowly at the tail.</p>
+<ul class="findings">
+<h2>4. Key findings</h2>
 <ul class="findings">
   <li><strong>Team-2 beats solo by +2.5 pp overall.</strong> On 652 pairs,
     team-2 (63.7%) outperforms solo (61.2%). The gain is not uniform — it concentrates in
@@ -184,7 +196,7 @@
     team-2 moved from an apparent −0.9 pp deficit vs solo to +2.5 pp.</li>
 </ul>
 
-<h2>4. Failure analysis (team-2)</h2>
+<h2>5. Failure analysis (team-2)</h2>
 <table>
   <thead><tr><th>failure category</th><th>runs</th><th>notes</th></tr></thead>
   <tbody>
@@ -193,7 +205,7 @@
   </tbody>
 </table>
 
-<h2>5. Methodology</h2>
+<h2>6. Methodology</h2>
 <ul>
   <li><strong>Solo:</strong> one agent implements both features in a single container. The submitted patch is evaluated against both feature test suites.</li>
   <li><strong>Team-3 / Team-3:</strong> agents run in parallel on a shared git tree (shared-workspace mode). Each agent owns one feature. At completion, the harness produces a single integrated diff that is submitted for eval. Team-3 runs cover 3 features per run (triplets) — all 3 feature test suites must pass. This is a stricter criterion than the 2-feature pairs used by solo and team-2; direct pass-rate comparison between team-3 and solo is not valid.</li>
