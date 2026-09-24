@@ -40,25 +40,28 @@
   Measures pass rate for three settings across the full CooperBench dataset:
   <strong>solo</strong> (1 agent, both features), <strong>team-2</strong> (2 agents, shared git tree, one feature each),
   and <strong>team-3</strong> (3 agents, shared git tree, one feature each).
-  A pair passes only if <em>all</em> feature test suites pass against the submitted patch.
+  A run passes only if <em>all</em> feature test suites pass against the submitted patch.
+  Solo and team-2 runs cover <strong>2 features each</strong> (pairs); team-3 runs cover
+  <strong>3 features each</strong> (triplets). The pass criteria are not equivalent, so
+  team-3 results are presented standalone without a direct solo comparison.
 </p>
 
 <h2>1. Overall pass rates</h2>
 <table>
-  <thead><tr><th>setting</th><th>agents</th><th>pairs</th><th>passed</th><th>pass rate</th><th>Δ vs solo</th></tr></thead>
+  <thead><tr><th>setting</th><th>agents</th><th>features per run</th><th>runs</th><th>passed</th><th>pass rate</th><th>Δ vs solo</th></tr></thead>
   <tbody>
-  <tr class="baseline"><td>solo</td><td class="num">1</td><td class="num">652</td><td class="num">399 / 652</td>
+  <tr class="baseline"><td>solo</td><td class="num">1</td><td class="num">2</td><td class="num">652</td><td class="num">399 / 652</td>
     <td><div class="bar-wrap"><div class="bar" style="width:61.2%;background:#16a34a"></div><span>61.2%</span></div></td>
     <td class="num zero">—</td></tr>
-  <tr><td>team-2</td><td class="num">2</td><td class="num">652</td><td class="num">415 / 652</td>
+  <tr><td>team-2</td><td class="num">2</td><td class="num">2</td><td class="num">652</td><td class="num">415 / 652</td>
     <td><div class="bar-wrap"><div class="bar" style="width:63.7%;background:#2563eb"></div><span>63.7%</span></div></td>
     <td class="num pos">+2.5 pp</td></tr>
-  <tr><td>team-3</td><td class="num">3</td><td class="num">250</td><td class="num">124 / 250</td>
-    <td><div class="bar-wrap"><div class="bar" style="width:49.6%;background:#dc2626"></div><span>49.6%</span></div></td>
-    <td class="num neg">−11.6 pp</td></tr>
+  <tr><td>team-3</td><td class="num">3</td><td class="num">3</td><td class="num">250</td><td class="num">124 / 250</td>
+    <td><div class="bar-wrap"><div class="bar" style="width:49.6%;background:#9333ea"></div><span>49.6%</span></div></td>
+    <td class="num zero">N/A</td></tr>
   </tbody>
 </table>
-<p class="key">Green row = solo baseline. Team-3 covers a 250-pair subset; its Δ vs solo is computed on those same 250 pairs.</p>
+<p class="key">Green row = solo baseline (2-feature pairs). Solo and team-2 are directly comparable. Team-3 covers 3-feature triplets — a harder task (all 3 feature suites must pass), so Δ vs solo is not applicable.</p>
 
 <h2>2. Per-repository breakdown</h2>
 <table>
@@ -163,12 +166,13 @@
     team-2 (63.7%) outperforms solo (61.2%). The gain is not uniform — it concentrates in
     repos where features are separable (<code>dottxt_ai_outlines</code> +19 pp,
     <code>go_chi</code> +10 pp, <code>llama_index</code> +8 pp).</li>
-  <li><strong>Team-3 underperforms solo by −11.6 pp on its subset.</strong>
-    Adding a third agent hurts across nearly every repo. The shared-workspace model
-    with 3 agents increases coordination overhead and cross-feature interference beyond
-    the point where parallel implementation pays off.
-    This is consistent with the S1 hypothesis in the seam backlog: value from multi-agent
-    coordination comes from <em>separability</em>, not headcount.</li>
+  <li><strong>Team-3 achieves 49.6% on 250 triplets.</strong>
+    Each team-3 run requires all 3 feature test suites to pass — a harder criterion
+    than the 2-feature pairs used by solo and team-2. Direct pass-rate comparison
+    with solo is not valid. Within team-3, results degrade across most repos relative
+    to team-2 on 2-feature pairs, which is consistent with the S1 hypothesis in the
+    seam backlog: coordination overhead and cross-feature interference increase with
+    more agents on a shared tree, and the harder 3-feature pass criterion amplifies any failure.</li>
   <li><strong>Repos where team-2 hurts.</strong>
     <code>react_hook_form</code> (−8 pp), <code>samuelcolvin_dirty_equals</code> (−8 pp),
     and <code>dspy</code> (−6 pp) regress under team-2. These tasks likely involve
@@ -192,10 +196,10 @@
 <h2>5. Methodology</h2>
 <ul>
   <li><strong>Solo:</strong> one agent implements both features in a single container. The submitted patch is evaluated against both feature test suites.</li>
-  <li><strong>Team-2 / Team-3:</strong> agents run in parallel on a shared git tree (shared-workspace mode). Each agent owns one feature. At completion, the harness produces a single integrated diff that is submitted for eval.</li>
+  <li><strong>Team-3 / Team-3:</strong> agents run in parallel on a shared git tree (shared-workspace mode). Each agent owns one feature. At completion, the harness produces a single integrated diff that is submitted for eval. Team-3 runs cover 3 features per run (triplets) — all 3 feature test suites must pass. This is a stricter criterion than the 2-feature pairs used by solo and team-2; direct pass-rate comparison between team-3 and solo is not valid.</li>
   <li><strong>Pass criterion:</strong> a pair passes only if <em>all</em> feature test suites pass against the submitted patch in a fresh container.</li>
   <li><strong>Infrastructure error removal:</strong> eval results containing "no space left on device" or GPU package install I/O errors were deleted and re-evaluated. Final numbers reflect only runs where the eval container itself succeeded.</li>
-  <li><strong>Team-3 subset:</strong> team-3 covered 250 of the 652 pairs. The team-3 Δ vs solo is computed on those same 250 pairs.</li>
+  <li><strong>Team-3 subset:</strong> team-3 covered 250 triplets (3 features each). Solo and team-2 are not run on triplets, so no direct delta is reported for team-3.</li>
 </ul>
 
 <div class="caveat">
