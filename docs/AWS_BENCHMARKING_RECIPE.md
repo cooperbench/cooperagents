@@ -492,14 +492,14 @@ ENV_FILE=.env.qwen38aws python3.12 scripts/bench_compare.py \
   --completion-gate \
   --presub-merge \
   --resume \
-  --team-name qwen3-27b-t2
+  --team-name qwen3-27b-team-2
 ```
 
 **3-agent team:**
 ```bash
 ENV_FILE=.env.qwen38aws python3.12 scripts/bench_compare.py \
   --team-only \
-  --subset all \
+  --subset team3_250 \
   --step-limit 1000 \
   --concurrency 8 \
   --max-agents 3 \
@@ -513,15 +513,19 @@ ENV_FILE=.env.qwen38aws python3.12 scripts/bench_compare.py \
   --completion-gate \
   --presub-merge \
   --resume \
-  --team-name qwen3-27b-t3
+  --team-name qwen3-27b-team-3
 ```
 
 Detach (`Ctrl+B, D`). Check progress at any time:
 
 ```bash
-# Count completed pairs (target: 652)
-COUNT=$(find ~/cooperagents/logs/<run-name> -name "result.json" | wc -l)
+# 2-agent team (target: 652 pairs)
+COUNT=$(find ~/cooperagents/logs/qwen3-27b-team-2 -name "result.json" | wc -l)
 echo "$COUNT / 652 ($(( COUNT * 100 / 652 ))%)"
+
+# 3-agent team (target: 250 pairs — team3_250 subset)
+COUNT=$(find ~/cooperagents/logs/qwen3-27b-team-3 -name "result.json" | wc -l)
+echo "$COUNT / 250 ($(( COUNT * 100 / 250 ))%)"
 ```
 
 **Flags explained**
@@ -544,11 +548,15 @@ echo "$COUNT / 652 ($(( COUNT * 100 / 652 ))%)"
 | `--presub-merge` | — | Before finishing, each agent merges all teammate branches and the completion gate checks the merged tree; integration selects the best member patch instead of re-merging (equivalent to ProgramBench `--presub-merge`; requires `--git-share`) |
 | `--resume` | — | Skips pairs that already have a `result.json`; safe to restart after interruption |
 
-**Expected runtime**: ~38 hours on H100 for the full 652 pairs (measured; original 20h estimate was optimistic for this task set). Estimated cost at ~$21/hr spot: ~$800.
+**Expected runtime**: ~38 hours on H100 for the full 652 pairs without `--completion-gate`/`--presub-merge` (measured). With those flags enabled each agent incurs additional LLM calls at finish time; expect somewhat longer. Estimated cost at ~$21/hr spot: ~$800+.
 
 If the instance is interrupted by AWS, it stops (not terminates) due to the persistent spot configuration. Restart:
 ```bash
-aws ec2 start-instances --region <REGION> --instance-ids i-XXXXXXXX --profile <YOUR_AWS_PROFILE>
+# team-2 (us-west-2)
+aws ec2 start-instances --region us-west-2 --instance-ids i-01d392a1333ae7892 --profile admin-user
+
+# team-3 (ap-northeast-1)
+aws ec2 start-instances --region ap-northeast-1 --instance-ids i-0e1cdc3c5f8a621c4 --profile admin-user
 ```
 Then SSH back in, retrieve the new IP, restart the Fabric Manager check, relaunch the vLLM Docker container, reattach to the bench tmux window, and re-run the same command — `--resume` ensures no work is repeated.
 
@@ -559,8 +567,19 @@ Then SSH back in, retrieve the new IP, restart the Fabric Manager check, relaunc
 Run from your local machine once the benchmark is complete:
 
 ```bash
+# Solo
 rsync -avz -e "ssh -i ~/.ssh/<YOUR_KEY_PAIR>.pem" \
   ubuntu@<PUBLIC_IP>:~/cooperagents/logs/qwen3-27b-solo \
+  ~/Desktop/cooperator/cooperagents/logs/
+
+# Team-2 (run from the team-2 instance)
+rsync -avz -e "ssh -i ~/.ssh/<YOUR_KEY_PAIR>.pem" \
+  ubuntu@<PUBLIC_IP>:~/cooperagents/logs/qwen3-27b-team-2 \
+  ~/Desktop/cooperator/cooperagents/logs/
+
+# Team-3 (run from the team-3 instance)
+rsync -avz -e "ssh -i ~/.ssh/<YOUR_KEY_PAIR>.pem" \
+  ubuntu@<PUBLIC_IP>:~/cooperagents/logs/qwen3-27b-team-3 \
   ~/Desktop/cooperator/cooperagents/logs/
 ```
 
