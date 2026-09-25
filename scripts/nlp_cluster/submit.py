@@ -28,10 +28,12 @@ def main():
     parser.add_argument("--wall-time", help="Slurm time limit, HH:MM:SS")
     parser.add_argument("--round", type=int, choices=(1, 2, 3))
     parser.add_argument("--no-coordinator", action="store_true")
+    parser.add_argument("--repair-integrator", action="store_true")
+    parser.add_argument("--repair-attempts", type=int, default=1)
     parser.add_argument("--cooperbench-dir", help="Immutable patched CooperBench checkout on the cluster")
     args = parser.parse_args()
-    if args.cpus < 1 or args.concurrency < 1 or args.eval_concurrency < 1:
-        parser.error("CPUs and concurrency must be positive")
+    if args.cpus < 1 or args.concurrency < 1 or args.eval_concurrency < 1 or args.repair_attempts < 1:
+        parser.error("CPUs, concurrency, and repair attempts must be positive")
     if args.qualification_report and args.qualification_dir:
         parser.error("Choose one qualification source")
     reports = []
@@ -91,6 +93,8 @@ def main():
         eval_concurrency=args.eval_concurrency,
         round=args.round,
         coordinator=not args.no_coordinator,
+        repair_integrator=args.repair_integrator,
+        repair_attempts=args.repair_attempts if args.repair_integrator else 0,
     )
     buffer = io.BytesIO(archive)
     with tarfile.open(fileobj=buffer, mode="a") as tar:
@@ -99,7 +103,9 @@ def main():
             "variant.toml": (
                 "workers = 2\n"
                 f"coordinator = {str(not args.no_coordinator).lower()}\n"
-                "completion_gate = true\npresub_merge = false\nrepair = false\n"
+                "completion_gate = true\npresub_merge = false\n"
+                f"repair = {str(args.repair_integrator).lower()}\n"
+                f"repair_attempts = {args.repair_attempts if args.repair_integrator else 0}\n"
             ),
             "checkpoint.json": '{"applicable":false}',
         }
@@ -130,6 +136,8 @@ def main():
         COOPER_CONCURRENCY=str(args.concurrency),
         COOPER_EVAL_CONCURRENCY=str(args.eval_concurrency),
         COOPER_COORDINATOR="0" if args.no_coordinator else "1",
+        COOPER_REPAIR="1" if args.repair_integrator else "0",
+        COOPER_REPAIR_ATTEMPTS=str(args.repair_attempts),
         COOPER_CREDENTIAL_FILE=args.env_file or "",
     )
     command = (

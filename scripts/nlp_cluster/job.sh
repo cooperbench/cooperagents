@@ -52,6 +52,9 @@ else
         --concurrency "${COOPER_CONCURRENCY:-1}" --eval-concurrency "${COOPER_EVAL_CONCURRENCY:-1}" --resume
         --team-name real --log-dir "$COOPER_RUN/logs")
   if [[ "${COOPER_COORDINATOR:-1}" == 1 ]]; then args+=(--coordinator); fi
+  if [[ "${COOPER_REPAIR:-0}" == 1 ]]; then
+    args+=(--repair-integrator --repair-attempts "${COOPER_REPAIR_ATTEMPTS:-1}")
+  fi
   printf '%s\n' "${args[@]}" > "$COOPER_RUN/training-args.txt"
   python scripts/bench_compare.py "${args[@]}"
 fi
