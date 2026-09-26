@@ -8,7 +8,10 @@ without importing each other.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from cooperagents.env.artifact import Artifact
 
 
 @dataclass
@@ -28,6 +31,11 @@ class AgentResult:
     feature_id: int | None = None
     messages: list[dict[str, Any]] = field(default_factory=list)
     error: str | None = None
+    artifact: Artifact | None = None
+    """The typed contribution this agent produced (a ``DiffArtifact`` for code
+    runs, a ``StateArtifact`` for non-code runs). ``patch`` is derived from it
+    (``artifact.as_patch()``) so the git pipeline is unchanged; non-code run
+    modes read ``artifact`` directly instead of the patch."""
     segments: list[dict[str, Any]] | None = None
     """Full pre-compaction history: each entry {kind, messages} holds the raw
     turns a compaction discarded from ``messages`` (solver segments) or the
@@ -329,6 +337,21 @@ class TeamSpec:
     agents work fully INDEPENDENTLY (own container, base only) and an integrator
     (or a mechanical merge) combines their patches — the classic isolated-coop
     design. Both satisfy the own-container hard constraint."""
+    artifact_backend: str = "git"
+    """Contribution substrate: "git" (default — unified-diff patches, the code
+    benchmarks) or "state" (non-code benchmarks — each agent's contribution is a
+    StateArtifact collected off a StateEnv, combined by ``reducer`` instead of a
+    git merge). Selecting "state" routes the non-shared run() path through the
+    state reducer; the git integration path is untouched when this is "git"."""
+    toolset_factory: Any = None
+    """callable() -> ToolSet. When set, each agent is given this benchmark tool
+    set (search / submit_answer / typed actions) in place of bash/read_file/
+    write_file. Used with artifact_backend="state"."""
+    reducer: Any = None
+    """callable(list[AgentResult]) -> AgentResult. The non-code aggregation step
+    that replaces git integration: reduces the team's StateArtifacts to one
+    submitted result (best-of-N selection or lead-synthesis). Solo runs need no
+    reducer (the single agent's artifact is the submission)."""
 
     def seed_count(self) -> int:
         return len(self.assignments) if self.assignments else self.team_size

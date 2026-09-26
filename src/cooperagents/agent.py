@@ -20,6 +20,7 @@ from typing import Any
 from cooperagents.bus.base import TeamBus
 from cooperagents.env.base import Environment
 from cooperagents.llm import Action, LLMClient
+from cooperagents.tools import CODE_TOOL_NAMES, ToolSet
 from cooperagents.types import AgentResult
 
 # Tool catalog handed to the policy each step.  ``spawn_helper`` is appended
@@ -64,6 +65,7 @@ class Agent:
         keep_recent: int = 24,
         max_actions_per_turn: int = 12,
         finish_nudges: int = 3,
+        toolset: ToolSet | None = None,
     ) -> None:
         self.agent_id = agent_id
         self.role = role
@@ -80,6 +82,7 @@ class Agent:
         self.keep_recent = keep_recent
         self.max_actions_per_turn = max_actions_per_turn
         self.finish_nudges = finish_nudges
+        self.toolset = toolset
         self.messages: list[dict[str, Any]] = []
         self.cost = 0.0
         self.steps = 0
@@ -87,7 +90,13 @@ class Agent:
 
     @property
     def tools(self) -> list[dict[str, str]]:
-        return [*_BASE_TOOLS, _SPAWN_TOOL] if self.allow_spawn else list(_BASE_TOOLS)
+        base = list(_BASE_TOOLS)
+        if self.toolset is not None:
+            # A benchmark tool set replaces the code-editing tools; the
+            # coordination and finish tools are always kept.
+            base = [t for t in base if t["name"] not in CODE_TOOL_NAMES]
+            base = [*self.toolset.specs(), *base]
+        return [*base, _SPAWN_TOOL] if self.allow_spawn else base
 
     def _add(self, role: str, content: str) -> None:
         self.messages.append({"role": role, "content": content})
@@ -154,6 +163,10 @@ class Agent:
             rid = self.bus.spawn_request(requested_by=self.agent_id, task=str(args.get("task", "")), role=str(args.get("role", "helper")))
             self.spawn_requests.append(rid)
             return f"spawn requested ({rid})", False
+        if self.toolset is not None:
+            handled = self.toolset.dispatch(self.env, action)
+            if handled is not None:
+                return handled
         return f"unknown or disallowed tool: {tool}", False
 
     def _truncate(self, text: str) -> str:
@@ -201,27 +214,28 @@ class Agent:
                     self._add("user", self._truncate(observation))
                     if finished:
                         break
-                # Veto a finish with an empty diff: the model often "plans" an
-                # edit it never executed and quits with nothing.  Nudge it back
-                # to work a few times before accepting an empty submission.
-                if finished and self.finish_nudges > 0 and not self.env.git_diff().strip():
-                    self.finish_nudges -= 1
-                    finished = False
-                    self._add(
-                        "user",
-                        "Your git diff is EMPTY — you have not written any code yet. Implement the "
-                        "feature now with write_file/bash edits (do NOT create or edit test files), "
-                        "then finish.",
-                    )
+                # Veto a finish with an empty contribution: the model often
+                # "plans" an edit it never executed and quits with nothing.
+                # Nudge it back to work a few times before accepting it. The
+                # emptiness test and hint come from the environment's Artifact,
+                # so this works for both code (diff) and non-code (state) runs.
+                if finished and self.finish_nudges > 0:
+                    contribution = self.env.contribution()
+                    if contribution.is_empty():
+                        self.finish_nudges -= 1
+                        finished = False
+                        self._add("user", contribution.empty_hint)
         except Exception as e:  # noqa: BLE001 - surface any failure as a result
             status = "error"
             error = str(e)
 
+        contribution = self.env.contribution()
         return AgentResult(
             agent_id=self.agent_id,
             role=self.role,
             status=status,
-            patch=self.env.git_diff(),
+            patch=contribution.as_patch(),
+            artifact=contribution,
             cost=self.cost,
             steps=self.steps,
             feature_id=self.feature_id,

@@ -15,6 +15,9 @@ redis = ["redis>=5.0"]
 llm = ["litellm>=1.40", "openai>=1.40"]
 # The vendored mini-swe-agent worker (cooperagents.vendor.mini_swe).
 mini = ["litellm>=1.40", "jinja2>=3.1", "pydantic>=2.0", "tenacity>=8.0", "pyyaml>=6.0"]
+# Non-code benchmarks (state substrate). PlanCraft is a pip package; WorkBench is
+# imported from a sibling checkout (see docs/SCALING_BENCHMARKS.md), not installed.
+benchmarks = ["plancraft>=0.4"]
 dev = [
     "pytest>=8.0",
     "ruff>=0.6",
@@ -43,7 +46,10 @@ select = ["E", "F", "I", "UP", "B"]
 ignore = ["B008"]
 
 [tool.mypy]
-python_version = "3.11"
+# Target the interpreter the venv actually runs (CPython 3.12); numpy>=2.2 stubs
+# (pulled in by the optional plancraft benchmark) use 3.12-only `type` syntax and
+# fail to parse under an older target. requires-python stays >=3.11 for runtime.
+python_version = "3.12"
 ignore_missing_imports = true
 files = ["src/cooperagents"]
 exclude = "src/cooperagents/vendor/"

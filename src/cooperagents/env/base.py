@@ -13,6 +13,8 @@ from __future__ import annotations
 import abc
 from dataclasses import dataclass
 
+from cooperagents.env.artifact import Artifact, DiffArtifact
+
 
 @dataclass
 class ExecResult:
@@ -37,9 +39,22 @@ class Environment(abc.ABC):
     def write_file(self, path: str, content: str) -> None:
         """Write a file relative to ``repo_path``."""
 
-    @abc.abstractmethod
     def git_diff(self) -> str:
-        """Unified diff of the working tree vs. the base commit."""
+        """Unified diff of the working tree vs. the base commit.
+
+        Git-backed environments override this. Non-code environments leave it
+        as the empty default and instead override :meth:`contribution`.
+        """
+        return ""
+
+    def contribution(self) -> Artifact:
+        """The agent's contribution harvested from this environment.
+
+        The default is a git :class:`DiffArtifact`, so code environments and
+        the whole existing pipeline are byte-for-byte unchanged. Non-code
+        environments override this to return a :class:`StateArtifact`.
+        """
+        return DiffArtifact(self.git_diff())
 
     def cleanup(self) -> None:  # noqa: B027 - optional hook, not abstract
         """Tear the environment down."""

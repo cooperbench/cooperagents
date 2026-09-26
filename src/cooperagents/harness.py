@@ -1604,6 +1604,7 @@ class UnifiedHarness:
         lock = threading.Lock()
         live = 0
         total_agents = n_seed
+        toolset = spec.toolset_factory() if spec.toolset_factory is not None else None
 
         def worker(agent_id: str, role: str, task: str, feature_id: int | None, *, is_helper: bool) -> None:
             nonlocal live
@@ -1623,6 +1624,7 @@ class UnifiedHarness:
                     step_limit=self.step_limit,
                     cost_limit=self.cost_limit,
                     command_timeout=self.command_timeout,
+                    toolset=toolset,
                 )
                 result = agent.run()
             except Exception as e:  # noqa: BLE001 - never let a worker kill the run
@@ -1679,6 +1681,20 @@ class UnifiedHarness:
                 env.cleanup()
 
         duration = time.time() - start_time
+
+        # Non-code (state) runs have no git tree to merge: reduce the team's
+        # StateArtifacts to one submitted result via the configured reducer
+        # (best-of-N selection or lead-synthesis). Solo runs (one seed, no
+        # reducer) submit that single agent's artifact directly.
+        integrated: AgentResult | None = None
+        if spec.artifact_backend == "state":
+            ordered = [seeds[a.agent_id] for a in assignments if a.agent_id in seeds]
+            ordered += list(helpers.values())
+            if spec.reducer is not None and ordered:
+                integrated = spec.reducer(ordered)
+            elif len(ordered) == 1:
+                integrated = ordered[0]
+
         return RunResult(
             run_id=spec.run_id,
             repo=spec.repo,
@@ -1686,6 +1702,7 @@ class UnifiedHarness:
             features=sorted(spec.features),
             seeds=seeds,
             helpers=helpers,
+            integrated=integrated,
             duration_seconds=duration,
             metrics=coordination_metrics(bus.task_events(), final_tasks=bus.list_tasks()),
             spawn_metrics=spawn_metrics(bus.spawn_events()) if spawning else {},
