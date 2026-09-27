@@ -22,13 +22,13 @@ import time
 import uuid
 from pathlib import Path
 
+from cooperagents import verification as _verification
 from cooperagents.bus.memory import InMemoryBus
 from cooperagents.env.runtime import task_environment
 from cooperagents.eval.cooperbench import run_eval, write_run_outputs
 from cooperagents.eval.dataset import WorkItem, image_name, load_subset, read_feature
 from cooperagents.harness import UnifiedHarness
 from cooperagents.types import Assignment, TeamSpec
-from cooperagents import verification as _verification
 
 
 def _load_env(path: str | None = None) -> None:
@@ -219,6 +219,7 @@ def run_team(
     completion_gate: bool = False,
     presub_merge: bool = False,
     repair_attempts: int = 1,
+    record_trajectory: bool = False,
 ) -> dict:
     feats = sorted(item.features)
     if reverse_order:
@@ -303,7 +304,23 @@ def run_team(
         selector = _mechanical_selector(image_name(item.repo, item.task_id)) if select == "mechanical" else _judge_selector(spec_bundle)
     vols = ([f"cbs{run_id}:/cbshared"] if git_share else []) + ([f"cbt{run_id}:/workspace/shared"] if team_roles else [])
     vols = vols or None
-    res = harness.run(spec, env_factory=lambda _id, _i=img, _v=vols: task_environment(_i, volumes=_v), selector=selector)
+    from cooperagents.trajectory import Trajectory
+
+    trajectory = None
+    if record_trajectory:
+        if best_of_n != 1 or decompose or adaptive or not coop_tools:
+            raise ValueError("Trajectory collection requires a single coop-tools team")
+        pair_dir = logs_dir / run_name / "team" / item.repo / str(item.task_id) / "_".join(f"f{f}" for f in sorted(feats))
+        trajectory = Trajectory(pair_dir / "trajectory.jsonl.gz")
+        harness.trajectory = trajectory
+        trajectory.emit("harness", "pair_start", run_id=run_id, repo=item.repo, task_id=item.task_id, features=feats)
+    try:
+        res = harness.run(spec, env_factory=lambda _id, _i=img, _v=vols: task_environment(_i, volumes=_v), selector=selector)
+        if trajectory:
+            trajectory.emit("harness", "pair_end", agents={k: {"status": v.status, "steps": v.steps} for k, v in res.seeds.items()})
+    finally:
+        if trajectory:
+            trajectory.close()
     write_run_outputs(res, run_name=run_name, logs_dir=logs_dir, setting="team", model=MODEL)
     return {"duration": res.duration_seconds, "steps": res.total_steps, "tokens": 0, "helpers": len(res.helpers)}
 
@@ -329,7 +346,8 @@ def main() -> None:
     MODEL = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-5.5-hao")
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=None, help="cap number of pairs (default: no limit)")
-    ap.add_argument("--subset", default="flash", help="CooperBench subset to load when --pairs is not given (default: flash; use 'all' for all 652 pairs)")
+    ap.add_argument("--subset", default="flash",
+                    help="CooperBench subset to load when --pairs is not given (default: flash; use 'all' for all 652 pairs)")
     ap.add_argument("--pairs", nargs="*", default=None, help="repo:task:f1,f2 ...")
     ap.add_argument("--max-agents", type=int, default=3)
     ap.add_argument("--step-limit", type=int, default=30)
@@ -398,6 +416,7 @@ def main() -> None:
     ap.add_argument("--team-name", default="cmp-team")
     ap.add_argument("--solo-only", action="store_true", help="skip the team arm (e.g. solo calibration sweeps)")
     ap.add_argument("--resume", action="store_true", help="skip pairs that already have a result.json on disk")
+    ap.add_argument("--record-trajectory", action="store_true", help="append complete agent/coordinator I/O for replay")
     ap.add_argument("--skip-eval", action="store_true", help="write generation artifacts without scoring")
     args = ap.parse_args()
 
@@ -476,6 +495,7 @@ def main() -> None:
                 completion_gate=args.completion_gate,
                 presub_merge=args.presub_merge,
                 repair_attempts=args.repair_attempts,
+                record_trajectory=args.record_trajectory,
             )
         except Exception as e:  # noqa: BLE001 - one bad pair (e.g. missing/arch-incompatible image) must not abort the run
             print(f"  SKIP {tag}: {type(e).__name__}: {str(e)[:160]}", flush=True)

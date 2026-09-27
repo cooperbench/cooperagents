@@ -55,6 +55,10 @@ else
   if [[ "${COOPER_REPAIR:-0}" == 1 ]]; then
     args+=(--repair-integrator --repair-attempts "${COOPER_REPAIR_ATTEMPTS:-1}")
   fi
+  if [[ "${COOPER_COLLECT_TRAJECTORIES:-0}" == 1 ]]; then args+=(--record-trajectory --skip-eval); fi
   printf '%s\n' "${args[@]}" > "$COOPER_RUN/training-args.txt"
   python scripts/bench_compare.py "${args[@]}"
+  if [[ "${COOPER_COLLECT_TRAJECTORIES:-0}" == 1 ]]; then
+    python scripts/audit_trajectories.py "$COOPER_RUN"
+  fi
 fi

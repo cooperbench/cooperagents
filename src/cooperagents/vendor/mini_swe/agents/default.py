@@ -141,6 +141,7 @@ class DefaultAgent:
     ):
         """See the `AgentConfig` class for permitted keyword arguments."""
         self.config = config_class(**kwargs)
+        self.trace = None
         self.messages: list[dict] = []
         self.model = model
         self.env = env
@@ -176,6 +177,8 @@ class DefaultAgent:
 
     def add_messages(self, *messages: dict) -> list[dict]:
         self.logger.debug(messages)  # set log level to debug to see
+        if self.trace is not None:
+            self.trace("messages", messages=messages)
         self.messages.extend(messages)
         return list(messages)
 
@@ -197,6 +200,8 @@ class DefaultAgent:
         """Run step() until agent is finished. Returns dictionary with exit_status, submission keys."""
         self.extra_template_vars |= {"task": task, **kwargs}
         self.messages = []
+        if self.trace is not None:
+            self.trace("context", messages=[], reason="start")
         self.add_messages(
             self.model.format_message(role="system", content=self._render_template(self.config.system_template)),
             self.model.format_message(role="user", content=self._render_template(self.config.instance_template)),
@@ -318,6 +323,8 @@ class DefaultAgent:
         }
         self._close_current_segment("solver")
         self.messages = prefix + [stub] + [clip(m) for m in recent]
+        if self.trace is not None:
+            self.trace("context", messages=self.messages, reason="compaction")
         self._compaction_count += 1
         self.log(
             f"Emergency truncation #{self._compaction_count}: kept system+task+{len(recent)} recent messages"
@@ -358,6 +365,8 @@ class DefaultAgent:
         )
 
         self.messages = prefix + [summary_msg] + recent_turns
+        if self.trace is not None:
+            self.trace("context", messages=self.messages, reason="compaction")
         self._compaction_count += 1
         self.log(
             f"Compaction #{self._compaction_count}: {self._last_prompt_tokens} prompt tokens -> compacted "
@@ -444,6 +453,8 @@ class DefaultAgent:
         any) against the docker env.  Single-tool registration is much
         more reliable for smaller models than exposing two tools.
         """
+        from cooperagents.trajectory import record_call
+
         actions = message.get("extra", {}).get("actions", [])
         outputs = []
         for action in actions:
@@ -454,14 +465,14 @@ class DefaultAgent:
                 # harness wires host-side handlers; output goes back as a
                 # normal observation.
                 try:
-                    outputs.append(handler(action))
+                    outputs.append(record_call(self.trace, handler, action=action))
                 except Exception as e:  # noqa: BLE001 - a tool bug must not kill the agent
                     outputs.append({"output": f"tool {tool_name} failed: {e}", "returncode": 1, "exception_info": ""})
                 continue
             if tool_name == "send_message" and self.comm:
                 # Defensive: supported for legacy callers that still
                 # register send_message as a tool.
-                outputs.append(self._handle_send_message(action))
+                outputs.append(record_call(self.trace, self._handle_send_message, action=action))
                 continue
 
             cmd = action.get("command", "")
@@ -470,7 +481,8 @@ class DefaultAgent:
                 if sm_matches:
                     sm_outputs = []
                     for recipient, content, wait in sm_matches:
-                        r = self._handle_send_message({"recipient": recipient, "content": content, "wait": wait})
+                        r = record_call(self.trace, self._handle_send_message,
+                                        action={"recipient": recipient, "content": content, "wait": wait})
                         sm_outputs.append(r["output"])
                     remaining = _strip_send_message(cmd)
                     combined = "\n".join(sm_outputs)
@@ -483,6 +495,8 @@ class DefaultAgent:
                     continue
 
             outputs.append(self.env.execute(action))
+        if self.trace is not None:
+            self.trace("tool_results", actions=actions, outputs=outputs)
         return self.add_messages(*self.model.format_observation_messages(message, outputs, self.get_template_vars()))
 
     def _handle_send_message(self, action: dict) -> dict:

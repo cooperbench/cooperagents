@@ -29,6 +29,7 @@ from __future__ import annotations
 import threading
 import time
 from collections.abc import Callable
+from functools import partial
 from typing import Any
 
 from cooperagents.agent import Agent
@@ -211,7 +212,8 @@ class _Coordinator:
     Max 3 nudges per agent; a static fallback nudge is used when the LLM
     composer is unavailable (offline-safe)."""
 
-    def __init__(self, envs: dict[str, Environment], model: str | None = None) -> None:
+    def __init__(self, envs: dict[str, Environment], model: str | None = None, *, trace=None) -> None:
+        self.trace = trace
         self._envs = envs
         self._agents: dict[str, Any] = {}
         self._queues: dict[str, list[str]] = {}
@@ -219,15 +221,21 @@ class _Coordinator:
         self._model = model
         self._stop = threading.Event()
         self._fired: list[dict] = []  # attribution log
+        if self.trace is not None:
+            self.trace("coordinator_start", model=model, interval_seconds=20, max_nudges_per_agent=3)
 
     def register(self, agent_id: str, agent: Any) -> None:
         self._agents[agent_id] = agent
         self._queues.setdefault(agent_id, [])
         self._sent.setdefault(agent_id, 0)
+        if self.trace is not None:
+            self.trace("register", target=agent_id)
 
     def drain(self, agent_id: str) -> list[str]:
         q = self._queues.get(agent_id, [])
         out, q[:] = list(q), []
+        if self.trace is not None and out:
+            self.trace("delivery", target=agent_id, messages=out)
         return out
 
     def events(self) -> list[dict]:
@@ -253,25 +261,37 @@ class _Coordinator:
 
     def _detect(self, aid: str, agent) -> str | None:
         cmds = self._commands(agent)
+        if self.trace is not None:
+            self.trace("detect_input", target=aid, commands=cmds, messages=list(getattr(agent, "messages", [])))
         if len(cmds) >= 6:
             heads = [" ".join(c.split()[:2]) for c in cmds[-6:]]
             if max(heads.count(h) for h in set(heads)) >= 4:
                 return "LOOP"
         obs = [m.get("content", "")[:120] for m in getattr(agent, "messages", [])[-8:] if m.get("role") == "tool"]
+        if self.trace is not None:
+            self.trace("observations", target=aid, observations=obs)
         if len(obs) >= 4 and len(set(obs[-4:])) == 1 and ("rror" in obs[-1] or "returncode\": 1" in obs[-1]):
             return "STALL"
         try:
-            mine = set(self._envs[aid].execute("git status --porcelain | awk '{print $2}'").stdout.split())
+            mine = self._dirty_files(aid, self._envs[aid])
             for oid, oenv in self._envs.items():
                 if oid == aid:
                     continue
-                theirs = set(oenv.execute("git status --porcelain | awk '{print $2}'").stdout.split())
+                theirs = self._dirty_files(oid, oenv)
                 overlap = (mine & theirs) - {".cb_checks"}
                 if overlap:
                     return "COLLISION:" + ",".join(sorted(overlap)[:3])
         except Exception:  # noqa: BLE001
             pass
         return None
+
+    def _dirty_files(self, aid: str, env: Environment) -> set[str]:
+        from cooperagents.trajectory import record_call
+
+        result = record_call(self.trace, env.execute, command="git status --porcelain | awk '{print $2}'")
+        if self.trace is not None:
+            self.trace("dirty_files", target=aid, output=result.stdout)
+        return set(result.stdout.split())
 
     _FALLBACK = {
         "LOOP": "You appear to be repeating near-identical commands without progress. Step back: state "
@@ -290,8 +310,11 @@ class _Coordinator:
         try:
             from cooperagents.planner import _default_planner_complete
 
-            fn = _default_planner_complete(self._model, None, None)
+            fn = (_default_planner_complete(self._model, None, None, trace=self.trace)
+                  if self.trace is not None else _default_planner_complete(self._model, None, None))
             if fn is None:
+                if self.trace is not None:
+                    self.trace("fallback", reason="composer_unavailable", kind=kind, text=fallback)
                 return fallback
             tail = "\n".join(self._commands(agent)[-5:])[:1200]
             out = fn(
@@ -299,8 +322,12 @@ class _Coordinator:
                 "Write ONE corrective instruction to it (max 40 words, imperative, specific)."
             )
             out = (out or "").strip()
+            if not out and self.trace is not None:
+                self.trace("fallback", reason="empty_response", kind=kind, text=fallback)
             return out[:400] if out else fallback
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            if self.trace is not None:
+                self.trace("fallback", reason=type(exc).__name__, kind=kind, text=fallback)
             return fallback
 
     def run(self) -> None:
@@ -309,8 +336,12 @@ class _Coordinator:
                 if self._sent.get(aid, 0) >= 3:
                     continue
                 kind = self._detect(aid, agent)
+                if self.trace is not None:
+                    self.trace("decision", target=aid, kind=kind, sent=self._sent.get(aid, 0))
                 if kind:
                     nudge = self._compose(kind, agent)
+                    if self.trace is not None:
+                        self.trace("nudge", target=aid, kind=kind, text=f"[coordinator] {nudge}")
                     self._queues[aid].append(f"[coordinator] {nudge}")
                     self._sent[aid] += 1
                     self._fired.append({"agent": aid, "kind": kind.split(":")[0]})
@@ -606,7 +637,9 @@ class UnifiedHarness:
         command_timeout: int = 60,
         quiet: bool = True,
         on_event: Callable[[str], None] | None = None,
+        trajectory=None,
     ) -> None:
+        self.trajectory = trajectory
         self.bus = bus
         self.step_limit = step_limit
         self.cost_limit = cost_limit
@@ -709,6 +742,7 @@ class UnifiedHarness:
                     monitor=monitor,
                     git_share=spec.git_share,
                     completion_gate=spec.completion_gate,
+                    trace=partial(self.trajectory.emit, agent_id) if self.trajectory else None,
                 )
             agent = Agent(
                 agent_id=agent_id,
@@ -824,9 +858,13 @@ class UnifiedHarness:
                     _e.execute(f"git push -q shared HEAD:refs/heads/{_aid} 2>/dev/null || true")
                 gitsync = _GitShareSync(coop_envs)
                 threading.Thread(target=gitsync.run, daemon=True).start()
-            coordinator = _Coordinator(coop_envs, spec.model) if spec.coordinator else None
+            coordinator = (_Coordinator(coop_envs, spec.model,
+                                        trace=partial(self.trajectory.emit, "coordinator") if self.trajectory else None)
+                           if spec.coordinator else None)
+            coordinator_thread = None
             if coordinator is not None:
-                threading.Thread(target=coordinator.run, daemon=True).start()
+                coordinator_thread = threading.Thread(target=coordinator.run, daemon=True)
+                coordinator_thread.start()
 
 
             def collect_diff(env, aid: str) -> str:
@@ -964,6 +1002,10 @@ class UnifiedHarness:
                     gitsync.stop()
                 if coordinator is not None:
                     coordinator.stop()
+                    if self.trajectory is not None and coordinator_thread is not None:
+                        coordinator_thread.join(timeout=600)
+                        if coordinator_thread.is_alive():
+                            raise RuntimeError("Coordinator still running; trajectory is incomplete")
                 for _e in coop_envs.values():
                     _e.cleanup()
             for th in spawn_threads:

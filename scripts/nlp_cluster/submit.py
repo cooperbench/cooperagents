@@ -28,6 +28,7 @@ def main():
     parser.add_argument("--wall-time", help="Slurm time limit, HH:MM:SS")
     parser.add_argument("--round", type=int, choices=(1, 2, 3))
     parser.add_argument("--no-coordinator", action="store_true")
+    parser.add_argument("--collect-trajectories", action="store_true", help="record full I/O and skip official evaluation")
     parser.add_argument("--repair-integrator", action="store_true")
     parser.add_argument("--repair-attempts", type=int, default=1)
     parser.add_argument("--cooperbench-dir", help="Immutable patched CooperBench checkout on the cluster")
@@ -79,6 +80,8 @@ def main():
         git_commit=sha,
         cooperbench_commit="63b9d44d9f39a02fccf5bf0052db48a917a011fd",
         mode=args.mode,
+        collect_trajectories=args.collect_trajectories,
+        official_evaluation=not args.collect_trajectories,
         pairs=args.pairs,
         runtime="apptainer",
         partition=args.partition,
@@ -138,6 +141,7 @@ def main():
         COOPER_COORDINATOR="0" if args.no_coordinator else "1",
         COOPER_REPAIR="1" if args.repair_integrator else "0",
         COOPER_REPAIR_ATTEMPTS=str(args.repair_attempts),
+        COOPER_COLLECT_TRAJECTORIES="1" if args.collect_trajectories else "0",
         COOPER_CREDENTIAL_FILE=args.env_file or "",
     )
     command = (

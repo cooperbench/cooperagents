@@ -155,11 +155,16 @@ class LitellmModel:
             raise val
         return val
 
+    trace = None
+
     def _query_inner(self, messages: list[dict[str, str]], **kwargs):
+        from cooperagents.trajectory import record_call
+
         merged = self.config.model_kwargs | kwargs
         tools = merged.pop("_tools", self._tools)  # _tools=None: plain call (summarizer)
         try:
-            return litellm.completion(
+            return record_call(
+                self.trace, litellm.completion,
                 model=self.config.model_name,
                 messages=messages,
                 tools=tools,

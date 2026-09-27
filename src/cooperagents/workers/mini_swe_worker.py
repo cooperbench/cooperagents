@@ -60,7 +60,9 @@ class MiniSweEnvAdapter:
         deadline: float | None = None,
         completion_gate=None,
         gate_max_rejections: int = 3,
+        trace=None,
     ) -> None:
+        self.trace = trace
         self._env = env
         self._timeout = timeout
         self._guard_git = guard_git
@@ -97,8 +99,12 @@ class MiniSweEnvAdapter:
                 "returncode": 1,
                 "exception_info": "",
             }
-        res = self._env.execute(_ENV_PREFIX + command, timeout=timeout or self._timeout)
+        from cooperagents.trajectory import record_call
+
+        res = record_call(self.trace, self._env.execute, command=_ENV_PREFIX + command, timeout=timeout or self._timeout)
         output = {"output": res.stdout, "returncode": res.exit_code, "exception_info": ""}
+        if self.trace is not None:
+            self.trace("environment_output", action=action, command=_ENV_PREFIX + command, output=output)
         self._check_finished(output)
         return output
 
@@ -353,6 +359,7 @@ def run_mini_swe_agent(
     monitor=None,
     git_share: bool = False,
     completion_gate=None,
+    trace=None,
 ) -> AgentResult:
     """Run one mini-swe DefaultAgent on the shared ``env``; return an AgentResult.
 
@@ -367,6 +374,10 @@ def run_mini_swe_agent(
         with_task_board=task_board is not None,
         with_spawn=spawn_handler is not None,
     )
+    model.trace = trace
+    if trace is not None:
+        trace("agent_start", role=role, feature_id=feature_id, task=task, model=model_name, step_limit=step_limit,
+              time_limit_s=time_limit_s)
     import time as _time  # noqa: E402 - also imported below; needed before first use
     hb_dir = os.getenv("COOPER_HEARTBEAT_DIR")
     if hb_dir:
@@ -398,6 +409,7 @@ def run_mini_swe_agent(
             guard_git=guard_git,
             deadline=(_time.time() + time_limit_s) if time_limit_s else None,
             completion_gate=completion_gate,
+            trace=trace,
         ),
         agent_id=agent_id,
         system_template=system_template,
@@ -408,6 +420,7 @@ def run_mini_swe_agent(
         compaction_token_trigger=cfg.get("compaction_token_trigger", 28000),
         comm=comm,
     )
+    agent.trace = trace
     if poller is not None:
         agent.team_poller = poller  # per-step pushed context (TK2/Q9 live awareness)
     if monitor is not None:
@@ -433,9 +446,13 @@ def run_mini_swe_agent(
         exit_extra = agent.run(task=task)
         status = "submitted" if exit_extra.get("exit_status") == "Submitted" else "limit"
         _hb_end(status)
+        if trace is not None:
+            trace("agent_end", status=status, steps=agent.n_calls)
     except Exception as e:  # noqa: BLE001 - surface any failure as an error result
         status = "error"
         _hb_end("error")
+        if trace is not None:
+            trace("agent_end", status=status, steps=agent.n_calls, error=str(e))
         return AgentResult(
             agent_id=agent_id,
             role=role,

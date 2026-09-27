@@ -18,6 +18,9 @@ then passes the completion gate, collects and merges both worker changes, invoke
 the pinned official evaluator, and separately checks both official gold patches.
 Dummy benchmark scores do not measure model quality.
 
+For complete worker, coordinator and repair I/O collection without official scoring,
+see [trajectory collection and replay](../../docs/trajectory-collection.md).
+
 ## Prepared runtime
 
 Cluster root: `/nlp/scr/chency/projects/cooperagents`.

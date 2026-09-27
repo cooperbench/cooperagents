@@ -113,6 +113,7 @@ def test_multi_task_qualification_requires_one_passing_node(monkeypatch, tmp_pat
             "--round",
             "1",
             "--no-coordinator",
+            "--collect-trajectories",
             "--repair-integrator",
             "--repair-attempts",
             "2",
@@ -153,6 +154,7 @@ def test_multi_task_qualification_requires_one_passing_node(monkeypatch, tmp_pat
     assert "--time=08:00:00" in submission and "--no-requeue" in submission
     assert "COOPER_CONCURRENCY=10" in submission
     assert "COOPER_COORDINATOR=0" in submission
+    assert "COOPER_COLLECT_TRAJECTORIES=1" in submission
     assert "COOPER_REPAIR=1" in submission
     assert "COOPER_REPAIR_ATTEMPTS=2" in submission
     with tarfile.open(fileobj=io.BytesIO(uploaded_archive)) as snapshot:
