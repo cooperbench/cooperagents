@@ -48,10 +48,11 @@ else
   export ENV_FILE="$COOPER_CREDENTIAL_FILE"
   read -ra pairs <<< "${COOPER_PAIRS:?}"
   args=(--pairs "${pairs[@]}" --team-only --max-agents 2 --no-seed --coop-tools --git-share
-        --completion-gate --step-limit 1000 --agent-time-limit 3600
+        --completion-gate --step-limit "${COOPER_STEP_LIMIT:-1000}" --agent-time-limit "${COOPER_AGENT_TIME_LIMIT:-3600}"
         --concurrency "${COOPER_CONCURRENCY:-1}" --eval-concurrency "${COOPER_EVAL_CONCURRENCY:-1}" --resume
         --team-name real --log-dir "$COOPER_RUN/logs")
   if [[ "${COOPER_COORDINATOR:-1}" == 1 ]]; then args+=(--coordinator); fi
+  if [[ "${COOPER_COORDINATOR_NOTEBOOK:-1}" == 0 ]]; then args+=(--no-coordinator-notebook); fi
   if [[ "${COOPER_REPAIR:-0}" == 1 ]]; then
     args+=(--repair-integrator --repair-attempts "${COOPER_REPAIR_ATTEMPTS:-1}")
   fi

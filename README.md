@@ -104,6 +104,48 @@ We meet CooperBench where it already looks. Its `discover_runs` scans
 seed patches are scored; helper/member work reaches the score through the seed
 agent that integrates it.
 
+## Coordinator notebook experiment
+
+`scripts/bench_compare.py --coordinator --coop-tools --no-seed` enables a
+coordinator for a fixed mini-SWE team. It makes one synchronous decision before
+workers start, then checks progress and replies every 20 seconds. Workers first
+inspect code and discuss proposed edit regions; agreement is a prompt convention,
+not an execution barrier. Budget advice is chosen by the model.
+
+The coordinator writes a run-specific Markdown artifact. Each worker mounts its
+directory read-only at `/coordination`, outside the code checkout. A short
+version/path notice prompts workers to read `/coordination/notebook.md` with their
+existing shell tool. Updates replace the file atomically; the poller never pushes
+its full text. After context compaction, the next poll repeats the read reminder.
+Reading consumes normal worker budget and is not guaranteed by the harness.
+
+Add `--no-coordinator-notebook` for the same coordinator with messages only.
+ProgramBench's `coopgitc2` arm accepts the same flag. The implementation and
+[k=3 comparison plan](thoughts/shared/plans/2026-09-27-coordinator-notebook.md)
+are experimental; feature-score benefit has not yet been measured.
+
+Direct `UnifiedHarness` callers must supply a new `coordinator_notebook_path`
+named `notebook.md` and mount its parent directory in each worker factory, e.g.
+`task_environment(image, coordinator_dir=path.parent)`. The harness creates the
+initial file before calling the factories and verifies readability before workers
+start. Set `TeamSpec.coordinator_notebook=False` to omit the file and mounts.
+
+The optional `coordinator_complete(prompt) -> str` callback now returns strict
+JSON, rather than a plain nudge:
+
+```json
+{"actions":[{"action":"update_notebook","content":"# Coordination\n\nProposed ownership: pending replies."},{"action":"send_message","recipient":"agent1","content":"Report proposed files and interfaces before editing shared regions."}]}
+```
+
+`{"actions":[]}` is a valid no-op. Each batch allows one full notebook replacement
+(8,000 characters) and one message per worker (1,200 characters). Unknown fields
+or recipients reject the entire batch. A failed write preserves the old notebook
+and sends none of that batch's messages. Callback errors or invalid JSON fail the
+run after cleanup; default model failures are logged and retried on a later tick.
+Replies are retained until a valid decision succeeds. The first callback runs on
+the caller thread, later callbacks serially on the monitor thread; injected
+clients must support that usage and bound their own request duration.
+
 ## Testing
 
 ```bash

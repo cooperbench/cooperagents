@@ -194,10 +194,11 @@ class TeamSpec:
     agent's repo and reports changed files with the exact commands to view or
     take teammate code. System-prompt billing included (TK3 result)."""
     coordinator: bool = False
-    """C2: a live monitor thread over the parallel agents — mechanical
-    triggers (loop / stall / collision) decide WHEN to intervene, an LLM
-    composes the nudge text, injection rides the pushed team_poller channel.
-    Max 3 nudges/agent; offline-safe static fallbacks."""
+    """Coordinate a static mini-swe team with JSON decisions, worker replies
+    and budget observations, starting synchronously before the workers."""
+    coordinator_notebook: bool = True
+    """When coordinator is enabled, maintain a Markdown notebook mounted
+    read-only in each worker. False selects the same messages-only policy."""
     focused_repair: bool = False
     """R2: the harness gathers the merge-damage EVIDENCE (reject hunks,
     conflict-marker locations, failing check output, failing test tail) and

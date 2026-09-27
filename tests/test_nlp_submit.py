@@ -113,6 +113,11 @@ def test_multi_task_qualification_requires_one_passing_node(monkeypatch, tmp_pat
             "--round",
             "1",
             "--no-coordinator",
+            "--no-coordinator-notebook",
+            "--step-limit",
+            "30",
+            "--agent-time-limit",
+            "300",
             "--collect-trajectories",
             "--repair-integrator",
             "--repair-attempts",
@@ -154,12 +159,17 @@ def test_multi_task_qualification_requires_one_passing_node(monkeypatch, tmp_pat
     assert "--time=08:00:00" in submission and "--no-requeue" in submission
     assert "COOPER_CONCURRENCY=10" in submission
     assert "COOPER_COORDINATOR=0" in submission
+    assert "COOPER_COORDINATOR_NOTEBOOK=0" in submission
+    assert "COOPER_STEP_LIMIT=30" in submission and "COOPER_AGENT_TIME_LIMIT=300" in submission
     assert "COOPER_COLLECT_TRAJECTORIES=1" in submission
     assert "COOPER_REPAIR=1" in submission
     assert "COOPER_REPAIR_ATTEMPTS=2" in submission
     with tarfile.open(fileobj=io.BytesIO(uploaded_archive)) as snapshot:
         variant = snapshot.extractfile("_run/variant.toml").read()
-        assert b"coordinator = false" in variant
+        assert b"coordinator = false" in variant and b"coordinator_notebook = false" in variant
+        metadata = json.loads(snapshot.extractfile("_run/metadata.json").read())
+        assert metadata["step_limit"] == 30 and metadata["agent_time_limit"] == 300
+        assert not metadata["coordinator_notebook"]
         assert b"repair = true\nrepair_attempts = 2" in variant
     (reports / "27.json").write_text(
         json.dumps(

@@ -126,14 +126,19 @@ def _infer_topology(subs: list[SubTask]) -> str:
     return "sequential" if edges >= len(subs) - 1 else "hybrid"
 
 
-def _default_planner_complete(model, base_url, api_key, *, trace=None) -> Callable[[str], str] | None:
+def _default_planner_complete(model, base_url, api_key, *, trace=None, timeout=None, max_retries=None) -> Callable[[str], str] | None:
     try:
         from openai import OpenAI
 
         m = str(model or os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-5.5-hao"))
         b = str(base_url or os.getenv("AZURE_OPENAI_BASE_URL") or os.getenv("OPENAI_BASE_URL") or "")
         k = str(api_key or os.getenv("AZURE_OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY") or "")
-        client = OpenAI(base_url=b, api_key=k)
+        options = {}
+        if timeout is not None:
+            options["timeout"] = timeout
+        if max_retries is not None:
+            options["max_retries"] = max_retries
+        client = OpenAI(base_url=b, api_key=k, **options)
 
         def complete(prompt: str) -> str:
             kwargs = sampling_kwargs()

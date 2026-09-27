@@ -8,9 +8,11 @@ from types import SimpleNamespace
 import litellm
 import pytest
 
+from cooperagents.bus.memory import InMemoryBus
 from cooperagents.env.base import ExecResult
 from cooperagents.harness import _Coordinator
 from cooperagents.trajectory import Trajectory, record_call, replay
+from cooperagents.types import Assignment
 from cooperagents.vendor.mini_swe.agents.default import DefaultAgent
 from cooperagents.vendor.mini_swe.models.litellm_model import LitellmModel
 from cooperagents.workers.mini_swe_worker import run_mini_swe_agent
@@ -110,6 +112,7 @@ def test_actual_worker_finish_and_coordinator_io(monkeypatch, tmp_path):
     assert result.status == "submitted"
     import openai
 
+    response_text = json.dumps({"actions": [{"action": "send_message", "recipient": "agent1", "content": "nudge"}]})
     monkeypatch.setattr(
         openai,
         "OpenAI",
@@ -117,19 +120,22 @@ def test_actual_worker_finish_and_coordinator_io(monkeypatch, tmp_path):
             chat=SimpleNamespace(
                 completions=SimpleNamespace(
                     create=lambda **kwargs: SimpleNamespace(
-                        choices=[SimpleNamespace(message=SimpleNamespace(content="nudge"))],
-                        model_dump=lambda **kw: {"choices": [{"message": {"content": "nudge"}}]},
+                        choices=[SimpleNamespace(message=SimpleNamespace(content=response_text))],
+                        model_dump=lambda **kw: {"choices": [{"message": {"content": response_text}}]},
                     )
                 )
             )
         ),
     )
-    coordinator = _Coordinator({"agent1": env}, "dummy", trace=partial(journal.emit, "coordinator"))
+    coordinator = _Coordinator(
+        {"agent1": env},
+        "dummy",
+        assignments=[Assignment(agent_id="agent1", role="lead", task="feature")],
+        bus=InMemoryBus("test"),
+        trace=partial(journal.emit, "coordinator"),
+    )
     coordinator.register("agent1", SimpleNamespace(messages=result.messages))
-    # One actual monitor tick; force trigger without waiting twenty seconds.
-    coordinator._stop = SimpleNamespace(wait=lambda seconds, ticks=iter([False, True]): next(ticks))
-    coordinator._detect = lambda aid, agent: "LOOP"
-    coordinator.run()
+    coordinator.decide(initial=True)
     assert coordinator.drain("agent1") == ["[coordinator] nudge"]
     journal.close()
     state = replay(journal.path)

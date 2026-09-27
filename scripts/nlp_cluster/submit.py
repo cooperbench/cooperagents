@@ -28,6 +28,9 @@ def main():
     parser.add_argument("--wall-time", help="Slurm time limit, HH:MM:SS")
     parser.add_argument("--round", type=int, choices=(1, 2, 3))
     parser.add_argument("--no-coordinator", action="store_true")
+    parser.add_argument("--no-coordinator-notebook", action="store_true")
+    parser.add_argument("--step-limit", type=int, default=1000)
+    parser.add_argument("--agent-time-limit", type=int, default=3600)
     parser.add_argument("--collect-trajectories", action="store_true", help="record full I/O and skip official evaluation")
     parser.add_argument("--repair-integrator", action="store_true")
     parser.add_argument("--repair-attempts", type=int, default=1)
@@ -35,6 +38,8 @@ def main():
     args = parser.parse_args()
     if args.cpus < 1 or args.concurrency < 1 or args.eval_concurrency < 1 or args.repair_attempts < 1:
         parser.error("CPUs, concurrency, and repair attempts must be positive")
+    if args.step_limit < 1 or args.agent_time_limit < 1:
+        parser.error("Worker step and time limits must be positive")
     if args.qualification_report and args.qualification_dir:
         parser.error("Choose one qualification source")
     reports = []
@@ -86,8 +91,8 @@ def main():
         runtime="apptainer",
         partition=args.partition,
         cpus=args.cpus,
-        step_limit=1000 if args.mode == "real" else 8,
-        agent_time_limit=3600 if args.mode == "real" else None,
+        step_limit=args.step_limit if args.mode == "real" else 8,
+        agent_time_limit=args.agent_time_limit if args.mode == "real" else None,
         wall_time=wall_time,
         memory=args.memory,
         qualification=qualification,
@@ -96,6 +101,7 @@ def main():
         eval_concurrency=args.eval_concurrency,
         round=args.round,
         coordinator=not args.no_coordinator,
+        coordinator_notebook=not args.no_coordinator and not args.no_coordinator_notebook,
         repair_integrator=args.repair_integrator,
         repair_attempts=args.repair_attempts if args.repair_integrator else 0,
     )
@@ -106,6 +112,7 @@ def main():
             "variant.toml": (
                 "workers = 2\n"
                 f"coordinator = {str(not args.no_coordinator).lower()}\n"
+                f"coordinator_notebook = {str(not args.no_coordinator and not args.no_coordinator_notebook).lower()}\n"
                 "completion_gate = true\npresub_merge = false\n"
                 f"repair = {str(args.repair_integrator).lower()}\n"
                 f"repair_attempts = {args.repair_attempts if args.repair_integrator else 0}\n"
@@ -139,6 +146,9 @@ def main():
         COOPER_CONCURRENCY=str(args.concurrency),
         COOPER_EVAL_CONCURRENCY=str(args.eval_concurrency),
         COOPER_COORDINATOR="0" if args.no_coordinator else "1",
+        COOPER_COORDINATOR_NOTEBOOK="0" if args.no_coordinator_notebook else "1",
+        COOPER_STEP_LIMIT=str(args.step_limit),
+        COOPER_AGENT_TIME_LIMIT=str(args.agent_time_limit),
         COOPER_REPAIR="1" if args.repair_integrator else "0",
         COOPER_REPAIR_ATTEMPTS=str(args.repair_attempts),
         COOPER_COLLECT_TRAJECTORIES="1" if args.collect_trajectories else "0",
