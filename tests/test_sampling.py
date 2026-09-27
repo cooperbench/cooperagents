@@ -95,3 +95,73 @@ def test_sglang_nonthinking_profile(monkeypatch):
     extra = sampling_kwargs()["extra_body"]
     assert extra["chat_template_kwargs"] == {"enable_thinking": False}
     assert "provider" not in extra and "reasoning" not in extra
+
+
+def test_injected_coordinator_uses_separate_endpoint_and_records_once(monkeypatch, tmp_path):
+    import json
+    from functools import partial
+    from types import SimpleNamespace
+
+    from cooperagents.harness import _Coordinator
+    from cooperagents.trajectory import Trajectory, record_call, replay
+
+    for key in ("AZURE_OPENAI_BASE_URL", "AZURE_OPENAI_API_KEY", "COOPER_PROVIDER_ONLY"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://workers.test/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "worker-key")
+    seen = []
+
+    def respond(request):
+        seen.append((str(request.url), json.loads(request.content)))
+        return httpx.Response(200, json={
+            "id": "test", "object": "chat.completion", "created": 0,
+            "model": "test", "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "nudge"}}],
+        })
+
+    with (
+        openai.OpenAI(api_key="training-session", base_url="https://training.test/v1", max_retries=0,
+                      http_client=httpx.Client(transport=httpx.MockTransport(respond))) as training,
+        openai.OpenAI(api_key="worker-key", base_url="https://workers.test/v1", max_retries=0,
+                      http_client=httpx.Client(transport=httpx.MockTransport(respond))) as workers,
+    ):
+        journal = Trajectory(tmp_path / "trajectory.jsonl")
+        trace = partial(journal.emit, "coordinator")
+
+        def complete(prompt):
+            response = record_call(trace, training.chat.completions.create,
+                                   model="Qwen/Qwen3-1.7B", messages=[{"role": "user", "content": prompt}])
+            return response.choices[0].message.content
+
+        coordinator = _Coordinator({}, "fixed-worker-model", complete=complete, trace=trace)
+        coordinator.register("agent1", SimpleNamespace(messages=[]))
+        coordinator._detect = lambda *_: "LOOP"
+        coordinator._stop = SimpleNamespace(wait=lambda _, ticks=iter([False, True]): next(ticks))
+        coordinator.run()
+        assert coordinator.error is None
+        assert coordinator.drain("agent1") == ["[coordinator] nudge"]
+
+        def worker_completion(**kwargs):
+            assert kwargs.pop("api_base") == "https://workers.test/v1"
+            assert kwargs.pop("api_key") == "worker-key"
+            kwargs.pop("tools", None)
+            kwargs.pop("drop_params", None)
+            kwargs.pop("timeout", None)
+            return workers.chat.completions.create(**kwargs)
+
+        monkeypatch.setattr("litellm.completion", worker_completion)
+        # Workers and repair share this model builder; summaries use the same client's
+        # query boundary without tool definitions.
+        model = build_model("fixed-worker-model")
+        model._query_inner([{"role": "user", "content": "worker"}])
+        model._query_inner([{"role": "user", "content": "repair"}])
+        model._query_inner([{"role": "user", "content": "summary"}], _tools=None)
+        journal.close()
+
+    assert [url for url, _ in seen] == ["https://training.test/v1/chat/completions"] + ["https://workers.test/v1/chat/completions"] * 3
+    assert seen[0][1]["model"] == "Qwen/Qwen3-1.7B"
+    assert all(payload["model"] == "openai/fixed-worker-model" for _, payload in seen[1:])
+    rows = [json.loads(line) for line in journal.path.read_text().splitlines()]
+    assert sum(row["event"] == "request" for row in rows) == 1
+    assert sum(row["event"] == "response" for row in rows) == 1
+    assert {"decision", "nudge", "delivery"} <= {row["event"] for row in rows}
+    assert not replay(journal.path)["pending_calls"]

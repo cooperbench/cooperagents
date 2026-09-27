@@ -703,12 +703,12 @@ def test_repair_integrator_runs_only_when_merge_broken():
             "agent1": [Action(tool="write_file", args={"path": "mod.py", "content": "X = 1\n"}), Action(tool="finish")],
             # agent2 writes a broken file that the mechanical merge will keep
             "agent2": [Action(tool="write_file", args={"path": "bad.py", "content": "def f(:\n"}), Action(tool="finish")],
-            "integrator": [Action(tool="write_file", args={"path": "bad.py", "content": "def f():\n    return 1\n"}),
+            "integrator1": [Action(tool="write_file", args={"path": "bad.py", "content": "def f():\n    return 1\n"}),
                            Action(tool="finish")],
         }
     )
     res = UnifiedHarness(bus=InMemoryBus("rq5")).run(spec, env_factory=lambda _id: LocalEnv.fresh(), llm=llm)
-    assert "integrator" in res.seeds  # gate fired -> repair ran
+    assert "integrator1" in res.seeds  # gate fired -> repair ran
     assert "def f():" in res.integrated.patch  # repaired content shipped
 
 
@@ -734,7 +734,7 @@ def test_repair_integrator_skipped_when_merge_clean():
         }
     )
     res = UnifiedHarness(bus=InMemoryBus("rq5c")).run(spec, env_factory=lambda _id: LocalEnv.fresh(), llm=llm)
-    assert "integrator" not in res.seeds  # clean merge -> no repair cost
+    assert "integrator1" not in res.seeds  # clean merge -> no repair cost
     assert "a.py" in res.integrated.patch and "b.py" in res.integrated.patch
 
 
@@ -759,12 +759,12 @@ def test_no_seed_merge_conflict_falls_back_and_repairs():
         {
             "agent1": [Action(tool="write_file", args={"path": "shared.py", "content": "MODE = 'alpha'\n"}), Action(tool="finish")],
             "agent2": [Action(tool="write_file", args={"path": "shared.py", "content": "def f(:\n"}), Action(tool="finish")],
-            "integrator": [Action(tool="write_file", args={"path": "shared.py", "content": "MODE = 'alpha'\ndef f():\n    return MODE\n"}),
+            "integrator1": [Action(tool="write_file", args={"path": "shared.py", "content": "MODE = 'alpha'\ndef f():\n    return MODE\n"}),
                            Action(tool="finish")],
         }
     )
     res = UnifiedHarness(bus=InMemoryBus("rq51")).run(spec, env_factory=lambda _id: LocalEnv.fresh(), llm=llm)
-    assert "integrator" in res.seeds
+    assert "integrator1" in res.seeds
     assert "def f():" in res.integrated.patch
 
 
@@ -969,3 +969,224 @@ def test_team_roles_uses_lead_tree_as_submission():
     # lead-only submission: agent2's demo file must NOT be in the integrated patch
     assert "NOTES_agent1.md" in res.integrated.patch
     assert "NOTES_agent2.md" not in res.integrated.patch
+
+
+def test_injected_coordinator_prompt_and_default_fallback(monkeypatch):
+    from types import SimpleNamespace
+
+    import pytest
+
+    from cooperagents.harness import _Coordinator
+
+    agent = SimpleNamespace(messages=[
+        {"role": "assistant", "tool_calls": [{"function": {"arguments": '{"command": "cat file"}'}}]}
+    ] * 7)
+    prompts = []
+
+    def complete(prompt):
+        prompts.append(prompt)
+        return "  " + "x" * 450 + "  "
+
+    c = _Coordinator({}, complete=complete)
+    assert c._compose("LOOP", agent) == "x" * 400
+    assert prompts == [
+        "An agent shows this issue: LOOP. Its recent commands:\n"
+        + "\n".join(["cat file"] * 5)
+        + "\n\nWrite ONE corrective instruction to it (max 40 words, imperative, specific)."
+    ]
+    for invalid in (None, "", "  ", 42):
+        with pytest.raises(ValueError, match="non-empty text"):
+            _Coordinator({}, complete=lambda _, value=invalid: value)._compose("LOOP", agent)
+    for response in (None, ""):
+        monkeypatch.setattr("cooperagents.planner._default_planner_complete", lambda *a, value=response: lambda _: value)
+        assert _Coordinator({})._compose("LOOP", agent) == c._FALLBACK["LOOP"]
+
+    def fail(_):
+        raise ConnectionError("offline")
+
+    monkeypatch.setattr("cooperagents.planner._default_planner_complete", lambda *a: fail)
+    assert _Coordinator({})._compose("LOOP", agent) == c._FALLBACK["LOOP"]
+    with pytest.raises(ConnectionError, match="offline"):
+        _Coordinator({}, complete=fail)._compose("LOOP", agent)
+
+
+def test_injected_coordinator_rejects_unsupported_modes():
+    from dataclasses import replace
+
+    import pytest
+
+    valid = replace(_features_spec(), worker="mini_swe", shared_workspace=True, coop_tools=True, coordinator=True)
+    changes = [
+        {"coordinator": False}, {"shared_workspace": False}, {"coop_tools": False},
+        {"worker": "builtin"}, {"team_roles": True}, {"adaptive": True}, {"decompose": True}, {"best_of_n": 2},
+    ]
+    for change in changes:
+        with pytest.raises(ValueError, match="coordinator_complete requires"):
+            UnifiedHarness(coordinator_complete=lambda _: "nudge").run(
+                replace(valid, **change), env_factory=lambda _: pytest.fail("must reject before constructing envs")
+            )
+    with pytest.raises(TypeError, match="must be callable"):
+        UnifiedHarness(coordinator_complete="invalid")
+
+
+def test_injected_failure_propagates_and_cleans_all_envs(monkeypatch):
+    from dataclasses import replace
+    from types import SimpleNamespace
+
+    import pytest
+
+    from cooperagents.env.base import ExecResult
+    from cooperagents.harness import _Coordinator
+    from cooperagents.types import AgentResult
+
+    created, cleaned = [], []
+    failure = ConnectionError("coordinator endpoint failed")
+    original_run = _Coordinator.run
+
+    def tick(coordinator):
+        coordinator.register("agent1", SimpleNamespace(messages=[]))
+        coordinator._detect = lambda *_: "LOOP"
+        coordinator._stop = SimpleNamespace(wait=lambda _, ticks=iter([False, True]): next(ticks), set=lambda: None)
+        original_run(coordinator)
+
+    def env_factory(aid):
+        created.append(aid)
+        return SimpleNamespace(
+            execute=lambda *a, **kw: ExecResult("", 0), git_diff=lambda: "",
+            cleanup=lambda: cleaned.append(aid),
+        )
+
+    def worker(env, *, agent_id, role, **kwargs):
+        return AgentResult(agent_id=agent_id, role=role, status="submitted")
+
+    def complete(_):
+        raise failure
+
+    monkeypatch.setattr(_Coordinator, "run", tick)
+    monkeypatch.setattr("cooperagents.workers.mini_swe_worker.run_mini_swe_agent", worker)
+    spec = replace(_features_spec(), worker="mini_swe", shared_workspace=True, coop_tools=True, coordinator=True)
+    with pytest.raises(RuntimeError, match="Coordinator failed") as exc:
+        UnifiedHarness(coordinator_complete=complete).run(spec, env_factory=env_factory)
+    assert exc.value.__cause__ is failure
+    assert sorted(created) == sorted(cleaned) == ["agent1", "agent2"]
+
+
+def test_injected_coordinator_waits_for_inflight_request():
+    import threading
+    from types import SimpleNamespace
+
+    from cooperagents.harness import _Coordinator
+
+    started, release, returned = threading.Event(), threading.Event(), threading.Event()
+
+    def complete(_):
+        started.set()
+        assert release.wait(2)
+        return "nudge"
+
+    coordinator = _Coordinator({}, complete=complete)
+    coordinator.register("agent1", SimpleNamespace(messages=[]))
+    coordinator._detect = lambda *_: "LOOP"
+    real_stop = coordinator._stop
+    ticks = iter([False])
+    coordinator._stop = SimpleNamespace(wait=lambda seconds: next(ticks, True), set=real_stop.set)
+    thread = threading.Thread(target=coordinator.run)
+    thread.start()
+    assert started.wait(2)
+
+    def finish():
+        coordinator.finish(thread)
+        returned.set()
+
+    joiner = threading.Thread(target=finish)
+    joiner.start()
+    try:
+        assert real_stop.wait(2)
+        assert not returned.is_set()
+    finally:
+        release.set()
+        thread.join(2)
+        joiner.join(2)
+    assert returned.is_set() and not thread.is_alive()
+
+
+def test_injected_coordinator_join_timeout_is_error():
+    from types import SimpleNamespace
+
+    import pytest
+
+    from cooperagents.harness import _Coordinator
+
+    deadlines = []
+    coordinator = _Coordinator({}, complete=lambda _: "nudge")
+    with pytest.raises(RuntimeError, match="still running"):
+        coordinator.finish(SimpleNamespace(join=lambda timeout: deadlines.append(timeout), is_alive=lambda: True))
+    assert deadlines == [600]
+
+
+def test_coop_setup_and_cleanup_failures_release_other_envs(monkeypatch):
+    from dataclasses import replace
+    from types import SimpleNamespace
+
+    import pytest
+
+    from cooperagents.env.base import ExecResult
+    from cooperagents.harness import _Coordinator
+    from cooperagents.types import AgentResult
+
+    cleaned = []
+    spec = replace(_features_spec(), worker="mini_swe", shared_workspace=True, coop_tools=True, coordinator=True)
+
+    def partial_factory(aid):
+        if aid == "agent2":
+            raise RuntimeError("creation failed")
+        return SimpleNamespace(cleanup=lambda: cleaned.append(aid))
+
+    with pytest.raises(RuntimeError, match="creation failed"):
+        UnifiedHarness(coordinator_complete=lambda _: "nudge").run(spec, env_factory=partial_factory)
+    assert cleaned == ["agent1"]
+    cleaned.clear()
+
+    def env_factory(aid):
+        def cleanup():
+            cleaned.append(aid)
+            if aid == "agent2":
+                raise RuntimeError("cleanup failed")
+        return SimpleNamespace(execute=lambda *a, **kw: ExecResult("", 0), git_diff=lambda: "", cleanup=cleanup)
+
+    def worker(env, *, agent_id, role, **kwargs):
+        return AgentResult(agent_id=agent_id, role=role, status="submitted")
+
+    monkeypatch.setattr("cooperagents.workers.mini_swe_worker.run_mini_swe_agent", worker)
+    monkeypatch.setattr(_Coordinator, "finish", lambda *a: (_ for _ in ()).throw(RuntimeError("join failed")))
+    with pytest.raises(RuntimeError, match="cleanup failed"):
+        UnifiedHarness(coordinator_complete=lambda _: "nudge").run(spec, env_factory=env_factory)
+    assert sorted(cleaned) == ["agent1", "agent2"]
+
+
+def test_injected_coordinator_no_intervention_returns_normally(monkeypatch):
+    from dataclasses import replace
+    from types import SimpleNamespace
+
+    import pytest
+
+    from cooperagents.env.base import ExecResult
+    from cooperagents.types import AgentResult
+
+    cleaned = []
+
+    def worker(env, *, agent_id, role, monitor, **kwargs):
+        monitor.register(agent_id, SimpleNamespace(messages=[]))
+        return AgentResult(agent_id=agent_id, role=role, status="submitted")
+
+    def env_factory(aid):
+        return SimpleNamespace(
+            execute=lambda *a, **kw: ExecResult("", 0), git_diff=lambda: "",
+            cleanup=lambda: cleaned.append(aid),
+        )
+
+    monkeypatch.setattr("cooperagents.workers.mini_swe_worker.run_mini_swe_agent", worker)
+    spec = replace(_features_spec(), worker="mini_swe", shared_workspace=True, coop_tools=True, coordinator=True)
+    result = UnifiedHarness(coordinator_complete=lambda _: pytest.fail("no intervention expected")).run(spec, env_factory=env_factory)
+    assert result.metrics["coordinator_events"] == []
+    assert sorted(cleaned) == ["agent1", "agent2"]
