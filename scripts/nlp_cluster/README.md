@@ -64,6 +64,11 @@ After the dummy smoke passes and an API key is available, place the exported
 python3 scripts/nlp_cluster/submit.py --mode real --env-file /private/path/model.env
 ```
 
+For a bounded real smoke, add `--step-limit 30 --agent-time-limit 300`.
+The normal defaults remain 1,000 steps and 3,600 seconds.
+`--no-coordinator-notebook` selects the messages-only coordinator; the switch and
+budgets are recorded in metadata and forwarded to the benchmark runner.
+
 The real path loads the private file passed through `--env-file`, including its
 model and sampling settings. Provider acceptance
 of reasoning/sampling settings, tool behavior, token limits and model performance
