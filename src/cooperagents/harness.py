@@ -29,6 +29,7 @@ from __future__ import annotations
 import threading
 import time
 from collections.abc import Callable
+from contextlib import ExitStack
 from functools import partial
 from typing import Any
 
@@ -212,8 +213,13 @@ class _Coordinator:
     Max 3 nudges per agent; a static fallback nudge is used when the LLM
     composer is unavailable (offline-safe)."""
 
-    def __init__(self, envs: dict[str, Environment], model: str | None = None, *, trace=None) -> None:
+    def __init__(
+        self, envs: dict[str, Environment], model: str | None = None, *, trace=None,
+        complete: Callable[[str], str] | None = None,
+    ) -> None:
         self.trace = trace
+        self._complete = complete
+        self.error: Exception | None = None
         self._envs = envs
         self._agents: dict[str, Any] = {}
         self._queues: dict[str, list[str]] = {}
@@ -310,8 +316,10 @@ class _Coordinator:
         try:
             from cooperagents.planner import _default_planner_complete
 
-            fn = (_default_planner_complete(self._model, None, None, trace=self.trace)
-                  if self.trace is not None else _default_planner_complete(self._model, None, None))
+            fn = self._complete
+            if fn is None:
+                fn = (_default_planner_complete(self._model, None, None, trace=self.trace)
+                      if self.trace is not None else _default_planner_complete(self._model, None, None))
             if fn is None:
                 if self.trace is not None:
                     self.trace("fallback", reason="composer_unavailable", kind=kind, text=fallback)
@@ -321,30 +329,47 @@ class _Coordinator:
                 f"An agent shows this issue: {base}. Its recent commands:\n{tail}\n\n"
                 "Write ONE corrective instruction to it (max 40 words, imperative, specific)."
             )
+            if self._complete is not None and (not isinstance(out, str) or not out.strip()):
+                raise ValueError("Injected coordinator completion must return non-empty text")
             out = (out or "").strip()
             if not out and self.trace is not None:
                 self.trace("fallback", reason="empty_response", kind=kind, text=fallback)
             return out[:400] if out else fallback
         except Exception as exc:  # noqa: BLE001
+            if self._complete is not None:
+                raise
             if self.trace is not None:
                 self.trace("fallback", reason=type(exc).__name__, kind=kind, text=fallback)
             return fallback
 
     def run(self) -> None:
-        while not self._stop.wait(20):
-            for aid, agent in list(self._agents.items()):
-                if self._sent.get(aid, 0) >= 3:
-                    continue
-                kind = self._detect(aid, agent)
-                if self.trace is not None:
-                    self.trace("decision", target=aid, kind=kind, sent=self._sent.get(aid, 0))
-                if kind:
-                    nudge = self._compose(kind, agent)
+        try:
+            while not self._stop.wait(20):
+                for aid, agent in list(self._agents.items()):
+                    if self._sent.get(aid, 0) >= 3:
+                        continue
+                    kind = self._detect(aid, agent)
                     if self.trace is not None:
-                        self.trace("nudge", target=aid, kind=kind, text=f"[coordinator] {nudge}")
-                    self._queues[aid].append(f"[coordinator] {nudge}")
-                    self._sent[aid] += 1
-                    self._fired.append({"agent": aid, "kind": kind.split(":")[0]})
+                        self.trace("decision", target=aid, kind=kind, sent=self._sent.get(aid, 0))
+                    if kind:
+                        nudge = self._compose(kind, agent)
+                        if self.trace is not None:
+                            self.trace("nudge", target=aid, kind=kind, text=f"[coordinator] {nudge}")
+                        self._queues[aid].append(f"[coordinator] {nudge}")
+                        self._sent[aid] += 1
+                        self._fired.append({"agent": aid, "kind": kind.split(":")[0]})
+        except Exception as exc:
+            self.error = exc
+
+    def finish(self, thread: threading.Thread) -> None:
+        """Join before environment teardown; never accept a partial injected episode."""
+        self.stop()
+        if self._complete is not None or self.trace is not None:
+            thread.join(timeout=600)
+            if thread.is_alive():
+                raise RuntimeError("Coordinator still running; episode is incomplete")
+            if self.error is not None:
+                raise RuntimeError("Coordinator failed; episode is incomplete") from self.error
 
 
 _GITSHARE = "/cbshared/repo.git"
@@ -626,7 +651,15 @@ def _repair_task(assignments: list[Assignment]) -> str:
 
 
 class UnifiedHarness:
-    """Runs one team on one task, growing it on demand."""
+    """Runs one team on one task, growing it on demand.
+
+    ``coordinator_complete`` overrides only corrective-instruction generation for
+    a single mini_swe coop-tools team. It receives the existing prompt, runs on
+    the monitor thread, and must enforce its own request timeout (under 600s).
+    The caller owns its client and SDK recording; worker environment variables
+    are untouched. Invalid results or exceptions fail ``run`` after cleanup.
+    Without a callback the existing composer and static fallback remain in use.
+    """
 
     def __init__(
         self,
@@ -638,7 +671,11 @@ class UnifiedHarness:
         quiet: bool = True,
         on_event: Callable[[str], None] | None = None,
         trajectory=None,
+        coordinator_complete: Callable[[str], str] | None = None,
     ) -> None:
+        if coordinator_complete is not None and not callable(coordinator_complete):
+            raise TypeError("coordinator_complete must be callable")
+        self.coordinator_complete = coordinator_complete
         self.trajectory = trajectory
         self.bus = bus
         self.step_limit = step_limit
@@ -846,150 +883,156 @@ class UnifiedHarness:
             contract = _build_contract(assignments, spec.model) if spec.contract_first else ""
             # Envs are created up front (not per-thread) so the TK2 poller can
             # observe teammates' trees across containers.
-            coop_envs: dict[str, Environment] = {a.agent_id: env_factory(a.agent_id) for a in assignments}
-            gitsync = None
-            if spec.git_share:
-                first = True
-                for _aid, _e in coop_envs.items():
-                    if first:
-                        _e.execute(f"git init -q --bare {_GITSHARE} 2>/dev/null || true")
-                        first = False
-                    _e.execute(f"git remote add shared {_GITSHARE} 2>/dev/null || true")
-                    _e.execute(f"git push -q shared HEAD:refs/heads/{_aid} 2>/dev/null || true")
-                gitsync = _GitShareSync(coop_envs)
-                threading.Thread(target=gitsync.run, daemon=True).start()
-            coordinator = (_Coordinator(coop_envs, spec.model,
-                                        trace=partial(self.trajectory.emit, "coordinator") if self.trajectory else None)
-                           if spec.coordinator else None)
-            coordinator_thread = None
-            if coordinator is not None:
-                coordinator_thread = threading.Thread(target=coordinator.run, daemon=True)
-                coordinator_thread.start()
+            with ExitStack() as cleanup:
+                coop_envs: dict[str, Environment] = {}
+                for assignment in assignments:
+                    env = env_factory(assignment.agent_id)
+                    cleanup.callback(env.cleanup)
+                    coop_envs[assignment.agent_id] = env
+                gitsync = None
+                if spec.git_share:
+                    first = True
+                    for _aid, _e in coop_envs.items():
+                        if first:
+                            _e.execute(f"git init -q --bare {_GITSHARE} 2>/dev/null || true")
+                            first = False
+                        _e.execute(f"git remote add shared {_GITSHARE} 2>/dev/null || true")
+                        _e.execute(f"git push -q shared HEAD:refs/heads/{_aid} 2>/dev/null || true")
+                    gitsync = _GitShareSync(coop_envs)
+                    cleanup.callback(gitsync.stop)
+                    threading.Thread(target=gitsync.run, daemon=True).start()
+                coordinator = (_Coordinator(coop_envs, spec.model, complete=self.coordinator_complete,
+                                            trace=partial(self.trajectory.emit, "coordinator") if self.trajectory else None)
+                               if spec.coordinator else None)
+                coordinator_thread = None
+                if coordinator is not None:
+                    coordinator_thread = threading.Thread(target=coordinator.run, daemon=True)
+                    coordinator_thread.start()
+                    cleanup.callback(coordinator.finish, coordinator_thread)
 
 
-            def collect_diff(env, aid: str) -> str:
-                """Agent diff with share fallback: agents sometimes wipe their
-                working tree at the end (stash/checkout/rm to "verify a clean
-                patch"); the 45s share sync holds their last state, so recover
-                the diff from the pushed branch when the tree reads empty."""
-                d = strip_test_sections(env.git_diff())
-                if d.strip():
+                def collect_diff(env, aid: str) -> str:
+                    """Agent diff with share fallback: agents sometimes wipe their
+                    working tree at the end (stash/checkout/rm to "verify a clean
+                    patch"); the 45s share sync holds their last state, so recover
+                    the diff from the pushed branch when the tree reads empty."""
+                    d = strip_test_sections(env.git_diff())
+                    if d.strip():
+                        return d
+                    base = getattr(env, "_base_commit", "") or "HEAD"
+                    r = env.execute(
+                        f"git fetch -q shared {aid} 2>/dev/null && "
+                        f"git diff {base} FETCH_HEAD -- . 2>/dev/null")
+                    if r.stdout.strip():
+                        return strip_test_sections(r.stdout)
+                    # last resort: the agent destroyed even its .git — read the
+                    # share volume directly with a throwaway container
+                    if hasattr(env, "recover_shared_diff"):
+                        return strip_test_sections(env.recover_shared_diff(aid))
+                    vol = next((v.split(":")[0] for v in getattr(env, "volumes", None) or []
+                                if v.endswith(":/cbshared")), None)
+                    if vol and base != "HEAD":
+                        import subprocess as _sp
+                        rr = _sp.run(["docker", "run", "--rm", "-v", f"{vol}:/cb",
+                                      "alpine/git", "--git-dir=/cb/repo.git",
+                                      "diff", base, aid],
+                                     capture_output=True, text=True, timeout=120)
+                        if rr.returncode == 0 and rr.stdout.strip():
+                            return strip_test_sections(rr.stdout)
                     return d
-                base = getattr(env, "_base_commit", "") or "HEAD"
-                r = env.execute(
-                    f"git fetch -q shared {aid} 2>/dev/null && "
-                    f"git diff {base} FETCH_HEAD -- . 2>/dev/null")
-                if r.stdout.strip():
-                    return strip_test_sections(r.stdout)
-                # last resort: the agent destroyed even its .git — read the
-                # share volume directly with a throwaway container
-                if hasattr(env, "recover_shared_diff"):
-                    return strip_test_sections(env.recover_shared_diff(aid))
-                vol = next((v.split(":")[0] for v in getattr(env, "volumes", None) or []
-                            if v.endswith(":/cbshared")), None)
-                if vol and base != "HEAD":
-                    import subprocess as _sp
-                    rr = _sp.run(["docker", "run", "--rm", "-v", f"{vol}:/cb",
-                                  "alpine/git", "--git-dir=/cb/repo.git",
-                                  "diff", base, aid],
-                                 capture_output=True, text=True, timeout=120)
-                    if rr.returncode == 0 and rr.stdout.strip():
-                        return strip_test_sections(rr.stdout)
-                return d
 
-            def run_coop(a: Assignment) -> tuple[str, AgentResult, str]:
-                env = coop_envs[a.agent_id]
-                if spec.team_roles:
-                    # Complete-Team cell: role block replaces the generic
-                    # coordination paragraphs (mirrors CooperBench team mode,
-                    # where the team block substitutes for the coop block).
-                    lead = assignments[0]
-                    if a.agent_id == lead.agent_id:
-                        others = [x for x in assignments if x.agent_id != a.agent_id]
-                        task = a.task + _team_lead_block(others)
-                    else:
-                        task = a.task + _team_member_block(a, lead)
-                    poller = _TeammatePoller(a.agent_id, coop_envs) if spec.task_board else None
-                    if poller is not None:
-                        poller.watch_board(bus)
-                    r = run_on_shared(env, a.agent_id, a.role, task, a.feature_id, poller=poller, time_limit_s=spec.agent_time_limit)
-                    return a.agent_id, r, collect_diff(env, a.agent_id)
-                if True:
-                    mates = ", ".join(
-                        f"{x.agent_id} (feature {x.feature_id})" for x in assignments if x.agent_id != a.agent_id
-                    )
-                    task = a.task + (
-                        f"\n\nTEAMMATES: {mates} are implementing their features RIGHT NOW in parallel "
-                        "copies of this repo; your diffs will be merged at the end. Coordinate via the "
-                        "send_message tool (incoming messages appear as [Message from ...]): agree on "
-                        "shared names/signatures early and avoid editing the same regions."
-                    )
-                    if spec.preserve_invariants and a.feature_id is not None:
-                        # Q8: the published check is used ONLY for best-of-N candidate
-                        # selection (cross-attempt agreement probes); it is stripped
-                        # before grading and never ships.
-                        task += (
-                            f"\n\nPUBLISH YOUR ACCEPTANCE CHECK — before finishing, create "
-                            f"`.cb_checks/f{a.feature_id}.py`: a minimal STANDALONE python script (no "
-                            "pytest) that exercises YOUR feature's public behavior exactly as the spec "
-                            "describes and exits non-zero if it is broken or absent. Run it to confirm "
-                            "it passes. It must terminate in seconds — no loops that can hang."
+                def run_coop(a: Assignment) -> tuple[str, AgentResult, str]:
+                    env = coop_envs[a.agent_id]
+                    if spec.team_roles:
+                        # Complete-Team cell: role block replaces the generic
+                        # coordination paragraphs (mirrors CooperBench team mode,
+                        # where the team block substitutes for the coop block).
+                        lead = assignments[0]
+                        if a.agent_id == lead.agent_id:
+                            others = [x for x in assignments if x.agent_id != a.agent_id]
+                            task = a.task + _team_lead_block(others)
+                        else:
+                            task = a.task + _team_member_block(a, lead)
+                        poller = _TeammatePoller(a.agent_id, coop_envs) if spec.task_board else None
+                        if poller is not None:
+                            poller.watch_board(bus)
+                        r = run_on_shared(env, a.agent_id, a.role, task, a.feature_id, poller=poller, time_limit_s=spec.agent_time_limit)
+                        return a.agent_id, r, collect_diff(env, a.agent_id)
+                    if True:
+                        mates = ", ".join(
+                            f"{x.agent_id} (feature {x.feature_id})" for x in assignments if x.agent_id != a.agent_id
                         )
-                    if spec.claim_mode:
-                        task += (
-                            "\n\nWORK ALLOCATION — the objective above contains MULTIPLE features and the "
-                            "board has one UNCLAIMED task per feature. FIRST action: task_list, then "
-                            "task_claim one task. Implement ONLY features you claimed. When done, mark it "
-                            "done and claim more unclaimed work if any remains. If a claim fails, someone "
-                            "else owns it — pick another."
+                        task = a.task + (
+                            f"\n\nTEAMMATES: {mates} are implementing their features RIGHT NOW in parallel "
+                            "copies of this repo; your diffs will be merged at the end. Coordinate via the "
+                            "send_message tool (incoming messages appear as [Message from ...]): agree on "
+                            "shared names/signatures early and avoid editing the same regions."
                         )
-                    if spec.task_board:
-                        task += (
-                            "\n\nTASK BOARD PROTOCOL — before coding, post 2-4 short tasks describing "
-                            "your plan (task_create), mark each 'doing' when you start and 'done' when "
-                            "finished (task_update). Check the whole board (task_list) before editing "
-                            "files a teammate's tasks mention. Keep titles short; spend steps on code."
+                        if spec.preserve_invariants and a.feature_id is not None:
+                            # Q8: the published check is used ONLY for best-of-N candidate
+                            # selection (cross-attempt agreement probes); it is stripped
+                            # before grading and never ships.
+                            task += (
+                                f"\n\nPUBLISH YOUR ACCEPTANCE CHECK — before finishing, create "
+                                f"`.cb_checks/f{a.feature_id}.py`: a minimal STANDALONE python script (no "
+                                "pytest) that exercises YOUR feature's public behavior exactly as the spec "
+                                "describes and exits non-zero if it is broken or absent. Run it to confirm "
+                                "it passes. It must terminate in seconds — no loops that can hang."
+                            )
+                        if spec.claim_mode:
+                            task += (
+                                "\n\nWORK ALLOCATION — the objective above contains MULTIPLE features and the "
+                                "board has one UNCLAIMED task per feature. FIRST action: task_list, then "
+                                "task_claim one task. Implement ONLY features you claimed. When done, mark it "
+                                "done and claim more unclaimed work if any remains. If a claim fails, someone "
+                                "else owns it — pick another."
+                            )
+                        if spec.task_board:
+                            task += (
+                                "\n\nTASK BOARD PROTOCOL — before coding, post 2-4 short tasks describing "
+                                "your plan (task_create), mark each 'doing' when you start and 'done' when "
+                                "finished (task_update). Check the whole board (task_list) before editing "
+                                "files a teammate's tasks mention. Keep titles short; spend steps on code."
+                            )
+                        if spec.wait_protocol:
+                            task += (
+                                "\n\nIf you need an agreed public name/signature from a teammate BEFORE you "
+                                "can proceed, use send_message with wait:true — the reply comes back in the "
+                                "same tool output."
+                            )
+                        if spec.tool_protocol:
+                            first_mate = next((x.agent_id for x in assignments if x.agent_id != a.agent_id), "your teammate")
+                            task += (
+                                f"\n\nCOORDINATION PROTOCOL — your FIRST action must be a send_message to "
+                                f"{first_mate} stating the public names, signatures, and files you plan to "
+                                "create for your feature. Before editing any file you suspect your teammate "
+                                "also touches, check your observations for [Message from ...] notes and "
+                                "reconcile names with what they declared. Keep messages short; spend your "
+                                "steps on code."
+                            )
+                        if contract:
+                            task += (
+                                "\n\nSHARED INTERFACE CONTRACT — the team agreed on this up front; "
+                                "follow it EXACTLY (names, signatures, file locations). Deviating breaks "
+                                "the merge with your teammates:\n" + contract
+                            )
+                        poller = (
+                            _TeammatePoller(a.agent_id, coop_envs)
+                            if (spec.live_awareness or spec.task_board or spec.coordinator or spec.git_share)
+                            else None
                         )
-                    if spec.wait_protocol:
-                        task += (
-                            "\n\nIf you need an agreed public name/signature from a teammate BEFORE you "
-                            "can proceed, use send_message with wait:true — the reply comes back in the "
-                            "same tool output."
-                        )
-                    if spec.tool_protocol:
-                        first_mate = next((x.agent_id for x in assignments if x.agent_id != a.agent_id), "your teammate")
-                        task += (
-                            f"\n\nCOORDINATION PROTOCOL — your FIRST action must be a send_message to "
-                            f"{first_mate} stating the public names, signatures, and files you plan to "
-                            "create for your feature. Before editing any file you suspect your teammate "
-                            "also touches, check your observations for [Message from ...] notes and "
-                            "reconcile names with what they declared. Keep messages short; spend your "
-                            "steps on code."
-                        )
-                    if contract:
-                        task += (
-                            "\n\nSHARED INTERFACE CONTRACT — the team agreed on this up front; "
-                            "follow it EXACTLY (names, signatures, file locations). Deviating breaks "
-                            "the merge with your teammates:\n" + contract
-                        )
-                    poller = (
-                        _TeammatePoller(a.agent_id, coop_envs)
-                        if (spec.live_awareness or spec.task_board or spec.coordinator or spec.git_share)
-                        else None
-                    )
-                    if poller is not None and spec.git_share:
-                        poller.watch_gitshare()
-                    if poller is not None and spec.task_board:
-                        poller.watch_board(bus)
-                    if poller is not None and coordinator is not None:
-                        poller.watch_coordinator(coordinator)
-                    r = run_on_shared(env, a.agent_id, a.role, task, a.feature_id,
-                                      poller=poller, monitor=coordinator, time_limit_s=spec.agent_time_limit)
+                        if poller is not None and spec.git_share:
+                            poller.watch_gitshare()
+                        if poller is not None and spec.task_board:
+                            poller.watch_board(bus)
+                        if poller is not None and coordinator is not None:
+                            poller.watch_coordinator(coordinator)
+                        r = run_on_shared(env, a.agent_id, a.role, task, a.feature_id,
+                                          poller=poller, monitor=coordinator, time_limit_s=spec.agent_time_limit)
 
-                    return a.agent_id, r, collect_diff(env, a.agent_id)
-                return None  # unreachable
+                        return a.agent_id, r, collect_diff(env, a.agent_id)
+                    return None  # unreachable
 
-            try:
                 with ThreadPoolExecutor(max_workers=len(roster)) as ex:
                     for aid, r, diff in ex.map(run_coop, assignments):
                         seeds[aid] = r
@@ -997,17 +1040,6 @@ class UnifiedHarness:
                         if spec.team_roles and aid == assignments[0].agent_id:
                             team_lead_patch = diff
                         prior.append(f"feature {roster[aid].feature_id}" if roster[aid].feature_id is not None else roster[aid].role)
-            finally:
-                if gitsync is not None:
-                    gitsync.stop()
-                if coordinator is not None:
-                    coordinator.stop()
-                    if self.trajectory is not None and coordinator_thread is not None:
-                        coordinator_thread.join(timeout=600)
-                        if coordinator_thread.is_alive():
-                            raise RuntimeError("Coordinator still running; trajectory is incomplete")
-                for _e in coop_envs.values():
-                    _e.cleanup()
             for th in spawn_threads:
                 th.join(timeout=1200)
             member_patches.extend(p for p in helper_patches if p.strip())
@@ -1619,6 +1651,15 @@ class UnifiedHarness:
         selector: Callable[[list[RunResult]], int] | None = None,
         planner: Planner | None = None,
     ) -> RunResult:
+        if self.coordinator_complete is not None and (
+            not spec.coordinator or not spec.shared_workspace or not spec.coop_tools
+            or spec.worker != "mini_swe" or spec.team_roles
+            or spec.adaptive or spec.decompose or spec.best_of_n != 1
+        ):
+            raise ValueError(
+                "coordinator_complete requires a single shared-workspace mini_swe coop-tools "
+                "team with coordinator enabled (no team_roles, adaptive, decomposition or best-of-N)"
+            )
         if llm is None and llm_factory is None and spec.worker != "mini_swe":
             raise ValueError("provide either llm or llm_factory")
         bus = self.bus or InMemoryBus(spec.run_id)
