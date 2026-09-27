@@ -5,7 +5,7 @@ repository: cooperagents
 branch: cooperagents-coordinator-training
 git_commit: 70062abf165df84f30481b144f2d848bf8db77cd
 last_updated: 2026-09-27
-status: implemented-offline-verified
+status: smoke-completed-protocol-issue-found
 implementation_branch: codex/coordinator-notebook
 scope: lean coordinator notebook experiment in cooperagents
 ---
@@ -19,7 +19,7 @@ scope: lean coordinator notebook experiment in cooperagents
 供两个 worker 访问。更新后现有 poller 只提醒版本和明确路径，worker 用已有文件读取能力自行读取。
 两个 worker 保留独立代码工作区；不自动把 notebook 全文注入 worker 上下文。
 
-最小实现和离线验证已完成；容器实测与模型效果实验尚未完成。范围不涉及 `cooperator-train`、`polar-ext` 的实现。
+最小实现、离线验证和 Apptainer smoke 已完成；Docker 验证与模型效果实验尚未完成。范围不涉及 `cooperator-train`、`polar-ext` 的实现。
 三阶段改为：最小功能 → 必要验证 → k=3 对照测量；效果测量是验收的一部分。
 
 ## 已确认的设计选择
@@ -235,14 +235,23 @@ host 原子替换两次后均能读到新版本，写入被拒绝，非 root 也
   （trajectory、limited_process、terminalbench、mini_swe_worker）。用基准提交导出源码核对，均非本次新增；
   未扩大到无关清理。新增测试、迁移的 SDK/trajectory 测试与 coordinator 类已格式化。
 - `dummy_smoke.py` 已迁移为同步初始 JSON 决策，并增加 v0→v1→v2 目录挂载读取、写入拒绝、
-  非 root 读取及 patch 排除检查；尚未运行。当前本地 Docker socket 不存在，默认 SSH Docker context
-  在沙箱中连接失败，Apptainer 不在 PATH 中。实际 Docker/Apptainer 挂载验收仍待配置环境执行。
+  非 root 读取及 patch 排除检查；在下方 NLP smoke 中完成了 Apptainer 验证。实施时本地 Docker socket 不存在，默认 SSH Docker context
+  在沙箱中连接失败，Apptainer 不在 PATH 中。Docker 挂载验收仍待配置环境执行。
 - 模型 pilot、JSON/schema 有效率、fixed10×k3 两臂与机制案例均未运行；没有效果或成本收益结论。
   不为本地实施启动或修改集群服务。跨 pair 协调仍仅是 future work。
 
+NLP smoke 更新（2026-09-27）：确定性 job `17637578` 全部通过；真实 Qwen job `17637587`
+以 `0:0` 完成，双 worker 各 30 步，读取与双向消息已验证，轨迹审计通过。
+真实 coordinator 仅 2/3 返回合法，另一次 Markdown 中未转义换行导致 JSON 整批被拒绝；
+同时观察到开局猜测文件范围与误标任务身份；协议确认的证据也需要进一步核查。
+这不等于完成 pilot 或证明 notebook 有效。详见
+[smoke 记录](../../../scripts/nlp_cluster/RESULTS_2026-09-27_NOTEBOOK_SMOKE.md)。
+本次为 bounded smoke 给 NLP launcher 透传了 notebook 开关及步数/时间预算，新增两项提交器检查通过。
+
 待验收：
 
-- [ ] 实际 Docker 与 Apptainer 挂载 smoke（含非 root、两次替换）。
+- [x] 实际 Apptainer 挂载 smoke（含非 root、两次替换）：NLP job `17637578`，`COMPLETED / 0:0`。
+- [ ] 实际 Docker 挂载 smoke。
 - [ ] Qwen3.5-9B non-thinking 两臂 pilot，各至少 20 次真实模型返回。
 - [ ] fixed10×k3 两臂完整评分、成本与机制报告，按预设规则决定是否扩样。
 
