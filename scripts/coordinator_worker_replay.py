@@ -223,19 +223,31 @@ def replay_one(point: dict, candidate: dict, state_dir: Path | None, label: str)
                 actions = []
                 for call in calls:
                     function = call["function"]
+                    simulation = None
                     try:
                         arguments = json.loads(function["arguments"])
                         if function["name"] == "bash":
                             result = env.execute(arguments["command"], timeout=90)
                             observation = {"returncode": result.exit_code, "output": result.stdout[:20000]}
                         elif function["name"] == "send_message":
-                            observation = {"returncode": 0, "output": f"Message queued for {arguments['recipient']}"}
+                            # With no peer loop, a blocking send reaches the real 60s timeout
+                            # with no reply. Skip wall time but preserve that tool observation.
+                            if arguments.get("wait"):
+                                simulation = {"outcome": "wait_timeout_no_peer", "timeout_seconds": 60}
+                            observation = {
+                                "output": f"Message sent to {arguments['recipient']}",
+                                "returncode": 0,
+                                "exception_info": "",
+                            }
                         else:
                             observation = {"returncode": 1, "output": "Unsupported tool"}
                     except (KeyError, ValueError) as exc:
                         arguments = function["arguments"]
                         observation = {"returncode": 1, "output": f"{type(exc).__name__}: {exc}"}
-                    actions.append({"tool": function["name"], "arguments": arguments, "observation": observation})
+                    action = {"tool": function["name"], "arguments": arguments, "observation": observation}
+                    if simulation:
+                        action["simulation"] = simulation
+                    actions.append(action)
                     messages.append({"role": "tool", "tool_call_id": call["id"], "content": json.dumps(observation, ensure_ascii=False)})
                 steps.append(
                     {

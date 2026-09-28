@@ -1,7 +1,9 @@
 """Keep bounded worker replays aligned with mini-swe's tool-call rejection loop."""
 
+import json
 from types import SimpleNamespace
 
+import pytest
 from scripts import coordinator_worker_replay as replay
 
 from cooperagents.env.base import ExecResult
@@ -89,3 +91,25 @@ def test_repeated_text_rejections_use_full_call_budget(monkeypatch):
     result, requests = run_replies(monkeypatch, [("ACK", None)] * 5)
     assert len(requests) == len(result["steps"]) == 5
     assert all(step["accepted"] is False for step in result["steps"])
+
+
+@pytest.mark.parametrize("wait", [False, True])
+def test_send_message_observation_matches_real_no_reply(monkeypatch, wait):
+    send = SimpleNamespace(
+        id="send",
+        function=SimpleNamespace(
+            name="send_message",
+            arguments=json.dumps({"recipient": "agent2", "content": "Scope split?", "wait": wait}),
+        ),
+    )
+    bash = SimpleNamespace(id="bash", function=SimpleNamespace(name="bash", arguments='{"command":"echo ok"}'))
+    result, requests = run_replies(monkeypatch, [("", [send]), ("", [bash])])
+    action = result["steps"][0]["actions"][0]
+    expected = {"output": "Message sent to agent2", "returncode": 0, "exception_info": ""}
+
+    assert action["observation"] == expected
+    assert requests[1][-1] == {"role": "tool", "tool_call_id": "send", "content": json.dumps(expected)}
+    if wait:
+        assert action["simulation"] == {"outcome": "wait_timeout_no_peer", "timeout_seconds": 60}
+    else:
+        assert "simulation" not in action
