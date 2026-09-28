@@ -1,11 +1,12 @@
 """Offline checks for source boundaries, judge blinding, and replay state gates."""
 
+import gzip
 import json
 from pathlib import Path
 
 import pytest
 from scripts.coordinator_research import choose_boundary
-from scripts.coordinator_research_score import aggregate, coordination_chars, packet
+from scripts.coordinator_research_score import aggregate, coordination_chars, initial_tasks, packet
 from scripts.coordinator_worker_replay import main as replay_main
 from scripts.coordinator_worker_replay import render_notices, replay_environment, seed_environment, verified_patch
 
@@ -202,3 +203,18 @@ def test_partial_score_is_visible_but_not_on_pareto_frontier(tmp_path: Path):
     aggregate(tmp_path, output)
     point = json.loads(output.read_text(encoding="utf-8"))[0]
     assert (point["train_count"], point["validation_count"], point["pareto"]) == (1, 1, False)
+
+
+def test_initial_judge_tasks_exclude_boundary_and_future(tmp_path: Path):
+    path = tmp_path / "source.gz"
+    rows = [
+        {"seq": 3, "event": "agent_start", "actor": "agent1", "data": {"task": "add TTL"}},
+        {"seq": 4, "event": "agent_start", "actor": "agent2", "data": {"task": "add counters"}},
+        {"seq": 5, "event": "agent_start", "actor": "agent1", "data": {"task": "future leak"}},
+    ]
+    with gzip.open(path, "wt") as handle:
+        handle.write("\n".join(json.dumps(row) for row in rows))
+    point = {"trajectory": str(path), "boundary_seq": 5}
+    assert [task["task"] for task in initial_tasks(point)] == ["add TTL", "add counters"]
+    with pytest.raises(ValueError, match="Both initial"):
+        initial_tasks({**point, "boundary_seq": 4})

@@ -7,6 +7,7 @@ The grader sees blinded arms, the declared target, and only that case's traces.
 from __future__ import annotations
 
 import argparse
+import gzip
 import hashlib
 import json
 import subprocess
@@ -85,6 +86,20 @@ INPUT_SCHEMA = {
 
 def load_case(dataset: Path, case_id: str) -> dict:
     return next(row for row in map(json.loads, dataset.read_text(encoding="utf-8").splitlines()) if row["id"] == case_id)
+
+
+def initial_tasks(point: dict) -> list[dict]:
+    tasks = []
+    with gzip.open(point["trajectory"], "rt", encoding="utf-8") as handle:
+        for line in handle:
+            row = json.loads(line)
+            if row["seq"] >= point["boundary_seq"]:
+                break
+            if row["event"] == "agent_start" and row["actor"] in {"agent1", "agent2"}:
+                tasks.append({"seq": row["seq"], "actor": row["actor"], "task": row["data"]["task"]})
+    if {task["actor"] for task in tasks} != {"agent1", "agent2"}:
+        raise ValueError("Both initial worker tasks must precede the source boundary")
+    return tasks
 
 
 def visible_trace(record: dict) -> dict:
@@ -264,6 +279,7 @@ def main() -> None:
     control = json.loads((args.replay_dir / "control.json").read_text(encoding="utf-8"))
     candidate = json.loads((args.replay_dir / "candidate.json").read_text(encoding="utf-8"))
     data, candidate_arm = packet(point, control, candidate)
+    data["initial_worker_tasks"] = initial_tasks(point)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     (args.output.parent / "judge-packet.json").write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     raw = args.output.parent / "judge-raw.json"
