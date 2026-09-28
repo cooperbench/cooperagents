@@ -81,6 +81,13 @@ def materialize_actions(point: dict, candidate: dict, notebook_path: Path) -> tu
     return notices, notebook_path.read_text(encoding="utf-8"), coordinator.worker_instructions()
 
 
+def render_notices(notices: list[str], candidate: dict) -> list[str]:
+    prefix = candidate.get("coordinator_notice_prefix", "")
+    if not isinstance(prefix, str) or len(prefix) > 128:
+        raise ValueError("Coordinator notice prefix must be a string of at most 128 characters")
+    return [prefix + "\n" + notice for notice in notices] if prefix else notices
+
+
 def replay_environment(image: str, notebook_dir: Path) -> Environment:
     if os.getenv("COOPER_RUNTIME", "docker") == "docker":
         return DockerEnv(image, network="none", volumes=[f"{notebook_dir}:/coordination:ro"], keepalive="8h")
@@ -136,6 +143,7 @@ def replay_one(point: dict, candidate: dict, state_dir: Path | None, label: str)
     rows, request, _ = archive(point)
     with tempfile.TemporaryDirectory(prefix="coordinator-replay-") as temporary:
         notices, _, instructions = materialize_actions(point, candidate, Path(temporary) / "notebook.md")
+        notices = render_notices(notices, candidate)
         patch = verified_patch(point, state_dir)
         env = replay_environment(point["image"], Path(temporary))
         try:
@@ -227,12 +235,19 @@ def main() -> None:
     parser.add_argument("--dataset", type=Path, required=True)
     parser.add_argument("--case", required=True)
     parser.add_argument("--candidate", type=Path, required=True)
+    parser.add_argument("--control-candidate", type=Path)
     parser.add_argument("--state-dir", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     point = next(p for p in map(json.loads, args.dataset.read_text(encoding="utf-8").splitlines()) if p["id"] == args.case)
     candidate = json.loads(args.candidate.read_text(encoding="utf-8"))
-    control = {"case_id": point["id"], "actions": [], "worker_coordination_suffix": ""}
+    control = (
+        json.loads(args.control_candidate.read_text(encoding="utf-8"))
+        if args.control_candidate
+        else {"case_id": point["id"], "actions": [], "worker_coordination_suffix": ""}
+    )
+    if control.get("case_id") != point["id"]:
+        raise ValueError("Control candidate case_id differs from source point")
     args.output.mkdir(parents=True, exist_ok=True)
     for label, arm in (("control", control), ("candidate", candidate)):
         path = args.output / f"{label}.json"

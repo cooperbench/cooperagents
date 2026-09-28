@@ -5,8 +5,9 @@ from pathlib import Path
 
 import pytest
 from scripts.coordinator_research import choose_boundary
-from scripts.coordinator_research_score import aggregate, packet
-from scripts.coordinator_worker_replay import replay_environment, seed_environment, verified_patch
+from scripts.coordinator_research_score import aggregate, coordination_chars, packet
+from scripts.coordinator_worker_replay import main as replay_main
+from scripts.coordinator_worker_replay import render_notices, replay_environment, seed_environment, verified_patch
 
 from cooperagents.env.base import ExecResult
 
@@ -85,6 +86,55 @@ def test_replay_seed_applies_patch_and_checks_exact_workspace(tmp_path: Path):
     assert env.commands[0] == "git apply /tmp/coordinator-replay.patch"
     with pytest.raises(ValueError, match="Workspace files differ"):
         seed_environment(env, {"archive_dirty_files": ["other.py"]}, None)
+
+
+def test_notice_prefix_preserves_canonical_messages_and_validates_input():
+    notices = ["[coordinator] First", "[coordinator] Second"]
+    assert render_notices(notices, {}) == notices
+    assert render_notices(notices, {"coordinator_notice_prefix": "[IMPORTANT]"}) == ["[IMPORTANT]\n" + notice for notice in notices]
+    assert notices[0] == "[coordinator] First"
+    for invalid in (42, "x" * 129):
+        with pytest.raises(ValueError, match="prefix"):
+            render_notices(notices, {"coordinator_notice_prefix": invalid})
+
+
+def test_replay_rejects_mismatched_control_case_before_running(monkeypatch, tmp_path: Path):
+    dataset = tmp_path / "dataset.jsonl"
+    dataset.write_text(json.dumps({"id": "case-a"}) + "\n", encoding="utf-8")
+    candidate = tmp_path / "candidate.json"
+    candidate.write_text(json.dumps({"case_id": "case-a", "actions": []}), encoding="utf-8")
+    control = tmp_path / "control.json"
+    control.write_text(json.dumps({"case_id": "case-b", "actions": []}), encoding="utf-8")
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "replay",
+            "--dataset",
+            str(dataset),
+            "--case",
+            "case-a",
+            "--candidate",
+            str(candidate),
+            "--control-candidate",
+            str(control),
+            "--output",
+            str(tmp_path / "output"),
+        ],
+    )
+    with pytest.raises(ValueError, match="Control candidate case_id"):
+        replay_main()
+    assert not (tmp_path / "output").exists()
+
+
+def test_coordination_cost_uses_candidate_minus_supplied_control():
+    action = {"name": "send_message", "arguments": {"recipient": "agent2", "text": "scope?"}}
+    control = {"candidate": {"actions": [action], "worker_coordination_suffix": "normal"}, "notices": ["notice"]}
+    candidate = {
+        "candidate": {"actions": [action], "worker_coordination_suffix": "NORMAL", "coordinator_notice_prefix": "[P]"},
+        "notices": ["[P]\nnotice"],
+    }
+    assert coordination_chars(candidate) - coordination_chars(control) == len("[P]\n")
+    assert coordination_chars({"candidate": {"actions": []}, "notices": []}) == 0
 
 
 def test_judge_packet_blinds_candidate_and_keeps_behavioral_trace():

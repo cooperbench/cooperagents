@@ -112,6 +112,16 @@ def packet(point: dict, control: dict, candidate: dict) -> tuple[dict, str]:
     return result, "A" if candidate_first else "B"
 
 
+def coordination_chars(record: dict) -> int:
+    candidate = record["candidate"]
+    prefix = candidate.get("coordinator_notice_prefix", "")
+    return (
+        sum(len(json.dumps(action)) for action in candidate["actions"])
+        + len(candidate.get("worker_coordination_suffix", ""))
+        + len(prefix + "\n" if prefix else "") * len(record["notices"])
+    )
+
+
 def judge(packet_data: dict, output: Path, *, input_stage: bool = False) -> None:
     if output.exists():
         raise FileExistsError(output)
@@ -262,9 +272,7 @@ def main() -> None:
         score = result[arm]
         return 2 * score["behavior"] + score["quality"] - score["harm"]
 
-    communication_chars = sum(len(json.dumps(action)) for action in candidate["candidate"]["actions"]) + len(
-        candidate["candidate"].get("worker_coordination_suffix", "")
-    )
+    communication_chars = coordination_chars(candidate) - coordination_chars(control)
     candidate_usage = [(step.get("usage") or {}).get("total_tokens") for step in candidate["steps"]]
     control_usage = [(step.get("usage") or {}).get("total_tokens") for step in control["steps"]]
     observed = all(isinstance(value, int) for value in candidate_usage + control_usage)
