@@ -226,6 +226,8 @@ The harness executes your returned actions; workers inspect code and may report 
 Their patches will be merged. Help them agree on responsibilities, file regions and shared interfaces before
 contested edits, resolve concrete overlaps or repeated failures during implementation, and decide when remaining
 step/time budgets warrant a specific handoff or verification reminder. Same-file edits are only potential overlap.
+Worker warnings are mechanical hints (LOOP, STALL, COLLISION), not proof that an intervention is needed.
+Check the underlying actions and results before deciding whether to message anyone.
 Use the supplied observations and replies; do not invent inspected code, agreement, completed tests or token budgets.
 Use task_id and each worker's id/feature_id exactly as supplied; a feature is not a separate task ID.
 Task requirements describe desired behavior, not proof of existing files or interfaces. Missing or truncated
@@ -575,6 +577,33 @@ class _Coordinator:
             }
         )
 
+    @staticmethod
+    def _add_warnings(workers: list[dict]) -> None:
+        for worker in workers:
+            warnings = worker["warnings"] = []
+            actions = worker["recent_actions"]
+            commands = [record["action"].get("command", "") for record in actions]
+            commands = [command for command in commands if isinstance(command, str) and command.strip()]
+            if len(commands) >= 6:
+                heads = [" ".join(command.split()[:2]) for command in commands[-6:]]
+                if max(heads.count(head) for head in set(heads)) >= 4:
+                    warnings.append("LOOP: at least 4 of the last 6 commands share their first two words")
+            results = [record["result"] for record in actions if record["result"] is not None]
+            if len(results) >= 4:
+                recent = results[-4:]
+                output = str(recent[-1]["output"])[:120]
+                if ("rror" in output or recent[-1]["returncode"] not in (None, 0)) and all(
+                    str(result["output"])[:120] == output for result in recent
+                ):
+                    warnings.append("STALL: the last 4 tool results repeat the same error")
+            files = set(worker["modified_files"] or [])
+            for peer in workers:
+                if peer is worker:
+                    continue
+                overlap = sorted(files.intersection(peer["modified_files"] or []))
+                if overlap:
+                    warnings.append(f"COLLISION: modified files overlap with {peer['id']}: {', '.join(overlap[:3])}")
+
     def decide(self, *, initial: bool = False) -> None:
         replies = self._bus.receive("coordinator")
         self._pending.extend(replies)
@@ -624,6 +653,7 @@ class _Coordinator:
                     "recent_actions": self._recent_actions(list(getattr(agent, "messages", []))),
                 }
             )
+        self._add_warnings(workers)
         observation = {
             "repo": self._repo,
             "task_id": self._task_id,

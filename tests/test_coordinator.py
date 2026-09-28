@@ -199,6 +199,28 @@ def test_observations_pair_actions_results_and_budget(monkeypatch):
     assert observations[-1]["workers"][0]["status"] == "limit"
 
 
+def test_mechanical_warnings_are_observations_not_automatic_messages():
+    observations = []
+    c = coordinator(complete=lambda prompt: observations.append(json.loads(prompt.split("OBSERVATION:\n")[1])) or NOOP)
+    messages = []
+    for index in range(6):
+        messages.extend(
+            [
+                {"role": "assistant", "extra": {"actions": [{"tool_name": "bash", "command": f"pytest retry {index}"}]}},
+                {"role": "tool", "extra": {"raw_output": "error: unchanged", "returncode": 1}},
+            ]
+        )
+    c.register("agent1", SimpleNamespace(n_calls=6, messages=messages))
+    c.register("agent2", SimpleNamespace(n_calls=1, messages=[]))
+    c._envs["agent1"].execute = lambda *a, **k: ExecResult(" M shared.py\0", 0)
+    c._envs["agent2"].execute = lambda *a, **k: ExecResult(" M shared.py\0", 0)
+    c.decide()
+    first, second = observations[0]["workers"]
+    assert [warning.split(":", 1)[0] for warning in first["warnings"]] == ["LOOP", "STALL", "COLLISION"]
+    assert second["warnings"] == ["COLLISION: modified files overlap with agent1: shared.py"]
+    assert c.events() == [] and c.drain("agent1") == [] and c.drain("agent2") == []
+
+
 @pytest.mark.parametrize("notebook", [False, True])
 def test_initial_prompt_keeps_evidence_pending_and_supplies_feature_identity(tmp_path, notebook):
     prompts = []
@@ -219,6 +241,7 @@ def test_initial_prompt_keeps_evidence_pending_and_supplies_feature_identity(tmp
     assert initial["task_id"] == later["task_id"] == 27
     assert [(w["id"], w["feature_id"]) for w in initial["workers"]] == [("agent1", 3), ("agent2", 4)]
     assert all(w["status"] == "not_started" and not w["recent_actions"] for w in initial["workers"])
+    assert all(not w["warnings"] for w in initial["workers"])
     assert ("notebook" in initial) == notebook
     assert "INITIAL DECISION:" in prompts[0] and "INITIAL DECISION:" not in prompts[1]
     assert "pending worker evidence and confirmation" in prompts[0]
