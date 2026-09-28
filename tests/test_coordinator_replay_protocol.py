@@ -7,6 +7,7 @@ import pytest
 from scripts import coordinator_worker_replay as replay
 
 from cooperagents.env.base import ExecResult
+from cooperagents.env.local import LocalEnv
 
 
 def run_replies(
@@ -14,6 +15,7 @@ def run_replies(
     replies: list[tuple[str, list | None] | Exception],
     trace_path=None,
     commands: list[str] | None = None,
+    environment=None,
 ) -> tuple[dict, list[list[dict]]]:
     requests: list[list[dict]] = []
     pending = iter(replies)
@@ -55,7 +57,12 @@ def run_replies(
                 commands.append(command)
             if command == "submit":
                 return ExecResult(" \n COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\nfinal answer\n", 0)
-            return ExecResult("ok" if command != "git diff HEAD" else "", 0)
+            return ExecResult("ok", 0)
+
+        def git_diff(self):
+            if commands is not None:
+                commands.append("git_diff")
+            return ""
 
         def cleanup(self):
             pass
@@ -78,7 +85,7 @@ def run_replies(
     )
     monkeypatch.setattr(replay, "materialize_actions", lambda *args: ([], "", ""))
     monkeypatch.setattr(replay, "verified_patch", lambda *args: None)
-    monkeypatch.setattr(replay, "replay_environment", lambda *args: FakeEnv())
+    monkeypatch.setattr(replay, "replay_environment", lambda *args: environment or FakeEnv())
     monkeypatch.setattr(replay, "seed_environment", lambda *args: None)
     monkeypatch.setenv("OPENAI_BASE_URL", "http://unused.invalid")
     point = {
@@ -144,7 +151,34 @@ def test_successful_submission_stops_before_later_tools_and_model_calls(monkeypa
     assert [action["arguments"]["command"] for action in result["steps"][0]["actions"]] == ["submit"]
     assert result["termination"] == {"reason": "submitted", "step": 1, "submission": "final answer\n"}
     assert result["completion_gate"] == "disabled"
-    assert commands == ["submit", "git diff HEAD"]
+    assert commands == ["submit", "git_diff"]
+    assert result["diff_collection"] == "environment.git_diff"
+
+
+def test_final_diff_includes_committed_and_untracked_worker_files(monkeypatch, tmp_path):
+    env = LocalEnv.fresh(workdir=str(tmp_path))
+    bash = SimpleNamespace(
+        id="bash",
+        function=SimpleNamespace(
+            name="bash",
+            arguments=json.dumps(
+                {
+                    "command": (
+                        "printf 'committed\\n' > committed.txt && git add committed.txt "
+                        "&& git commit -qm worker && printf 'untracked\\n' > untracked.txt"
+                    )
+                }
+            ),
+        ),
+    )
+
+    result, _ = run_replies(monkeypatch, [("", [bash])], environment=env)
+
+    assert "diff --git a/committed.txt b/committed.txt" in result["final_diff"]
+    assert "diff --git a/untracked.txt b/untracked.txt" in result["final_diff"]
+    assert "+committed" in result["final_diff"]
+    assert "+untracked" in result["final_diff"]
+    assert result["diff_collection"] == "environment.git_diff"
 
 
 @pytest.mark.parametrize("wait", [False, True])

@@ -281,7 +281,7 @@ def replay_one(point: dict, candidate: dict, state_dir: Path | None, label: str,
                     break
             if termination is None:
                 termination = {"reason": "call_budget", "step": len(steps)}
-            diff = required(env.execute("git diff HEAD"), "read final diff")
+            diff = env.git_diff()
             return {
                 "case_id": point["id"],
                 "label": label,
@@ -294,6 +294,7 @@ def replay_one(point: dict, candidate: dict, state_dir: Path | None, label: str,
                 "termination": termination,
                 "completion_gate": "disabled",
                 "final_diff": diff,
+                "diff_collection": "environment.git_diff",
                 "workspace_evidence": "base_image" if patch is None else str(patch),
                 **({"trace_path": str(trace_path)} if trace_path is not None else {}),
             }
