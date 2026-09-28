@@ -961,6 +961,12 @@ def test_injected_coordinator_rejects_unsupported_modes():
             )
     with pytest.raises(TypeError, match="must be callable"):
         UnifiedHarness(coordinator_complete="invalid")
+    for change in ({"coordinator": False}, {"coordinator_notebook": False}):
+        with pytest.raises(ValueError, match="requires coordinator and notebook"):
+            UnifiedHarness(coordination_variant="human_in_loop").run(
+                replace(replace(valid, coordinator_notebook=True), **change),
+                env_factory=lambda _: pytest.fail("must reject before constructing envs"),
+            )
 
 
 def test_injected_failure_propagates_and_cleans_all_envs(monkeypatch):

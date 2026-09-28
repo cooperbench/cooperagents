@@ -41,6 +41,11 @@ from typing import Any
 from cooperagents.agent import Agent
 from cooperagents.bus.base import TeamBus
 from cooperagents.bus.memory import InMemoryBus
+from cooperagents.coordination_prompts import (
+    HUMAN_COORDINATOR_BASE,
+    HUMAN_COORDINATOR_INITIAL,
+    HUMAN_WORKER_WORKFLOW,
+)
 from cooperagents.env.base import Environment
 from cooperagents.llm import LLMClient
 from cooperagents.metrics import coordination_metrics, spawn_metrics
@@ -305,6 +310,7 @@ class _Coordinator:
         assignments: list[Assignment],
         bus: TeamBus,
         notebook_path: Path | None = None,
+        coordination_variant: str = "current",
         repo: str = "",
         task_id: int = 0,
         step_limit: int = 0,
@@ -314,6 +320,11 @@ class _Coordinator:
     ) -> None:
         from cooperagents.planner import _default_planner_complete
 
+        if coordination_variant not in ("current", "human_in_loop"):
+            raise ValueError(f"Unknown coordination variant: {coordination_variant}")
+        if coordination_variant == "human_in_loop" and notebook_path is None:
+            raise ValueError("Human-in-loop coordination requires a notebook")
+        self.coordination_variant = coordination_variant
         self.trace = trace
         self.error: Exception | None = None
         self._envs = envs
@@ -367,6 +378,8 @@ class _Coordinator:
             self.trace(event, **data)
 
     def worker_instructions(self) -> str:
+        if self.coordination_variant == "human_in_loop":
+            return "\n\n" + HUMAN_WORKER_WORKFLOW
         note = ""
         if self._notebook_path is not None:
             note = (
@@ -508,8 +521,15 @@ class _Coordinator:
                     self._emit("message_dropped", target=action.recipient, reason="worker_finished_or_stopped", content=action.content)
                     continue
                 version = self._version if self._notebook_path is not None else None
-                label = f"[coordinator; notebook v{version}]" if version is not None else "[coordinator]"
-                text = f"{label} {action.content}"
+                if self.coordination_variant == "human_in_loop":
+                    text = (
+                        f"[COORDINATION NOTEBOOK]\nVersion: {version}\n"
+                        "Read /coordination/notebook.md before continuing affected work.\n\n"
+                        f"[FROM COORDINATOR]\n{action.content}\n[END COORDINATOR MESSAGE]"
+                    )
+                else:
+                    label = f"[coordinator; notebook v{version}]" if version is not None else "[coordinator]"
+                    text = f"{label} {action.content}"
                 self._queues[action.recipient].append(text)
                 self._fired.append({"agent": action.recipient, "kind": "message", "notebook_version": version})
                 self._emit("nudge", target=action.recipient, kind="message", text=text, notebook_version=version)
@@ -662,24 +682,30 @@ class _Coordinator:
             "replies": list(self._pending),
             "previous_error": self._last_error,
         }
-        protocol = _COORDINATOR_PROMPT
-        if initial:
-            protocol += (
-                "\nINITIAL DECISION: Workers have not started inspecting code. Request inspection and a report of "
-                "proposed files, regions, shared interfaces and dependencies to peers and coordinator. "
-                "You may suggest provisional responsibilities based on the supplied feature requirements, "
-                "but leave concrete edit boundaries and ownership pending worker evidence and confirmation. "
-                "Do not guess filenames, existing symbols or new shared APIs, or declare coordination complete.\n"
-            )
+        if self.coordination_variant == "human_in_loop":
+            protocol = HUMAN_COORDINATOR_BASE + "\n"
+            if initial:
+                protocol += "\nINITIAL DECISION:\n" + HUMAN_COORDINATOR_INITIAL + "\n"
+        else:
+            protocol = _COORDINATOR_PROMPT
+            if initial:
+                protocol += (
+                    "\nINITIAL DECISION: Workers have not started inspecting code. Request inspection and a report of "
+                    "proposed files, regions, shared interfaces and dependencies to peers and coordinator. "
+                    "You may suggest provisional responsibilities based on the supplied feature requirements, "
+                    "but leave concrete edit boundaries and ownership pending worker evidence and confirmation. "
+                    "Do not guess filenames, existing symbols or new shared APIs, or declare coordination complete.\n"
+                )
         if self._notebook_path is not None:
             observation["notebook"] = {"version": version, "content": notebook}
-            protocol += (
-                "Call update_notebook at most once, with the complete Markdown (at most 8000 characters).\n"
-                "Prefer a short notebook (about 1000-2000 characters) of current responsibilities/regions, "
-                "interfaces/dependencies, pending issues and handoff. Preserve unresolved questions when replacing it.\n"
-                "Distinguish proposed, worker-reported, confirmed (explicit replies) and verified (observed checks).\n"
-                f"Workers read {_COORDINATOR_PATH}; an update automatically sends a path/version reminder, not the full text.\n"
-            )
+            if self.coordination_variant == "current":
+                protocol += (
+                    "Call update_notebook at most once, with the complete Markdown (at most 8000 characters).\n"
+                    "Prefer a short notebook (about 1000-2000 characters) of current responsibilities/regions, "
+                    "interfaces/dependencies, pending issues and handoff. Preserve unresolved questions when replacing it.\n"
+                    "Distinguish proposed, worker-reported, confirmed (explicit replies) and verified (observed checks).\n"
+                    f"Workers read {_COORDINATOR_PATH}; an update automatically sends a path/version reminder, not the full text.\n"
+                )
         else:
             protocol += "Notebook is disabled; only send_message is available.\n"
         prompt = protocol + "\nOBSERVATION:\n" + json.dumps(observation, ensure_ascii=False)
@@ -1030,10 +1056,14 @@ class UnifiedHarness:
         trajectory=None,
         coordinator_complete: Callable[[str], list[dict[str, str]]] | None = None,
         coordinator_notebook_path: Path | None = None,
+        coordination_variant: str = "current",
     ) -> None:
         if coordinator_complete is not None and not callable(coordinator_complete):
             raise TypeError("coordinator_complete must be callable")
         self.coordinator_complete = coordinator_complete
+        if coordination_variant not in ("current", "human_in_loop"):
+            raise ValueError(f"Unknown coordination variant: {coordination_variant}")
+        self.coordination_variant = coordination_variant
         self.coordinator_notebook_path = Path(coordinator_notebook_path).resolve() if coordinator_notebook_path is not None else None
         self.trajectory = trajectory
         self.bus = bus
@@ -1248,6 +1278,7 @@ class UnifiedHarness:
                     _Coordinator(
                         coop_envs, spec.model, assignments=assignments, bus=bus,
                         notebook_path=self.coordinator_notebook_path if spec.coordinator_notebook else None,
+                        coordination_variant=self.coordination_variant,
                         repo=spec.repo, task_id=spec.task_id, step_limit=self.step_limit, time_limit_s=spec.agent_time_limit,
                         complete=self.coordinator_complete,
                         trace=partial(self.trajectory.emit, "coordinator") if self.trajectory else None,
@@ -2021,6 +2052,8 @@ class UnifiedHarness:
         selector: Callable[[list[RunResult]], int] | None = None,
         planner: Planner | None = None,
     ) -> RunResult:
+        if self.coordination_variant == "human_in_loop" and not (spec.coordinator and spec.coordinator_notebook):
+            raise ValueError("Human-in-loop coordination requires coordinator and notebook")
         if (spec.coordinator or self.coordinator_complete is not None) and (
             not spec.coordinator or not spec.shared_workspace or not spec.coop_tools
             or spec.worker != "mini_swe" or spec.team_roles

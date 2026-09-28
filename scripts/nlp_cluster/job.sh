@@ -53,6 +53,7 @@ else
         --team-name real --log-dir "$COOPER_RUN/logs")
   if [[ "${COOPER_COORDINATOR:-1}" == 1 ]]; then args+=(--coordinator); fi
   if [[ "${COOPER_COORDINATOR_NOTEBOOK:-1}" == 0 ]]; then args+=(--no-coordinator-notebook); fi
+  args+=(--coordination-variant "${COOPER_COORDINATION_VARIANT:-current}")
   if [[ "${COOPER_REPAIR:-0}" == 1 ]]; then
     args+=(--repair-integrator --repair-attempts "${COOPER_REPAIR_ATTEMPTS:-1}")
   fi

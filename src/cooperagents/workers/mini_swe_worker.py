@@ -389,6 +389,9 @@ def run_mini_swe_agent(
         model.heartbeat_path = os.path.join(
             hb_dir, f"{os.getpid()}_{int(_time.time())}_{agent_id}.hb")
     system_template = cfg["system_template"]
+    if monitor is not None and git_share:
+        # Keep both coordinator arms' shared prefix in the human-reviewed order.
+        system_template = system_template.rstrip("\n") + _GIT_SHARE_SYSTEM
     if (tool_protocol or monitor is not None) and comm is not None:
         system_template = system_template + _SEND_MESSAGE_SYSTEM
     if monitor is not None:
@@ -403,7 +406,7 @@ def run_mini_swe_agent(
         system_template = system_template + _TASK_BOARD_SYSTEM
     if spawn_handler is not None:
         system_template = system_template + _SPAWN_SYSTEM
-    if git_share:
+    if git_share and monitor is None:
         system_template = system_template + _GIT_SHARE_SYSTEM
     import time as _time
 

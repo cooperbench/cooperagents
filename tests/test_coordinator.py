@@ -250,6 +250,32 @@ def test_initial_prompt_keeps_evidence_pending_and_supplies_feature_identity(tmp
     assert all("Return ONLY a JSON object" not in prompt for prompt in prompts)
 
 
+def test_human_in_loop_initial_prompt_and_direct_message_wrapper(tmp_path):
+    prompts = []
+    c = coordinator(
+        notebook_path=tmp_path / "notebook.md",
+        coordination_variant="human_in_loop",
+        complete=lambda prompt: prompts.append(prompt) or NOOP,
+    )
+    c.decide(initial=True)
+    assert prompts[0].startswith("You coordinate software workers from the supplied OBSERVATION.")
+    assert "INITIAL DECISION:\nSend a message to agent1 now." in prompts[0]
+    assert "Call update_notebook at most once" not in prompts[0]
+    c.register("agent1", SimpleNamespace(n_calls=1, messages=[]))
+    c.decide()
+    assert prompts[1].startswith("You coordinate software workers from the supplied OBSERVATION.")
+    assert "INITIAL DECISION:" not in prompts[1]
+    assert "Call update_notebook at most once" not in prompts[1]
+    c._apply_actions(c._parse_actions([message("propose scope")]))
+    assert c.drain("agent1")[1] == (
+        "[COORDINATION NOTEBOOK]\nVersion: 0\n"
+        "Read /coordination/notebook.md before continuing affected work.\n\n"
+        "[FROM COORDINATOR]\npropose scope\n[END COORDINATOR MESSAGE]"
+    )
+    with pytest.raises(ValueError, match="requires a notebook"):
+        coordinator(coordination_variant="human_in_loop")
+
+
 def test_finish_joins_inflight_even_if_already_stopped():
     started, release, returned = threading.Event(), threading.Event(), threading.Event()
 
@@ -461,3 +487,32 @@ def test_worker_error_marks_finished_before_end(monkeypatch):
         model_name="dummy", step_limit=3, cost_limit=5,
     )
     assert solo.status == "error" and "COORDINATOR ACKNOWLEDGMENT" not in systems[-1]
+
+
+def test_worker_system_variant_keeps_reviewed_shared_prefix(monkeypatch, tmp_path):
+    from cooperagents.vendor.mini_swe.agents.default import DefaultAgent
+    from cooperagents.workers.mini_swe_worker import run_mini_swe_agent
+
+    monkeypatch.setenv("OPENAI_API_KEY", "offline")
+    systems = []
+
+    def capture(agent, **kwargs):
+        systems.append(agent._render_template(agent.config.system_template))
+        raise RuntimeError("captured")
+
+    monkeypatch.setattr(DefaultAgent, "run", capture)
+    for variant in ("current", "human_in_loop"):
+        c = coordinator(notebook_path=tmp_path / variant / "notebook.md", coordination_variant=variant)
+        result = run_mini_swe_agent(
+            SimpleNamespace(repo_path="/repo"), task="feature", agent_id="agent1", role="lead",
+            model_name="dummy", step_limit=3, cost_limit=5, comm=SimpleNamespace(), monitor=c, git_share=True,
+        )
+        assert result.status == "error"
+        system = systems[-1]
+        assert system.index("A shared git remote") < system.index("You also have a second tool")
+        assert system.index("You also have a second tool") < system.index("The coordinator is also")
+        if variant == "current":
+            assert "COORDINATOR ACKNOWLEDGMENT" in system
+        else:
+            assert "COORDINATOR NOTICES" in system and "at most two focused inspections" not in system
+            assert "A focused code inspection" in system

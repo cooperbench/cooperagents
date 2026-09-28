@@ -29,6 +29,7 @@ def main():
     parser.add_argument("--round", type=int, choices=(1, 2, 3))
     parser.add_argument("--no-coordinator", action="store_true")
     parser.add_argument("--no-coordinator-notebook", action="store_true")
+    parser.add_argument("--coordination-variant", choices=("current", "human_in_loop"), default="current")
     parser.add_argument("--step-limit", type=int, default=1000)
     parser.add_argument("--agent-time-limit", type=int, default=3600)
     parser.add_argument("--collect-trajectories", action="store_true", help="record full I/O and skip official evaluation")
@@ -40,6 +41,10 @@ def main():
         parser.error("CPUs, concurrency, and repair attempts must be positive")
     if args.step_limit < 1 or args.agent_time_limit < 1:
         parser.error("Worker step and time limits must be positive")
+    if args.coordination_variant == "human_in_loop" and (
+        args.mode != "real" or args.no_coordinator or args.no_coordinator_notebook
+    ):
+        parser.error("human_in_loop requires a real run with coordinator and notebook enabled")
     if args.qualification_report and args.qualification_dir:
         parser.error("Choose one qualification source")
     reports = []
@@ -102,6 +107,7 @@ def main():
         round=args.round,
         coordinator=not args.no_coordinator,
         coordinator_notebook=not args.no_coordinator and not args.no_coordinator_notebook,
+        coordination_variant=args.coordination_variant,
         repair_integrator=args.repair_integrator,
         repair_attempts=args.repair_attempts if args.repair_integrator else 0,
     )
@@ -113,6 +119,7 @@ def main():
                 "workers = 2\n"
                 f"coordinator = {str(not args.no_coordinator).lower()}\n"
                 f"coordinator_notebook = {str(not args.no_coordinator and not args.no_coordinator_notebook).lower()}\n"
+                f"coordination_variant = {args.coordination_variant!r}\n"
                 "completion_gate = true\npresub_merge = false\n"
                 f"repair = {str(args.repair_integrator).lower()}\n"
                 f"repair_attempts = {args.repair_attempts if args.repair_integrator else 0}\n"
@@ -147,6 +154,7 @@ def main():
         COOPER_EVAL_CONCURRENCY=str(args.eval_concurrency),
         COOPER_COORDINATOR="0" if args.no_coordinator else "1",
         COOPER_COORDINATOR_NOTEBOOK="0" if args.no_coordinator_notebook else "1",
+        COOPER_COORDINATION_VARIANT=args.coordination_variant,
         COOPER_STEP_LIMIT=str(args.step_limit),
         COOPER_AGENT_TIME_LIMIT=str(args.agent_time_limit),
         COOPER_REPAIR="1" if args.repair_integrator else "0",
