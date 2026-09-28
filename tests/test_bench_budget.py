@@ -31,7 +31,7 @@ def test_runners_isolate_notebooks_and_mount_workers_only(monkeypatch, tmp_path)
     def run(self, team, *, env_factory, **kwargs):
         path = self.coordinator_notebook_path
         paths.append(path)
-        coordinator = _Coordinator({}, assignments=team.assignments, bus=self.bus, notebook_path=path, complete=lambda _: '{"actions":[]}')
+        coordinator = _Coordinator({}, assignments=team.assignments, bus=self.bus, notebook_path=path, complete=lambda _: [])
         for worker in [a.agent_id for a in team.assignments] + ["merge"]:
             env_factory(worker)
         assert bool(path) == team.coordinator_notebook

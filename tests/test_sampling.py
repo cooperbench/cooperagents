@@ -113,13 +113,29 @@ def test_sglang_nonthinking_profile(monkeypatch):
     assert "provider" not in extra and "reasoning" not in extra
 
 
+def test_coordinator_ignores_unparsed_tool_markup(monkeypatch):
+    from cooperagents.harness import _SEND_MESSAGE_TOOL
+
+    def respond(request):
+        return httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": "<tool_call>raw</tool_call>"}}]})
+
+    client = openai.OpenAI(
+        api_key="test-only", base_url="https://example.test/v1", http_client=httpx.Client(transport=httpx.MockTransport(respond))
+    )
+    monkeypatch.setattr(openai, "OpenAI", lambda **_: client)
+    complete = _default_planner_complete("test-model", None, None, tools=[_SEND_MESSAGE_TOOL])
+    assert complete is not None
+    assert complete("coordinate") == []
+    client.close()
+
+
 def test_injected_coordinator_uses_separate_endpoint_and_records_once(monkeypatch, tmp_path):
     import json
     from functools import partial
     from types import SimpleNamespace
 
     from cooperagents.bus.memory import InMemoryBus
-    from cooperagents.harness import _Coordinator
+    from cooperagents.harness import _SEND_MESSAGE_TOOL, _Coordinator
     from cooperagents.trajectory import Trajectory, record_call, replay
     from cooperagents.types import Assignment
 
@@ -130,7 +146,21 @@ def test_injected_coordinator_uses_separate_endpoint_and_records_once(monkeypatc
     seen = []
 
     def respond(request):
-        seen.append((str(request.url), json.loads(request.content)))
+        payload = json.loads(request.content)
+        seen.append((str(request.url), payload))
+        message = (
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "send_message", "arguments": json.dumps({"recipient": "agent1", "content": "nudge"})},
+                }],
+            }
+            if payload.get("tools")
+            else {"role": "assistant", "content": '{"tool":"finish"}'}
+        )
         return httpx.Response(
             200,
             json={
@@ -142,10 +172,7 @@ def test_injected_coordinator_uses_separate_endpoint_and_records_once(monkeypatc
                     {
                         "index": 0,
                         "finish_reason": "stop",
-                        "message": {
-                            "role": "assistant",
-                            "content": json.dumps({"actions": [{"action": "send_message", "recipient": "agent1", "content": "nudge"}]}),
-                        },
+                        "message": message,
                     }
                 ],
             },
@@ -170,9 +197,13 @@ def test_injected_coordinator_uses_separate_endpoint_and_records_once(monkeypatc
 
         def complete(prompt):
             response = record_call(
-                trace, training.chat.completions.create, model="Qwen/Qwen3-1.7B", messages=[{"role": "user", "content": prompt}]
+                trace, training.chat.completions.create, model="Qwen/Qwen3-1.7B", messages=[{"role": "user", "content": prompt}],
+                tools=[_SEND_MESSAGE_TOOL], tool_choice="auto",
             )
-            return response.choices[0].message.content
+            return [
+                {"name": call.function.name, "arguments": call.function.arguments}
+                for call in response.choices[0].message.tool_calls or []
+            ]
 
         coordinator = _Coordinator(
             {},
@@ -206,6 +237,7 @@ def test_injected_coordinator_uses_separate_endpoint_and_records_once(monkeypatc
 
     assert [url for url, _ in seen] == ["https://training.test/v1/chat/completions"] + ["https://workers.test/v1/chat/completions"] * 3
     assert seen[0][1]["model"] == "Qwen/Qwen3-1.7B"
+    assert seen[0][1]["tools"][0]["function"]["name"] == "send_message"
     assert all(payload["model"] == "openai/fixed-worker-model" for _, payload in seen[1:])
     rows = [json.loads(line) for line in journal.path.read_text().splitlines()]
     assert sum(row["event"] == "request" for row in rows) == 1

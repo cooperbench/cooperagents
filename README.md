@@ -130,17 +130,28 @@ named `notebook.md` and mount its parent directory in each worker factory, e.g.
 initial file before calling the factories and verifies readability before workers
 start. Set `TeamSpec.coordinator_notebook=False` to omit the file and mounts.
 
-The optional `coordinator_complete(prompt) -> str` callback now returns strict
-JSON, rather than a plain nudge:
+The optional `coordinator_complete(prompt)` callback returns OpenAI-style tool
+calls as `[{"name": ..., "arguments": "<JSON object>"}]`. For example:
 
-```json
-{"actions":[{"action":"update_notebook","content":"# Coordination\n\nProposed ownership: pending replies."},{"action":"send_message","recipient":"agent1","content":"Report proposed files and interfaces before editing shared regions."}]}
+```python
+[
+    {"name": "update_notebook", "arguments": '{"content":"# Coordination\\n\\nProposed ownership: pending replies."}'},
+    {"name": "send_message", "arguments": '{"recipient":"agent1","content":"Report proposed files and interfaces."}'},
+]
 ```
 
-`{"actions":[]}` is a valid no-op. Each batch allows one full notebook replacement
-(8,000 characters) and one message per worker (1,200 characters). Unknown fields
-or recipients reject the entire batch. A failed write preserves the old notebook
-and sends none of that batch's messages. Callback errors or invalid JSON fail the
+`[]` is a valid no-op. The default client passes tool definitions to the model API
+and reads `message.tool_calls`; the serving stack must parse the model's native
+tool syntax into that field. The coordinator ignores `message.content`, including
+raw tool markup; a service without a tool parser will therefore make no action.
+For the tested Qwen3.5-9B SGLang service, enable `--tool-call-parser qwen3_coder`
+on the server; this is a serving setting, not a harness model-format branch.
+Each batch allows one full notebook replacement (8,000 characters) and one
+message per worker (1,200 characters). Content above either limit is truncated
+with a visible notice at the end, included in that limit; a truncated notebook
+loses its tail. Unknown fields or recipients reject the entire batch. A failed
+write preserves the old notebook and sends none of that batch's messages.
+Callback errors or invalid tool calls fail the
 run after cleanup; default model failures are logged and retried on a later tick.
 Replies are retained until a valid decision succeeds. The first callback runs on
 the caller thread, later callbacks serially on the monitor thread; injected

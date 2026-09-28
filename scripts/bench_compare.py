@@ -379,7 +379,7 @@ def main() -> None:
                     help="Complete-Team cell: lead/member roles + shared scratchpad volume;"
                          " lead merges member patches and its tree is the submission")
     ap.add_argument("--coordinator", action="store_true",
-                    help="JSON coordinator: initial and ongoing coordination, messages and a read-only shared notebook")
+                    help="tool-call coordinator: initial and ongoing coordination, messages and a read-only shared notebook")
     ap.add_argument("--no-coordinator-notebook", action="store_true",
                     help="keep the same coordinator policy and messages, with no notebook or mount")
     ap.add_argument("--focused-repair", action="store_true", help="R2: harness gathers merge-damage evidence into the repair brief")

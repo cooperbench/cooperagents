@@ -112,20 +112,22 @@ def test_actual_worker_finish_and_coordinator_io(monkeypatch, tmp_path):
     assert result.status == "submitted"
     import openai
 
-    response_text = json.dumps({"actions": [{"action": "send_message", "recipient": "agent1", "content": "nudge"}]})
+    arguments = json.dumps({"recipient": "agent1", "content": "nudge"})
+    tool_call = SimpleNamespace(function=SimpleNamespace(name="send_message", arguments=arguments))
+    def completion(**kwargs):
+        assert kwargs["tool_choice"] == "auto"
+        assert [tool["function"]["name"] for tool in kwargs["tools"]] == ["send_message"]
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content=None, tool_calls=[tool_call]))],
+            model_dump=lambda **kw: {
+                "choices": [{"message": {"content": None, "tool_calls": [{"function": {"name": "send_message", "arguments": arguments}}]}}]
+            },
+        )
+
     monkeypatch.setattr(
         openai,
         "OpenAI",
-        lambda *a, **k: SimpleNamespace(
-            chat=SimpleNamespace(
-                completions=SimpleNamespace(
-                    create=lambda **kwargs: SimpleNamespace(
-                        choices=[SimpleNamespace(message=SimpleNamespace(content=response_text))],
-                        model_dump=lambda **kw: {"choices": [{"message": {"content": response_text}}]},
-                    )
-                )
-            )
-        ),
+        lambda *a, **k: SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=completion))),
     )
     coordinator = _Coordinator(
         {"agent1": env},

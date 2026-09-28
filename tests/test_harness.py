@@ -956,7 +956,7 @@ def test_injected_coordinator_rejects_unsupported_modes():
     ]
     for change in changes:
         with pytest.raises(ValueError, match="coordinator requires"):
-            UnifiedHarness(coordinator_complete=lambda _: '{"actions":[]}').run(
+            UnifiedHarness(coordinator_complete=lambda _: []).run(
                 replace(valid, **change), env_factory=lambda _: pytest.fail("must reject before constructing envs")
             )
     with pytest.raises(TypeError, match="must be callable"):
@@ -1032,7 +1032,7 @@ def test_coop_setup_and_cleanup_failures_release_other_envs(monkeypatch):
         return SimpleNamespace(cleanup=lambda: cleaned.append(aid))
 
     with pytest.raises(RuntimeError, match="creation failed"):
-        UnifiedHarness(coordinator_complete=lambda _: '{"actions":[]}').run(spec, env_factory=partial_factory)
+        UnifiedHarness(coordinator_complete=lambda _: []).run(spec, env_factory=partial_factory)
     assert cleaned == ["agent1"]
     cleaned.clear()
 
@@ -1056,7 +1056,7 @@ def test_coop_setup_and_cleanup_failures_release_other_envs(monkeypatch):
 
     monkeypatch.setattr(_Coordinator, "finish", fail_finish)
     with pytest.raises(RuntimeError, match="cleanup failed"):
-        UnifiedHarness(coordinator_complete=lambda _: '{"actions":[]}').run(spec, env_factory=env_factory)
+        UnifiedHarness(coordinator_complete=lambda _: []).run(spec, env_factory=env_factory)
     assert sorted(cleaned) == ["agent1", "agent2"]
 
 
@@ -1091,6 +1091,6 @@ def test_injected_coordinator_no_intervention_returns_normally(monkeypatch):
         coordinator_notebook=False,
         seed_prior=False,
     )
-    result = UnifiedHarness(coordinator_complete=lambda _: '{"actions":[]}').run(spec, env_factory=env_factory)
+    result = UnifiedHarness(coordinator_complete=lambda _: []).run(spec, env_factory=env_factory)
     assert result.metrics["coordinator_events"] == []
     assert sorted(cleaned) == ["agent1", "agent2", "merge"]

@@ -215,15 +215,55 @@ _COORDINATION_WORKFLOW = (
     "verification results. A proposal is not an agreement; silence is not confirmation."
 )
 _COORDINATOR_PROMPT = """You coordinate software workers implementing features in separate copies of one repository.
+You make one decision from the current OBSERVATION. You cannot inspect code, execute tools or wait for replies.
+The harness executes your returned actions; workers inspect code and may report back in a later observation.
 Their patches will be merged. Help them agree on responsibilities, file regions and shared interfaces before
 contested edits, resolve concrete overlaps or repeated failures during implementation, and decide when remaining
 step/time budgets warrant a specific handoff or verification reminder. Same-file edits are only potential overlap.
 Use the supplied observations and replies; do not invent inspected code, agreement, completed tests or token budgets.
+Use task_id and each worker's id/feature_id exactly as supplied; a feature is not a separate task ID.
+Task requirements describe desired behavior, not proof of existing files or interfaces. Missing or truncated
+evidence is unknown. When needed, ask a worker to inspect and report; do not fill gaps with plausible code details.
+Your earlier notebook and advice are proposals, not independent evidence. Cite the supporting worker reply or
+observed result briefly when recording agreement or verification. Silence and one worker claiming peer agreement
+are not confirmation by both workers. Preserve conflicting reports as unresolved until clarified.
+For a shared definition, propose one writer and have affected workers confirm the interface and ownership;
+do not direct multiple workers to implement the same shared definition. Do not invent an API to make a plan concrete.
 Allow independent work while unresolved shared decisions are clarified. Prefer no action without useful new advice.
-Return ONLY a JSON object with an actions array. No markdown fences or other fields.
-Allowed message: {"action":"send_message","recipient":"<roster ID>","content":"<text>"}.
-At most one message per worker, each nonempty and at most 1200 characters. {"actions":[]} is a valid no-op.
+Use remaining steps/time to prioritize feasible verification or handoff; do not start new work for an exhausted worker.
+Use the provided tools to act. Do not describe an intended action in prose instead of calling its tool.
+Call send_message at most once per worker. Keep each message under 500 characters: state one observed
+fact and one concrete next action or question. Name the check and its scope; an import or partial
+test does not verify a complete feature. Never prefix content with [Message from ...] or speak as another worker.
+When there is no useful action, make no tool call.
 """
+
+_SEND_MESSAGE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "send_message",
+        "description": "Send one coordination message to a worker in the supplied roster.",
+        "parameters": {
+            "type": "object",
+            "properties": {"recipient": {"type": "string"}, "content": {"type": "string"}},
+            "required": ["recipient", "content"],
+            "additionalProperties": False,
+        },
+    },
+}
+_UPDATE_NOTEBOOK_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "update_notebook",
+        "description": "Replace the complete shared Markdown notebook; workers receive its path and version.",
+        "parameters": {
+            "type": "object",
+            "properties": {"content": {"type": "string"}},
+            "required": ["content"],
+            "additionalProperties": False,
+        },
+    },
+}
 
 
 @dataclass(frozen=True)
@@ -235,6 +275,15 @@ class _NotebookUpdate:
 class _CoordinatorMessage:
     recipient: str
     content: str
+
+
+def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"Duplicate tool argument: {key}")
+        result[key] = value
+    return result
 
 
 class _Coordinator:
@@ -253,7 +302,7 @@ class _Coordinator:
         step_limit: int = 0,
         time_limit_s: int | None = None,
         trace=None,
-        complete: Callable[[str], str] | None = None,
+        complete: Callable[[str], list[dict[str, str]]] | None = None,
     ) -> None:
         from cooperagents.planner import _default_planner_complete
 
@@ -288,10 +337,11 @@ class _Coordinator:
                 trace=trace,
                 timeout=60,
                 max_retries=0,
+                tools=[_SEND_MESSAGE_TOOL, *([_UPDATE_NOTEBOOK_TOOL] if notebook_path is not None else [])],
             )
         )
         self._emit(
-            "coordinator_start", model=model, interval_seconds=20, protocol="notebook-v1", notebook_enabled=notebook_path is not None
+            "coordinator_start", model=model, interval_seconds=20, protocol="tool-calls-v1", notebook_enabled=notebook_path is not None
         )
         if notebook_path is not None:
             notebook_path.parent.mkdir(parents=True, exist_ok=True)
@@ -393,21 +443,27 @@ class _Coordinator:
             self._version, self._notebook = version, content
         self._emit("notebook_update", previous_version=previous, version=version, content=content)
 
-    def _parse_actions(self, response: str) -> list[_NotebookUpdate | _CoordinatorMessage]:
-        if not isinstance(response, str) or not response.strip() or len(response) > 65536:
-            raise ValueError("Expected a nonempty JSON response of at most 65536 characters")
-        data = json.loads(response)
-        if not isinstance(data, dict) or set(data) != {"actions"} or not isinstance(data["actions"], list):
-            raise ValueError("Expected only an actions array")
-        if len(data["actions"]) > len(self._assignments) + 1:
+    def _parse_actions(self, response: list[dict[str, str]]) -> list[_NotebookUpdate | _CoordinatorMessage]:
+        if not isinstance(response, list):
+            raise ValueError("Expected tool calls")
+        if len(response) > len(self._assignments) + 1:
             raise ValueError("Too many actions")
         parsed: list[_NotebookUpdate | _CoordinatorMessage] = []
         recipients: set[str] = set()
         updated = False
-        for item in data["actions"]:
+        for call in response:
+            if not isinstance(call, dict) or set(call) != {"name", "arguments"}:
+                raise ValueError("Expected a named tool call with arguments")
+            kind, arguments = call["name"], call["arguments"]
+            if not isinstance(arguments, str) or len(arguments) > 65536:
+                raise ValueError("Tool arguments must be JSON text of at most 65536 characters")
+            try:
+                item = json.loads(arguments, object_pairs_hook=_unique_json_object)
+            except json.JSONDecodeError as exc:
+                raise ValueError("Invalid tool arguments") from exc
             if not isinstance(item, dict):
-                raise ValueError("Each action must be an object")
-            kind, content = item.get("action"), item.get("content")
+                raise ValueError("Tool arguments must be an object")
+            content = item.get("content")
             limit = 8000 if kind == "update_notebook" else 1200
             if not isinstance(content, str) or not content.strip():
                 raise ValueError("Action content must be nonempty text")
@@ -415,12 +471,14 @@ class _Coordinator:
                 label = "notebook" if kind == "update_notebook" else "message"
                 notice = f"\n[truncated: {label} exceeded {limit} characters]"
                 content = content[: limit - len(notice)] + notice
-            if kind == "update_notebook" and set(item) == {"action", "content"}:
+            if kind == "update_notebook" and set(item) == {"content"}:
                 if updated or self._notebook_path is None:
                     raise ValueError("Notebook update is disabled or repeated")
                 updated = True
                 parsed.append(_NotebookUpdate(content))
-            elif kind == "send_message" and set(item) == {"action", "recipient", "content"}:
+            elif kind == "send_message" and set(item) == {"recipient", "content"}:
+                if content.lstrip().startswith("[Message from "):
+                    raise ValueError("Coordinator message impersonates a worker")
                 recipient = item["recipient"]
                 if not isinstance(recipient, str) or recipient not in self._assignments or recipient in recipients:
                     raise ValueError("Unknown or repeated message recipient")
@@ -550,6 +608,7 @@ class _Coordinator:
             workers.append(
                 {
                     "id": aid,
+                    "feature_id": assignment.feature_id,
                     "task": self._clip(assignment.task, 6000),
                     "status": finished.get(aid, "running" if agent is not None else "not_started"),
                     "steps_used": used,
@@ -568,16 +627,25 @@ class _Coordinator:
             "previous_error": self._last_error,
         }
         protocol = _COORDINATOR_PROMPT
+        if initial:
+            protocol += (
+                "\nINITIAL DECISION: Workers have not started inspecting code. Request inspection and a report of "
+                "proposed files, regions, shared interfaces and dependencies to peers and coordinator. "
+                "You may suggest provisional responsibilities based on the supplied feature requirements, "
+                "but leave concrete edit boundaries and ownership pending worker evidence and confirmation. "
+                "Do not guess filenames, existing symbols or new shared APIs, or declare coordination complete.\n"
+            )
         if self._notebook_path is not None:
             observation["notebook"] = {"version": version, "content": notebook}
             protocol += (
-                'Also allowed once: {"action":"update_notebook","content":"<complete Markdown>"}, at most 8000 characters.\n'
-                "Prefer a short notebook of current responsibilities/regions, interfaces/dependencies, pending issues and handoff.\n"
+                "Call update_notebook at most once, with the complete Markdown (at most 8000 characters).\n"
+                "Prefer a short notebook (about 1000-2000 characters) of current responsibilities/regions, "
+                "interfaces/dependencies, pending issues and handoff. Preserve unresolved questions when replacing it.\n"
                 "Distinguish proposed, worker-reported, confirmed (explicit replies) and verified (observed checks).\n"
                 f"Workers read {_COORDINATOR_PATH}; an update automatically sends a path/version reminder, not the full text.\n"
             )
         else:
-            protocol += "Notebook is disabled. Only send_message and an empty actions array are allowed.\n"
+            protocol += "Notebook is disabled; only send_message is available.\n"
         prompt = protocol + "\nOBSERVATION:\n" + json.dumps(observation, ensure_ascii=False)
         count = len(self._pending)
         self._emit("observation", **observation)
@@ -903,7 +971,7 @@ def _repair_task(assignments: list[Assignment]) -> str:
 class UnifiedHarness:
     """Runs one team on one task, growing it on demand.
 
-    ``coordinator_complete`` returns a JSON actions object for one mini_swe
+    ``coordinator_complete`` returns tool calls for one mini_swe
     coop-tools team. Its first call is synchronous on the harness caller's
     thread; later calls run serially on the monitor thread. The callback must
     support both threads and enforce its own request timeout (under 600s).
@@ -924,7 +992,7 @@ class UnifiedHarness:
         quiet: bool = True,
         on_event: Callable[[str], None] | None = None,
         trajectory=None,
-        coordinator_complete: Callable[[str], str] | None = None,
+        coordinator_complete: Callable[[str], list[dict[str, str]]] | None = None,
         coordinator_notebook_path: Path | None = None,
     ) -> None:
         if coordinator_complete is not None and not callable(coordinator_complete):

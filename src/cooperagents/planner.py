@@ -126,7 +126,7 @@ def _infer_topology(subs: list[SubTask]) -> str:
     return "sequential" if edges >= len(subs) - 1 else "hybrid"
 
 
-def _default_planner_complete(model, base_url, api_key, *, trace=None, timeout=None, max_retries=None) -> Callable[[str], str] | None:
+def _default_planner_complete(model, base_url, api_key, *, trace=None, timeout=None, max_retries=None, tools=None):
     try:
         from openai import OpenAI
 
@@ -140,16 +140,22 @@ def _default_planner_complete(model, base_url, api_key, *, trace=None, timeout=N
             options["max_retries"] = max_retries
         client = OpenAI(base_url=b, api_key=k, **options)
 
-        def complete(prompt: str) -> str:
+        def complete(prompt: str) -> str | list[dict[str, str]]:
             kwargs = sampling_kwargs()
             if "max_tokens" not in kwargs:
                 kwargs["max_completion_tokens"] = 2000
+            if tools is not None:
+                kwargs["tools"] = tools
+                kwargs["tool_choice"] = "auto"
             from cooperagents.trajectory import record_call
 
             resp = record_call(trace, client.chat.completions.create,
                                model=m, messages=[{"role": "user", "content": prompt}], **kwargs)
             from cooperagents.vendor.mini_swe.models.litellm_model import _strip_think
 
+            if tools is not None:
+                calls = resp.choices[0].message.tool_calls or []
+                return [{"name": call.function.name, "arguments": call.function.arguments} for call in calls]
             return _strip_think(resp.choices[0].message.content or "")
 
         return complete

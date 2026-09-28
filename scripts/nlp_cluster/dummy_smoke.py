@@ -27,31 +27,24 @@ def main():
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             requests.append(body)
+            names = {tool["function"]["name"] for tool in body.get("tools") or []}
+            coordinator_request = "update_notebook" in names
             message = {
                 "role": "assistant",
-                "content": json.dumps(
-                    {
-                        "actions": [
-                            {
-                                "action": "update_notebook",
-                                "content": "# Coordination\n\n## Proposed\nEach worker owns its separate dummy marker.",
-                            },
-                            {
-                                "action": "send_message",
-                                "recipient": "agent1",
-                                "content": "Read /coordination/notebook.md and confirm your marker.",
-                            },
-                            {
-                                "action": "send_message",
-                                "recipient": "agent2",
-                                "content": "Read /coordination/notebook.md and confirm your marker.",
-                            },
+                "content": None,
+                "tool_calls": [
+                    {"id": f"coord_{i}", "type": "function", "function": {"name": name, "arguments": json.dumps(args)}}
+                    for i, (name, args) in enumerate(
+                        [
+                            ("update_notebook", {"content": "# Coordination\n\n## Proposed\nEach worker owns its separate dummy marker."}),
+                            ("send_message", {"recipient": "agent1", "content": "Read /coordination/notebook.md and confirm your marker."}),
+                            ("send_message", {"recipient": "agent2", "content": "Read /coordination/notebook.md and confirm your marker."}),
                         ]
-                    }
-                ),
+                    )
+                ],
             }
-            finish = "stop"
-            if body.get("tools"):
+            finish = "tool_calls"
+            if not coordinator_request:
                 history = body["messages"]
                 prompt = "\n".join(str(m.get("content", "")) for m in history if m["role"] == "user")
                 own, mate = ("agent1", "agent2") if "TEAMMATES: agent2" in prompt else ("agent2", "agent1")
@@ -130,7 +123,7 @@ def main():
         notebook = run / "mount-check" / "notebook.md"
         roster = [Assignment(agent_id=f"agent{i}", role="member", task="mount check") for i in (1, 2)]
         coordinator = _Coordinator(
-            {}, assignments=roster, bus=InMemoryBus("mount-check"), notebook_path=notebook, complete=lambda _: '{"actions":[]}'
+            {}, assignments=roster, bus=InMemoryBus("mount-check"), notebook_path=notebook, complete=lambda _: []
         )
         with ExitStack() as cleanup:
             envs = []
@@ -173,9 +166,11 @@ def main():
         ]
         (run / "training-args.txt").write_text("\n".join(command) + "\n")
         subprocess.run(command, check=True)
-        assert any(b.get("tools") for b in requests), "No worker HTTP requests"
-        assert not requests[0].get("tools"), "Initial coordinator decision must precede worker requests"
-        assert any("coordinator notebook v1" in json.dumps(b["messages"]) for b in requests if b.get("tools")), (
+        assert any("bash" in {tool["function"]["name"] for tool in b.get("tools") or []} for b in requests), "No worker HTTP requests"
+        assert {tool["function"]["name"] for tool in requests[0]["tools"]} == {"send_message", "update_notebook"}, (
+            "Initial coordinator decision must precede worker requests"
+        )
+        assert any("coordinator notebook v1" in json.dumps(b["messages"]) for b in requests[1:] if b.get("tools")), (
             "Worker did not read the mounted notebook into its model context"
         )
         expected = dict(

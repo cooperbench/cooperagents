@@ -9,7 +9,7 @@ Retired arms and pre-adapter history: git log before commit 0e73bdf.
 Arms
   solo       1 mini-swe agent + the mechanical tail.
   coopgit    N agents (default 2), same task, shared git remote.
-  coopgitc2  coopgit + JSON coordinator messages and a read-only notebook.
+  coopgitc2  coopgit + tool-call coordinator messages and a read-only notebook.
 
 Mechanism flags (each measured; record in docs/SEAM_BACKLOG.md)
   --repair            gate the integrated tree; on failure run up to 2
