@@ -12,6 +12,7 @@ import json
 import os
 import time
 from datetime import datetime
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -19,6 +20,7 @@ from cooperagents.bus.memory import InMemoryBus
 from cooperagents.env.base import ExecResult
 from cooperagents.harness import _SEND_MESSAGE_TOOL, _UPDATE_NOTEBOOK_TOOL, _Coordinator
 from cooperagents.planner import _default_planner_complete
+from cooperagents.trajectory import Trajectory
 from cooperagents.types import Assignment
 
 
@@ -83,87 +85,96 @@ def run(point: dict, variant: dict, output: Path, *, dry_run: bool = False) -> d
     }
     captured = {}
     model = os.environ.get("COOPER_REPLAY_MODEL", "qwen3.5-9b")
-    complete = (
-        (lambda _prompt: [])
-        if dry_run
-        else _default_planner_complete(
-            model,
-            None,
-            None,
-            tools=[_SEND_MESSAGE_TOOL, _UPDATE_NOTEBOOK_TOOL],
-            timeout=60,
-            max_retries=0,
-        )
-    )
-    if complete is None:
-        raise RuntimeError("Coordinator model is not configured")
-
-    def call(prompt: str) -> list[dict[str, str]]:
-        prefix, separator, observation = prompt.partition("\nOBSERVATION:\n")
-        if not separator:
-            raise ValueError("Coordinator observation marker missing")
-        add_instruction = variant.get("instruction_addendum", "")
-        add_observation = variant.get("observation_addendum", "")
-        payload = json.loads(observation)
-        if add_observation:
-            payload["research_observation_note"] = add_observation
-        modified = prefix + ("\n" + add_instruction if add_instruction else "") + separator + json.dumps(payload, ensure_ascii=False)
-        captured["baseline_prompt"] = prompt
-        captured["modified_prompt"] = modified
-        result = complete(modified)
-        captured["raw_actions"] = result
-        return result
-
     output.parent.mkdir(parents=True, exist_ok=True)
-    notebook = output.with_suffix(".notebook.md")
-    coordinator = _Coordinator(
-        envs,
-        assignments=roster,
-        bus=InMemoryBus("research"),
-        notebook_path=notebook,
-        repo=point["repo"],
-        task_id=int(point["pair"].split("/")[1]),
-        complete=call,
-    )
-    boundary_time = datetime.fromisoformat(rows[point["boundary_seq"] - 1]["time"])
-    for aid, start in starts.items():
-        used = sum(
-            row["actor"] == aid and row["event"] == "request" and "messages" in row["data"].get("request", {})
-            for row in rows[: point["boundary_seq"] - 1]
-        )
-        original_limit = start.get("step_limit") or 1000
-        limit = used + point["replay_model_calls"] if point["phase"] == "budget" and aid == point["target"] else original_limit
-        original_seconds = start.get("time_limit_s")
-        remaining = (
-            max(
-                0,
-                original_seconds
-                - (
-                    boundary_time
-                    - datetime.fromisoformat(next(row["time"] for row in rows if row["actor"] == aid and row["event"] == "agent_start"))
-                ).total_seconds(),
+    trace_path = output.with_suffix(".trace.jsonl") if not dry_run else None
+    trajectory = Trajectory(trace_path) if trace_path else None
+    try:
+        trace = partial(trajectory.emit, "coordinator") if trajectory else None
+        complete = (
+            (lambda _prompt: [])
+            if dry_run
+            else _default_planner_complete(
+                model,
+                None,
+                None,
+                tools=[_SEND_MESSAGE_TOOL, _UPDATE_NOTEBOOK_TOOL],
+                trace=trace,
+                timeout=60,
+                max_retries=0,
             )
-            if original_seconds
-            else None
         )
-        config = SimpleNamespace(step_limit=limit, wall_deadline=time.time() + remaining if remaining is not None else None)
-        coordinator.register(aid, SimpleNamespace(messages=contexts[aid], n_calls=used, config=config, _compaction_count=0))
-    coordinator.decide(initial=point["phase"] == "early")
-    result = {
-        "case_id": point["id"],
-        "variant": variant,
-        "model": model,
-        "dry_run": dry_run,
-        "source_boundary_seq": point["boundary_seq"],
-        "observation_evidence": evidence,
-        "experimental_five_call_budget": point["phase"] == "budget",
-        **captured,
-        "delivered": {aid: coordinator.drain(aid) for aid in contexts},
-        "notebook": notebook.read_text(encoding="utf-8"),
-        "error": str(coordinator.error) if coordinator.error else None,
-    }
-    output.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
-    return result
+        if complete is None:
+            raise RuntimeError("Coordinator model is not configured")
+
+        def call(prompt: str) -> list[dict[str, str]]:
+            prefix, separator, observation = prompt.partition("\nOBSERVATION:\n")
+            if not separator:
+                raise ValueError("Coordinator observation marker missing")
+            add_instruction = variant.get("instruction_addendum", "")
+            add_observation = variant.get("observation_addendum", "")
+            payload = json.loads(observation)
+            if add_observation:
+                payload["research_observation_note"] = add_observation
+            modified = prefix + ("\n" + add_instruction if add_instruction else "") + separator + json.dumps(payload, ensure_ascii=False)
+            captured["baseline_prompt"] = prompt
+            captured["modified_prompt"] = modified
+            result = complete(modified)
+            captured["raw_actions"] = result
+            return result
+
+        notebook = output.with_suffix(".notebook.md")
+        coordinator = _Coordinator(
+            envs,
+            assignments=roster,
+            bus=InMemoryBus("research"),
+            notebook_path=notebook,
+            repo=point["repo"],
+            task_id=int(point["pair"].split("/")[1]),
+            complete=call,
+        )
+        boundary_time = datetime.fromisoformat(rows[point["boundary_seq"] - 1]["time"])
+        for aid, start in starts.items():
+            used = sum(
+                row["actor"] == aid and row["event"] == "request" and "messages" in row["data"].get("request", {})
+                for row in rows[: point["boundary_seq"] - 1]
+            )
+            original_limit = start.get("step_limit") or 1000
+            limit = used + point["replay_model_calls"] if point["phase"] == "budget" and aid == point["target"] else original_limit
+            original_seconds = start.get("time_limit_s")
+            remaining = (
+                max(
+                    0,
+                    original_seconds
+                    - (
+                        boundary_time
+                        - datetime.fromisoformat(next(row["time"] for row in rows if row["actor"] == aid and row["event"] == "agent_start"))
+                    ).total_seconds(),
+                )
+                if original_seconds
+                else None
+            )
+            config = SimpleNamespace(step_limit=limit, wall_deadline=time.time() + remaining if remaining is not None else None)
+            coordinator.register(aid, SimpleNamespace(messages=contexts[aid], n_calls=used, config=config, _compaction_count=0))
+        coordinator.decide(initial=point["phase"] == "early")
+        result = {
+            "case_id": point["id"],
+            "variant": variant,
+            "model": model,
+            "dry_run": dry_run,
+            "trace_path": str(trace_path) if trace_path else None,
+            "source_boundary_seq": point["boundary_seq"],
+            "observation_evidence": evidence,
+            "experimental_five_call_budget": point["phase"] == "budget",
+            **captured,
+            "delivered": {aid: coordinator.drain(aid) for aid in contexts},
+            "notebook": notebook.read_text(encoding="utf-8"),
+            "error": str(coordinator.error) if coordinator.error else None,
+        }
+        output.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+        return result
+    finally:
+        if trajectory is not None:
+            trajectory.close()
 
 
 def main() -> None:
