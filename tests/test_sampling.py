@@ -114,6 +114,9 @@ def test_sglang_nonthinking_profile(monkeypatch):
 
 
 def test_coordinator_ignores_unparsed_tool_markup(monkeypatch):
+    import sys
+
+    monkeypatch.setitem(sys.modules, "cooperagents.vendor.mini_swe.models.litellm_model", None)
     from cooperagents.harness import _SEND_MESSAGE_TOOL
 
     def respond(request):

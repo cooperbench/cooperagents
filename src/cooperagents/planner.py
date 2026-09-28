@@ -151,11 +151,11 @@ def _default_planner_complete(model, base_url, api_key, *, trace=None, timeout=N
 
             resp = record_call(trace, client.chat.completions.create,
                                model=m, messages=[{"role": "user", "content": prompt}], **kwargs)
-            from cooperagents.vendor.mini_swe.models.litellm_model import _strip_think
-
             if tools is not None:
                 calls = resp.choices[0].message.tool_calls or []
                 return [{"name": call.function.name, "arguments": call.function.arguments} for call in calls]
+            from cooperagents.vendor.mini_swe.models.litellm_model import _strip_think
+
             return _strip_think(resp.choices[0].message.content or "")
 
         return complete
