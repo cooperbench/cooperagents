@@ -9,7 +9,12 @@ from scripts import coordinator_worker_replay as replay
 from cooperagents.env.base import ExecResult
 
 
-def run_replies(monkeypatch, replies: list[tuple[str, list | None] | Exception], trace_path=None) -> tuple[dict, list[list[dict]]]:
+def run_replies(
+    monkeypatch,
+    replies: list[tuple[str, list | None] | Exception],
+    trace_path=None,
+    commands: list[str] | None = None,
+) -> tuple[dict, list[list[dict]]]:
     requests: list[list[dict]] = []
     pending = iter(replies)
 
@@ -46,6 +51,10 @@ def run_replies(monkeypatch, replies: list[tuple[str, list | None] | Exception],
 
     class FakeEnv:
         def execute(self, command, **kwargs):
+            if commands is not None:
+                commands.append(command)
+            if command == "submit":
+                return ExecResult(" \n COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\nfinal answer\n", 0)
             return ExecResult("ok" if command != "git diff HEAD" else "", 0)
 
         def cleanup(self):
@@ -111,6 +120,31 @@ def test_repeated_text_rejections_use_full_call_budget(monkeypatch):
     result, requests = run_replies(monkeypatch, [("ACK", None)] * 5)
     assert len(requests) == len(result["steps"]) == 5
     assert all(step["accepted"] is False for step in result["steps"])
+    assert result["termination"] == {"reason": "call_budget", "step": 5}
+    assert result["completion_gate"] == "disabled"
+
+
+def test_successful_submission_stops_before_later_tools_and_model_calls(monkeypatch):
+    submit = SimpleNamespace(
+        id="submit",
+        function=SimpleNamespace(name="bash", arguments='{"command":"submit"}'),
+    )
+    later_tool = SimpleNamespace(
+        id="later-tool",
+        function=SimpleNamespace(name="bash", arguments='{"command":"echo too late"}'),
+    )
+    commands: list[str] = []
+    result, requests = run_replies(
+        monkeypatch,
+        [("", [submit, later_tool]), ("", [later_tool])],
+        commands=commands,
+    )
+
+    assert len(requests) == len(result["steps"]) == 1
+    assert [action["arguments"]["command"] for action in result["steps"][0]["actions"]] == ["submit"]
+    assert result["termination"] == {"reason": "submitted", "step": 1, "submission": "final answer\n"}
+    assert result["completion_gate"] == "disabled"
+    assert commands == ["submit", "git diff HEAD"]
 
 
 @pytest.mark.parametrize("wait", [False, True])

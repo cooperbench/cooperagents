@@ -187,6 +187,7 @@ def replay_one(point: dict, candidate: dict, state_dir: Path | None, label: str,
             config = files("cooperagents.vendor.mini_swe").joinpath("config", "solo.yaml")
             format_error_template = yaml.safe_load(config.read_text())["model"]["format_error_template"]
             steps = []
+            termination = None
             for index in range(point["replay_model_calls"]):
                 response = record_call(
                     trace,
@@ -236,6 +237,13 @@ def replay_one(point: dict, candidate: dict, state_dir: Path | None, label: str,
                         if function["name"] == "bash":
                             result = env.execute(arguments["command"], timeout=90)
                             observation = {"returncode": result.exit_code, "output": result.stdout[:20000]}
+                            lines = result.stdout.lstrip().splitlines(keepends=True)
+                            if result.exit_code == 0 and lines and lines[0].strip() == "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT":
+                                termination = {
+                                    "reason": "submitted",
+                                    "step": index + 1,
+                                    "submission": "".join(lines[1:]),
+                                }
                         elif function["name"] == "send_message":
                             # With no peer loop, a blocking send reaches the real 60s timeout
                             # with no reply. Skip wall time but preserve that tool observation.
@@ -257,6 +265,8 @@ def replay_one(point: dict, candidate: dict, state_dir: Path | None, label: str,
                     actions.append(action)
                     if trace is not None:
                         trace("tool_action", step=index + 1, tool_call_id=call["id"], action=action)
+                    if termination is not None:
+                        break
                     messages.append({"role": "tool", "tool_call_id": call["id"], "content": json.dumps(observation, ensure_ascii=False)})
                 steps.append(
                     {
@@ -267,6 +277,10 @@ def replay_one(point: dict, candidate: dict, state_dir: Path | None, label: str,
                         "accepted": True,
                     }
                 )
+                if termination is not None:
+                    break
+            if termination is None:
+                termination = {"reason": "call_budget", "step": len(steps)}
             diff = required(env.execute("git diff HEAD"), "read final diff")
             return {
                 "case_id": point["id"],
@@ -277,6 +291,8 @@ def replay_one(point: dict, candidate: dict, state_dir: Path | None, label: str,
                 "notices": notices,
                 "initial_messages_sha256": baseline_hash,
                 "steps": steps,
+                "termination": termination,
+                "completion_gate": "disabled",
                 "final_diff": diff,
                 "workspace_evidence": "base_image" if patch is None else str(patch),
                 **({"trace_path": str(trace_path)} if trace_path is not None else {}),
