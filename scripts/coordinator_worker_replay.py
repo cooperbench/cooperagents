@@ -12,7 +12,10 @@ import hashlib
 import json
 import os
 import tempfile
+from importlib.resources import files
 from pathlib import Path
+
+import yaml
 
 from cooperagents.bus.memory import InMemoryBus
 from cooperagents.env.base import Environment, ExecResult
@@ -20,6 +23,8 @@ from cooperagents.env.docker import DockerEnv
 from cooperagents.env.runtime import task_environment
 from cooperagents.harness import _Coordinator
 from cooperagents.types import Assignment
+from cooperagents.vendor.mini_swe.exceptions import FormatError
+from cooperagents.vendor.mini_swe.models.utils.actions_toolcall import parse_toolcall_actions
 
 
 def required(result: ExecResult, label: str) -> str:
@@ -87,9 +92,7 @@ def render_notices(notices: list[str], candidate: dict) -> list[str]:
         raise ValueError("Coordinator notice label must be plain text of at most 128 characters")
     if label:
         notices = [
-            notice.replace("[coordinator", f"[{label}", 1)
-            if notice.startswith(("[coordinator]", "[coordinator;"))
-            else notice
+            notice.replace("[coordinator", f"[{label}", 1) if notice.startswith(("[coordinator]", "[coordinator;")) else notice
             for notice in notices
         ]
     prefix = candidate.get("coordinator_notice_prefix", "")
@@ -176,6 +179,8 @@ def replay_one(point: dict, candidate: dict, state_dir: Path | None, label: str)
                 messages.append({"role": "user", "content": "\n".join(notices)})
             model = os.environ.get("COOPER_REPLAY_MODEL", "qwen3.5-9b")
             client = OpenAI(base_url=os.environ["OPENAI_BASE_URL"], api_key=os.environ.get("OPENAI_API_KEY", "dummy"), timeout=120)
+            config = files("cooperagents.vendor.mini_swe").joinpath("config", "solo.yaml")
+            format_error_template = yaml.safe_load(config.read_text())["model"]["format_error_template"]
             steps = []
             for index in range(point["replay_model_calls"]):
                 response = client.chat.completions.create(
@@ -191,9 +196,28 @@ def replay_one(point: dict, candidate: dict, state_dir: Path | None, label: str)
                 )
                 choice = response.choices[0]
                 reply = choice.message
+                tool_calls = reply.tool_calls or []
+                try:
+                    parse_toolcall_actions(
+                        tool_calls,
+                        format_error_template=format_error_template,
+                    )
+                except FormatError as error:
+                    steps.append(
+                        {
+                            "index": index + 1,
+                            "content": reply.content,
+                            "actions": [],
+                            "usage": response.usage.model_dump() if response.usage else None,
+                            "accepted": False,
+                            "error": error.messages[0]["content"],
+                        }
+                    )
+                    messages.extend({"role": message["role"], "content": message["content"]} for message in error.messages)
+                    continue
                 calls = [
                     {"id": tool.id, "type": "function", "function": {"name": tool.function.name, "arguments": tool.function.arguments}}
-                    for tool in reply.tool_calls or []
+                    for tool in tool_calls
                 ]
                 messages.append({"role": "assistant", "content": reply.content or "", **({"tool_calls": calls} if calls else {})})
                 actions = []
@@ -219,10 +243,9 @@ def replay_one(point: dict, candidate: dict, state_dir: Path | None, label: str)
                         "content": reply.content,
                         "actions": actions,
                         "usage": response.usage.model_dump() if response.usage else None,
+                        "accepted": True,
                     }
                 )
-                if not calls:
-                    break
             diff = required(env.execute("git diff HEAD"), "read final diff")
             return {
                 "case_id": point["id"],
