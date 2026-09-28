@@ -392,6 +392,7 @@ def run_mini_swe_agent(
     if (tool_protocol or monitor is not None) and comm is not None:
         system_template = system_template + _SEND_MESSAGE_SYSTEM
     if monitor is not None:
+        system_template += monitor.worker_instructions()
         system_template += (
             '\nThe coordinator is also a valid send_message recipient: {"recipient":"coordinator","content":"..."}. '
             "Report proposed edit regions, interface agreements, blockers and verification results without waiting for a reply."

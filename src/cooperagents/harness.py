@@ -208,7 +208,13 @@ def _build_contract(assignments: list[Assignment], model: str | None = None) -> 
 
 _COORDINATOR_PATH = "/coordination/notebook.md"
 _COORDINATION_WORKFLOW = (
-    "\n\nCOORDINATION — first inspect the relevant code, then send your proposed files, regions and "
+    "\n\nCOORDINATOR ACKNOWLEDGMENT — when new coordinator notices arrive, begin your next "
+    "assistant response with one short ordinary-text acknowledgment naming the request and your next action. "
+    "Do not use send_message for the acknowledgment, claim completion or agreement, or repeat it without "
+    "a new notice. Then continue work with normal tools in that same response. Example: assistant text "
+    "'I received the coordinator's scope request; I'll inspect the relevant files now,' followed by "
+    "bash {\"command\":\"ls src\"}.\n\n"
+    "COORDINATION — after acknowledging, inspect the relevant code, then send your proposed files, regions and "
     "shared interfaces to your teammates and to the coordinator using send_message. Confirm disputed "
     "shared responsibilities before editing those regions. While waiting, continue read-only exploration, "
     "verification or clearly independent work; do not use wait:true. Report changed plans, blockers and "
@@ -362,8 +368,8 @@ class _Coordinator:
         note = ""
         if self._notebook_path is not None:
             note = (
-                f"\nRead the coordinator's read-only notebook at {_COORDINATOR_PATH} before starting, "
-                "after an update notification, and after context compaction. "
+                f"\nAfter acknowledging a new notice, read the coordinator's read-only notebook at {_COORDINATOR_PATH} "
+                "before starting affected work, after an update notification, and after context compaction. "
                 f"Use `cat {_COORDINATOR_PATH}`; the file is outside your code repository. "
                 "Read the version in the file header; proposals still require confirmation."
             )
@@ -1350,8 +1356,6 @@ class UnifiedHarness:
                                 "follow it EXACTLY (names, signatures, file locations). Deviating breaks "
                                 "the merge with your teammates:\n" + contract
                             )
-                        if coordinator is not None:
-                            task += coordinator.worker_instructions()
                         poller = (
                             _TeammatePoller(a.agent_id, coop_envs)
                             if (spec.live_awareness or spec.task_board or spec.coordinator or spec.git_share)

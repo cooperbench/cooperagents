@@ -328,6 +328,9 @@ def test_real_worker_loop_startup_replies_and_path_notices(monkeypatch, tmp_path
         requests.append(messages)
         step = sum(m["role"] == "assistant" for m in messages)
         if step == 0:
+            assert "COORDINATOR ACKNOWLEDGMENT" in messages[0]["content"]
+            assert "Do not use send_message for the acknowledgment" in messages[0]["content"]
+            assert "COORDINATOR ACKNOWLEDGMENT" not in messages[1]["content"]
             actions = [
                 ("send_message", {"recipient": "coordinator", "content": "proposed independent edit"}),
                 ("bash", {"command": "sync coordinator"}),
@@ -340,8 +343,9 @@ def test_real_worker_loop_startup_replies_and_path_notices(monkeypatch, tmp_path
             {"id": f"s{step}-{i}", "type": "function", "function": {"name": name, "arguments": json.dumps(args)}}
             for i, (name, args) in enumerate(actions)
         ]
+        content = "I received the coordinator's advice; I'll inspect scope now." if step == 0 else ""
         return litellm.ModelResponse(
-            choices=[{"message": {"role": "assistant", "content": "", "tool_calls": calls}}],
+            choices=[{"message": {"role": "assistant", "content": content, "tool_calls": calls}}],
             usage={"prompt_tokens": 10, "completion_tokens": 1},
         )
 
@@ -369,6 +373,11 @@ def test_real_worker_loop_startup_replies_and_path_notices(monkeypatch, tmp_path
     finally:
         journal.close()
     assert all(agent.status == "submitted" for agent in result.seeds.values())
+    if not notebook:  # The notebook branch intentionally compacts away early assistant text.
+        assert all(
+            next(message for message in agent.messages if message["role"] == "assistant")["content"].startswith("I received")
+            for agent in result.seeds.values()
+        )
     assert len(decisions) == 2 and len(decisions[1]["replies"]) == 2
     assert sorted(cleaned) == ["agent1", "agent2", "merge"]
     texts = [json.dumps(request) for request in requests]
@@ -402,7 +411,13 @@ def test_worker_error_marks_finished_before_end(monkeypatch):
     events = []
     c = coordinator(trace=lambda event, **data: events.append(event))
     monkeypatch.setenv("OPENAI_API_KEY", "offline")
-    monkeypatch.setattr(DefaultAgent, "run", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("worker failure")))
+    systems = []
+
+    def fail(agent, **kwargs):
+        systems.append(agent._render_template(agent.config.system_template))
+        raise RuntimeError("worker failure")
+
+    monkeypatch.setattr(DefaultAgent, "run", fail)
     result = run_mini_swe_agent(
         SimpleNamespace(repo_path="/repo"),
         task="feature",
@@ -415,5 +430,11 @@ def test_worker_error_marks_finished_before_end(monkeypatch):
         trace=lambda event, **data: events.append(event),
     )
     assert result.status == "error" and result.error == "worker failure"
+    assert "COORDINATOR ACKNOWLEDGMENT" in systems[-1]
     assert events.index("worker_finished") < events.index("agent_end")
     assert c.drain("agent1") == []
+    solo = run_mini_swe_agent(
+        SimpleNamespace(repo_path="/repo"), task="feature", agent_id="solo", role="lead",
+        model_name="dummy", step_limit=3, cost_limit=5,
+    )
+    assert solo.status == "error" and "COORDINATOR ACKNOWLEDGMENT" not in systems[-1]
