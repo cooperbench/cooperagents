@@ -89,13 +89,26 @@ def test_replay_seed_applies_patch_and_checks_exact_workspace(tmp_path: Path):
 
 
 def test_notice_prefix_preserves_canonical_messages_and_validates_input():
-    notices = ["[coordinator] First", "[coordinator] Second"]
+    notices = ["[coordinator] First", "[coordinator; notebook v0] Second", "[agent2] Third"]
     assert render_notices(notices, {}) == notices
     assert render_notices(notices, {"coordinator_notice_prefix": "[IMPORTANT]"}) == ["[IMPORTANT]\n" + notice for notice in notices]
+    relabeled = [
+        "[IMPORTANT!! MESSAGE FROM COORDINATOR] First",
+        "[IMPORTANT!! MESSAGE FROM COORDINATOR; notebook v0] Second",
+        "[agent2] Third",
+    ]
+    assert render_notices(notices, {"coordinator_notice_label": "IMPORTANT!! MESSAGE FROM COORDINATOR"}) == relabeled
+    assert render_notices(
+        notices,
+        {"coordinator_notice_label": "IMPORTANT!! MESSAGE FROM COORDINATOR", "coordinator_notice_prefix": "[P]"},
+    ) == ["[P]\n" + notice for notice in relabeled]
     assert notices[0] == "[coordinator] First"
     for invalid in (42, "x" * 129):
         with pytest.raises(ValueError, match="prefix"):
             render_notices(notices, {"coordinator_notice_prefix": invalid})
+    for invalid in (42, "x" * 129, "[COORDINATOR]", "BAD\nLABEL"):
+        with pytest.raises(ValueError, match="label"):
+            render_notices(notices, {"coordinator_notice_label": invalid})
 
 
 def test_replay_rejects_mismatched_control_case_before_running(monkeypatch, tmp_path: Path):
@@ -134,6 +147,13 @@ def test_coordination_cost_uses_candidate_minus_supplied_control():
         "notices": ["[P]\nnotice"],
     }
     assert coordination_chars(candidate) - coordination_chars(control) == len("[P]\n")
+    relabeled = {
+        "candidate": {**control["candidate"], "coordinator_notice_label": "IMPORTANT!! MESSAGE FROM COORDINATOR"},
+        "notices": ["[IMPORTANT!! MESSAGE FROM COORDINATOR] notice", "[IMPORTANT!! MESSAGE FROM COORDINATOR; notebook v0] second"],
+    }
+    assert coordination_chars(relabeled) - coordination_chars(control) == 2 * (
+        len("IMPORTANT!! MESSAGE FROM COORDINATOR") - len("coordinator")
+    )
     assert coordination_chars({"candidate": {"actions": []}, "notices": []}) == 0
 
 

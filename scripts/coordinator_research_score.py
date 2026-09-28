@@ -14,7 +14,8 @@ import tempfile
 from collections import defaultdict
 from pathlib import Path
 
-RUBRIC = """Judge five worker model calls, not just the final patch. For each arm, score:
+RUBRIC = """Judge all worker model calls supplied in each arm, not just the final patch.
+The arms may contain different numbers of calls if one stopped early. For each arm, score:
 receipt 0-2: 0 no sign of receipt, 1 rote acknowledgment or notebook read only,
 2 acknowledgment that names the requested next step.
 behavior 0-4: 0 no relevant action, 1 acknowledgment only, 2 relevant inspection/plan,
@@ -115,10 +116,12 @@ def packet(point: dict, control: dict, candidate: dict) -> tuple[dict, str]:
 def coordination_chars(record: dict) -> int:
     candidate = record["candidate"]
     prefix = candidate.get("coordinator_notice_prefix", "")
+    label = candidate.get("coordinator_notice_label", "")
     return (
         sum(len(json.dumps(action)) for action in candidate["actions"])
         + len(candidate.get("worker_coordination_suffix", ""))
         + len(prefix + "\n" if prefix else "") * len(record["notices"])
+        + (len(label) - len("coordinator") if label else 0) * len(record["notices"])
     )
 
 

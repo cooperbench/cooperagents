@@ -82,6 +82,16 @@ def materialize_actions(point: dict, candidate: dict, notebook_path: Path) -> tu
 
 
 def render_notices(notices: list[str], candidate: dict) -> list[str]:
+    label = candidate.get("coordinator_notice_label", "")
+    if not isinstance(label, str) or len(label) > 128 or any(char in label for char in "[]\r\n"):
+        raise ValueError("Coordinator notice label must be plain text of at most 128 characters")
+    if label:
+        notices = [
+            notice.replace("[coordinator", f"[{label}", 1)
+            if notice.startswith(("[coordinator]", "[coordinator;"))
+            else notice
+            for notice in notices
+        ]
     prefix = candidate.get("coordinator_notice_prefix", "")
     if not isinstance(prefix, str) or len(prefix) > 128:
         raise ValueError("Coordinator notice prefix must be a string of at most 128 characters")
