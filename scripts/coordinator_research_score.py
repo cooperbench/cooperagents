@@ -21,6 +21,10 @@ receipt 0-2: 0 no sign of receipt, 1 rote acknowledgment or notebook read only,
 2 acknowledgment that names the requested next step.
 behavior 0-4: 0 no relevant action, 1 acknowledgment only, 2 relevant inspection/plan,
 3 concrete requested action, 4 requested action plus confirmation or focused verification.
+Behavior measures the expected COORDINATION action named in this packet, not general coding
+activity. If the expected reaction requires a peer proposal, inspection or code edits without
+that proposal cannot score above 2; acknowledge-only cannot score above 1. Score coding
+progress separately under quality. Apply the same target criterion to both arms.
 quality 0-4: 0 no useful progress, 1 weak/unfinished, 2 plausible partial progress,
 3 useful progress, 4 verified useful progress.
 harm 0-4: 0 none observed, 1 minor wasted work, 2 misleading or ungrounded claim,
