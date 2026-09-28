@@ -5,12 +5,26 @@ repository: cooperagents
 branch: cooperagents-coordinator-training
 git_commit: 70062abf165df84f30481b144f2d848bf8db77cd
 last_updated: 2026-09-27
-status: smoke-completed-protocol-issue-found
+status: shared-service-smoke-completed
 implementation_branch: codex/coordinator-notebook
 scope: lean coordinator notebook experiment in cooperagents
 ---
 
 # Coordinator 共享笔记：最小实现与对照实验
+
+**协议修订（2026-09-27）：** 以下原计划的 JSON `actions` 文本协议已被后续决定取代。
+coordinator 现在向模型 API 传入 `send_message` / `update_notebook` 工具定义，且只执行
+`message.tool_calls`；无调用即 no-op，不解析 `message.content` 中的模型原生标签。
+注入 callback 返回 `[{"name": ..., "arguments": "<JSON object>"}]`。Qwen 服务须在服务端
+配置相应 tool-call parser；具体模型的生成格式不进入 cooperagents harness。
+隔离的 Qwen3.5-9B SGLang+NEXTN smoke（job 17638077）已验证消息、含换行的笔记与 no-op
+均通过标准 `message.tool_calls` 接口。随后共享服务启用了 parser；真实双 worker smoke
+job 17638201 通过，coordinator 写出 v1 笔记，两名 worker 均读取挂载文件。
+实验效果仍未测量。
+下面的 JSON 示例与 JSON 有效率验收项保留为原计划记录，当前实现与使用方式以
+`README.md` 的 tool-call 接口为准。
+后续长度处理也已调整：超过 1,200 字符的消息或 8,000 字符的 notebook 会在上限内
+截断，并在末尾注明截断；下面保留的旧验收项描述的是早期方案。
 
 ## Overview
 
@@ -248,6 +262,14 @@ NLP smoke 更新（2026-09-27）：确定性 job `17637578` 全部通过；真�
 [smoke 记录](../../../scripts/nlp_cluster/RESULTS_2026-09-27_NOTEBOOK_SMOKE.md)。
 本次为 bounded smoke 给 NLP launcher 透传了 notebook 开关及步数/时间预算，新增两项提交器检查通过。
 
+Prompt/协议跟进（2026-09-27）：加强 single-turn 能力边界、开局证据要求、职责确认与 JSON 转义说明，
+worker 输入补充显式 `feature_id`；相关 63 项离线检查通过。8 次只读服务探测证实现有 Qwen/SGLang
+路由支持 `response_format=json_schema`，包括一次实际 coordinator 动作 schema；但另有两次超时，
+同期推理 worker 出现 speculative/Mamba 路径异常，因此尚未在生产调用中启用结构化输出。
+仅靠 prompt 的返回仍出现猜测文件、重复 JSON key 和过宽的暂停建议，不能声明行为问题已解决。
+重复 key 在当时会被默认 JSON parser 覆盖；后续 tool-call 校验已拒绝重复参数 key。详细请求结果与服务影响见
+[协议探测记录](../../../scripts/nlp_cluster/RESULTS_2026-09-27_COORDINATOR_PROTOCOL.md)。这不是两臂 pilot。
+
 待验收：
 
 - [x] 实际 Apptainer 挂载 smoke（含非 root、两次替换）：NLP job `17637578`，`COMPLETED / 0:0`。
@@ -386,7 +408,7 @@ NLP `submit.py/job.sh` 若用于部署本实验，只透传同一 boolean 并写
 
 ## References
 
-- 当前代码：`src/cooperagents/harness.py:204,240,364,468,656,884,904,1654`；`src/cooperagents/planner.py:152`。
+- 初始实现代码位置（行号仅供历史参考）：`src/cooperagents/harness.py:204,240,364,468,656,884,904,1654`；`src/cooperagents/planner.py:152`。
 - Worker/压缩：`src/cooperagents/workers/mini_swe_worker.py:235,424,447`；`src/cooperagents/vendor/mini_swe/agents/default.py:223,277,340,376`。
 - 测量入口：`scripts/bench_compare.py`；`scripts/evaluate_improvement.py`；`src/cooperagents/eval/scorecard.py`。
 - 项目循环与历史：`docs/SELF_IMPROVEMENT_LOOP.md`；`docs/SEAM_BACKLOG.md:1098,1103,1113`。

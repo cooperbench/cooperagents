@@ -6,6 +6,8 @@ The three subsequent [no-coordinator ablation rounds](RESULTS_2026-09-24_NO_COOR
 use the same non-thinking worker profile and keep the completion gate.
 The later [merge-repair ablation](RESULTS_2026-09-25_REPAIR.md) keeps the
 coordinator and enables up to two sequential repair attempts.
+The [tool-call interface smoke](RESULTS_2026-09-27_TOOL_CALL_SMOKE.md) validates
+Qwen3.5-9B tool calls through an isolated SGLang service with the Qwen parser.
 
 This path runs the existing two-worker team in independent, writable Apptainer
 sandboxes. Messaging uses the existing in-memory bus; Git sharing uses one
