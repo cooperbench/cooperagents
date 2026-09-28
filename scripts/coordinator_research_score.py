@@ -124,6 +124,10 @@ def judge(packet_data: dict, output: Path, *, input_stage: bool = False) -> None
             [
                 "codex",
                 "exec",
+                "--model",
+                "gpt-6-sol",
+                "--config",
+                'model_reasoning_effort="low"',
                 "--ephemeral",
                 "--sandbox",
                 "read-only",

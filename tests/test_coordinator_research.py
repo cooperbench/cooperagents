@@ -6,7 +6,9 @@ from pathlib import Path
 import pytest
 from scripts.coordinator_research import choose_boundary
 from scripts.coordinator_research_score import aggregate, packet
-from scripts.coordinator_worker_replay import verified_patch
+from scripts.coordinator_worker_replay import replay_environment, seed_environment, verified_patch
+
+from cooperagents.env.base import ExecResult
 
 
 def test_early_and_budget_boundaries_use_worker_requests():
@@ -38,6 +40,51 @@ def test_noninitial_replay_requires_reviewed_matching_snapshot(tmp_path: Path):
     (tmp_path / "example.json").write_text(json.dumps({"reviewed_against_archive": True}), encoding="utf-8")
     with pytest.raises(ValueError, match="provenance"):
         verified_patch(point, tmp_path)
+
+
+def test_replay_runtime_keeps_notebook_mount_and_docker_network_off(monkeypatch, tmp_path: Path):
+    calls = []
+    monkeypatch.setenv("COOPER_RUNTIME", "docker")
+    monkeypatch.setattr(
+        "scripts.coordinator_worker_replay.DockerEnv",
+        lambda image, **kwargs: calls.append((image, kwargs)),
+    )
+    replay_environment("image", tmp_path)
+    assert calls == [("image", {"network": "none", "volumes": [f"{tmp_path}:/coordination:ro"], "keepalive": "8h"})]
+
+    calls.clear()
+    monkeypatch.setenv("COOPER_RUNTIME", "apptainer")
+    monkeypatch.setattr(
+        "scripts.coordinator_worker_replay.task_environment",
+        lambda image, **kwargs: calls.append((image, kwargs)),
+    )
+    replay_environment("image", tmp_path)
+    assert calls == [("image", {"coordinator_dir": tmp_path})]
+
+
+def test_replay_seed_applies_patch_and_checks_exact_workspace(tmp_path: Path):
+    class FakeEnv:
+        def __init__(self) -> None:
+            self.commands = []
+            self.files = {}
+
+        def write_file(self, path: str, content: str) -> None:
+            self.files[path] = content
+
+        def execute(self, command: str) -> ExecResult:
+            self.commands.append(command)
+            if command.startswith("git -c"):
+                return ExecResult(" M a.py\0", 0)
+            return ExecResult("", 0)
+
+    patch = tmp_path / "state.patch"
+    patch.write_text("diff --git a/a.py b/a.py\n", encoding="utf-8")
+    env = FakeEnv()
+    seed_environment(env, {"archive_dirty_files": ["a.py"]}, patch)
+    assert env.files["/tmp/coordinator-replay.patch"] == patch.read_text(encoding="utf-8")
+    assert env.commands[0] == "git apply /tmp/coordinator-replay.patch"
+    with pytest.raises(ValueError, match="Workspace files differ"):
+        seed_environment(env, {"archive_dirty_files": ["other.py"]}, None)
 
 
 def test_judge_packet_blinds_candidate_and_keeps_behavioral_trace():

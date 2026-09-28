@@ -11,27 +11,20 @@ import gzip
 import hashlib
 import json
 import os
-import subprocess
 import tempfile
-import uuid
 from pathlib import Path
 
 from cooperagents.bus.memory import InMemoryBus
+from cooperagents.env.base import Environment, ExecResult
+from cooperagents.env.docker import DockerEnv
+from cooperagents.env.runtime import task_environment
 from cooperagents.harness import _Coordinator
 from cooperagents.types import Assignment
 
 
-def command(*args: str, input_text: str | None = None, timeout: int = 120) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(args, input=input_text, text=True, capture_output=True, timeout=timeout, check=False)
-
-
-def docker(*args: str, input_text: str | None = None, timeout: int = 120) -> subprocess.CompletedProcess[str]:
-    return command("docker", *args, input_text=input_text, timeout=timeout)
-
-
-def required(result: subprocess.CompletedProcess[str], label: str) -> str:
-    if result.returncode:
-        raise RuntimeError(f"{label}: {result.stderr or result.stdout}")
+def required(result: ExecResult, label: str) -> str:
+    if result.exit_code:
+        raise RuntimeError(f"{label}: {result.stdout}")
     return result.stdout
 
 
@@ -88,18 +81,21 @@ def materialize_actions(point: dict, candidate: dict, notebook_path: Path) -> tu
     return notices, notebook_path.read_text(encoding="utf-8"), coordinator.worker_instructions()
 
 
-def seed_container(name: str, point: dict, patch: Path | None, notebook: str) -> None:
-    required(
-        docker("run", "-d", "--rm", "--network", "none", "--entrypoint", "sleep", "--name", name, point["image"], "infinity"),
-        "start container",
-    )
+def replay_environment(image: str, notebook_dir: Path) -> Environment:
+    if os.getenv("COOPER_RUNTIME", "docker") == "docker":
+        return DockerEnv(image, network="none", volumes=[f"{notebook_dir}:/coordination:ro"], keepalive="8h")
+    return task_environment(image, coordinator_dir=notebook_dir)
+
+
+def seed_environment(env: Environment, point: dict, patch: Path | None) -> None:
     if patch is not None:
+        env.write_file("/tmp/coordinator-replay.patch", patch.read_text(encoding="utf-8"))
         required(
-            docker("exec", "-i", name, "bash", "-lc", "cd /workspace/repo && git apply -", input_text=patch.read_text(encoding="utf-8")),
+            env.execute("git apply /tmp/coordinator-replay.patch"),
             "apply workspace snapshot",
         )
     status = required(
-        docker("exec", name, "bash", "-lc", "cd /workspace/repo && git -c core.quotepath=false status --porcelain=v1 -z --no-renames"),
+        env.execute("git -c core.quotepath=false status --porcelain=v1 -z --no-renames"),
         "inspect workspace",
     )
     actual = sorted(
@@ -107,10 +103,6 @@ def seed_container(name: str, point: dict, patch: Path | None, notebook: str) ->
     )
     if actual != sorted(point["archive_dirty_files"]):
         raise ValueError(f"Workspace files differ from archive: {actual} != {point['archive_dirty_files']}")
-    required(
-        docker("exec", "-i", name, "bash", "-lc", "mkdir -p /coordination && cat > /coordination/notebook.md", input_text=notebook),
-        "mount notebook",
-    )
 
 
 def remove_superseded_notice(messages: list[dict], rows: list[dict], point: dict) -> list[dict]:
@@ -143,91 +135,91 @@ def replay_one(point: dict, candidate: dict, state_dir: Path | None, label: str)
 
     rows, request, _ = archive(point)
     with tempfile.TemporaryDirectory(prefix="coordinator-replay-") as temporary:
-        notices, notebook, instructions = materialize_actions(point, candidate, Path(temporary) / "notebook.md")
-    patch = verified_patch(point, state_dir)
-    name = "coordinator-replay-" + uuid.uuid4().hex[:10]
-    try:
-        seed_container(name, point, patch, notebook)
-        messages = [
-            {
-                key: value
-                for key, value in message.items()
-                if key in {"role", "content", "tool_calls", "tool_call_id", "name"} and value is not None
-            }
-            for message in request["messages"]
-        ]
-        messages = remove_superseded_notice(messages, rows, point)
-        messages[0]["content"] += instructions
-        suffix = candidate.get("worker_coordination_suffix", "")
-        if suffix:
-            messages[0]["content"] += "\n\nCOORDINATION PROTOCOL: " + suffix
-        baseline_hash = hashlib.sha256(json.dumps(messages, sort_keys=True).encode()).hexdigest()
-        if notices:
-            messages.append({"role": "user", "content": "\n".join(notices)})
-        model = os.environ.get("COOPER_REPLAY_MODEL", "qwen3.5-9b")
-        client = OpenAI(base_url=os.environ["OPENAI_BASE_URL"], api_key=os.environ.get("OPENAI_API_KEY", "dummy"), timeout=120)
-        steps = []
-        for index in range(point["replay_model_calls"]):
-            response = client.chat.completions.create(
-                model=model,
-                messages=messages,
-                tools=request["tools"],
-                tool_choice="auto",
-                temperature=0,
-                top_p=0.95,
-                presence_penalty=1.5,
-                max_tokens=1200,
-                extra_body={"top_k": 20, "chat_template_kwargs": {"enable_thinking": False}},
-            )
-            choice = response.choices[0]
-            reply = choice.message
-            calls = [
-                {"id": tool.id, "type": "function", "function": {"name": tool.function.name, "arguments": tool.function.arguments}}
-                for tool in reply.tool_calls or []
-            ]
-            messages.append({"role": "assistant", "content": reply.content or "", **({"tool_calls": calls} if calls else {})})
-            actions = []
-            for call in calls:
-                function = call["function"]
-                try:
-                    arguments = json.loads(function["arguments"])
-                    if function["name"] == "bash":
-                        result = docker("exec", name, "bash", "-lc", arguments["command"], timeout=90)
-                        observation = {"returncode": result.returncode, "output": (result.stdout + result.stderr)[:20000]}
-                    elif function["name"] == "send_message":
-                        observation = {"returncode": 0, "output": f"Message queued for {arguments['recipient']}"}
-                    else:
-                        observation = {"returncode": 1, "output": "Unsupported tool"}
-                except (KeyError, ValueError, subprocess.TimeoutExpired) as exc:
-                    arguments = function["arguments"]
-                    observation = {"returncode": 1, "output": f"{type(exc).__name__}: {exc}"}
-                actions.append({"tool": function["name"], "arguments": arguments, "observation": observation})
-                messages.append({"role": "tool", "tool_call_id": call["id"], "content": json.dumps(observation, ensure_ascii=False)})
-            steps.append(
+        notices, _, instructions = materialize_actions(point, candidate, Path(temporary) / "notebook.md")
+        patch = verified_patch(point, state_dir)
+        env = replay_environment(point["image"], Path(temporary))
+        try:
+            seed_environment(env, point, patch)
+            messages = [
                 {
-                    "index": index + 1,
-                    "content": reply.content,
-                    "actions": actions,
-                    "usage": response.usage.model_dump() if response.usage else None,
+                    key: value
+                    for key, value in message.items()
+                    if key in {"role", "content", "tool_calls", "tool_call_id", "name"} and value is not None
                 }
-            )
-            if not calls:
-                break
-        diff = required(docker("exec", name, "bash", "-lc", "cd /workspace/repo && git diff HEAD"), "read final diff")
-        return {
-            "case_id": point["id"],
-            "label": label,
-            "candidate": candidate,
-            "model": model,
-            "source_request_seq": point["worker_request_seq"],
-            "notices": notices,
-            "initial_messages_sha256": baseline_hash,
-            "steps": steps,
-            "final_diff": diff,
-            "workspace_evidence": "base_image" if patch is None else str(patch),
-        }
-    finally:
-        docker("rm", "-f", name)
+                for message in request["messages"]
+            ]
+            messages = remove_superseded_notice(messages, rows, point)
+            messages[0]["content"] += instructions
+            suffix = candidate.get("worker_coordination_suffix", "")
+            if suffix:
+                messages[0]["content"] += "\n\nCOORDINATION PROTOCOL: " + suffix
+            baseline_hash = hashlib.sha256(json.dumps(messages, sort_keys=True).encode()).hexdigest()
+            if notices:
+                messages.append({"role": "user", "content": "\n".join(notices)})
+            model = os.environ.get("COOPER_REPLAY_MODEL", "qwen3.5-9b")
+            client = OpenAI(base_url=os.environ["OPENAI_BASE_URL"], api_key=os.environ.get("OPENAI_API_KEY", "dummy"), timeout=120)
+            steps = []
+            for index in range(point["replay_model_calls"]):
+                response = client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    tools=request["tools"],
+                    tool_choice="auto",
+                    temperature=0,
+                    top_p=0.95,
+                    presence_penalty=1.5,
+                    max_tokens=1200,
+                    extra_body={"top_k": 20, "chat_template_kwargs": {"enable_thinking": False}},
+                )
+                choice = response.choices[0]
+                reply = choice.message
+                calls = [
+                    {"id": tool.id, "type": "function", "function": {"name": tool.function.name, "arguments": tool.function.arguments}}
+                    for tool in reply.tool_calls or []
+                ]
+                messages.append({"role": "assistant", "content": reply.content or "", **({"tool_calls": calls} if calls else {})})
+                actions = []
+                for call in calls:
+                    function = call["function"]
+                    try:
+                        arguments = json.loads(function["arguments"])
+                        if function["name"] == "bash":
+                            result = env.execute(arguments["command"], timeout=90)
+                            observation = {"returncode": result.exit_code, "output": result.stdout[:20000]}
+                        elif function["name"] == "send_message":
+                            observation = {"returncode": 0, "output": f"Message queued for {arguments['recipient']}"}
+                        else:
+                            observation = {"returncode": 1, "output": "Unsupported tool"}
+                    except (KeyError, ValueError) as exc:
+                        arguments = function["arguments"]
+                        observation = {"returncode": 1, "output": f"{type(exc).__name__}: {exc}"}
+                    actions.append({"tool": function["name"], "arguments": arguments, "observation": observation})
+                    messages.append({"role": "tool", "tool_call_id": call["id"], "content": json.dumps(observation, ensure_ascii=False)})
+                steps.append(
+                    {
+                        "index": index + 1,
+                        "content": reply.content,
+                        "actions": actions,
+                        "usage": response.usage.model_dump() if response.usage else None,
+                    }
+                )
+                if not calls:
+                    break
+            diff = required(env.execute("git diff HEAD"), "read final diff")
+            return {
+                "case_id": point["id"],
+                "label": label,
+                "candidate": candidate,
+                "model": model,
+                "source_request_seq": point["worker_request_seq"],
+                "notices": notices,
+                "initial_messages_sha256": baseline_hash,
+                "steps": steps,
+                "final_diff": diff,
+                "workspace_evidence": "base_image" if patch is None else str(patch),
+            }
+        finally:
+            env.cleanup()
 
 
 def main() -> None:
