@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import tempfile
+from functools import partial
 from importlib.resources import files
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from cooperagents.env.base import Environment, ExecResult
 from cooperagents.env.docker import DockerEnv
 from cooperagents.env.runtime import task_environment
 from cooperagents.harness import _Coordinator
+from cooperagents.trajectory import Trajectory, record_call
 from cooperagents.types import Assignment
 from cooperagents.vendor.mini_swe.exceptions import FormatError
 from cooperagents.vendor.mini_swe.models.utils.actions_toolcall import parse_toolcall_actions
@@ -150,7 +152,7 @@ def remove_superseded_notice(messages: list[dict], rows: list[dict], point: dict
     return [message for message in messages if message.get("content") or message.get("tool_calls") or message.get("role") == "system"]
 
 
-def replay_one(point: dict, candidate: dict, state_dir: Path | None, label: str) -> dict:
+def replay_one(point: dict, candidate: dict, state_dir: Path | None, label: str, trace_path: Path | None = None) -> dict:
     from openai import OpenAI
 
     rows, request, _ = archive(point)
@@ -159,7 +161,10 @@ def replay_one(point: dict, candidate: dict, state_dir: Path | None, label: str)
         notices = render_notices(notices, candidate)
         patch = verified_patch(point, state_dir)
         env = replay_environment(point["image"], Path(temporary))
+        trajectory = None
         try:
+            trajectory = Trajectory(trace_path) if trace_path is not None else None
+            trace = partial(trajectory.emit, "worker") if trajectory else None
             seed_environment(env, point, patch)
             messages = [
                 {
@@ -183,7 +188,9 @@ def replay_one(point: dict, candidate: dict, state_dir: Path | None, label: str)
             format_error_template = yaml.safe_load(config.read_text())["model"]["format_error_template"]
             steps = []
             for index in range(point["replay_model_calls"]):
-                response = client.chat.completions.create(
+                response = record_call(
+                    trace,
+                    client.chat.completions.create,
                     model=model,
                     messages=messages,
                     tools=request["tools"],
@@ -248,6 +255,8 @@ def replay_one(point: dict, candidate: dict, state_dir: Path | None, label: str)
                     if simulation:
                         action["simulation"] = simulation
                     actions.append(action)
+                    if trace is not None:
+                        trace("tool_action", step=index + 1, tool_call_id=call["id"], action=action)
                     messages.append({"role": "tool", "tool_call_id": call["id"], "content": json.dumps(observation, ensure_ascii=False)})
                 steps.append(
                     {
@@ -270,9 +279,14 @@ def replay_one(point: dict, candidate: dict, state_dir: Path | None, label: str)
                 "steps": steps,
                 "final_diff": diff,
                 "workspace_evidence": "base_image" if patch is None else str(patch),
+                **({"trace_path": str(trace_path)} if trace_path is not None else {}),
             }
         finally:
-            env.cleanup()
+            try:
+                if trajectory is not None:
+                    trajectory.close()
+            finally:
+                env.cleanup()
 
 
 def main() -> None:
@@ -298,7 +312,11 @@ def main() -> None:
         path = args.output / f"{label}.json"
         if path.exists():
             raise FileExistsError(path)
-        path.write_text(json.dumps(replay_one(point, arm, args.state_dir, label), ensure_ascii=False, indent=2), encoding="utf-8")
+        trace_path = args.output / f"{label}.trace.jsonl"
+        path.write_text(
+            json.dumps(replay_one(point, arm, args.state_dir, label, trace_path=trace_path), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
     print(f"Saved paired replays to {args.output}")
 
 
