@@ -409,8 +409,12 @@ class _Coordinator:
                 raise ValueError("Each action must be an object")
             kind, content = item.get("action"), item.get("content")
             limit = 8000 if kind == "update_notebook" else 1200
-            if not isinstance(content, str) or not content.strip() or len(content) > limit:
-                raise ValueError(f"Action content must be nonempty text of at most {limit} characters")
+            if not isinstance(content, str) or not content.strip():
+                raise ValueError("Action content must be nonempty text")
+            if len(content) > limit:
+                label = "notebook" if kind == "update_notebook" else "message"
+                notice = f"\n[truncated: {label} exceeded {limit} characters]"
+                content = content[: limit - len(notice)] + notice
             if kind == "update_notebook" and set(item) == {"action", "content"}:
                 if updated or self._notebook_path is None:
                     raise ValueError("Notebook update is disabled or repeated")

@@ -41,8 +41,6 @@ def test_invalid_batch_and_failed_write_have_no_effect(tmp_path, monkeypatch):
         [update, update],
         [message(), message()],
         [message(recipient="other")],
-        [{**update, "content": "x" * 8001}],
-        [message("x" * 1201)],
         [{"action": "unknown", "content": "x"}],
         [message(" ")],
     ]
@@ -75,6 +73,29 @@ def test_invalid_batch_and_failed_write_have_no_effect(tmp_path, monkeypatch):
     c.register("agent1", worker)
     assert len(c.drain("agent1")) == 1  # same version, refreshed after compaction
     assert c.drain("agent1") == []
+
+
+def test_long_coordinator_content_is_truncated_and_delivered(tmp_path):
+    path = tmp_path / "notebook.md"
+    c = coordinator(notebook_path=path)
+    exact_limit = "x" * 1200
+    long_message = "y" * 1201
+    long_notebook = "z" * 8001
+    actions = [message(exact_limit), message("peer", "agent2"), {"action": "update_notebook", "content": long_notebook}]
+    c._apply_actions(c._parse_actions(json.dumps({"actions": actions})))
+    assert c._version == 1
+    assert len(c._notebook) == 8000
+    assert c._notebook.endswith("\n[truncated: notebook exceeded 8000 characters]")
+    assert path.read_text().endswith(c._notebook + "\n")
+    assert c.drain("agent1")[1] == f"[coordinator; notebook v1] {exact_limit}"
+    assert c.drain("agent2")[1] == "[coordinator; notebook v1] peer"
+
+    c._apply_actions(c._parse_actions(json.dumps({"actions": [message(long_message)]})))
+    delivered = c.drain("agent1")
+    assert len(delivered) == 1
+    content = delivered[0].removeprefix("[coordinator; notebook v1] ")
+    assert len(content) == 1200
+    assert content.endswith("\n[truncated: message exceeded 1200 characters]")
 
 
 def test_concurrent_drain_and_ended_workers():
