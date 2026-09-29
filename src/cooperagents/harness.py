@@ -511,9 +511,11 @@ class _Coordinator:
         return parsed
 
     def _apply_actions(self, actions: list[_NotebookUpdate | _CoordinatorMessage]) -> None:
+        previous_version = self._version
         for action in actions:
             if isinstance(action, _NotebookUpdate):
                 self.update_notebook(action.content)
+        notebook_updated = self._version != previous_version
         with self._lock:
             for action in actions:
                 if not isinstance(action, _CoordinatorMessage):
@@ -523,9 +525,13 @@ class _Coordinator:
                     continue
                 version = self._version if self._notebook_path is not None else None
                 if self.coordination_variant == "human_in_loop":
+                    instruction = (
+                        "Notebook updated! Read /coordination/notebook.md before continuing affected work."
+                        if notebook_updated else "Read /coordination/notebook.md if needed."
+                    )
                     text = (
                         f"[COORDINATION NOTEBOOK]\nVersion: {version}\n"
-                        "Read /coordination/notebook.md before continuing affected work.\n\n"
+                        f"{instruction}\n\n"
                         f"[FROM COORDINATOR]\n{action.content}\n[END COORDINATOR MESSAGE]"
                     )
                 else:

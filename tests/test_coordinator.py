@@ -269,11 +269,48 @@ def test_human_in_loop_initial_prompt_and_direct_message_wrapper(tmp_path):
     c._apply_actions(c._parse_actions([message("propose scope")]))
     assert c.drain("agent1")[1] == (
         "[COORDINATION NOTEBOOK]\nVersion: 0\n"
-        "Read /coordination/notebook.md before continuing affected work.\n\n"
+        "Read /coordination/notebook.md if needed.\n\n"
         "[FROM COORDINATOR]\npropose scope\n[END COORDINATOR MESSAGE]"
     )
     with pytest.raises(ValueError, match="requires a notebook"):
         coordinator(coordination_variant="human_in_loop")
+
+
+def test_human_in_loop_notebook_update_and_message_combinations(tmp_path):
+    c = coordinator(notebook_path=tmp_path / "notebook.md", coordination_variant="human_in_loop")
+    assert len(c.drain("agent1")) == 1  # initial notebook notice
+    assert c.drain("agent1") == []  # no update, no direct message
+
+    c._apply_actions(c._parse_actions([message("ordinary advice")]))
+    assert c.drain("agent1") == [
+        "[COORDINATION NOTEBOOK]\nVersion: 0\n"
+        "Read /coordination/notebook.md if needed.\n\n"
+        "[FROM COORDINATOR]\nordinary advice\n[END COORDINATOR MESSAGE]"
+    ]
+
+    c._apply_actions(c._parse_actions([tool("update_notebook", content="revision one")]))
+    assert c.drain("agent1") == [
+        "[coordinator] Notebook v1 is available. Read the latest file at "
+        "/coordination/notebook.md (`cat /coordination/notebook.md`) before continuing affected work."
+    ]
+
+    c._apply_actions(c._parse_actions([message("new plan"), tool("update_notebook", content="revision two")]))
+    assert c.drain("agent1") == [
+        "[coordinator] Notebook v2 is available. Read the latest file at "
+        "/coordination/notebook.md (`cat /coordination/notebook.md`) before continuing affected work.",
+        "[COORDINATION NOTEBOOK]\nVersion: 2\n"
+        "Notebook updated! Read /coordination/notebook.md before continuing affected work.\n\n"
+        "[FROM COORDINATOR]\nnew plan\n[END COORDINATOR MESSAGE]",
+    ]
+
+    c._apply_actions(c._parse_actions([tool("update_notebook", content="revision two"), message("same version")]))
+    assert c.drain("agent1") == [
+        "[COORDINATION NOTEBOOK]\nVersion: 2\n"
+        "Read /coordination/notebook.md if needed.\n\n"
+        "[FROM COORDINATOR]\nsame version\n[END COORDINATOR MESSAGE]"
+    ]
+    c._apply_actions(c._parse_actions([]))
+    assert c.drain("agent1") == []
 
 
 def test_finish_joins_inflight_even_if_already_stopped():
