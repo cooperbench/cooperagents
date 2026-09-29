@@ -46,8 +46,40 @@ rewriting WorkBench's `_CSV_PATHS` to absolute paths in memory.
 | --- | --- | --- |
 | PlanCraft | Ready | Official gym-wrapper reward (offline, deterministic) |
 | WorkBench | Ready | Official `is_correct` / `has_side_effects` (current scorer, v1 2024 tasks, offline) |
-| BrowseComp-Plus | Stub | Needs served retriever index + Qwen3-32B judge |
-| Finance-Agent | Stub | Needs live API keys + Vals-gated grader (50/537 open) |
+| BrowseComp-Plus | Ready (real services implemented); smoke-testable offline with fakes | `BM25Retriever` + `LLMJudge` (real), configured by env |
+| Finance-Agent | Ready (real services implemented); smoke-testable offline with fakes | `LiveFinanceBackend` + `LLMRubricGrader` (real), configured by env |
+
+Real services for the two network/judge benchmarks are implemented behind the
+injected protocols (`benchmarks/browsecomp.py`, `benchmarks/finance.py`): a
+pure-Python BM25 retriever, litellm-backed judges/graders, live-HTTP Finance
+tools, and dataset loaders. Their network/LLM calls use an injectable seam, so
+the logic is unit-tested offline; only live endpoints are exercised at real-run
+time. `get_benchmark(name)` builds the real services from environment variables
+when present and otherwise returns unconfigured shells that raise with guidance.
+
+## Smoke testing without API keys
+
+BrowseComp-Plus and Finance-Agent each depend on external services (a retriever
+and a judge; four data tools and a rubric grader). Those services are injected
+behind small protocols, so the adapters run fully offline with fake, deterministic
+implementations — the cooperagents plumbing (tools, harvest, scorer) is identical
+whether the injected services are fake or real.
+
+- BrowseComp-Plus: `InMemoryRetriever` (keyword search over an in-memory corpus) +
+  `SubstringJudge`.
+- Finance-Agent: `FakeFinanceBackend` (canned tool responses) + `KeywordGrader`.
+
+Construct a benchmark with fakes plus a small `instances_data` fixture and it runs
+through the real agent loop, tool dispatch, and scorer with no keys:
+
+```
+uv run pytest tests/test_benchmark_browsecomp.py tests/test_benchmark_finance.py -q
+```
+
+`get_benchmark("browsecomp")` / `get_benchmark("finance")` return the benchmark
+with unconfigured real-service shells that raise a clear "provide X" error until
+you inject real services — so the registry is safe to import without keys, and the
+smoke path is reached by constructing the benchmark directly with fakes.
 
 ## Setup
 
@@ -101,34 +133,44 @@ plotting.
 - **WorkBench team.** WorkBench is a negative control (tasks are 1-5 tool calls;
   the paper found +5.7% at best). The solo baseline is the primary number.
 
-## Completing BrowseComp-Plus
+## Running BrowseComp-Plus (real)
 
-The adapter is a stub in `benchmarks/browsecomp.py`. To make it runnable:
+The retriever, judge, and loader are implemented. A real run needs three
+environment variables; any missing one leaves that service as a shell:
 
-1. Stand up the frozen retriever and prebuilt index (BM25 or Qwen3-Embedding-8B)
-   from github.com/texttron/BrowseComp-Plus as a local service.
-2. Implement a `ToolSet` exposing `search(query)` and `open(doc_id)` over that
-   service and `submit_answer(answer)` writing to `StateEnv.answer`.
-3. Implement a `Scorer` calling the official Qwen3-32B judge endpoint on the
-   final answer (optionally recall/nDCG over visited document ids).
-4. `make_env` returns a read-only `StateEnv` whose harvest is the answer plus the
-   visited-document set; `instances` loads the 830 obfuscated queries.
+```
+export BROWSECOMP_CORPUS=/path/to/corpus.jsonl
+export BROWSECOMP_QUERIES=/path/to/queries.jsonl
+export BROWSECOMP_JUDGE_MODEL=gemini/gemini-2.5-pro
+uv run python scripts/scaling_box.py --benchmark browsecomp --split test --limit 20
+```
 
-Topology fit: search fan-out (Independent or Centralized) with a synthesis reducer.
+`corpus.jsonl` is `{"docid": ..., "text": ...}` per line (from the
+BrowseComp-Plus corpus); `queries.jsonl` is `{"id", "query", "answer", "gold_docs"}`
+per line. The retriever is a pure-Python BM25 over that corpus; the judge calls
+`BROWSECOMP_JUDGE_MODEL` via litellm. To use a served index or a different judge,
+inject a custom `Retriever` / `Judge` into `BrowseCompBenchmark` instead.
 
-## Completing Finance-Agent
+## Running Finance-Agent (real)
 
-The adapter is a stub in `benchmarks/finance.py`. To make it runnable:
+The tool backend, grader, and loader are implemented. A real run needs API keys
+and env configuration:
 
-1. Provide API keys via the environment (LLM provider, Tavily or SerpAPI, SEC
-   EDGAR) and, for the full set, Vals platform access. Never commit keys.
-2. Implement a `ToolSet` wrapping the four official tools (GoogleSearch,
-   EdgarSearch, ParseHTML, RetrieveInformation) plus `submit_answer`.
-3. Implement a `Scorer`: call the Vals rubric grader where available, else a
-   local rubric-judge approximation over the 50 open questions (documented as an
-   approximation, not leaderboard-comparable).
-4. `instances` loads the open 50-question validation split.
+```
+export TAVILY_API_KEY=...
+export FINANCE_GRADER_MODEL=gemini/gemini-2.5-pro
+export FINANCE_DATA=/path/to/finance_validation.csv
+uv run python scripts/scaling_box.py --benchmark finance --split validation --limit 20
+```
 
-Topology fit: Centralized (a planner splits into sub-questions, workers fetch, a
-synthesizer composes) — the paper's approximately +80% regime. Coordination
-raises cost per query, which the benchmark penalizes.
+`LiveFinanceBackend` uses Tavily for web search, SEC EDGAR full-text search, and
+stdlib HTTP for page parsing; `LLMRubricGrader` calls `FINANCE_GRADER_MODEL`. Only
+the open 50-question split is freely available (`vals-ai/finance_agent_benchmark`
+on HuggingFace); the full set and the official Vals grader are gated, so the local
+rubric grader is an approximation — not leaderboard-comparable. To use the Vals
+grader, inject a custom `RubricGrader`.
+
+Topology fit: BrowseComp — search fan-out (Independent/Centralized) + synthesis;
+Finance — Centralized (planner splits into sub-questions, workers fetch, a
+synthesizer composes), the paper's approximately +80% regime. Note team
+coordination raises cost per query, which Finance penalizes.

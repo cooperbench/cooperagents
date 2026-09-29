@@ -20,13 +20,13 @@ def get_benchmark(name: str) -> StateBenchmark:
 
         return WorkBenchBenchmark()
     if name == "browsecomp":
-        from cooperagents.benchmarks.browsecomp import BrowseCompBenchmark
+        from cooperagents.benchmarks.browsecomp import browsecomp_from_env
 
-        return BrowseCompBenchmark()
+        return browsecomp_from_env()
     if name == "finance":
-        from cooperagents.benchmarks.finance import FinanceAgentBenchmark
+        from cooperagents.benchmarks.finance import finance_from_env
 
-        return FinanceAgentBenchmark()
+        return finance_from_env()
     raise KeyError(f"unknown benchmark: {name!r}")
 
 
