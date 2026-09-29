@@ -33,6 +33,7 @@ def main():
     parser.add_argument("--step-limit", type=int, default=1000)
     parser.add_argument("--agent-time-limit", type=int, default=3600)
     parser.add_argument("--collect-trajectories", action="store_true", help="record full I/O and skip official evaluation")
+    parser.add_argument("--record-trajectories", action="store_true", help="record full I/O alongside official evaluation")
     parser.add_argument("--repair-integrator", action="store_true")
     parser.add_argument("--repair-attempts", type=int, default=1)
     parser.add_argument("--cooperbench-dir", help="Immutable patched CooperBench checkout on the cluster")
@@ -91,6 +92,7 @@ def main():
         cooperbench_commit="63b9d44d9f39a02fccf5bf0052db48a917a011fd",
         mode=args.mode,
         collect_trajectories=args.collect_trajectories,
+        record_trajectories=args.record_trajectories or args.collect_trajectories,
         official_evaluation=not args.collect_trajectories,
         pairs=args.pairs,
         runtime="apptainer",
@@ -160,6 +162,7 @@ def main():
         COOPER_REPAIR="1" if args.repair_integrator else "0",
         COOPER_REPAIR_ATTEMPTS=str(args.repair_attempts),
         COOPER_COLLECT_TRAJECTORIES="1" if args.collect_trajectories else "0",
+        COOPER_RECORD_TRAJECTORIES="1" if args.record_trajectories else "0",
         COOPER_CREDENTIAL_FILE=args.env_file or "",
     )
     command = (
