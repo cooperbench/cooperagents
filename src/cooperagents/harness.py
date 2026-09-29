@@ -425,12 +425,16 @@ class _Coordinator:
             marker = (self._version, compactions)
             if self._notebook_path is not None and self._notified.get(agent_id) != marker:
                 self._notified[agent_id] = marker
-                notice = (
-                    f"[coordinator] Notebook v{self._version} is available. Read the latest file at "
-                    f"{_COORDINATOR_PATH} (`cat {_COORDINATOR_PATH}`) before continuing affected work."
+                bundled = self.coordination_variant == "human_in_loop" and any(
+                    text.startswith(f"[COORDINATION NOTEBOOK]\nVersion: {self._version}\n") for text in out
                 )
-                self._emit("notebook_delivery", target=agent_id, version=self._version, text=notice, compactions=compactions)
-                out = [notice, *out]
+                if not bundled:
+                    notice = (
+                        f"[coordinator] Notebook v{self._version} is available. Read the latest file at "
+                        f"{_COORDINATOR_PATH} (`cat {_COORDINATOR_PATH}`) before continuing affected work."
+                    )
+                    self._emit("notebook_delivery", target=agent_id, version=self._version, text=notice, compactions=compactions)
+                    out = [notice, *out]
             if out:
                 self._emit("delivery", target=agent_id, messages=out)
             return out
