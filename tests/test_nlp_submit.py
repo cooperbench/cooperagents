@@ -41,6 +41,7 @@ def test_qualified_image_pins_resources_and_node(monkeypatch, tmp_path):
             str(report),
             "--pairs",
             "go_chi_task:26:1,2",
+            "--langfuse",
         ],
     )
     archive = io.BytesIO()
@@ -65,6 +66,7 @@ def test_qualified_image_pins_resources_and_node(monkeypatch, tmp_path):
     assert "--nodelist=john11" in submission
     assert "--cpus-per-task=2" in submission and "--mem=8G" in submission
     assert "--time=02:00:00" in submission
+    assert "COOPER_LANGFUSE=1" in submission
     report.write_text(json.dumps(dict(passed=False, task=dict(repo="go_chi_task", task_id=26, pairs=[[1, 2]]))))
     with pytest.raises(SystemExit):
         module.main()

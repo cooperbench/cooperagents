@@ -12,6 +12,9 @@ mkdir -p "$COOPER_SCRATCH" "$APPTAINER_TMPDIR"
 cd "$COOPER_CODE"
 python3 -m venv "$COOPER_SCRATCH/venv"
 "$COOPER_SCRATCH/venv/bin/pip" install -q 'litellm==1.99.0' 'openai==2.54.0' rich tenacity jinja2 pydantic pyyaml modal redis python-dotenv platformdirs docker
+if [[ "${COOPER_LANGFUSE:-0}" == 1 ]]; then
+  "$COOPER_SCRATCH/venv/bin/pip" install -q 'langfuse==4.15.6'
+fi
 export PATH="$COOPER_SCRATCH/venv/bin:$PATH"
 export PYTHONPATH="$COOPER_CODE/src:$COOPERBENCH_DIR/src"
 export LITELLM_LOCAL_MODEL_COST_MAP=True
@@ -61,6 +64,7 @@ else
     args+=(--record-trajectory)
   fi
   if [[ "${COOPER_COLLECT_TRAJECTORIES:-0}" == 1 ]]; then args+=(--skip-eval); fi
+  if [[ "${COOPER_LANGFUSE:-0}" == 1 ]]; then args+=(--langfuse); fi
   printf '%s\n' "${args[@]}" > "$COOPER_RUN/training-args.txt"
   python scripts/bench_compare.py "${args[@]}"
   if [[ "${COOPER_RECORD_TRAJECTORIES:-0}" == 1 || "${COOPER_COLLECT_TRAJECTORIES:-0}" == 1 ]]; then

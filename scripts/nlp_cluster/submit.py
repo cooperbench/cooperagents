@@ -34,6 +34,7 @@ def main():
     parser.add_argument("--agent-time-limit", type=int, default=3600)
     parser.add_argument("--collect-trajectories", action="store_true", help="record full I/O and skip official evaluation")
     parser.add_argument("--record-trajectories", action="store_true", help="record full I/O alongside official evaluation")
+    parser.add_argument("--langfuse", action="store_true", help="export worker and coordinator traces to Langfuse")
     parser.add_argument("--repair-integrator", action="store_true")
     parser.add_argument("--repair-attempts", type=int, default=1)
     parser.add_argument("--cooperbench-dir", help="Immutable patched CooperBench checkout on the cluster")
@@ -46,6 +47,8 @@ def main():
         args.mode != "real" or args.no_coordinator or args.no_coordinator_notebook
     ):
         parser.error("human_in_loop requires a real run with coordinator and notebook enabled")
+    if args.langfuse and args.mode != "real":
+        parser.error("Langfuse tracing requires a real run")
     if args.qualification_report and args.qualification_dir:
         parser.error("Choose one qualification source")
     reports = []
@@ -93,6 +96,7 @@ def main():
         mode=args.mode,
         collect_trajectories=args.collect_trajectories,
         record_trajectories=args.record_trajectories or args.collect_trajectories,
+        langfuse=args.langfuse,
         official_evaluation=not args.collect_trajectories,
         pairs=args.pairs,
         runtime="apptainer",
@@ -163,6 +167,7 @@ def main():
         COOPER_REPAIR_ATTEMPTS=str(args.repair_attempts),
         COOPER_COLLECT_TRAJECTORIES="1" if args.collect_trajectories else "0",
         COOPER_RECORD_TRAJECTORIES="1" if args.record_trajectories else "0",
+        COOPER_LANGFUSE="1" if args.langfuse else "0",
         COOPER_CREDENTIAL_FILE=args.env_file or "",
     )
     command = (
