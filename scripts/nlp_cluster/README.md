@@ -6,6 +6,8 @@ The three subsequent [no-coordinator ablation rounds](RESULTS_2026-09-24_NO_COOR
 use the same non-thinking worker profile and keep the completion gate.
 The later [merge-repair ablation](RESULTS_2026-09-25_REPAIR.md) keeps the
 coordinator and enables up to two sequential repair attempts.
+The [tool-call interface smoke](RESULTS_2026-09-27_TOOL_CALL_SMOKE.md) validates
+Qwen3.5-9B tool calls through an isolated SGLang service with the Qwen parser.
 
 This path runs the existing two-worker team in independent, writable Apptainer
 sandboxes. Messaging uses the existing in-memory bus; Git sharing uses one
@@ -63,6 +65,11 @@ After the dummy smoke passes and an API key is available, place the exported
 ```bash
 python3 scripts/nlp_cluster/submit.py --mode real --env-file /private/path/model.env
 ```
+
+For a bounded real smoke, add `--step-limit 30 --agent-time-limit 300`.
+The normal defaults remain 1,000 steps and 3,600 seconds.
+`--no-coordinator-notebook` selects the messages-only coordinator; the switch and
+budgets are recorded in metadata and forwarded to the benchmark runner.
 
 The real path loads the private file passed through `--env-file`, including its
 model and sampling settings. Provider acceptance

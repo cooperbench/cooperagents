@@ -16,7 +16,15 @@ from cooperagents.env.limited_process import run_limited
 
 
 class ApptainerEnv(Environment):
-    def __init__(self, image: str, *, scratch: str, shared: str | None = None, repo_path: str = "/workspace/repo") -> None:
+    def __init__(
+        self,
+        image: str,
+        *,
+        scratch: str,
+        shared: str | None = None,
+        repo_path: str = "/workspace/repo",
+        coordinator_dir: Path | None = None,
+    ) -> None:
         sif = Path(image).resolve(strict=True)
         if not sif.is_file():
             raise ValueError("Apptainer image must be a prepared SIF file")
@@ -61,6 +69,12 @@ class ApptainerEnv(Environment):
             if shared:
                 Path(shared).mkdir(parents=True, exist_ok=True)
                 self._argv += ["--bind", f"{Path(shared).resolve()}:/cbshared"]
+            if coordinator_dir is not None:
+                notebook_dir = Path(coordinator_dir).resolve(strict=True)
+                if not notebook_dir.is_dir():
+                    raise ValueError("Coordinator mount must be a directory")
+                (self.root / "fs" / "coordination").mkdir(exist_ok=True)
+                self._argv += ["--bind", f"{notebook_dir}:/coordination:ro"]
             self._argv += ["--pwd", "/", str(self.root / "fs")]
             result = self.execute("git rev-parse HEAD")
             if result.exit_code:

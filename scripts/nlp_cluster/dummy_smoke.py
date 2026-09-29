@@ -7,10 +7,12 @@ import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from types import SimpleNamespace
 
+from cooperagents.bus.memory import InMemoryBus
+from cooperagents.env.runtime import task_environment
 from cooperagents.eval.apptainer import ApptainerEvalBackend
 from cooperagents.harness import _Coordinator
+from cooperagents.types import Assignment
 
 
 def main():
@@ -25,9 +27,24 @@ def main():
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             requests.append(body)
-            message = {"role": "assistant", "content": "Check your own changes before completing."}
-            finish = "stop"
-            if body.get("tools"):
+            names = {tool["function"]["name"] for tool in body.get("tools") or []}
+            coordinator_request = "update_notebook" in names
+            message = {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": f"coord_{i}", "type": "function", "function": {"name": name, "arguments": json.dumps(args)}}
+                    for i, (name, args) in enumerate(
+                        [
+                            ("update_notebook", {"content": "# Coordination\n\n## Proposed\nEach worker owns its separate dummy marker."}),
+                            ("send_message", {"recipient": "agent1", "content": "Read /coordination/notebook.md and confirm your marker."}),
+                            ("send_message", {"recipient": "agent2", "content": "Read /coordination/notebook.md and confirm your marker."}),
+                        ]
+                    )
+                ],
+            }
+            finish = "tool_calls"
+            if not coordinator_request:
                 history = body["messages"]
                 prompt = "\n".join(str(m.get("content", "")) for m in history if m["role"] == "user")
                 own, mate = ("agent1", "agent2") if "TEAMMATES: agent2" in prompt else ("agent2", "agent1")
@@ -35,6 +52,8 @@ def main():
                 if step == 0:
                     name, args = "send_message", {"recipient": mate, "content": "Dummy smoke: I own my separate marker file."}
                 elif step == 1:
+                    name, args = "bash", {"command": "cat /coordination/notebook.md"}
+                elif step == 2:
                     name, args = (
                         "bash",
                         {"command": f"printf 'invalid go syntax\\n' > dummy_{own}.go; echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"},
@@ -96,9 +115,32 @@ def main():
         COOPER_REQUIRE_PARAMETERS="true",
     )
     try:
-        # Short workers may finish before the periodic monitor fires. Probe its actual composer explicitly.
-        nudge = _Coordinator({}, "qwen/qwen3.5-9b")._compose("LOOP", SimpleNamespace(messages=[]))
-        assert nudge == "Check your own changes before completing.", nudge
+        # Exercise directory binding across atomic replacements, using the configured runtime.
+        from contextlib import ExitStack
+
+        from cooperagents.eval.dataset import image_name
+
+        notebook = run / "mount-check" / "notebook.md"
+        roster = [Assignment(agent_id=f"agent{i}", role="member", task="mount check") for i in (1, 2)]
+        coordinator = _Coordinator(
+            {}, assignments=roster, bus=InMemoryBus("mount-check"), notebook_path=notebook, complete=lambda _: []
+        )
+        with ExitStack() as cleanup:
+            envs = []
+            for _ in roster:
+                env = task_environment(image_name("go_chi_task", 27), coordinator_dir=notebook.parent)
+                cleanup.callback(env.cleanup)
+                envs.append(env)
+            for version in range(3):
+                if version:
+                    coordinator.update_notebook(f"# Coordination version {version}")
+                for env in envs:
+                    result = env.execute("cat /coordination/notebook.md")
+                    assert result.exit_code == 0 and result.stdout == notebook.read_text()
+                    assert env.execute("printf forbidden > /coordination/notebook.md").exit_code != 0
+                    assert "coordination/notebook" not in env.git_diff()
+            # Apptainer runs as the host user; this smoke must not silently claim a root-only read check.
+            assert all(env.execute("id -u").stdout.strip() != "0" for env in envs), "Run mount smoke as a non-root user"
         command = [
             sys.executable,
             "scripts/bench_compare.py",
@@ -111,6 +153,7 @@ def main():
             "--coop-tools",
             "--git-share",
             "--coordinator",
+            "--record-trajectory",
             "--completion-gate",
             "--step-limit",
             "8",
@@ -123,8 +166,13 @@ def main():
         ]
         (run / "training-args.txt").write_text("\n".join(command) + "\n")
         subprocess.run(command, check=True)
-        assert any(b.get("tools") for b in requests), "No worker HTTP requests"
-        assert any(not b.get("tools") for b in requests), "No coordinator HTTP requests"
+        assert any("bash" in {tool["function"]["name"] for tool in b.get("tools") or []} for b in requests), "No worker HTTP requests"
+        assert {tool["function"]["name"] for tool in requests[0]["tools"]} == {"send_message", "update_notebook"}, (
+            "Initial coordinator decision must precede worker requests"
+        )
+        assert any("coordinator notebook v1" in json.dumps(b["messages"]) for b in requests[1:] if b.get("tools")), (
+            "Worker did not read the mounted notebook into its model context"
+        )
         expected = dict(
             temperature=1.0,
             top_p=0.95,
@@ -143,7 +191,7 @@ def main():
         assert len(result_paths) == 1
         result = json.loads(result_paths[0].read_text())
         assert set(result["agents"]) == {"agent1", "agent2"} and not result["helpers"]
-        assert all(a["status"] == "submitted" and a["steps"] == 3 for a in result["agents"].values()), result
+        assert all(a["status"] == "submitted" and a["steps"] == 4 for a in result["agents"].values()), result
         shared = Path(os.environ["COOPER_SCRATCH"]) / "shared"
         repositories = list(shared.glob("*/repo.git"))
         assert len(repositories) == 1, "Missing shared Git repository"
@@ -154,6 +202,7 @@ def main():
         assert any("dummy_agent1.txt" in p.read_text() and "dummy_agent2.txt" in p.read_text() for p in patches), (
             "Missing merged worker markers"
         )
+        assert all("coordination/notebook" not in p.read_text() for p in patches)
         from cooperbench.eval.sandbox import run_patch_test
 
         backend = ApptainerEvalBackend(json.loads(Path(os.environ["COOPER_IMAGE_MANIFEST"]).read_text()), os.environ["COOPER_SCRATCH"])

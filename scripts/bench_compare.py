@@ -210,6 +210,8 @@ def run_team(
     git_share: bool = False,
     team_roles: bool = False,
     coordinator: bool = False,
+    coordinator_notebook: bool = True,
+    coordination_variant: str = "current",
     focused_repair: bool = False,
     repair_time: int = 0,
     apply_merge: bool = False,
@@ -219,6 +221,7 @@ def run_team(
     completion_gate: bool = False,
     presub_merge: bool = False,
     repair_attempts: int = 1,
+    langfuse: bool = False,
     record_trajectory: bool = False,
 ) -> dict:
     feats = sorted(item.features)
@@ -284,6 +287,7 @@ def run_team(
         git_share=git_share,
         team_roles=team_roles,
         coordinator=coordinator,
+        coordinator_notebook=coordinator_notebook,
         focused_repair=focused_repair,
         repair_time_limit=repair_time or None,
         apply_chain_merge=apply_merge,
@@ -297,7 +301,10 @@ def run_team(
             lambda patches: max(range(len(patches)), key=lambda i: len(patches[i]))
         ) if presub_merge else None,
     )
-    harness = UnifiedHarness(bus=InMemoryBus(run_id), step_limit=step_limit, command_timeout=300)
+    pair_dir = logs_dir / run_name / "team" / item.repo / str(item.task_id) / "_".join(f"f{f}" for f in sorted(feats))
+    notebook_path = (pair_dir / "coordination" / run_id / "notebook.md").resolve() if coordinator and coordinator_notebook else None
+    harness = UnifiedHarness(bus=InMemoryBus(run_id), step_limit=step_limit, command_timeout=300,
+                             coordinator_notebook_path=notebook_path, coordination_variant=coordination_variant, langfuse=langfuse)
     img = image_name(item.repo, item.task_id)
     selector = None
     if best_of_n > 1:
@@ -310,12 +317,16 @@ def run_team(
     if record_trajectory:
         if best_of_n != 1 or decompose or adaptive or not coop_tools:
             raise ValueError("Trajectory collection requires a single coop-tools team")
-        pair_dir = logs_dir / run_name / "team" / item.repo / str(item.task_id) / "_".join(f"f{f}" for f in sorted(feats))
         trajectory = Trajectory(pair_dir / "trajectory.jsonl.gz")
         harness.trajectory = trajectory
-        trajectory.emit("harness", "pair_start", run_id=run_id, repo=item.repo, task_id=item.task_id, features=feats)
+        trajectory.emit("harness", "pair_start", run_id=run_id, repo=item.repo, task_id=item.task_id, features=feats,
+                        coordinator=coordinator, coordinator_notebook=coordinator and coordinator_notebook,
+                        coordination_variant=coordination_variant)
     try:
-        res = harness.run(spec, env_factory=lambda _id, _i=img, _v=vols: task_environment(_i, volumes=_v), selector=selector)
+        worker_ids = {a.agent_id for a in assignments}
+        res = harness.run(spec, env_factory=lambda _id: task_environment(
+            img, volumes=vols, coordinator_dir=notebook_path.parent if notebook_path is not None and _id in worker_ids else None,
+        ), selector=selector)
         if trajectory:
             trajectory.emit("harness", "pair_end", agents={k: {"status": v.status, "steps": v.steps} for k, v in res.seeds.items()})
     finally:
@@ -371,7 +382,10 @@ def main() -> None:
                     help="Complete-Team cell: lead/member roles + shared scratchpad volume;"
                          " lead merges member patches and its tree is the submission")
     ap.add_argument("--coordinator", action="store_true",
-                    help="C2: live monitor — mechanical loop/stall/collision triggers, LLM-composed nudges via poller")
+                    help="tool-call coordinator: initial and ongoing coordination, messages and a read-only shared notebook")
+    ap.add_argument("--no-coordinator-notebook", action="store_true",
+                    help="keep the same coordinator policy and messages, with no notebook or mount")
+    ap.add_argument("--coordination-variant", choices=("current", "human_in_loop"), default="current")
     ap.add_argument("--focused-repair", action="store_true", help="R2: harness gathers merge-damage evidence into the repair brief")
     ap.add_argument("--repair-time", type=int, default=0, help="TK9f: wall-clock cap (s) for the repair agent; 0 = uncapped")
     ap.add_argument("--apply-merge", action="store_true", help="TK8: pure apply-chain merge (Q5 base) instead of 3-way-first")
@@ -416,9 +430,12 @@ def main() -> None:
     ap.add_argument("--team-name", default="cmp-team")
     ap.add_argument("--solo-only", action="store_true", help="skip the team arm (e.g. solo calibration sweeps)")
     ap.add_argument("--resume", action="store_true", help="skip pairs that already have a result.json on disk")
+    ap.add_argument("--langfuse", action="store_true", help="export worker and coordinator traces to Langfuse (default: off)")
     ap.add_argument("--record-trajectory", action="store_true", help="append complete agent/coordinator I/O for replay")
     ap.add_argument("--skip-eval", action="store_true", help="write generation artifacts without scoring")
     args = ap.parse_args()
+    if args.coordination_variant == "human_in_loop" and (not args.coordinator or args.no_coordinator_notebook):
+        ap.error("human_in_loop requires --coordinator with notebook enabled")
 
     if args.pairs:
         items = []
@@ -485,7 +502,10 @@ def main() -> None:
                 wait_protocol=args.wait_protocol,
                 git_share=args.git_share,
                 team_roles=args.team_roles,
+                langfuse=args.langfuse,
                 coordinator=args.coordinator,
+                coordinator_notebook=not args.no_coordinator_notebook,
+                coordination_variant=args.coordination_variant,
                 focused_repair=args.focused_repair,
                 repair_time=args.repair_time,
                 apply_merge=args.apply_merge,

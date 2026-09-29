@@ -104,6 +104,59 @@ We meet CooperBench where it already looks. Its `discover_runs` scans
 seed patches are scored; helper/member work reaches the score through the seed
 agent that integrates it.
 
+## Coordinator notebook experiment
+
+`scripts/bench_compare.py --coordinator --coop-tools --no-seed` enables a
+coordinator for a fixed mini-SWE team. It makes one synchronous decision before
+workers start, then checks progress and replies every 20 seconds. Workers first
+inspect code and discuss proposed edit regions; agreement is a prompt convention,
+not an execution barrier. Budget advice is chosen by the model.
+
+The coordinator writes a run-specific Markdown artifact. Each worker mounts its
+directory read-only at `/coordination`, outside the code checkout. A short
+version/path notice prompts workers to read `/coordination/notebook.md` with their
+existing shell tool. Updates replace the file atomically; the poller never pushes
+its full text. After context compaction, the next poll repeats the read reminder.
+Reading consumes normal worker budget and is not guaranteed by the harness.
+
+Add `--no-coordinator-notebook` for the same coordinator with messages only.
+ProgramBench's `coopgitc2` arm accepts the same flag. The implementation and
+[k=3 comparison plan](thoughts/shared/plans/2026-09-27-coordinator-notebook.md)
+are experimental; feature-score benefit has not yet been measured.
+
+Direct `UnifiedHarness` callers must supply a new `coordinator_notebook_path`
+named `notebook.md` and mount its parent directory in each worker factory, e.g.
+`task_environment(image, coordinator_dir=path.parent)`. The harness creates the
+initial file before calling the factories and verifies readability before workers
+start. Set `TeamSpec.coordinator_notebook=False` to omit the file and mounts.
+
+The optional `coordinator_complete(prompt)` callback returns OpenAI-style tool
+calls as `[{"name": ..., "arguments": "<JSON object>"}]`. For example:
+
+```python
+[
+    {"name": "update_notebook", "arguments": '{"content":"# Coordination\\n\\nProposed ownership: pending replies."}'},
+    {"name": "send_message", "arguments": '{"recipient":"agent1","content":"Report proposed files and interfaces."}'},
+]
+```
+
+`[]` is a valid no-op. The default client passes tool definitions to the model API
+and reads `message.tool_calls`; the serving stack must parse the model's native
+tool syntax into that field. The coordinator ignores `message.content`, including
+raw tool markup; a service without a tool parser will therefore make no action.
+For the tested Qwen3.5-9B SGLang service, enable `--tool-call-parser qwen3_coder`
+on the server; this is a serving setting, not a harness model-format branch.
+Each batch allows one full notebook replacement (8,000 characters) and one
+message per worker (1,200 characters). Content above either limit is truncated
+with a visible notice at the end, included in that limit; a truncated notebook
+loses its tail. Unknown fields or recipients reject the entire batch. A failed
+write preserves the old notebook and sends none of that batch's messages.
+Callback errors or invalid tool calls fail the
+run after cleanup; default model failures are logged and retried on a later tick.
+Replies are retained until a valid decision succeeds. The first callback runs on
+the caller thread, later callbacks serially on the monitor thread; injected
+clients must support that usage and bound their own request duration.
+
 ## Testing
 
 ```bash
@@ -126,3 +179,40 @@ repeatable, resumable cycle:
   fixed 10-pair benchmark (same agent/model/eval) and prints pass-rate.
 
 Work one item at a time: implement → re-measure → keep if it helps → record the delta.
+
+### Optional Langfuse tracing
+
+Install `uv sync --extra mini --extra langfuse`. Tracing is **off by default**,
+even when credentials are present. Add `--langfuse` to `scripts/bench_compare.py`
+(with `--coop-tools --no-seed`, optionally `--coordinator`) or
+`scripts/bench_programbench.py` (a coop arm). Direct callers use
+`UnifiedHarness(langfuse=True)` for a single mini-SWE coop-tools team.
+
+Set `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` in the process environment
+(or the launcher's dotenv file). `LANGFUSE_BASE_URL` selects the server; the
+existing `LANGFUSE_OTEL_HOST` and `LANGFUSE_HOST` aliases are also accepted.
+The default is `https://us.cloud.langfuse.com`. The SDK also accepts
+`LANGFUSE_TRACING_ENVIRONMENT`.
+
+Each `run_id` has a stable session containing separate worker and coordinator
+agent traces. Reusing the same `run_id` and agent IDs after a restart appends new
+observations to the same session and traces; it does not restore agent state.
+Use a new `run_id` for every independent experiment. Launcher-generated run IDs
+are fresh on each launch; their `--resume` option skips completed work rather
+than restoring an earlier tracing session.
+
+Traces include model inputs, raw responses (including tool calls and reasoning
+returned by the provider), token counts, tool results, compaction
+calls, and coordinator observations/decisions. Calls use explicit parent spans
+so concurrent agents and completion threads remain separate. Cost calculation
+uses Langfuse's model pricing when available; custom models may need pricing
+configured in Langfuse. Transport credentials are omitted and known environment
+secrets are redacted. Task content and tool output are uploaded when enabled.
+
+`--record-trajectory` can run alongside Langfuse. Missing credentials or the
+optional SDK fail before containers start; export failures are logged and do not
+retry or fail agent work. Traces are flushed when the harness finishes, including
+exception paths. A hard process kill cannot guarantee delivery. Custom
+`coordinator_complete` callbacks retain ownership of their SDK recording; their
+observations and decisions are captured, but raw model usage requires recording
+inside that callback.

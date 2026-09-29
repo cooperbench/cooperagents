@@ -389,15 +389,24 @@ def run_mini_swe_agent(
         model.heartbeat_path = os.path.join(
             hb_dir, f"{os.getpid()}_{int(_time.time())}_{agent_id}.hb")
     system_template = cfg["system_template"]
-    if tool_protocol and comm is not None:
+    if monitor is not None and git_share:
+        # Keep both coordinator arms' shared prefix in the human-reviewed order.
+        system_template = system_template.rstrip("\n") + _GIT_SHARE_SYSTEM
+    if (tool_protocol or monitor is not None) and comm is not None:
         system_template = system_template + _SEND_MESSAGE_SYSTEM
+    if monitor is not None:
+        system_template += monitor.worker_instructions()
+        system_template += (
+            '\nThe coordinator is also a valid send_message recipient: {"recipient":"coordinator","content":"..."}. '
+            "Report proposed edit regions, interface agreements, blockers and verification results without waiting for a reply."
+        )
     if wait_protocol and comm is not None:
         system_template = system_template + _WAIT_SYSTEM
     if task_board is not None:
         system_template = system_template + _TASK_BOARD_SYSTEM
     if spawn_handler is not None:
         system_template = system_template + _SPAWN_SYSTEM
-    if git_share:
+    if git_share and monitor is None:
         system_template = system_template + _GIT_SHARE_SYSTEM
     import time as _time
 
@@ -442,28 +451,19 @@ def run_mini_swe_agent(
             except Exception:  # noqa: BLE001
                 pass
 
+    status = "error"
+    error = None
     try:
         exit_extra = agent.run(task=task)
         status = "submitted" if exit_extra.get("exit_status") == "Submitted" else "limit"
+    except Exception as e:  # noqa: BLE001 - surface any failure as an error result
+        error = str(e)
+    finally:
+        if monitor is not None:
+            monitor.mark_finished(agent_id, status)
         _hb_end(status)
         if trace is not None:
-            trace("agent_end", status=status, steps=agent.n_calls)
-    except Exception as e:  # noqa: BLE001 - surface any failure as an error result
-        status = "error"
-        _hb_end("error")
-        if trace is not None:
-            trace("agent_end", status=status, steps=agent.n_calls, error=str(e))
-        return AgentResult(
-            agent_id=agent_id,
-            role=role,
-            status=status,
-            cost=agent.cost,
-            steps=agent.n_calls,
-            feature_id=feature_id,
-            messages=agent.messages,
-            error=str(e),
-            segments=(agent._segments or None),
-        )
+            trace("agent_end", status=status, steps=agent.n_calls, **({"error": error} if error is not None else {}))
     return AgentResult(
         agent_id=agent_id,
         role=role,
@@ -472,6 +472,7 @@ def run_mini_swe_agent(
         steps=agent.n_calls,
         feature_id=feature_id,
         messages=agent.messages,
+        error=error,
         segments=(agent._segments or None),
     )
 

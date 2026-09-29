@@ -18,10 +18,12 @@ def test_worker_coordinator_profile_parity(monkeypatch):
             monkeypatch.delenv(key)
     profile = {
         "OPENAI_BASE_URL": "https://openrouter.ai/api/v1",
-        "COOPER_TEMPERATURE_FORCE": "1.0", "COOPER_TOP_P": "0.95",
+        "COOPER_TEMPERATURE_FORCE": "1.0",
+        "COOPER_TOP_P": "0.95",
         "COOPER_TOP_K": "20",
         "COOPER_PRESENCE_PENALTY": "1.5",
-        "COOPER_REASONING_ENABLED": "false", "COOPER_REQUIRE_PARAMETERS": "true",
+        "COOPER_REASONING_ENABLED": "false",
+        "COOPER_REQUIRE_PARAMETERS": "true",
         "COOPER_PROVIDER_ONLY": "venice",
     }
     for key, value in profile.items():
@@ -35,8 +37,9 @@ def test_worker_coordinator_profile_parity(monkeypatch):
         captured.append(json.loads(request.content))
         return httpx.Response(200, json={"choices": [{"message": {"content": "Try another command."}}]})
 
-    client = openai.OpenAI(api_key="test-only", base_url="https://example.test/v1",
-                           http_client=httpx.Client(transport=httpx.MockTransport(respond)))
+    client = openai.OpenAI(
+        api_key="test-only", base_url="https://example.test/v1", http_client=httpx.Client(transport=httpx.MockTransport(respond))
+    )
     monkeypatch.setattr(openai, "OpenAI", lambda **_: client)
     coordinator = _default_planner_complete("qwen/qwen3.5-9b", None, None)
     assert coordinator is not None
@@ -56,14 +59,27 @@ def test_worker_coordinator_profile_parity(monkeypatch):
     worker._query_inner([{"role": "user", "content": "work"}])
     for payload in captured:
         assert "min_p" not in payload and "repetition_penalty" not in payload
-        assert {key: payload[key] for key in (
-            "model", "temperature", "top_p", "top_k", "presence_penalty",
-            "reasoning", "provider", "max_tokens",
-        )} == {
-            "model": "qwen/qwen3.5-9b", "temperature": 1.0, "top_p": 0.95,
-            "top_k": 20, "presence_penalty": 1.5,
+        assert {
+            key: payload[key]
+            for key in (
+                "model",
+                "temperature",
+                "top_p",
+                "top_k",
+                "presence_penalty",
+                "reasoning",
+                "provider",
+                "max_tokens",
+            )
+        } == {
+            "model": "qwen/qwen3.5-9b",
+            "temperature": 1.0,
+            "top_p": 0.95,
+            "top_k": 20,
+            "presence_penalty": 1.5,
             "reasoning": {"enabled": False},
-            "provider": {"require_parameters": True, "only": ["venice"], "allow_fallbacks": False}, "max_tokens": 4096,
+            "provider": {"require_parameters": True, "only": ["venice"], "allow_fallbacks": False},
+            "max_tokens": 4096,
         }
     monkeypatch.setenv("COOPER_CHAT_TEMPLATE_ENABLE_THINKING", "false")
     monkeypatch.setenv("COOPER_WORKER_CHAT_TEMPLATE_ENABLE_THINKING", "true")
@@ -97,13 +113,34 @@ def test_sglang_nonthinking_profile(monkeypatch):
     assert "provider" not in extra and "reasoning" not in extra
 
 
+def test_coordinator_ignores_unparsed_tool_markup(monkeypatch):
+    import sys
+
+    monkeypatch.setitem(sys.modules, "cooperagents.vendor.mini_swe.models.litellm_model", None)
+    from cooperagents.harness import _SEND_MESSAGE_TOOL
+
+    def respond(request):
+        return httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": "<tool_call>raw</tool_call>"}}]})
+
+    client = openai.OpenAI(
+        api_key="test-only", base_url="https://example.test/v1", http_client=httpx.Client(transport=httpx.MockTransport(respond))
+    )
+    monkeypatch.setattr(openai, "OpenAI", lambda **_: client)
+    complete = _default_planner_complete("test-model", None, None, tools=[_SEND_MESSAGE_TOOL])
+    assert complete is not None
+    assert complete("coordinate") == []
+    client.close()
+
+
 def test_injected_coordinator_uses_separate_endpoint_and_records_once(monkeypatch, tmp_path):
     import json
     from functools import partial
     from types import SimpleNamespace
 
-    from cooperagents.harness import _Coordinator
+    from cooperagents.bus.memory import InMemoryBus
+    from cooperagents.harness import _SEND_MESSAGE_TOOL, _Coordinator
     from cooperagents.trajectory import Trajectory, record_call, replay
+    from cooperagents.types import Assignment
 
     for key in ("AZURE_OPENAI_BASE_URL", "AZURE_OPENAI_API_KEY", "COOPER_PROVIDER_ONLY"):
         monkeypatch.delenv(key, raising=False)
@@ -112,31 +149,75 @@ def test_injected_coordinator_uses_separate_endpoint_and_records_once(monkeypatc
     seen = []
 
     def respond(request):
-        seen.append((str(request.url), json.loads(request.content)))
-        return httpx.Response(200, json={
-            "id": "test", "object": "chat.completion", "created": 0,
-            "model": "test", "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "nudge"}}],
-        })
+        payload = json.loads(request.content)
+        seen.append((str(request.url), payload))
+        message = (
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "send_message", "arguments": json.dumps({"recipient": "agent1", "content": "nudge"})},
+                }],
+            }
+            if payload.get("tools")
+            else {"role": "assistant", "content": '{"tool":"finish"}'}
+        )
+        return httpx.Response(
+            200,
+            json={
+                "id": "test",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "test",
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": "stop",
+                        "message": message,
+                    }
+                ],
+            },
+        )
 
     with (
-        openai.OpenAI(api_key="training-session", base_url="https://training.test/v1", max_retries=0,
-                      http_client=httpx.Client(transport=httpx.MockTransport(respond))) as training,
-        openai.OpenAI(api_key="worker-key", base_url="https://workers.test/v1", max_retries=0,
-                      http_client=httpx.Client(transport=httpx.MockTransport(respond))) as workers,
+        openai.OpenAI(
+            api_key="training-session",
+            base_url="https://training.test/v1",
+            max_retries=0,
+            http_client=httpx.Client(transport=httpx.MockTransport(respond)),
+        ) as training,
+        openai.OpenAI(
+            api_key="worker-key",
+            base_url="https://workers.test/v1",
+            max_retries=0,
+            http_client=httpx.Client(transport=httpx.MockTransport(respond)),
+        ) as workers,
     ):
         journal = Trajectory(tmp_path / "trajectory.jsonl")
         trace = partial(journal.emit, "coordinator")
 
         def complete(prompt):
-            response = record_call(trace, training.chat.completions.create,
-                                   model="Qwen/Qwen3-1.7B", messages=[{"role": "user", "content": prompt}])
-            return response.choices[0].message.content
+            response = record_call(
+                trace, training.chat.completions.create, model="Qwen/Qwen3-1.7B", messages=[{"role": "user", "content": prompt}],
+                tools=[_SEND_MESSAGE_TOOL], tool_choice="auto",
+            )
+            return [
+                {"name": call.function.name, "arguments": call.function.arguments}
+                for call in response.choices[0].message.tool_calls or []
+            ]
 
-        coordinator = _Coordinator({}, "fixed-worker-model", complete=complete, trace=trace)
+        coordinator = _Coordinator(
+            {},
+            "fixed-worker-model",
+            assignments=[Assignment(agent_id="agent1", role="lead", task="feature")],
+            bus=InMemoryBus("test"),
+            complete=complete,
+            trace=trace,
+        )
         coordinator.register("agent1", SimpleNamespace(messages=[]))
-        coordinator._detect = lambda *_: "LOOP"
-        coordinator._stop = SimpleNamespace(wait=lambda _, ticks=iter([False, True]): next(ticks))
-        coordinator.run()
+        coordinator.decide(initial=True)
         assert coordinator.error is None
         assert coordinator.drain("agent1") == ["[coordinator] nudge"]
 
@@ -159,6 +240,7 @@ def test_injected_coordinator_uses_separate_endpoint_and_records_once(monkeypatc
 
     assert [url for url, _ in seen] == ["https://training.test/v1/chat/completions"] + ["https://workers.test/v1/chat/completions"] * 3
     assert seen[0][1]["model"] == "Qwen/Qwen3-1.7B"
+    assert seen[0][1]["tools"][0]["function"]["name"] == "send_message"
     assert all(payload["model"] == "openai/fixed-worker-model" for _, payload in seen[1:])
     rows = [json.loads(line) for line in journal.path.read_text().splitlines()]
     assert sum(row["event"] == "request" for row in rows) == 1
