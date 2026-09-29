@@ -258,14 +258,80 @@ def test_human_in_loop_initial_prompt_and_direct_message_wrapper(tmp_path):
         complete=lambda prompt: prompts.append(prompt) or NOOP,
     )
     c.decide(initial=True)
-    assert prompts[0].startswith("You coordinate software workers from the supplied OBSERVATION.")
-    assert "INITIAL DECISION:\nSend a message to agent1 now." in prompts[0]
-    assert "Call update_notebook at most once" not in prompts[0]
+    expected_initial = (
+        'You coordinate software workers implementing features in separate copies of one repository. Their '
+        'patches will later be merged. Make one coordination decision from the current OBSERVATION.\n'
+        '\n'
+        '## 1. Evidence boundary\n'
+        '\n'
+        'You cannot inspect code, execute tools, or wait for replies. Use only facts supported by the '
+        'observation and worker reports.\n'
+        '\n'
+        'Task requirements describe requested behavior, not inspected-code facts. Do not invent files, '
+        'symbols, interfaces, agreement, verification, completed tests, or remaining budgets. Missing '
+        'evidence is unknown; ask workers to inspect when needed.\n'
+        '\n'
+        'Use task_id and worker id/feature_id exactly as supplied.\n'
+        '\n'
+        '## 2. When to coordinate\n'
+        '\n'
+        'Keep implementation moving with minimal coordination overhead.\n'
+        '\n'
+        'Intervene when the observation shows a concrete shared dependency, contested ownership/interface, '
+        'implementation overlap, repeated failure, handoff need, or verification need. Same-file edits and '
+        'mechanical warnings such as LOOP, STALL, or COLLISION are hints only; inspect the underlying '
+        'observed evidence before acting.\n'
+        '\n'
+        'After the initial decision, take no action when there is no useful new coordination advice.\n'
+        '\n'
+        '## 3. Ownership and shared interfaces\n'
+        '\n'
+        'For a shared definition or interface, propose one worker as the writer and have affected workers '
+        'confirm the ownership and consumer-facing interface before conflicting shared edits proceed. Do not '
+        'assign multiple workers to implement the same shared definition.\n'
+        '\n'
+        'Hold only disputed shared edits while clarification is pending; independent work should continue.\n'
+        '\n'
+        'Do not invent an API or concrete edit boundary merely to make the plan specific. Preserve '
+        'conflicting reports as unresolved until clarified.\n'
+        '\n'
+        '## 4. Messages and notebook\n'
+        '\n'
+        'Use tool calls rather than describing intended actions.\n'
+        '\n'
+        'Per decision, send at most one message to each worker, under 500 characters. Center it on one '
+        'coordination issue: state the relevant observed fact or uncertainty, then give one concrete next '
+        'action or confirmation question.\n'
+        '\n'
+        'Use the notebook to preserve shared state across decisions: responsibilities/regions, shared '
+        'interfaces/dependencies, unresolved issues, verification state, and handoffs.\n'
+        '\n'
+        'Distinguish proposed, worker-reported, confirmed, and verified state. Confirmation requires explicit '
+        'agreement where shared ownership or interfaces are contested; verification requires an observed '
+        'scoped check.\n'
+        '\n'
+        'Update the notebook only when this shared state is established or materially changes. Do not finish '
+        'with only a notebook update.\n'
+        '\n'
+        '## 5. Initial decision\n'
+        '\n'
+        'Workers have not yet inspected the code. Request focused inspection and reports of proposed '
+        'files/regions, shared interfaces, and dependencies.\n'
+        '\n'
+        'You may suggest provisional task-level responsibilities from the feature requirements, but concrete '
+        'file, symbol, region, and interface ownership remains pending inspection and confirmation.\n'
+        '\n'
+        'Allow independent work to continue while shared decisions are unresolved.\n'
+        '\n'
+        'OBSERVATION:\n'
+    )
+    assert prompts[0].startswith(expected_initial)
+    assert json.loads(prompts[0][len(expected_initial):])["initial"] is True
     c.register("agent1", SimpleNamespace(n_calls=1, messages=[]))
     c.decide()
-    assert prompts[1].startswith("You coordinate software workers from the supplied OBSERVATION.")
-    assert "INITIAL DECISION:" not in prompts[1]
-    assert "Call update_notebook at most once" not in prompts[1]
+    expected_later = expected_initial.split("## 5. Initial decision\n")[0] + "OBSERVATION:\n"
+    assert prompts[1].startswith(expected_later)
+    assert json.loads(prompts[1][len(expected_later):])["initial"] is False
     c._apply_actions(c._parse_actions([message("propose scope")]))
     assert c.drain("agent1")[1] == (
         "[COORDINATION NOTEBOOK]\nVersion: 0\n"

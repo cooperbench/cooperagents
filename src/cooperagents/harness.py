@@ -692,7 +692,7 @@ class _Coordinator:
         if self.coordination_variant == "human_in_loop":
             protocol = HUMAN_COORDINATOR_BASE + "\n"
             if initial:
-                protocol += "\nINITIAL DECISION:\n" + HUMAN_COORDINATOR_INITIAL + "\n"
+                protocol += "\n" + HUMAN_COORDINATOR_INITIAL + "\n"
         else:
             protocol = _COORDINATOR_PROMPT
             if initial:
