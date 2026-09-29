@@ -304,8 +304,9 @@ def test_finish_joins_inflight_even_if_already_stopped():
     assert deadlines == [600]
 
 
+@pytest.mark.parametrize("remote", [False, True])
 @pytest.mark.parametrize("notebook", [False, True])
-def test_real_worker_loop_startup_replies_and_path_notices(monkeypatch, tmp_path, notebook):
+def test_real_worker_loop_startup_replies_and_path_notices(monkeypatch, tmp_path, notebook, remote):
     import litellm
 
     from cooperagents.env.local import LocalEnv
@@ -415,12 +416,21 @@ def test_real_worker_loop_startup_replies_and_path_notices(monkeypatch, tmp_path
         coordinator_notebook=notebook,
     )
     journal = Trajectory(tmp_path / "trajectory.jsonl")
+    if remote:
+        from test_observability import memory_trace
+
+        sink, exporter = memory_trace(journal)
+        monkeypatch.setattr("cooperagents.observability.LangfuseTrace", lambda *a: sink)
     try:
         result = UnifiedHarness(
-            bus=bus, trajectory=journal, coordinator_complete=decide, coordinator_notebook_path=path if notebook else None
+            bus=bus, trajectory=journal, langfuse=remote, coordinator_complete=decide, coordinator_notebook_path=path if notebook else None
         ).run(spec, env_factory=factory)
     finally:
         journal.close()
+    if remote:
+        assert sink._closed and not sink._calls
+        roots = {s.name for s in exporter.get_finished_spans() if s.attributes.get("langfuse.internal.as_root")}
+        assert {"agent1", "agent2", "coordinator"} <= roots
     assert all(agent.status == "submitted" for agent in result.seeds.values())
     if not notebook:  # The notebook branch intentionally compacts away early assistant text.
         assert all(

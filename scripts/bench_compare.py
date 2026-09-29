@@ -221,6 +221,7 @@ def run_team(
     completion_gate: bool = False,
     presub_merge: bool = False,
     repair_attempts: int = 1,
+    langfuse: bool = False,
     record_trajectory: bool = False,
 ) -> dict:
     feats = sorted(item.features)
@@ -303,7 +304,7 @@ def run_team(
     pair_dir = logs_dir / run_name / "team" / item.repo / str(item.task_id) / "_".join(f"f{f}" for f in sorted(feats))
     notebook_path = (pair_dir / "coordination" / run_id / "notebook.md").resolve() if coordinator and coordinator_notebook else None
     harness = UnifiedHarness(bus=InMemoryBus(run_id), step_limit=step_limit, command_timeout=300,
-                             coordinator_notebook_path=notebook_path, coordination_variant=coordination_variant)
+                             coordinator_notebook_path=notebook_path, coordination_variant=coordination_variant, langfuse=langfuse)
     img = image_name(item.repo, item.task_id)
     selector = None
     if best_of_n > 1:
@@ -429,6 +430,7 @@ def main() -> None:
     ap.add_argument("--team-name", default="cmp-team")
     ap.add_argument("--solo-only", action="store_true", help="skip the team arm (e.g. solo calibration sweeps)")
     ap.add_argument("--resume", action="store_true", help="skip pairs that already have a result.json on disk")
+    ap.add_argument("--langfuse", action="store_true", help="export worker and coordinator traces to Langfuse (default: off)")
     ap.add_argument("--record-trajectory", action="store_true", help="append complete agent/coordinator I/O for replay")
     ap.add_argument("--skip-eval", action="store_true", help="write generation artifacts without scoring")
     args = ap.parse_args()
@@ -500,6 +502,7 @@ def main() -> None:
                 wait_protocol=args.wait_protocol,
                 git_share=args.git_share,
                 team_roles=args.team_roles,
+                langfuse=args.langfuse,
                 coordinator=args.coordinator,
                 coordinator_notebook=not args.no_coordinator_notebook,
                 coordination_variant=args.coordination_variant,

@@ -22,6 +22,9 @@ dev = [
     "fakeredis>=2.20",
 ]
 all = ["cooperagents[redis,llm,dev]"]
+langfuse = [
+    "langfuse>=4,<5",
+]
 
 [project.scripts]
 cooperagents = "cooperagents.cli:main"

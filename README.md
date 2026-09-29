@@ -179,3 +179,40 @@ repeatable, resumable cycle:
   fixed 10-pair benchmark (same agent/model/eval) and prints pass-rate.
 
 Work one item at a time: implement → re-measure → keep if it helps → record the delta.
+
+### Optional Langfuse tracing
+
+Install `uv sync --extra mini --extra langfuse`. Tracing is **off by default**,
+even when credentials are present. Add `--langfuse` to `scripts/bench_compare.py`
+(with `--coop-tools --no-seed`, optionally `--coordinator`) or
+`scripts/bench_programbench.py` (a coop arm). Direct callers use
+`UnifiedHarness(langfuse=True)` for a single mini-SWE coop-tools team.
+
+Set `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` in the process environment
+(or the launcher's dotenv file). `LANGFUSE_BASE_URL` selects the server; the
+existing `LANGFUSE_OTEL_HOST` and `LANGFUSE_HOST` aliases are also accepted.
+The default is `https://us.cloud.langfuse.com`. The SDK also accepts
+`LANGFUSE_TRACING_ENVIRONMENT`.
+
+Each `run_id` has a stable session containing separate worker and coordinator
+agent traces. Reusing the same `run_id` and agent IDs after a restart appends new
+observations to the same session and traces; it does not restore agent state.
+Use a new `run_id` for every independent experiment. Launcher-generated run IDs
+are fresh on each launch; their `--resume` option skips completed work rather
+than restoring an earlier tracing session.
+
+Traces include model inputs, raw responses (including tool calls and reasoning
+returned by the provider), token counts, tool results, compaction
+calls, and coordinator observations/decisions. Calls use explicit parent spans
+so concurrent agents and completion threads remain separate. Cost calculation
+uses Langfuse's model pricing when available; custom models may need pricing
+configured in Langfuse. Transport credentials are omitted and known environment
+secrets are redacted. Task content and tool output are uploaded when enabled.
+
+`--record-trajectory` can run alongside Langfuse. Missing credentials or the
+optional SDK fail before containers start; export failures are logged and do not
+retry or fail agent work. Traces are flushed when the harness finishes, including
+exception paths. A hard process kill cannot guarantee delivery. Custom
+`coordinator_complete` callbacks retain ownership of their SDK recording; their
+observations and decisions are captured, but raw model usage requires recording
+inside that callback.
