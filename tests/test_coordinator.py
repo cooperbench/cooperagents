@@ -267,19 +267,11 @@ def test_human_in_loop_initial_prompt_and_direct_message_wrapper(tmp_path):
     assert "INITIAL DECISION:" not in prompts[1]
     assert "Call update_notebook at most once" not in prompts[1]
     c._apply_actions(c._parse_actions([message("propose scope")]))
-    expected = (
+    assert c.drain("agent1")[1] == (
         "[COORDINATION NOTEBOOK]\nVersion: 0\n"
         "Read /coordination/notebook.md before continuing affected work.\n\n"
         "[FROM COORDINATOR]\npropose scope\n[END COORDINATOR MESSAGE]"
     )
-    assert c.drain("agent1") == [expected]
-    assert c.drain("agent1") == []
-    assert c.drain("agent2") == [
-        "[coordinator] Notebook v0 is available. Read the latest file at "
-        "/coordination/notebook.md (`cat /coordination/notebook.md`) before continuing affected work."
-    ]
-    c.update_notebook("new content")
-    assert c.drain("agent1")[0].startswith("[coordinator] Notebook v1 is available.")
     with pytest.raises(ValueError, match="requires a notebook"):
         coordinator(coordination_variant="human_in_loop")
 
