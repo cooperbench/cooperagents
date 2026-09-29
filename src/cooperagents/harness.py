@@ -26,6 +26,7 @@ it (the conventional lead-merges-the-team pattern).
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import tempfile
@@ -1054,6 +1055,7 @@ class UnifiedHarness:
         quiet: bool = True,
         on_event: Callable[[str], None] | None = None,
         trajectory=None,
+        langfuse: bool = False,
         coordinator_complete: Callable[[str], list[dict[str, str]]] | None = None,
         coordinator_notebook_path: Path | None = None,
         coordination_variant: str = "current",
@@ -1066,6 +1068,7 @@ class UnifiedHarness:
         self.coordination_variant = coordination_variant
         self.coordinator_notebook_path = Path(coordinator_notebook_path).resolve() if coordinator_notebook_path is not None else None
         self.trajectory = trajectory
+        self.langfuse = langfuse
         self.bus = bus
         self.step_limit = step_limit
         self.cost_limit = cost_limit
@@ -2052,6 +2055,26 @@ class UnifiedHarness:
         selector: Callable[[list[RunResult]], int] | None = None,
         planner: Planner | None = None,
     ) -> RunResult:
+        if self.langfuse:
+            if (
+                spec.worker != "mini_swe" or not spec.shared_workspace or not spec.coop_tools
+                or spec.best_of_n != 1 or spec.decompose or spec.adaptive
+            ):
+                raise ValueError("Langfuse tracing requires a single mini_swe coop-tools team")
+            try:
+                from cooperagents.observability import LangfuseTrace
+            except ImportError as exc:
+                raise RuntimeError("Install cooperagents[langfuse] to enable Langfuse tracing") from exc
+            sink = LangfuseTrace(spec, self.trajectory)
+            traced = copy.copy(self)
+            traced.langfuse, traced.trajectory = False, sink
+            failed = True
+            try:
+                result = traced.run(spec, env_factory=env_factory, llm=llm, llm_factory=llm_factory, selector=selector, planner=planner)
+                failed = False
+                return result
+            finally:
+                sink.close(failed=failed)
         if self.coordination_variant == "human_in_loop" and not (spec.coordinator and spec.coordinator_notebook):
             raise ValueError("Human-in-loop coordination requires coordinator and notebook")
         if (spec.coordinator or self.coordinator_complete is not None) and (

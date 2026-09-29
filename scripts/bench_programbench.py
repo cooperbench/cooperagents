@@ -120,7 +120,7 @@ def build_gate_and_repair(instance: str, patch: str, *, model: str, step_limit: 
 def run_team_once(arm: str, instance: str, *, step_limit: int, agent_time_limit: int | None,
                   gate: bool = False, brief: str = "", presub_merge: bool = False,
                   team_size: int = 2, dry_run: bool = False, coordinator_notebook: bool = True,
-                  artifact_dir: Path | None = None):
+                  artifact_dir: Path | None = None, langfuse: bool = False):
     """One full run for `arm`; returns (integrated_patch, RunResult).
 
     Own run_id -> own bus and git-share volume, so concurrent calls are safe.
@@ -187,6 +187,7 @@ def run_team_once(arm: str, instance: str, *, step_limit: int, agent_time_limit:
                 "coop_tools": spec.coop_tools, "git_share": spec.git_share,
                 "coordinator": spec.coordinator,
                 "coordinator_notebook": spec.coordinator and spec.coordinator_notebook,
+                "langfuse": langfuse,
                 "agent_time_limit": spec.agent_time_limit,
                 "completion_gate": getattr(spec.completion_gate, "__name__",
                                            None) if spec.completion_gate else None,
@@ -196,7 +197,7 @@ def run_team_once(arm: str, instance: str, *, step_limit: int, agent_time_limit:
             "src_path": __import__("cooperagents").__file__,
         }, None
     harness = UnifiedHarness(bus=InMemoryBus(run_id), step_limit=step_limit, command_timeout=300,
-                             coordinator_notebook_path=notebook_path)
+                             coordinator_notebook_path=notebook_path, langfuse=langfuse)
     res = harness.run(spec, env_factory=make_env)
     return (res.integrated.patch or ""), res
 
@@ -222,6 +223,7 @@ def main() -> None:
                     help="E_CB purity: build-only verification — disable the ProgramBench-evolved "
                          "reference-behavior probes in score/repair (CooperBench-era form)")
     ap.add_argument("--runs-dir", default="runs")
+    ap.add_argument("--langfuse", action="store_true", help="export worker and coordinator traces to Langfuse (default: off)")
     args = ap.parse_args()
 
     if args.basic_verify:
@@ -233,7 +235,8 @@ def main() -> None:
                                agent_time_limit=args.agent_time_limit or None,
                                gate=args.completion_gate, brief="",
                                presub_merge=args.presub_merge,
-                               team_size=args.team_size, dry_run=True, coordinator_notebook=not args.no_coordinator_notebook)
+                               team_size=args.team_size, dry_run=True, langfuse=args.langfuse,
+                               coordinator_notebook=not args.no_coordinator_notebook)
         cfg["flags"] = {"repair": args.repair, "env_brief": args.env_brief,
                         "basic_verify": args.basic_verify}
         print(_json.dumps(cfg, sort_keys=True))
@@ -248,7 +251,8 @@ def main() -> None:
                                agent_time_limit=args.agent_time_limit or None,
                                gate=args.completion_gate, brief=brief,
                                presub_merge=args.presub_merge,
-                               team_size=args.team_size, coordinator_notebook=not args.no_coordinator_notebook, artifact_dir=out_root)
+                               team_size=args.team_size, langfuse=args.langfuse,
+                               coordinator_notebook=not args.no_coordinator_notebook, artifact_dir=out_root)
 
     repair_meta = {}
     if args.repair:
