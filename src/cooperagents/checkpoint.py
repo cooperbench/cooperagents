@@ -29,7 +29,9 @@ def preview_patch(env) -> str:
     """Collect a binary-capable patch without changing the real Git index/stashes."""
     base = shlex.quote(getattr(env, "_base_commit", "") or "HEAD")
     result = env.execute(
-        'index=$(mktemp) || exit; rm -f "$index"; '
+        'index=$(mktemp) || exit; '
+        'original=$(git rev-parse --git-path index) && '
+        '{ if [ -f "$original" ]; then cp "$original" "$index"; else rm -f "$index"; fi; } && '
         'GIT_INDEX_FILE="$index" git add -A && '
         f'GIT_INDEX_FILE="$index" git diff --cached --binary {base}; '
         'rc=$?; rm -f "$index" "$index.lock"; exit "$rc"',

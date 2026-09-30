@@ -12,6 +12,26 @@ from cooperagents.harness import UnifiedHarness
 from cooperagents.types import AgentResult, Assignment, TeamSpec
 
 
+def test_preview_preserves_tracked_files_that_match_gitignore(tmp_path):
+    env = LocalEnv.fresh(workdir=str(tmp_path))
+    try:
+        env.write_file("tracked.txt", "base\n")
+        assert env.execute("git add tracked.txt && git commit -qm tracked").exit_code == 0
+        env._base_commit = env.execute("git rev-parse HEAD").stdout.strip()
+        env.write_file(".gitignore", "tracked.txt\n")
+        env.write_file("staged.txt", "staged\n")
+        assert env.execute("git add .gitignore staged.txt").exit_code == 0
+        env.write_file("staged.txt", "unstaged\n")
+        index = Path(env.repo_path) / ".git/index"
+        before = index.read_bytes()
+        preview = preview_patch(env)
+        assert index.read_bytes() == before
+        assert "diff --git a/tracked.txt" not in preview
+        assert preview == env.git_diff()
+    finally:
+        env.cleanup()
+
+
 def test_delivery_snapshot_precedes_staging_and_preserves_non_patch_files(tmp_path):
     env = LocalEnv.fresh(workdir=str(tmp_path))
     try:

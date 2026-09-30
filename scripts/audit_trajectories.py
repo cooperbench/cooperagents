@@ -38,7 +38,11 @@ def audit(run: Path) -> dict:
                 raise ValueError(f"{pair}: missing coordinator journal")
             if counts["coordinator:nudge"] != len(result.get("metrics", {}).get("coordinator_events", [])):
                 raise ValueError(f"{pair}: coordinator nudge count mismatch")
-        if not {"agent1", "agent2"} <= ends.keys():
+        workers = {"agent1", "agent2"}
+        if metadata.get("checkpoint_repair"):
+            config = json.loads((directory / "checkpoints/run.json").read_text())
+            workers = {assignment["agent_id"] for assignment in config["assignments"]}
+        if not workers <= ends.keys() or not workers <= result["agents"].keys():
             raise ValueError(f"{pair}: missing workers")
         for actor, info in result["agents"].items():
             final = json.loads((directory / f"{actor}_traj.json").read_text())
@@ -53,7 +57,7 @@ def audit(run: Path) -> dict:
             from cooperagents.checkpoint import verify_checkpoint
 
             root = directory / "checkpoints"
-            expected = {"worker-agent1", "worker-agent2", "pre-repair", "post-repair"}
+            expected = {"pre-repair", "post-repair", *(f"worker-{actor}" for actor in workers)}
             expected.update(f"before-{actor}" for actor in result["agents"] if actor.startswith("integrator"))
             for name in sorted(expected):
                 saved = verify_checkpoint(root / name)
