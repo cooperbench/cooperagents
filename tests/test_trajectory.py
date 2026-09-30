@@ -194,7 +194,8 @@ def test_concurrent_failures_and_recording_failure(tmp_path):
         broken.close()
 
 
-def test_two_repair_attempts_and_collection_audit(monkeypatch, tmp_path):
+@pytest.mark.parametrize("n_workers", [2, 3])
+def test_two_repair_attempts_and_collection_audit(monkeypatch, tmp_path, n_workers):
     import importlib.util
     from pathlib import Path
 
@@ -240,21 +241,42 @@ def test_two_repair_attempts_and_collection_audit(monkeypatch, tmp_path):
         coop_tools=True,
         repair_integrator=True,
         repair_attempts=2,
-        assignments=[Assignment(agent_id=f"agent{i}", role="lead" if i == 1 else "member", feature_id=i, task="finish") for i in (1, 2)],
+        assignments=[
+            Assignment(agent_id=f"agent{i}", role="lead" if i == 1 else "member", feature_id=i, task="finish")
+            for i in range(1, n_workers + 1)
+        ],
     )
     directory = tmp_path / "logs/real/team/demo/1/f1_f2"
     journal = Trajectory(directory / "trajectory.jsonl.gz")
     journal.emit("harness", "pair_start")
-    result = UnifiedHarness(trajectory=journal).run(spec, env_factory=lambda _: LocalEnv.fresh())
+    result = UnifiedHarness(trajectory=journal, checkpoint_dir=directory / "checkpoints").run(
+        spec, env_factory=lambda _: LocalEnv.fresh()
+    )
     journal.emit("harness", "pair_end")
     journal.close()
-    assert set(result.seeds) == {"agent1", "agent2", "integrator1", "integrator2"}
+    assert set(result.seeds) == {*(f"agent{i}" for i in range(1, n_workers + 1)), "integrator1", "integrator2"}
     write_run_outputs(result, run_name="real", logs_dir=tmp_path / "logs")
-    (tmp_path / "metadata.json").write_text(json.dumps({"pairs": ["demo:1:1,2"]}))
+    (tmp_path / "metadata.json").write_text(json.dumps({"pairs": ["demo:1:1,2"], "checkpoint_repair": True}))
     module_spec = importlib.util.spec_from_file_location("audit", Path(__file__).parents[1] / "scripts/audit_trajectories.py")
     module = importlib.util.module_from_spec(module_spec)
     module_spec.loader.exec_module(module)
-    assert module.audit(tmp_path)["workers"] == 2
+    audited = module.audit(tmp_path)
+    assert audited["workers"] == n_workers
+    if n_workers == 3:
+        checkpoint = directory / "checkpoints/worker-agent3"
+        manifest = checkpoint / "manifest.json"
+        saved = manifest.read_bytes()
+        manifest.unlink()
+        with pytest.raises(FileNotFoundError):
+            module.audit(tmp_path)
+        manifest.write_bytes(saved)
+        patch = checkpoint / "raw.patch"
+        saved = patch.read_bytes()
+        patch.write_text("corrupted")
+        with pytest.raises(ValueError, match="checksum mismatch"):
+            module.audit(tmp_path)
+        patch.write_bytes(saved)
+        assert "worker-agent3" in audited["entries"][0]["checkpoints"]
     trajectory = directory / "agent1_traj.json"
     damaged = json.loads(trajectory.read_text())
     damaged["messages"] = []

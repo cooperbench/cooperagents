@@ -34,6 +34,7 @@ def main():
     parser.add_argument("--agent-time-limit", type=int, default=3600)
     parser.add_argument("--collect-trajectories", action="store_true", help="record full I/O and skip official evaluation")
     parser.add_argument("--record-trajectories", action="store_true", help="record full I/O alongside official evaluation")
+    parser.add_argument("--checkpoint-repair", action="store_true", help="save worker/repair filesystems and full I/O")
     parser.add_argument("--langfuse", action="store_true", help="export worker and coordinator traces to Langfuse")
     parser.add_argument("--repair-integrator", action="store_true")
     parser.add_argument("--repair-attempts", type=int, default=1)
@@ -49,6 +50,8 @@ def main():
         parser.error("human_in_loop requires a real run with coordinator and notebook enabled")
     if args.langfuse and args.mode != "real":
         parser.error("Langfuse tracing requires a real run")
+    if args.checkpoint_repair and args.mode != "real":
+        parser.error("Repair checkpoints require a real run")
     if args.qualification_report and args.qualification_dir:
         parser.error("Choose one qualification source")
     reports = []
@@ -95,7 +98,8 @@ def main():
         cooperbench_commit="63b9d44d9f39a02fccf5bf0052db48a917a011fd",
         mode=args.mode,
         collect_trajectories=args.collect_trajectories,
-        record_trajectories=args.record_trajectories or args.collect_trajectories,
+        record_trajectories=args.record_trajectories or args.collect_trajectories or args.checkpoint_repair,
+        checkpoint_repair=args.checkpoint_repair,
         langfuse=args.langfuse,
         official_evaluation=not args.collect_trajectories,
         pairs=args.pairs,
@@ -129,8 +133,10 @@ def main():
                 "completion_gate = true\npresub_merge = false\n"
                 f"repair = {str(args.repair_integrator).lower()}\n"
                 f"repair_attempts = {args.repair_attempts if args.repair_integrator else 0}\n"
+                f"checkpoint_repair = {str(args.checkpoint_repair).lower()}\n"
             ),
-            "checkpoint.json": '{"applicable":false}',
+            "checkpoint.json": json.dumps(dict(enabled=args.checkpoint_repair, format="filesystem-v1",
+                                                location="logs/real/team/<repo>/<task>/<features>/checkpoints")),
         }
         if reports:
             records["images.json"] = json.dumps(images)
@@ -166,7 +172,8 @@ def main():
         COOPER_REPAIR="1" if args.repair_integrator else "0",
         COOPER_REPAIR_ATTEMPTS=str(args.repair_attempts),
         COOPER_COLLECT_TRAJECTORIES="1" if args.collect_trajectories else "0",
-        COOPER_RECORD_TRAJECTORIES="1" if args.record_trajectories else "0",
+        COOPER_RECORD_TRAJECTORIES="1" if args.record_trajectories or args.checkpoint_repair else "0",
+        COOPER_CHECKPOINT_REPAIR="1" if args.checkpoint_repair else "0",
         COOPER_LANGFUSE="1" if args.langfuse else "0",
         COOPER_CREDENTIAL_FILE=args.env_file or "",
     )

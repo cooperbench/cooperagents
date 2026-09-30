@@ -31,6 +31,8 @@ class ApptainerEnv(Environment):
         Path(scratch).mkdir(parents=True, exist_ok=True)
         self.root = Path(tempfile.mkdtemp(prefix="ca-", dir=scratch))
         self.repo_path = repo_path
+        self.image = sif
+        self._checkpoint_mounts = {}
         self._lock = threading.RLock()
         self._closed = False
         self._host_env = {
@@ -69,12 +71,14 @@ class ApptainerEnv(Environment):
             if shared:
                 Path(shared).mkdir(parents=True, exist_ok=True)
                 self._argv += ["--bind", f"{Path(shared).resolve()}:/cbshared"]
+                self._checkpoint_mounts["/cbshared"] = Path(shared).resolve()
             if coordinator_dir is not None:
                 notebook_dir = Path(coordinator_dir).resolve(strict=True)
                 if not notebook_dir.is_dir():
                     raise ValueError("Coordinator mount must be a directory")
                 (self.root / "fs" / "coordination").mkdir(exist_ok=True)
                 self._argv += ["--bind", f"{notebook_dir}:/coordination:ro"]
+                self._checkpoint_mounts["/coordination"] = notebook_dir
             self._argv += ["--pwd", "/", str(self.root / "fs")]
             result = self.execute("git rev-parse HEAD")
             if result.exit_code:
@@ -112,10 +116,10 @@ class ApptainerEnv(Environment):
 
     def git_diff(self) -> str:
         self.execute("git add -A")
-        result = self.execute(f"git diff --cached {shlex.quote(self._base_commit)}")
+        result = self.execute(f"git diff --cached --binary {shlex.quote(self._base_commit)}")
         if not result.stdout.strip() and self.execute("git stash list | head -1").stdout.strip():
             self.execute("git stash pop -q 2>/dev/null || git checkout stash@{0} -- . 2>/dev/null; git add -A")
-            result = self.execute(f"git diff --cached {shlex.quote(self._base_commit)}")
+            result = self.execute(f"git diff --cached --binary {shlex.quote(self._base_commit)}")
         return result.stdout
 
     def recover_shared_diff(self, agent_id: str) -> str:
@@ -123,7 +127,9 @@ class ApptainerEnv(Environment):
         with self._lock:
             cwd, self.repo_path = self.repo_path, "/"
             try:
-                result = self.execute(f"git --git-dir=/cbshared/repo.git diff {shlex.quote(self._base_commit)} {shlex.quote(agent_id)}")
+                result = self.execute(
+                    f"git --git-dir=/cbshared/repo.git diff --binary {shlex.quote(self._base_commit)} {shlex.quote(agent_id)}"
+                )
                 return result.stdout if result.exit_code == 0 else ""
             finally:
                 self.repo_path = cwd
@@ -132,3 +138,18 @@ class ApptainerEnv(Environment):
         with self._lock:
             self._closed = True
             shutil.rmtree(self.root, ignore_errors=True)
+
+    def checkpoint(self, destination: Path) -> dict:
+        from cooperagents.checkpoint import archive_tree, sha256
+
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("Apptainer environment is closed")
+            archive_tree(self.root / "fs", destination / "rootfs.tar.gz")
+            mounts = []
+            for i, (target, source) in enumerate(self._checkpoint_mounts.items()):
+                name = f"mount-{i}.tar.gz"
+                archive_tree(source, destination / name)
+                mounts.append(dict(target=target, archive=name, readonly=target == "/coordination"))
+            return dict(backend="apptainer", archive="rootfs.tar.gz", image=str(self.image),
+                        image_sha256=sha256(self.image), mounts=mounts)
