@@ -193,7 +193,7 @@ def run_eval(
     force: bool = False,
     use_uv: bool = True,
     dry_run: bool = False,
-) -> subprocess.CompletedProcess | list[str]:
+) -> subprocess.CompletedProcess[str] | list[str]:
     """Invoke CooperBench's evaluator on previously-written outputs.
 
     Runs ``cooperbench eval`` inside the CooperBench checkout (via ``uv run``

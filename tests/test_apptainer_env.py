@@ -42,3 +42,18 @@ def test_build_discovery_uses_go_when_make_is_missing(tmp_path):
     (tmp_path / "Makefile").touch()
     (tmp_path / "go.mod").touch()
     assert discover_build(env) == "go build ./..."
+
+
+def test_missing_repository_is_infrastructure_failure_but_command_125_is_observation(tmp_path):
+    import pytest
+
+    env = object.__new__(ApptainerEnv)
+    env._lock = threading.RLock()
+    env._closed = False
+    env._host_env = {"PATH": "/usr/bin:/bin"}
+    env._argv = []
+    env.repo_path = str(tmp_path)
+    assert env.execute("exit 125").exit_code == 125
+    env.repo_path = str(tmp_path / "missing")
+    with pytest.raises(RuntimeError, match="repository is unavailable"):
+        env.execute("echo should-not-run")

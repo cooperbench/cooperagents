@@ -17,18 +17,23 @@ from __future__ import annotations
 import os
 import platform
 import re
+from collections.abc import Callable
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import yaml
 
+from cooperagents.completion import CompletionBinding
 from cooperagents.env.base import Environment
 from cooperagents.sampling import sampling_kwargs
 from cooperagents.types import AgentResult
 from cooperagents.vendor.mini_swe.agents.default import DefaultAgent
 from cooperagents.vendor.mini_swe.exceptions import LimitsExceeded, Submitted
 from cooperagents.vendor.mini_swe.models.litellm_model import LitellmModel
+
+if TYPE_CHECKING:
+    from cooperagents.repair import RepairInput
 
 _CONFIG = Path(__file__).resolve().parents[1] / "vendor" / "mini_swe" / "config" / "solo.yaml"
 # Exports mini-swe normally injects via `docker run -e` (kill pagers/progress
@@ -360,25 +365,50 @@ def run_mini_swe_agent(
     git_share: bool = False,
     completion_gate=None,
     trace=None,
+    repair_input: RepairInput | None = None,
+    completion: CompletionBinding | None = None,
+    on_start: Callable[[DefaultAgent], None] | None = None,
 ) -> AgentResult:
     """Run one mini-swe DefaultAgent on the shared ``env``; return an AgentResult.
 
     The patch is intentionally left empty — the harness computes the integrated
     diff from the shared tree after all agents run.
     """
-    cfg = _solo_config()["agent"]
-    model = build_model(
-        model_name,
-        temperature=temperature,
-        with_send_message=comm is not None,
-        with_task_board=task_board is not None,
-        with_spawn=spawn_handler is not None,
-    )
+    if completion is not None and role != "integrator":
+        raise ValueError("completion injection is restricted to integrators")
+    cfg = repair_input.agent_config if repair_input is not None else _solo_config()["agent"]
+    if repair_input is not None:
+        model_config = dict(repair_input.model_config_data)
+        model_kwargs = dict(model_config["model_kwargs"])
+        for field, value in (
+            ("api_base", os.getenv("AZURE_OPENAI_BASE_URL") or os.getenv("OPENAI_BASE_URL")),
+            ("api_key", os.getenv("AZURE_OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")),
+        ):
+            if value:
+                model_kwargs[field] = value
+        model_config["model_kwargs"] = model_kwargs
+        model = LitellmModel(**model_config, extra_tools=repair_input.tools[1:])
+    else:
+        model = build_model(
+            model_name,
+            temperature=temperature,
+            with_send_message=comm is not None,
+            with_task_board=task_board is not None,
+            with_spawn=spawn_handler is not None,
+        )
+    if completion is not None:
+        model.completion = completion
+        model.actor_id = agent_id
+        model.config.model_name = completion.action_settings.model
+        model.config.model_kwargs = dict(completion.action_settings.generation)
+        model.config.cost_tracking = "ignore_errors"
     model.trace = trace
     if trace is not None:
-        trace("agent_start", role=role, feature_id=feature_id, task=task, model=model_name, step_limit=step_limit,
-              time_limit_s=time_limit_s)
+        trace(
+            "agent_start", role=role, feature_id=feature_id, task=task, model=model_name, step_limit=step_limit, time_limit_s=time_limit_s
+        )
     import time as _time  # noqa: E402 - also imported below; needed before first use
+
     hb_dir = os.getenv("COOPER_HEARTBEAT_DIR")
     if hb_dir:
         # one file per (harness process, agent): live starvation checker
@@ -386,8 +416,7 @@ def run_mini_swe_agent(
         os.makedirs(hb_dir, exist_ok=True)
         # process start time in the name prevents pid-recycling collisions
         # from appending new lines onto a dead run's file
-        model.heartbeat_path = os.path.join(
-            hb_dir, f"{os.getpid()}_{int(_time.time())}_{agent_id}.hb")
+        model.heartbeat_path = os.path.join(hb_dir, f"{os.getpid()}_{int(_time.time())}_{agent_id}.hb")
     system_template = cfg["system_template"]
     if tool_protocol and comm is not None:
         system_template = system_template + _SEND_MESSAGE_SYSTEM
@@ -420,6 +449,9 @@ def run_mini_swe_agent(
         compaction_token_trigger=cfg.get("compaction_token_trigger", 28000),
         comm=comm,
     )
+    if repair_input is not None:
+        agent.config = agent.config.model_validate(repair_input.agent_config)
+        agent.config.wall_deadline = (_time.time() + time_limit_s) if time_limit_s else None
     agent.trace = trace
     if poller is not None:
         agent.team_poller = poller  # per-step pushed context (TK2/Q9 live awareness)
@@ -432,6 +464,7 @@ def run_mini_swe_agent(
         handlers["spawn_helper"] = spawn_handler  # TK7 recruit tool
     if handlers:
         agent.tool_handlers = handlers
+
     def _hb_end(final: str) -> None:
         # terminal marker so the live starvation checker can tell a finished
         # or crashed agent apart from a stalled one (both stop heartbeating)
@@ -442,13 +475,34 @@ def run_mini_swe_agent(
             except Exception:  # noqa: BLE001
                 pass
 
+    capture_failed = False
     try:
-        exit_extra = agent.run(task=task)
+
+        def started(current: DefaultAgent) -> None:
+            nonlocal capture_failed
+            if on_start is not None:
+                try:
+                    on_start(current)
+                except Exception:
+                    capture_failed = True
+                    raise
+            # Filesystem capture is outside the model's repair time budget.
+            if time_limit_s and on_start is not None:
+                current.config.wall_deadline = _time.time() + time_limit_s
+                current.env._deadline = current.config.wall_deadline
+
+        exit_extra = agent.run(
+            task=task,
+            initial_messages=repair_input.messages_for(task) if repair_input is not None else None,
+            on_start=started,
+        )
         status = "submitted" if exit_extra.get("exit_status") == "Submitted" else "limit"
         _hb_end(status)
         if trace is not None:
             trace("agent_end", status=status, steps=agent.n_calls)
     except Exception as e:  # noqa: BLE001 - surface any failure as an error result
+        if capture_failed:
+            raise
         status = "error"
         _hb_end("error")
         if trace is not None:
