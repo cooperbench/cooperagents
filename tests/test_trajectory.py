@@ -245,12 +245,14 @@ def test_two_repair_attempts_and_collection_audit(monkeypatch, tmp_path):
     directory = tmp_path / "logs/real/team/demo/1/f1_f2"
     journal = Trajectory(directory / "trajectory.jsonl.gz")
     journal.emit("harness", "pair_start")
-    result = UnifiedHarness(trajectory=journal).run(spec, env_factory=lambda _: LocalEnv.fresh())
+    result = UnifiedHarness(trajectory=journal, checkpoint_dir=directory / "checkpoints").run(
+        spec, env_factory=lambda _: LocalEnv.fresh()
+    )
     journal.emit("harness", "pair_end")
     journal.close()
     assert set(result.seeds) == {"agent1", "agent2", "integrator1", "integrator2"}
     write_run_outputs(result, run_name="real", logs_dir=tmp_path / "logs")
-    (tmp_path / "metadata.json").write_text(json.dumps({"pairs": ["demo:1:1,2"]}))
+    (tmp_path / "metadata.json").write_text(json.dumps({"pairs": ["demo:1:1,2"], "checkpoint_repair": True}))
     module_spec = importlib.util.spec_from_file_location("audit", Path(__file__).parents[1] / "scripts/audit_trajectories.py")
     module = importlib.util.module_from_spec(module_spec)
     module_spec.loader.exec_module(module)

@@ -223,6 +223,7 @@ def run_team(
     repair_attempts: int = 1,
     langfuse: bool = False,
     record_trajectory: bool = False,
+    checkpoint_repair: bool = False,
 ) -> dict:
     feats = sorted(item.features)
     if reverse_order:
@@ -304,7 +305,8 @@ def run_team(
     pair_dir = logs_dir / run_name / "team" / item.repo / str(item.task_id) / "_".join(f"f{f}" for f in sorted(feats))
     notebook_path = (pair_dir / "coordination" / run_id / "notebook.md").resolve() if coordinator and coordinator_notebook else None
     harness = UnifiedHarness(bus=InMemoryBus(run_id), step_limit=step_limit, command_timeout=300,
-                             coordinator_notebook_path=notebook_path, coordination_variant=coordination_variant, langfuse=langfuse)
+                             coordinator_notebook_path=notebook_path, coordination_variant=coordination_variant, langfuse=langfuse,
+                             checkpoint_dir=pair_dir / "checkpoints" if checkpoint_repair else None)
     img = image_name(item.repo, item.task_id)
     selector = None
     if best_of_n > 1:
@@ -314,7 +316,7 @@ def run_team(
     from cooperagents.trajectory import Trajectory
 
     trajectory = None
-    if record_trajectory:
+    if record_trajectory or checkpoint_repair:
         if best_of_n != 1 or decompose or adaptive or not coop_tools:
             raise ValueError("Trajectory collection requires a single coop-tools team")
         trajectory = Trajectory(pair_dir / "trajectory.jsonl.gz")
@@ -432,6 +434,7 @@ def main() -> None:
     ap.add_argument("--resume", action="store_true", help="skip pairs that already have a result.json on disk")
     ap.add_argument("--langfuse", action="store_true", help="export worker and coordinator traces to Langfuse (default: off)")
     ap.add_argument("--record-trajectory", action="store_true", help="append complete agent/coordinator I/O for replay")
+    ap.add_argument("--checkpoint-repair", action="store_true", help="save worker and repair filesystems and full I/O for replay")
     ap.add_argument("--skip-eval", action="store_true", help="write generation artifacts without scoring")
     args = ap.parse_args()
     if args.coordination_variant == "human_in_loop" and (not args.coordinator or args.no_coordinator_notebook):
@@ -516,6 +519,7 @@ def main() -> None:
                 presub_merge=args.presub_merge,
                 repair_attempts=args.repair_attempts,
                 record_trajectory=args.record_trajectory,
+                checkpoint_repair=args.checkpoint_repair,
             )
         except Exception as e:  # noqa: BLE001 - one bad pair (e.g. missing/arch-incompatible image) must not abort the run
             print(f"  SKIP {tag}: {type(e).__name__}: {str(e)[:160]}", flush=True)

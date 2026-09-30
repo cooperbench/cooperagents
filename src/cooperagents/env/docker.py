@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -150,7 +151,7 @@ class DockerEnv(Environment):
     def git_diff(self) -> str:
         self.execute("git add -A")
         base = self._base_commit or "HEAD"
-        res = self.execute(f"git diff --cached {base}")
+        res = self.execute(f"git diff --cached --binary {base}")
         if not res.stdout.strip():
             # Agents sometimes stash their work to "verify a clean patch"
             # right before finishing (observed: tree back at base, 1000+
@@ -159,8 +160,35 @@ class DockerEnv(Environment):
             if has_stash:
                 self.execute("git stash pop -q 2>/dev/null || git checkout stash@{0} -- . 2>/dev/null")
                 self.execute("git add -A")
-                res = self.execute(f"git diff --cached {base}")
+                res = self.execute(f"git diff --cached --binary {base}")
         return res.stdout
 
     def cleanup(self) -> None:
         subprocess.run(["docker", "rm", "-f", self.name], check=False, capture_output=True)
+
+    def checkpoint(self, destination: Path) -> dict:
+        from cooperagents.checkpoint import archive_tree
+
+        info = json.loads(subprocess.check_output(["docker", "inspect", self.name]))[0]
+        paused = info["State"]["Paused"]
+        if not paused:
+            subprocess.run(["docker", "pause", self.name], check=True, capture_output=True)
+        try:
+            # Export includes .git, ignored files and installed tools, but excludes volumes.
+            subprocess.run(["docker", "export", "--output", str(destination / "rootfs.tar"), self.name], check=True, capture_output=True)
+            mounts = []
+            for i, mount in enumerate(info["Mounts"]):
+                if mount["Type"] not in {"bind", "volume"}:
+                    raise ValueError(f"Unsupported checkpoint mount: {mount['Type']}")
+                with tempfile.TemporaryDirectory(prefix="ca-mount-") as temporary:
+                    copied = Path(temporary) / "data"
+                    subprocess.run(["docker", "cp", f"{self.name}:{mount['Destination']}", str(copied)],
+                                   check=True, capture_output=True)
+                    name = f"mount-{i}.tar.gz"
+                    archive_tree(copied, destination / name)
+                mounts.append(dict(target=mount["Destination"], archive=name, readonly=not mount["RW"]))
+            return dict(backend="docker", archive="rootfs.tar", image=self.image, image_id=info["Image"],
+                        config=info["Config"], network_mode=info["HostConfig"]["NetworkMode"], mounts=mounts)
+        finally:
+            if not paused:
+                subprocess.run(["docker", "unpause", self.name], check=True, capture_output=True)

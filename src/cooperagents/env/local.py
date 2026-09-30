@@ -12,6 +12,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+from pathlib import Path
 
 from cooperagents.env.base import Environment, ExecResult
 
@@ -89,7 +90,7 @@ class LocalEnv(Environment):
         subprocess.run(["git", "add", "-A"], cwd=self.repo_path, check=False)
         base = self._base_commit or "HEAD"
         proc = subprocess.run(
-            ["git", "diff", "--cached", base] if self._base_commit else ["git", "diff", "--cached"],
+            ["git", "diff", "--cached", "--binary", base] if self._base_commit else ["git", "diff", "--cached", "--binary"],
             cwd=self.repo_path,
             capture_output=True,
             text=True,
@@ -100,3 +101,9 @@ class LocalEnv(Environment):
     def cleanup(self) -> None:
         if self._owns_dir:
             shutil.rmtree(os.path.dirname(self.repo_path), ignore_errors=True)
+
+    def checkpoint(self, destination: Path) -> dict:
+        from cooperagents.checkpoint import archive_tree
+
+        archive_tree(Path(self.repo_path), destination / "repo.tar.gz")
+        return dict(backend="local", scope="repository", archive="repo.tar.gz")

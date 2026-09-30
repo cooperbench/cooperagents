@@ -40,6 +40,10 @@ internals are not recorded. It cannot reconstruct container state, execute a new
 counterfactual action, or reproduce an unobserved response from a killed request.
 A provider call still pending at shutdown is reported as incomplete.
 
+For filesystem checkpoints as well as I/O replay, add `--checkpoint-repair` to
+the benchmark or cluster launcher. See [repair replay](repair-replay.md) for
+capture boundaries, verification and sandbox restoration.
+
 ## Replay without containers or inference
 
 From the repository (or its saved source snapshot):

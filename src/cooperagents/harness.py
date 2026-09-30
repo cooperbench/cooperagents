@@ -33,8 +33,8 @@ import tempfile
 import threading
 import time
 from collections.abc import Callable
-from contextlib import ExitStack
-from dataclasses import dataclass
+from contextlib import ExitStack, nullcontext
+from dataclasses import asdict, dataclass
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -771,6 +771,7 @@ class _GitShareSync:
     def __init__(self, envs: dict[str, Environment]) -> None:
         self._envs = envs
         self._stop = threading.Event()
+        self._locks = {aid: threading.Lock() for aid in envs}
 
     def stop(self) -> None:
         self._stop.set()
@@ -779,11 +780,12 @@ class _GitShareSync:
         while not self._stop.wait(45):
             for aid, env in list(self._envs.items()):
                 try:
-                    env.execute(
-                        "C=$(git stash create 2>/dev/null); "
-                        f"git push -q -f shared ${{C:-HEAD}}:refs/heads/{aid} 2>/dev/null || true",
-                        timeout=60,
-                    )
+                    with self._locks[aid]:
+                        env.execute(
+                            "C=$(git stash create 2>/dev/null); "
+                            f"git push -q -f shared ${{C:-HEAD}}:refs/heads/{aid} 2>/dev/null || true",
+                            timeout=60,
+                        )
                 except Exception:  # noqa: BLE001 - sync must never disturb the run
                     pass
 
@@ -1065,6 +1067,7 @@ class UnifiedHarness:
         coordinator_complete: Callable[[str], list[dict[str, str]]] | None = None,
         coordinator_notebook_path: Path | None = None,
         coordination_variant: str = "current",
+        checkpoint_dir: Path | None = None,
     ) -> None:
         if coordinator_complete is not None and not callable(coordinator_complete):
             raise TypeError("coordinator_complete must be callable")
@@ -1074,6 +1077,7 @@ class UnifiedHarness:
         self.coordination_variant = coordination_variant
         self.coordinator_notebook_path = Path(coordinator_notebook_path).resolve() if coordinator_notebook_path is not None else None
         self.trajectory = trajectory
+        self.checkpoint_dir = Path(checkpoint_dir) if checkpoint_dir is not None else None
         self.langfuse = langfuse
         self.bus = bus
         self.step_limit = step_limit
@@ -1321,35 +1325,49 @@ class UnifiedHarness:
                     cleanup.callback(coordinator.finish, coordinator_thread)
 
 
-                def collect_diff(env, aid: str) -> str:
+                def collect_raw_diff(env, aid: str) -> tuple[str, str]:
                     """Agent diff with share fallback: agents sometimes wipe their
                     working tree at the end (stash/checkout/rm to "verify a clean
                     patch"); the 45s share sync holds their last state, so recover
                     the diff from the pushed branch when the tree reads empty."""
-                    d = strip_test_sections(env.git_diff())
-                    if d.strip():
-                        return d
+                    raw = env.git_diff()
+                    if strip_test_sections(raw).strip():
+                        return raw, "working_tree"
                     base = getattr(env, "_base_commit", "") or "HEAD"
                     r = env.execute(
                         f"git fetch -q shared {aid} 2>/dev/null && "
-                        f"git diff {base} FETCH_HEAD -- . 2>/dev/null")
+                        f"git diff --binary {base} FETCH_HEAD -- . 2>/dev/null")
                     if r.stdout.strip():
-                        return strip_test_sections(r.stdout)
+                        return r.stdout, "shared_branch"
                     # last resort: the agent destroyed even its .git — read the
                     # share volume directly with a throwaway container
                     if hasattr(env, "recover_shared_diff"):
-                        return strip_test_sections(env.recover_shared_diff(aid))
+                        return env.recover_shared_diff(aid), "shared_branch_recovery"
                     vol = next((v.split(":")[0] for v in getattr(env, "volumes", None) or []
                                 if v.endswith(":/cbshared")), None)
                     if vol and base != "HEAD":
                         import subprocess as _sp
                         rr = _sp.run(["docker", "run", "--rm", "-v", f"{vol}:/cb",
                                       "alpine/git", "--git-dir=/cb/repo.git",
-                                      "diff", base, aid],
+                                      "diff", "--binary", base, aid],
                                      capture_output=True, text=True, timeout=120)
                         if rr.returncode == 0 and rr.stdout.strip():
-                            return strip_test_sections(rr.stdout)
-                    return d
+                            return rr.stdout, "shared_volume_recovery"
+                    return raw, "empty_working_tree"
+
+                def collect_diff(env, aid: str, result: AgentResult) -> str:
+                    if self.checkpoint_dir is None:
+                        return strip_test_sections(collect_raw_diff(env, aid)[0])
+                    from cooperagents.checkpoint import save_checkpoint
+
+                    # Block sync only during capture; teammates still receive later final pushes.
+                    with gitsync._locks[aid] if gitsync is not None else nullcontext():
+                        return save_checkpoint(
+                            env, self.checkpoint_dir / f"worker-{aid}",
+                            metadata=dict(boundary="worker_end_before_collect_diff", actor=aid, result=asdict(result)),
+                            collect_patch=lambda: collect_raw_diff(env, aid),
+                            trace=partial(self.trajectory.emit, aid) if self.trajectory else None,
+                        )
 
                 def run_coop(a: Assignment) -> tuple[str, AgentResult, str]:
                     env = coop_envs[a.agent_id]
@@ -1367,7 +1385,7 @@ class UnifiedHarness:
                         if poller is not None:
                             poller.watch_board(bus)
                         r = run_on_shared(env, a.agent_id, a.role, task, a.feature_id, poller=poller, time_limit_s=spec.agent_time_limit)
-                        return a.agent_id, r, collect_diff(env, a.agent_id)
+                        return a.agent_id, r, collect_diff(env, a.agent_id, r)
                     if True:
                         mates = ", ".join(
                             f"{x.agent_id} (feature {x.feature_id})" for x in assignments if x.agent_id != a.agent_id
@@ -1440,7 +1458,7 @@ class UnifiedHarness:
                         r = run_on_shared(env, a.agent_id, a.role, task, a.feature_id,
                                           poller=poller, monitor=coordinator, time_limit_s=spec.agent_time_limit)
 
-                        return a.agent_id, r, collect_diff(env, a.agent_id)
+                        return a.agent_id, r, collect_diff(env, a.agent_id, r)
                     return None  # unreachable
 
                 with ThreadPoolExecutor(max_workers=len(roster)) as ex:
@@ -1571,7 +1589,34 @@ class UnifiedHarness:
                 # diff (observed on qwen14-q4: 7/14 pairs polluted).
                 env.execute("find . -path ./.git -prune -o \\( -name '*.rej' -o -name '*.orig' \\) -print0 2>/dev/null | xargs -0 -r rm -f")
                 _gate = _tree_health_behavioral if spec.behavioral_gate else _tree_health
-                if spec.repair_integrator and not _gate(env):
+                gate_checks = []
+
+                def check_gate():
+                    from cooperagents.trajectory import record_call
+
+                    if self.checkpoint_dir is None and self.trajectory is None:
+                        return _gate(env)
+                    trace = partial(self.trajectory.emit, "merge_gate") if self.trajectory else None
+                    class GateEnv:
+                        def execute(_self, command, *, timeout=60):
+                            result = record_call(trace, env.execute, command=command, timeout=timeout)
+                            gate_checks.append(dict(command=command, timeout=timeout, **asdict(result)))
+                            return result
+                    return _gate(GateEnv())
+
+                healthy = check_gate() if spec.repair_integrator else None
+                if self.checkpoint_dir is not None:
+                    from cooperagents.checkpoint import save_checkpoint
+
+                    save_checkpoint(env, self.checkpoint_dir / "pre-repair", metadata=dict(
+                        boundary="merged_before_repair", conflict=conflict, apply_chain=spec.apply_chain_merge,
+                        repair_enabled=spec.repair_integrator, healthy=healthy, gate_checks=gate_checks,
+                        gate="behavioral" if spec.behavioral_gate else "syntax_build",
+                        task=_merge_repair_task(assignments_all),
+                    ), trace=partial(self.trajectory.emit, "merge") if self.trajectory else None)
+                repair_started = time.monotonic()
+                attempts = []
+                if spec.repair_integrator and not healthy:
                     for _repair_attempt in range(max(1, spec.repair_attempts)):
                         repair_brief = _merge_repair_task(assignments_all)
                         if spec.focused_repair:
@@ -1582,6 +1627,13 @@ class UnifiedHarness:
                                     "directly instead of searching:\n\n" + ev
                                 )
                         # Run ONE repair agent per attempt; stop early if the tree recovers.
+                        if self.checkpoint_dir is not None:
+                            save_checkpoint(env, self.checkpoint_dir / f"before-integrator{_repair_attempt + 1}",
+                                            metadata=dict(boundary="repair_agent_start", task=repair_brief,
+                                                          attempt=_repair_attempt + 1, healthy=healthy, gate_checks=gate_checks),
+                                            trace=partial(self.trajectory.emit, f"integrator{_repair_attempt + 1}")
+                                            if self.trajectory else None)
+                        attempt_started = time.monotonic()
                         seeds[f"integrator{_repair_attempt + 1}"] = run_on_shared(
                             env,
                             f"integrator{_repair_attempt + 1}",
@@ -1594,9 +1646,22 @@ class UnifiedHarness:
                         env.execute(
                             "find . -path ./.git -prune -o \\( -name '*.rej' -o -name '*.orig' \\) -print0 2>/dev/null | xargs -0 -r rm -f"
                         )
-                        if _gate(env):
+                        healthy = check_gate()
+                        attempts.append(dict(actor=f"integrator{_repair_attempt + 1}", healthy=healthy,
+                                             duration_seconds=time.monotonic() - attempt_started))
+                        if healthy:
                             break
-                integrated_patch = strip_test_sections(env.git_diff())
+                raw_integrated_patch = env.git_diff()
+                integrated_patch = strip_test_sections(raw_integrated_patch)
+                if self.checkpoint_dir is not None:
+                    # Capture after final collect_diff so the saved patch is the actual submission.
+                    save_checkpoint(env, self.checkpoint_dir / "post-repair", metadata=dict(
+                        boundary="integrated_submission", healthy=healthy, gate_checks=gate_checks, attempts=attempts,
+                        repair_duration_seconds=sum(a["duration_seconds"] for a in attempts),
+                        repair_wall_seconds_including_checkpoints=time.monotonic() - repair_started if attempts else 0,
+                        results={aid: asdict(r) for aid, r in seeds.items() if aid.startswith("integrator")},
+                    ), collect_patch=lambda: (raw_integrated_patch, "integrated_submission"),
+                        trace=partial(self.trajectory.emit, "merge") if self.trajectory else None)
             finally:
                 env.cleanup()
         elif not spec.seed_prior:
@@ -2061,6 +2126,17 @@ class UnifiedHarness:
         selector: Callable[[list[RunResult]], int] | None = None,
         planner: Planner | None = None,
     ) -> RunResult:
+        if self.checkpoint_dir is not None:
+            if (
+                not spec.shared_workspace or not spec.coop_tools or spec.seed_prior or spec.worker != "mini_swe"
+                or spec.best_of_n != 1 or spec.decompose or spec.adaptive or spec.team_roles or spec.verify_fix
+                or spec.select_integration is not None or spec.allow_spawn_tool or spec.completeness_review
+            ):
+                raise ValueError("Repair checkpoints require a single mini_swe coop-tools no-seed mechanical-merge team")
+            assignments = self._build_assignments(spec)
+            ids = [a.agent_id for a in assignments]
+            if len(ids) < 2 or len(set(ids)) != len(ids) or any(Path(aid).name != aid or aid in {".", "..", ""} for aid in ids):
+                raise ValueError("Repair checkpoints require at least two workers with unique safe IDs")
         if self.langfuse:
             if (
                 spec.worker != "mini_swe" or not spec.shared_workspace or not spec.coop_tools
@@ -2097,6 +2173,17 @@ class UnifiedHarness:
             raise ValueError("provide either llm or llm_factory")
         bus = self.bus or InMemoryBus(spec.run_id)
         assignments = self._build_assignments(spec)
+        if self.checkpoint_dir is not None:
+            self.checkpoint_dir.mkdir(parents=True, mode=0o700, exist_ok=False)
+            config = asdict(spec)
+            for key in ("completion_gate", "select_integration"):
+                if config[key] is not None:
+                    config[key] = getattr(config[key], "__qualname__", str(config[key]))
+            (self.checkpoint_dir / "run.json").write_text(json.dumps(dict(
+                spec=config, assignments=[asdict(a) for a in assignments], step_limit=self.step_limit,
+                cost_limit=self.cost_limit, command_timeout=self.command_timeout,
+                coordination_variant=self.coordination_variant,
+            ), indent=2))
         if spec.coordinator:
             ids = [a.agent_id for a in assignments]
             if not ids or len(set(ids)) != len(ids) or "coordinator" in ids:
