@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import uuid
 from pathlib import Path
 
 from cooperagents.env.base import Environment, ExecResult
@@ -79,7 +80,11 @@ class ApptainerEnv(Environment):
         with self._lock:
             if self._closed:
                 raise RuntimeError("Apptainer environment is closed")
-            script = f'cd {shlex.quote(self.repo_path)} || {{ echo "__COOPER_REPO_UNAVAILABLE__"; exit 125; }}\n{command}'
+            marker = f"__COOPER_STARTED_{uuid.uuid4().hex}__\n"
+            script = (
+                f"printf %s {shlex.quote(marker)}\n"
+                f'cd {shlex.quote(self.repo_path)} || {{ echo "__COOPER_REPO_UNAVAILABLE__"; exit 125; }}\n{command}'
+            )
             result, _ = run_limited(
                 [*self._argv, "bash", "-s"],
                 input_text=script,
@@ -87,6 +92,9 @@ class ApptainerEnv(Environment):
                 env=self._host_env,
                 new_session=True,
             )
+            if marker not in result.stdout:
+                raise RuntimeError("Apptainer command failed before container shell startup")
+            result = ExecResult(result.stdout.replace(marker, "", 1), result.exit_code)
             if result.exit_code == 125 and "__COOPER_REPO_UNAVAILABLE__" in result.stdout:
                 raise RuntimeError("Apptainer task repository is unavailable")
             return result
@@ -134,12 +142,20 @@ class ApptainerEnv(Environment):
             raise ValueError("Unsupported or duplicate checkpoint mount target")
         if any(type(m["readonly"]) is not bool or m["readonly"] != (m["target"] == "/coordination") for m in mounts):
             raise ValueError("Unsupported checkpoint mount access mode")
+        image, image_hash = runtime.get("image"), runtime.get("image_sha256")
+        if (
+            not isinstance(image, str)
+            or not Path(image).is_absolute()
+            or not isinstance(image_hash, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", image_hash)
+        ):
+            raise ValueError("Checkpoint requires valid original image provenance")
         scratch.mkdir(parents=True, exist_ok=True)
         env = cls.__new__(cls)
         env.root = Path(tempfile.mkdtemp(prefix="ca-repair-", dir=scratch))
         env.repo_path = str(repo)
-        env.image = Path(runtime["image"])
-        env._image_sha256 = runtime["image_sha256"]
+        env.image = Path(image)
+        env._image_sha256 = image_hash
         env._checkpoint_mounts = {}
         env._lock = threading.RLock()
         env._closed = False

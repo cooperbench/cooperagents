@@ -108,6 +108,31 @@ def test_credentials_and_invalid_sdk_history_rejected():
         )
 
 
+def test_worker_propagates_injected_failure_without_replay_wrapper(monkeypatch, tmp_path):
+    from cooperagents.env.local import LocalEnv
+    from cooperagents.repair import RepairInfrastructureError
+    from cooperagents.workers.mini_swe_worker import run_mini_swe_agent
+
+    def fail(request):
+        raise TimeoutError("transport unavailable")
+
+    env = LocalEnv.fresh(workdir=str(tmp_path))
+    try:
+        with pytest.raises(RepairInfrastructureError):
+            run_mini_swe_agent(
+                env,
+                task="repair",
+                agent_id="integrator1",
+                role="integrator",
+                model_name="fixture",
+                step_limit=5,
+                cost_limit=5.0,
+                completion=CompletionBinding(fail, settings("policy"), fail, settings("summary")),
+            )
+    finally:
+        env.cleanup()
+
+
 def test_summary_context_failure_does_not_trigger_emergency_truncation(monkeypatch):
     from cooperagents.repair import RepairInfrastructureError
     from cooperagents.vendor.mini_swe.agents.default import DefaultAgent

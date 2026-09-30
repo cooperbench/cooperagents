@@ -501,7 +501,9 @@ def run_mini_swe_agent(
         if trace is not None:
             trace("agent_end", status=status, steps=agent.n_calls)
     except Exception as e:  # noqa: BLE001 - surface any failure as an error result
-        if capture_failed:
+        from cooperagents.repair import RepairInfrastructureError
+
+        if capture_failed or (completion is not None and isinstance(e, RepairInfrastructureError)):
             raise
         status = "error"
         _hb_end("error")

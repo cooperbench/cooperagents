@@ -272,6 +272,22 @@ def test_restore_failure_cleans_owned_tree(monkeypatch, tmp_path, failure):
     assert not list((tmp_path / "scratch").glob("ca-repair-*")) if (tmp_path / "scratch").exists() else True
 
 
+@pytest.mark.parametrize("field,value", [("image", None), ("image_sha256", None)])
+def test_malformed_image_metadata_allocates_no_sandbox(monkeypatch, tmp_path, field, value):
+    from cooperagents.checkpoint import sha256
+
+    checkpoint = make_checkpoint(monkeypatch, tmp_path)
+    state = json.loads((checkpoint / "state.json").read_text())
+    state["runtime"][field] = value
+    (checkpoint / "state.json").write_text(json.dumps(state))
+    manifest = json.loads((checkpoint / "manifest.json").read_text())
+    manifest["files"]["state.json"] = {"bytes": (checkpoint / "state.json").stat().st_size, "sha256": sha256(checkpoint / "state.json")}
+    (checkpoint / "manifest.json").write_text(json.dumps(manifest))
+    with pytest.raises(ValueError, match="image provenance"):
+        ApptainerEnv.from_checkpoint(checkpoint, scratch=tmp_path / "scratch")
+    assert not (tmp_path / "scratch").exists()
+
+
 @pytest.mark.parametrize("name,target", [("../escape", None), ("/escape", None), ("link/escape", "/tmp")])
 def test_archives_cannot_write_outside_owned_tree(tmp_path, name, target):
     path = tmp_path / "bad.tar.gz"

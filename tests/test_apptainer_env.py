@@ -54,6 +54,29 @@ def test_missing_repository_is_infrastructure_failure_but_command_125_is_observa
     env._argv = []
     env.repo_path = str(tmp_path)
     assert env.execute("exit 125").exit_code == 125
+    assert env.execute("printf ordinary; exit 255").stdout == "ordinary"
+    assert env.execute("exit 255").exit_code == 255
     env.repo_path = str(tmp_path / "missing")
     with pytest.raises(RuntimeError, match="repository is unavailable"):
         env.execute("echo should-not-run")
+
+
+def test_container_startup_failure_is_not_a_tool_observation(monkeypatch, tmp_path):
+    import pytest
+
+    from cooperagents.env import apptainer
+    from cooperagents.env.base import ExecResult
+
+    env = object.__new__(ApptainerEnv)
+    env._lock = threading.RLock()
+    env._closed = False
+    env._host_env = {"PATH": "/usr/bin:/bin"}
+    env._argv = []
+    env.repo_path = str(tmp_path)
+    original = apptainer.run_limited
+    with monkeypatch.context() as failure:
+        failure.setattr(apptainer, "run_limited", lambda *a, **k: (ExecResult("FATAL: startup failed", 255), False))
+        with pytest.raises(RuntimeError, match="before container shell startup"):
+            env.execute("true")
+    assert apptainer.run_limited is original
+    assert env.execute("printf recovered").stdout == "recovered"
