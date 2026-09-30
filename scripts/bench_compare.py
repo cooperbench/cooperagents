@@ -316,8 +316,12 @@ def read_eval(logs_dir: Path, run_name: str, setting: str, item: WorkItem) -> tu
     if not p.is_file():
         return None
     e = json.loads(p.read_text())
-    nfeat = sum(1 for k in ("feature1", "feature2") if (e.get(k) or {}).get("passed"))
-    return bool(e.get("both_passed")), nfeat
+    if e.get("features_result"):
+        nfeat = sum(1 for fr in e["features_result"].values() if fr.get("passed"))
+    else:
+        nfeat = sum(1 for k in ("feature1", "feature2") if (e.get(k) or {}).get("passed"))
+    passed = bool(e.get("both_passed") or e.get("all_passed"))
+    return passed, nfeat
 
 
 def main() -> None:
@@ -510,8 +514,9 @@ def main() -> None:
         ts = "PASS" if tp and tp[0] else (f"{tp[1]}/2 " if tp else "none")
         print(f"  {tag:<45} solo={ss:<4} ({s['duration']:.0f}s)  team={ts:<4} ({t['duration']:.0f}s)")
     n = len(rows)
+    total_feats = sum(len(item.features) for item, *_ in rows)
     print(f"\n  pass-rate:  solo {solo_pass}/{n}   team {team_pass}/{n}")
-    print(f"  features :  solo {solo_feats}/{2 * n}   team {team_feats}/{2 * n}")
+    print(f"  features :  solo {solo_feats}/{total_feats}   team {team_feats}/{total_feats}")
     print(f"  avg time :  solo {sum(r[1]['duration'] for r in rows) / n:.0f}s   team {sum(r[2]['duration'] for r in rows) / n:.0f}s")
 
 
