@@ -209,7 +209,7 @@ class ApptainerEnv(Environment):
                 observed = complete_output(env.execute(f"GIT_OPTIONAL_LOCKS=0 {command}"), f"Restore Git {name}")
                 if observed != state["git"][name]["stdout"]:
                     raise ValueError(f"Restored Git {name} differs from checkpoint")
-            if preview_patch(env) != (checkpoint / "raw.patch").read_text():
+            if preview_patch(env).encode() != (checkpoint / "raw.patch").read_bytes():
                 raise ValueError("Restored patch differs from checkpoint")
             return env
         except BaseException:

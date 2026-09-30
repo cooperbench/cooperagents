@@ -30,11 +30,17 @@ from cooperagents.verification import validate
 from cooperagents.workers import mini_swe_worker as worker
 
 
-def make_checkpoint(monkeypatch, tmp_path, *, gate=None, attempts=2):
+def make_checkpoint(monkeypatch, tmp_path, *, gate=None, attempts=2, crlf=False):
     """Host bash replaces only Apptainer execution; restore uses the public API."""
 
     def execute(env, command, *, timeout=60):
         repo = env.root / "fs" / env.repo_path.lstrip("/")
+        if crlf:
+            import shlex
+
+            from cooperagents.env.limited_process import run_limited
+
+            return run_limited(["bash", "-c", f"cd {shlex.quote(str(repo))} && {command}"], timeout=timeout)[0]
         return LocalEnv(str(repo), base_commit=getattr(env, "_base_commit", "HEAD")).execute(command, timeout=timeout)
 
     monkeypatch.setattr(ApptainerEnv, "execute", execute)
@@ -62,6 +68,9 @@ def make_checkpoint(monkeypatch, tmp_path, *, gate=None, attempts=2):
     env.execute("git add .gitignore worker.py")
     env.write_file("worker.py", "feature = 2\n")
     env.write_file("ignored", "cache")
+    if crlf:
+        env.execute("git config core.autocrlf false")
+        env.write_file("notes.txt", "first\r\nsecond\r\n")
     (repo / "binary").write_bytes(bytes(range(256)))
     env.execute("ln -s worker.py link; chmod +x worker.py")
     (env.root / "fs/bin").symlink_to("/usr/bin")
@@ -167,6 +176,29 @@ def test_two_restores_are_independent_and_preserve_full_state(monkeypatch, tmp_p
     finally:
         left.cleanup()
         right.cleanup()
+
+
+@pytest.mark.parametrize("normalize_saved_patch", [False, True])
+def test_restore_preserves_crlf_and_rejects_normalized_patch(monkeypatch, tmp_path, normalize_saved_patch):
+    checkpoint = make_checkpoint(monkeypatch, tmp_path, crlf=True)
+    patch = checkpoint / "raw.patch"
+    original = patch.read_bytes()
+    assert b"+first\r\n+second\r\n" in original
+    if normalize_saved_patch:
+        patch.write_bytes(original.replace(b"\r\n", b"\n"))
+        manifest = json.loads((checkpoint / "manifest.json").read_text())
+        manifest["files"]["raw.patch"] = {"bytes": patch.stat().st_size, "sha256": sha256(patch)}
+        (checkpoint / "manifest.json").write_text(json.dumps(manifest))
+        with pytest.raises(ValueError, match="Restored patch differs"):
+            ApptainerEnv.from_checkpoint(checkpoint, scratch=tmp_path / "scratch")
+        assert not list((tmp_path / "scratch").glob("ca-repair-*"))
+    else:
+        env = ApptainerEnv.from_checkpoint(checkpoint, scratch=tmp_path / "scratch")
+        try:
+            assert (env.root / "fs/workspace/repo/notes.txt").read_bytes() == b"first\r\nsecond\r\n"
+            assert patch.read_bytes() == original
+        finally:
+            env.cleanup()
 
 
 def test_only_repair_and_second_attempt_uses_current_tree_and_saved_prompt(monkeypatch, tmp_path):
@@ -469,8 +501,12 @@ def test_legacy_source_requires_known_commit_and_matching_collection(monkeypatch
         (checkpoint / "manifest.json").write_text(json.dumps(manifest))
     with pytest.raises(ValueError, match="source commit|historical_a"):
         import_legacy_repair_input(
-            checkpoint, journal=journal, source=source, variant=variant,
-            launch_args=args, destination=tmp_path / "new-run/input.json",
+            checkpoint,
+            journal=journal,
+            source=source,
+            variant=variant,
+            launch_args=args,
+            destination=tmp_path / "new-run/input.json",
         )
 
 
