@@ -294,6 +294,7 @@ def run_repair_checkpoint(
     run_id: str,
     completion: CompletionBinding | None = None,
     trajectory: Trajectory | None = None,
+    max_attempts: int | None = None,
 ) -> RunResult:
     """Restore one independent sandbox and run only new integrator attempts."""
     from cooperagents.bus.memory import InMemoryBus
@@ -304,6 +305,10 @@ def run_repair_checkpoint(
 
     inputs = load_repair_input(checkpoint, repair_input)
     spec = inputs.settings.team_spec(run_id, str(inputs.model_config_data["model_name"]))
+    if max_attempts is not None:
+        if type(max_attempts) is not int or not 1 <= max_attempts <= spec.repair_attempts:
+            raise ValueError("Repair attempt limit must be positive and cannot exceed the saved budget")
+        spec.repair_attempts = max_attempts
     spec.repair_step_limit = int(inputs.agent_config["step_limit"])
     spec.repair_time_limit = inputs.time_limit_s
     bus = InMemoryBus(run_id)
@@ -373,7 +378,8 @@ def run_repair_checkpoint(
             integrated=integrated,
             duration_seconds=time.monotonic() - started,
             metrics=dict(
-                repair_attempts=attempts, repair_gate_checks=checks, checkpoint_manifest_sha256=sha256(checkpoint / "manifest.json")
+                repair_attempts=attempts, repair_gate_checks=checks, checkpoint_manifest_sha256=sha256(checkpoint / "manifest.json"),
+                saved_attempt_limit=inputs.settings.attempts, effective_attempt_limit=spec.repair_attempts,
             ),
         )
     finally:

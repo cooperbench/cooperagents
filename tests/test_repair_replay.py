@@ -562,3 +562,25 @@ def test_cleanup_removes_readonly_rootfs_without_touching_external_symlink(monke
         env.cleanup()  # Idempotent.
     finally:
         outside.chmod(0o755)
+
+
+def test_attempt_limit_narrows_without_changing_checkpoint(monkeypatch, tmp_path):
+    checkpoint = make_checkpoint(monkeypatch, tmp_path, attempts=2)
+    manifest = (checkpoint / "manifest.json").read_bytes()
+    requests = []
+
+    def query(model, messages, **kwargs):
+        requests.append(messages)
+        return completion("echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT")
+
+    monkeypatch.setattr(worker.LitellmModel, "_query_inner", query)
+    result = run_repair_checkpoint(checkpoint, scratch=tmp_path / "scratch", run_id="single", max_attempts=1)
+    assert len(requests) == 1 and set(result.seeds) == {"integrator1"}
+    assert result.metrics["repair_attempts"][0]["healthy"] is False
+    assert result.metrics["saved_attempt_limit"] == 2 and result.metrics["effective_attempt_limit"] == 1
+    assert load_repair_input(checkpoint).settings.attempts == 2
+    assert (checkpoint / "manifest.json").read_bytes() == manifest
+    monkeypatch.setattr(ApptainerEnv, "from_checkpoint", lambda *a, **k: pytest.fail("invalid budget restored sandbox"))
+    for invalid in (0, -1, True, 3):
+        with pytest.raises(ValueError, match="cannot exceed the saved budget"):
+            run_repair_checkpoint(checkpoint, scratch=tmp_path / "scratch", run_id="invalid", max_attempts=invalid)
