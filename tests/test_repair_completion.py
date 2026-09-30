@@ -106,3 +106,32 @@ def test_credentials_and_invalid_sdk_history_rejected():
             call_id=1,
             purpose="summary",
         )
+
+
+def test_summary_context_failure_does_not_trigger_emergency_truncation(monkeypatch):
+    from cooperagents.repair import RepairInfrastructureError
+    from cooperagents.vendor.mini_swe.agents.default import DefaultAgent
+
+    calls = []
+
+    def fail(request):
+        calls.append(request)
+        raise ValueError("ContextWindowExceededError: context window too long")
+
+    model = LitellmModel(
+        model_name="old", completion=CompletionBinding(fail, settings("policy"), fail, settings("summary")), actor_id="integrator1"
+    )
+    agent = DefaultAgent(
+        model, object(), system_template="system", instance_template="{{task}}", compaction_token_trigger=1, compaction_keep_recent_turns=0
+    )
+    agent.messages = [
+        {"role": "system", "content": "system"},
+        {"role": "user", "content": "task"},
+        {"role": "assistant", "content": "old turn"},
+    ]
+    agent._last_prompt_tokens = 2
+    monkeypatch.setattr(agent, "_emergency_truncate", lambda: pytest.fail("injected failure truncated context"))
+    with pytest.raises(RepairInfrastructureError):
+        agent.query()
+    assert len(calls) == 1 and calls[0].purpose == "summary"
+    assert len(agent.messages) == 3 and agent.n_calls == 0

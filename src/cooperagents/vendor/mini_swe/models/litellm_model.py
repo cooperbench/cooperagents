@@ -152,7 +152,7 @@ class LitellmModel:
                 # Do not let DefaultAgent's legacy context-error retries truncate
                 # or reissue an injected endpoint failure.
                 from cooperagents.repair import RepairInfrastructureError
-                raise RepairInfrastructureError(type(exc).__name__) from exc
+                raise RepairInfrastructureError("Injected completion transport failed") from exc
         import queue as _q
         import threading as _t
 
