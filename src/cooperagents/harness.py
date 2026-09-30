@@ -1062,6 +1062,40 @@ class UnifiedHarness:
             integrated_patch = member_patches[idx]
             print(f"[harness] integration=selected chosen={idx} "
                   f"sizes={[len(p) for p in member_patches]}")
+            if spec.repair_integrator:
+                # Gate-check the selected tree; repair only if it fails.
+                # Passing trees skip the container entirely (no regression risk).
+                env = env_factory("repair")
+                try:
+                    seed_prior(env, integrated_patch)
+                    _gate = _tree_health_behavioral if spec.behavioral_gate else _tree_health
+                    if not _gate(env):
+                        for _repair_attempt in range(max(1, spec.repair_attempts)):
+                            repair_brief = _merge_repair_task(assignments_all)
+                            if spec.focused_repair:
+                                ev = _gather_merge_evidence(env)
+                                if ev:
+                                    repair_brief += (
+                                        "\n\nEVIDENCE — the harness already located the damage; fix THESE "
+                                        "directly instead of searching:\n\n" + ev
+                                    )
+                            seeds[f"integrator{_repair_attempt + 1}"] = run_on_shared(
+                                env,
+                                f"integrator{_repair_attempt + 1}",
+                                "integrator",
+                                repair_brief,
+                                None,
+                                step_limit=spec.repair_step_limit,
+                                time_limit_s=spec.repair_time_limit,
+                            )
+                            env.execute(
+                                "find . -path ./.git -prune -o \\( -name '*.rej' -o -name '*.orig' \\) -print0 2>/dev/null | xargs -0 -r rm -f"
+                            )
+                            if _gate(env):
+                                break
+                    integrated_patch = strip_test_sections(env.git_diff())
+                finally:
+                    env.cleanup()
         elif not spec.seed_prior and len(member_patches) > 1:
             # No-seed without an LLM integrator: mechanically merge the independent
             # member patches in a fresh container. A real 3-way merge goes first —
