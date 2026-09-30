@@ -412,10 +412,14 @@ def import_legacy_repair_input(
         raise ValueError("Legacy input must be written to a new run, outside the checkpoint")
     # Known source identity, rather than importing/executing arbitrary old code.
     commit = subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip()
-    if commit != "514ed98a59c611ee5a38027c8459d6fcbcec92b8":
+    if commit not in {
+        "514ed98a59c611ee5a38027c8459d6fcbcec92b8",
+        "043fa798a8fcf667f14d32153a19dc0abff80c33",
+    }:
         raise ValueError("Unsupported legacy collection source commit")
     files = (
         "src/cooperagents/harness.py",
+        "src/cooperagents/verification.py",
         "src/cooperagents/workers/mini_swe_worker.py",
         "src/cooperagents/vendor/mini_swe/config/solo.yaml",
         "src/cooperagents/vendor/mini_swe/agents/default.py",
@@ -452,6 +456,8 @@ def import_legacy_repair_input(
     if "run.json" not in manifest["files"]:
         raise ValueError("Legacy checkpoint is missing its manifest-covered run configuration")
     run = json.loads(run_path.read_text())
+    if commit == "043fa798a8fcf667f14d32153a19dc0abff80c33" and run.get("coordination_variant") != "historical_a":
+        raise ValueError("Legacy A collection requires historical_a provenance")
     raw_spec = run["spec"].copy()
     raw_spec.pop("coordinator_notebook", None)  # Workers are finished; no live monitor is restored.
     raw_spec["completion_gate"] = GateDescriptor(kind="cooperagents.verification.validate").build()

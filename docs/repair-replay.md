@@ -76,7 +76,11 @@ import_legacy_repair_input(
 result = run_repair_checkpoint(checkpoint, repair_input=sidecar, scratch=scratch, run_id="new-run")
 ```
 
-The supported collection source is commit `514ed98a59c611ee5a38027c8459d6fcbcec92b8`.
+The supported collection sources are commits `514ed98a59c611ee5a38027c8459d6fcbcec92b8`
+and `043fa798a8fcf667f14d32153a19dc0abff80c33` (the latter requires the saved
+`historical_a` collection identity). Both retain the same repair templates, agent defaults,
+tools and standard verification gate; committed source bytes and the actual first SDK
+request remain required evidence.
 Its required files must match committed contents. Import verifies the checkpoint receipt,
 journal ordering, startup task/budgets, exact initial SDK request, source templates and
 tools, variant and actual launch arguments, and the standard completion gate. Changed,

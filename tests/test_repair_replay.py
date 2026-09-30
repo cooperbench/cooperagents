@@ -327,19 +327,27 @@ def test_invalid_inputs_fail_before_restore_and_credentials_not_saved(monkeypatc
         )
 
 
-def make_legacy_evidence(monkeypatch, tmp_path):
+def make_legacy_evidence(monkeypatch, tmp_path, source_commit="514ed98a59c611ee5a38027c8459d6fcbcec92b8"):
     checkpoint = make_checkpoint(monkeypatch, tmp_path, gate=partial(validate, merged=False))
     inputs = load_repair_input(checkpoint)
     manifest = json.loads((checkpoint / "manifest.json").read_text())
     del manifest["files"]["repair-input.json"]
     (checkpoint / "repair-input.json").unlink()
     (checkpoint / "manifest.json").write_text(json.dumps(manifest))
+    if source_commit == "043fa798a8fcf667f14d32153a19dc0abff80c33":
+        run_path = checkpoint / "run.json"
+        run = json.loads(run_path.read_text())
+        run["coordination_variant"] = "historical_a"
+        run_path.write_text(json.dumps(run))
+        manifest["files"]["run.json"] = dict(bytes=run_path.stat().st_size, sha256=sha256(run_path))
+        (checkpoint / "manifest.json").write_text(json.dumps(manifest))
     source = tmp_path / "source-code"
     package = Path(worker.__file__).parents[1]
     files = {
         name: (package / name).read_bytes()
         for name in (
             "harness.py",
+            "verification.py",
             "workers/mini_swe_worker.py",
             "vendor/mini_swe/config/solo.yaml",
             "vendor/mini_swe/agents/default.py",
@@ -356,10 +364,12 @@ def make_legacy_evidence(monkeypatch, tmp_path):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("pinned-source-fixture")
 
+    committed = {str(path.relative_to(source)): path.read_bytes() for path in source.rglob("*") if path.is_file()}
+
     def git_read(argv, **kwargs):
         if argv[-1] == "HEAD":
-            return "514ed98a59c611ee5a38027c8459d6fcbcec92b8\n"
-        return (source / argv[-1].split(":", 1)[1]).read_bytes()
+            return source_commit + "\n"
+        return committed[argv[-1].split(":", 1)[1]]
 
     monkeypatch.setattr("subprocess.check_output", git_read)
     variant = tmp_path / "variant.toml"
@@ -399,8 +409,9 @@ def make_legacy_evidence(monkeypatch, tmp_path):
     return checkpoint, inputs, journal, source, variant, args
 
 
-def test_legacy_import_verifies_evidence_and_does_not_rewrite_original(monkeypatch, tmp_path):
-    checkpoint, inputs, journal, source, variant, args = make_legacy_evidence(monkeypatch, tmp_path)
+@pytest.mark.parametrize("source_commit", ["514ed98a59c611ee5a38027c8459d6fcbcec92b8", "043fa798a8fcf667f14d32153a19dc0abff80c33"])
+def test_legacy_import_verifies_evidence_and_does_not_rewrite_original(monkeypatch, tmp_path, source_commit):
+    checkpoint, inputs, journal, source, variant, args = make_legacy_evidence(monkeypatch, tmp_path, source_commit)
     before = {p.name: sha256(p) for p in checkpoint.iterdir() if p.is_file()}
     destination = tmp_path / "new-run/data/repair-input.json"
     imported = import_legacy_repair_input(
@@ -416,7 +427,7 @@ def test_legacy_import_verifies_evidence_and_does_not_rewrite_original(monkeypat
         import_legacy_repair_input(checkpoint, journal=journal, source=source, variant=variant, launch_args=args, destination=destination)
 
 
-@pytest.mark.parametrize("damage", ["receipt", "task", "messages", "tools", "sequence", "gate", "args"])
+@pytest.mark.parametrize("damage", ["receipt", "task", "messages", "tools", "sequence", "gate", "args", "source"])
 def test_legacy_missing_or_mismatched_evidence_fails_before_inference(monkeypatch, tmp_path, damage):
     checkpoint, _, journal, source, variant, args = make_legacy_evidence(monkeypatch, tmp_path)
     rows = [json.loads(line) for line in journal.read_text().splitlines()]
@@ -432,6 +443,8 @@ def test_legacy_missing_or_mismatched_evidence_fails_before_inference(monkeypatc
         rows[2]["seq"] = 99
     elif damage == "gate":
         variant.write_text("completion_gate = true\npresub_merge = true\n")
+    elif damage == "source":
+        (source / "src/cooperagents/verification.py").write_text("modified gate")
     else:
         args.write_text(args.read_text() + "--repair-steps\n99\n")
     journal.write_text("".join(json.dumps(row) + "\n" for row in rows))
@@ -441,6 +454,24 @@ def test_legacy_missing_or_mismatched_evidence_fails_before_inference(monkeypatc
     assert not destination.exists()
     with pytest.raises(ValueError, match="Legacy checkpoint"):
         load_repair_input(checkpoint)
+
+
+@pytest.mark.parametrize("source_commit", ["unknown-source", "043fa798a8fcf667f14d32153a19dc0abff80c33"])
+def test_legacy_source_requires_known_commit_and_matching_collection(monkeypatch, tmp_path, source_commit):
+    checkpoint, _, journal, source, variant, args = make_legacy_evidence(monkeypatch, tmp_path, source_commit)
+    if source_commit.startswith("043fa"):
+        run_path = checkpoint / "run.json"
+        run = json.loads(run_path.read_text())
+        run["coordination_variant"] = "current"
+        run_path.write_text(json.dumps(run))
+        manifest = json.loads((checkpoint / "manifest.json").read_text())
+        manifest["files"]["run.json"] = dict(bytes=run_path.stat().st_size, sha256=sha256(run_path))
+        (checkpoint / "manifest.json").write_text(json.dumps(manifest))
+    with pytest.raises(ValueError, match="source commit|historical_a"):
+        import_legacy_repair_input(
+            checkpoint, journal=journal, source=source, variant=variant,
+            launch_args=args, destination=tmp_path / "new-run/input.json",
+        )
 
 
 @pytest.mark.parametrize("failure", ["truncated", "failed", "cancel"])
