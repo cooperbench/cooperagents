@@ -1054,7 +1054,7 @@ def repair_brief(env: Environment, spec: TeamSpec, assignments: list[Assignment]
 def run_repair_tail(env: Environment, *, spec: TeamSpec, assignments: list[Assignment], seeds: dict[str, AgentResult],
                     run_agent: Callable, check_gate: Callable[[], bool], gate_checks: list[dict],
                     checkpoint_dir: Path | None = None,
-        trace=None, first_task: str | None = None) -> list[dict]:
+        trace=None, first_task: str | None = None, checkpoint_bus: TeamBus | None = None) -> list[dict]:
     """Shared by full-team and checkpoint entrypoints; no initial health check here."""
     attempts = []
     for attempt in range(1, max(1, spec.repair_attempts) + 1):
@@ -1071,6 +1071,7 @@ def run_repair_tail(env: Environment, *, spec: TeamSpec, assignments: list[Assig
             repair_input = capture_repair_input(
                 agent, task=task, spec=spec, assignments=assignments, command_timeout=agent.env._timeout,
                 guard_git=agent.env._guard_git, time_limit_s=spec.repair_time_limit,
+                bus=checkpoint_bus,
             )
             save_checkpoint(env, checkpoint_dir / f"before-{actor}", metadata=dict(
                 boundary="repair_agent_start", task=task, attempt=attempt, healthy=False, gate_checks=gate_checks,
@@ -1690,6 +1691,7 @@ class UnifiedHarness:
                         env, spec=spec, assignments=assignments_all, seeds=seeds,
                         run_agent=run_repair_agent, check_gate=check_gate, gate_checks=gate_checks,
                         checkpoint_dir=self.checkpoint_dir,
+                        checkpoint_bus=bus,
                         trace=self.trajectory.emit if self.trajectory else None,
                     )
                     healthy = attempts[-1]["healthy"]

@@ -139,14 +139,23 @@ class InitialMessage(BaseModel):
     content: str
 
 
+class PendingMessage(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, populate_by_name=True)
+    sender: str = Field(alias="from")
+    to: str
+    content: str
+    ts: float = Field(allow_inf_nan=False)
+
+
 class RepairInput(BaseModel):
     """Effective inputs, before the first model request. No historical completion is stored."""
 
     model_config = ConfigDict(extra="forbid", strict=True)
-    version: Literal[1]
+    version: Literal[1, 2]
     original_task: str
     effective_task: str
     initial_messages: list[InitialMessage]
+    pending_messages: dict[str, list[PendingMessage]] | None = None
     agent_config: dict[str, JsonValue]
     model_config_data: dict[str, JsonValue]
     tools: list[dict[str, JsonValue]]
@@ -165,6 +174,14 @@ class RepairInput(BaseModel):
         from cooperagents.vendor.mini_swe.models.litellm_model import LitellmModelConfig
         from cooperagents.vendor.mini_swe.models.utils.actions_toolcall import BASH_TOOL, SEND_MESSAGE_TOOL
 
+        if self.version == 2 and self.pending_messages is None:
+            raise ValueError("Repair input v2 requires unread inbox evidence")
+        if self.pending_messages is not None:
+            actors = {f"integrator{i}" for i in range(1, self.settings.attempts + 1)}
+            if not set(self.pending_messages) <= actors or any(
+                message.to != actor for actor, messages in self.pending_messages.items() for message in messages
+            ):
+                raise ValueError("Invalid repair inbox recipient")
         if set(self.agent_config) != set(AgentConfig.model_fields):
             raise ValueError("Incomplete or unknown effective agent configuration")
         agent = AgentConfig.model_validate(self.agent_config, strict=True)
@@ -212,7 +229,12 @@ def capture_repair_input(
     command_timeout: int,
     guard_git: bool,
     time_limit_s: int | None,
+    bus: TeamBus | None,
 ) -> RepairInput:
+    from cooperagents.bus.memory import InMemoryBus
+
+    if not isinstance(bus, InMemoryBus):
+        raise ValueError("Repair capture requires the default in-memory bus")
     agent_config = agent.config.model_dump(mode="json")
     agent_config.update(wall_deadline=None, output_path=None)
     model_config = agent.model.config.model_dump(mode="json")
@@ -223,6 +245,7 @@ def capture_repair_input(
     root = Path(__file__).parent
     files = (
         "harness.py",
+        "bus/memory.py",
         "workers/mini_swe_worker.py",
         "vendor/mini_swe/config/solo.yaml",
         "vendor/mini_swe/agents/default.py",
@@ -230,10 +253,14 @@ def capture_repair_input(
         "vendor/mini_swe/models/utils/actions_toolcall.py",
     )
     return RepairInput(
-        version=1,
+        version=2,
         original_task=task,
         effective_task=agent.extra_template_vars["task"],
         initial_messages=agent.model._prepare_messages_for_api(agent.messages),
+        pending_messages={
+            actor: [PendingMessage.model_validate(m) for m in messages]
+            for actor, messages in bus.snapshot_inboxes([f"integrator{i}" for i in range(1, spec.repair_attempts + 1)]).items()
+        },
         agent_config=agent_config,
         model_config_data=model_config,
         tools=agent.model._tools,
@@ -311,7 +338,13 @@ def run_repair_checkpoint(
         spec.repair_attempts = max_attempts
     spec.repair_step_limit = int(inputs.agent_config["step_limit"])
     spec.repair_time_limit = inputs.time_limit_s
+    actors = {f"integrator{i}" for i in range(1, spec.repair_attempts + 1)}
+    if inputs.pending_messages is None or not actors <= inputs.pending_messages.keys():
+        raise ValueError(
+            "Checkpoint lacks unread repair inbox evidence; recapture with v2, or use max_attempts=1 for a validated legacy import"
+        )
     bus = InMemoryBus(run_id)
+    bus.restore_inboxes({actor: [m.model_dump(by_alias=True) for m in inputs.pending_messages[actor]] for actor in actors})
     env = ApptainerEnv.from_checkpoint(checkpoint, scratch=scratch)
     seeds = {}
     checks = []
@@ -378,8 +411,11 @@ def run_repair_checkpoint(
             integrated=integrated,
             duration_seconds=time.monotonic() - started,
             metrics=dict(
-                repair_attempts=attempts, repair_gate_checks=checks, checkpoint_manifest_sha256=sha256(checkpoint / "manifest.json"),
-                saved_attempt_limit=inputs.settings.attempts, effective_attempt_limit=spec.repair_attempts,
+                repair_attempts=attempts,
+                repair_gate_checks=checks,
+                checkpoint_manifest_sha256=sha256(checkpoint / "manifest.json"),
+                saved_attempt_limit=inputs.settings.attempts,
+                effective_attempt_limit=spec.repair_attempts,
             ),
         )
     finally:
@@ -616,10 +652,13 @@ def import_legacy_repair_input(
         git_share=spec.git_share,
     )
     result = RepairInput(
-        version=1,
+        version=2,
         original_task=state["metadata"]["task"],
         effective_task=effective_task,
         initial_messages=messages,
+        # The exact two-message SDK request proves integrator1's inbox was empty.
+        # No journal evidence establishes integrator2's pending inbox.
+        pending_messages={"integrator1": []},
         agent_config=agent_cfg.model_dump(mode="json"),
         model_config_data=model_cfg.model_dump(mode="json"),
         tools=request["tools"],

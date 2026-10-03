@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 from litellm import ModelResponse
 
+from cooperagents.bus.memory import InMemoryBus
 from cooperagents.checkpoint import extract_tree, save_checkpoint, sha256, verify_checkpoint
 from cooperagents.env.apptainer import ApptainerEnv
 from cooperagents.env.base import ExecResult
@@ -30,7 +31,7 @@ from cooperagents.verification import validate
 from cooperagents.workers import mini_swe_worker as worker
 
 
-def make_checkpoint(monkeypatch, tmp_path, *, gate=None, attempts=2, crlf=False):
+def make_checkpoint(monkeypatch, tmp_path, *, gate=None, attempts=2, crlf=False, bus=None):
     """Host bash replaces only Apptainer execution; restore uses the public API."""
 
     def execute(env, command, *, timeout=60):
@@ -98,6 +99,8 @@ def make_checkpoint(monkeypatch, tmp_path, *, gate=None, attempts=2, crlf=False)
     from cooperagents.vendor.mini_swe.exceptions import LimitsExceeded
 
     task = repair_brief(env, spec, spec.assignments)
+    if bus is None:
+        bus = InMemoryBus("original")
     checkpoint = tmp_path / "checkpoints/before-integrator1"
     checkpoint.parent.mkdir()
     run = dict(spec=asdict(spec), assignments=[asdict(a) for a in spec.assignments], step_limit=40, cost_limit=5.0, command_timeout=300)
@@ -106,7 +109,7 @@ def make_checkpoint(monkeypatch, tmp_path, *, gate=None, attempts=2, crlf=False)
 
     def capture(agent):
         inputs = capture_repair_input(
-            agent, task=task, spec=spec, assignments=spec.assignments, command_timeout=300, guard_git=False, time_limit_s=None
+            agent, task=task, spec=spec, assignments=spec.assignments, command_timeout=300, guard_git=False, time_limit_s=None, bus=bus
         )
         save_checkpoint(env, checkpoint, metadata=dict(boundary="repair_agent_start", task=task, attempt=1), repair_input=inputs)
 
@@ -124,7 +127,7 @@ def make_checkpoint(monkeypatch, tmp_path, *, gate=None, attempts=2, crlf=False)
             step_limit=spec.repair_step_limit,
             cost_limit=5,
             command_timeout=300,
-            comm=worker.BusComm(__import__("cooperagents.bus.memory", fromlist=["InMemoryBus"]).InMemoryBus("original"), "integrator1"),
+            comm=worker.BusComm(bus, "integrator1"),
             on_start=capture,
         )
     env.cleanup()
@@ -176,7 +179,7 @@ def test_notebook_team_checkpoint_replays_saved_integrator_inputs(monkeypatch, t
         if actor != "merge":
             env.write_file(
                 "compile.sh",
-                "python3 -c 'import ast,pathlib; [ast.parse(p.read_bytes()) for p in pathlib.Path(\".\").glob(\"*.py\")]'\n",
+                'python3 -c \'import ast,pathlib; [ast.parse(p.read_bytes()) for p in pathlib.Path(".").glob("*.py")]\'\n',
             )
         env._checkpoint_mounts["/coordination"] = notebook.parent
         return env
@@ -194,6 +197,7 @@ def test_notebook_team_checkpoint_replays_saved_integrator_inputs(monkeypatch, t
         if "TEAMMATES:" in messages[1]["content"]:
             assert "shared ownership pending" in notebook.read_text()
             command = "printf 'broken(\\n' > a.py" if "feature one" in messages[1]["content"] else "printf 'feature = 2\\n' > b.py"
+            command = 'send_message integrator1 "Preserve parse_v2 compatibility"\n' + command
         else:
             assert "COORDINATOR ACKNOWLEDGMENT" not in messages[0]["content"]
             assert "COORDINATOR NOTICES" not in messages[0]["content"]
@@ -203,15 +207,26 @@ def test_notebook_team_checkpoint_replays_saved_integrator_inputs(monkeypatch, t
     monkeypatch.setattr(_Coordinator, "run", monitor)
     monkeypatch.setattr(worker.LitellmModel, "_query_inner", query)
     spec = TeamSpec(
-        run_id="notebook-team", repo="demo", task_id=1, features=[1, 2],
+        run_id="notebook-team",
+        repo="demo",
+        task_id=1,
+        features=[1, 2],
         assignments=[Assignment("agent1", "feature one", feature_id=1), Assignment("agent2", "feature two", feature_id=2)],
-        worker="mini_swe", model="fixture", shared_workspace=True, coop_tools=True, seed_prior=False,
-        coordinator=True, repair_integrator=True, repair_attempts=2,
+        worker="mini_swe",
+        model="fixture",
+        shared_workspace=True,
+        coop_tools=True,
+        seed_prior=False,
+        coordinator=True,
+        repair_integrator=True,
+        repair_attempts=2,
         completion_gate=partial(validate, merged=False, build_artifact=None),
     )
     directory = tmp_path / "team-checkpoints"
     result = UnifiedHarness(
-        checkpoint_dir=directory, coordinator_complete=decide, coordinator_notebook_path=notebook,
+        checkpoint_dir=directory,
+        coordinator_complete=decide,
+        coordinator_notebook_path=notebook,
         coordination_variant=variant,
     ).run(spec, env_factory=factory)
     # The broken worker exhausts the standard gate's three rejection attempts.
@@ -220,7 +235,9 @@ def test_notebook_team_checkpoint_replays_saved_integrator_inputs(monkeypatch, t
     assert set(result.seeds) == {"agent1", "agent2", "integrator1"}
     checkpoint = directory / "before-integrator1"
     saved = load_repair_input(checkpoint)
-    assert requests[-1] == [m.model_dump() for m in saved.initial_messages]
+    assert saved.pending_messages["integrator1"]
+    assert requests[-1][:2] == [m.model_dump() for m in saved.initial_messages]
+    assert all("Preserve parse_v2 compatibility" in m["content"] for m in requests[-1][2:])
     assert saved.gate is not None
     run = json.loads((directory / "run.json").read_text())
     assert run["coordination_variant"] == variant
@@ -248,11 +265,13 @@ def test_notebook_team_checkpoint_replays_saved_integrator_inputs(monkeypatch, t
     monkeypatch.setattr(worker.LitellmModel, "_query_inner", forbidden)
     settings = CompletionSettings(model="policy", revision="fixed", generation={"max_tokens": 128}, timeout=30.0)
     replay = run_repair_checkpoint(
-        checkpoint, scratch=tmp_path / "replay-scratch", run_id="replay",
+        checkpoint,
+        scratch=tmp_path / "replay-scratch",
+        run_id="replay",
         completion=CompletionBinding(action, settings, forbidden, settings),
     )
     assert len(policy_requests) == 1 and policy_requests[0].actor_id == "integrator1"
-    assert policy_requests[0].messages == [m.model_dump() for m in saved.initial_messages]
+    assert policy_requests[0].messages == requests[-1]
     assert policy_requests[0].tools == saved.tools
     assert "fixed = 1" in replay.integrated.patch and "feature = 2" in replay.integrated.patch
     assert (checkpoint / "manifest.json").read_bytes() == manifest
@@ -444,6 +463,40 @@ def test_archives_cannot_write_outside_owned_tree(tmp_path, name, target):
         extract_tree(path, tmp_path / "restore")
 
 
+def test_unread_inboxes_survive_capture_and_two_attempt_replays(monkeypatch, tmp_path):
+    bus = InMemoryBus("original")
+    bus.send(sender="agent1", to="integrator1", content="already read")
+    bus.receive("integrator1")
+    bus.send(sender="agent1", to="integrator1", content="first hint")
+    bus.send(sender="agent2", to="integrator1", content="second hint")
+    bus.send(sender="agent2", to="integrator2", content="backup hint")
+    expected = bus.snapshot_inboxes(["integrator1", "integrator2"])
+    checkpoint = make_checkpoint(monkeypatch, tmp_path, bus=bus)
+    saved = load_repair_input(checkpoint)
+    assert saved.version == 2
+    assert {actor: [m.model_dump(by_alias=True) for m in messages] for actor, messages in saved.pending_messages.items()} == expected
+    assert bus.receive("integrator1") == expected["integrator1"]  # Capture did not drain.
+    assert bus.receive("integrator2") == expected["integrator2"]
+    requests = []
+
+    def query(model, messages, **kwargs):
+        requests.append(messages)
+        if len(requests) % 3 == 1:
+            return completion('send_message integrator2 "new repair hint"\ntrue')
+        if len(requests) % 3 == 2:
+            return completion("echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT")  # Broken tree triggers attempt 2.
+        return completion("printf 'fixed = 1\\n' > a.py; echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT")
+
+    monkeypatch.setattr(worker.LitellmModel, "_query_inner", query)
+    for run_id in ("left", "right"):
+        result = run_repair_checkpoint(checkpoint, scratch=tmp_path / "scratch", run_id=run_id)
+        assert set(result.seeds) == {"integrator1", "integrator2"}
+    assert requests[0] == requests[3]  # Independent restores see the same first request.
+    assert [m["content"] for m in requests[0][2:]] == ["[Message from agent1]: first hint", "[Message from agent2]: second hint"]
+    assert sum("first hint" in (m["content"] or "") for m in requests[1]) == 1  # No duplicate drain on step 2.
+    assert [m["content"] for m in requests[2][2:]] == ["[Message from agent2]: backup hint", "[Message from integrator1]: new repair hint"]
+
+
 def test_invalid_inputs_fail_before_restore_and_credentials_not_saved(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENAI_API_KEY", "private-credential")
     monkeypatch.setenv("OPENAI_BASE_URL", "https://private-endpoint.invalid/v1")
@@ -458,6 +511,10 @@ def test_invalid_inputs_fail_before_restore_and_credentials_not_saved(monkeypatc
     broken = inputs.model_dump()
     broken["version"] = 99
     with pytest.raises(ValueError):
+        RepairInput.model_validate(broken)
+    broken = inputs.model_dump()
+    broken["pending_messages"] = {"integrator1": [{"from": "a", "to": "integrator2", "content": "hint", "ts": 1.0}]}
+    with pytest.raises(ValueError, match="recipient"):
         RepairInput.model_validate(broken)
     with pytest.raises(ValueError, match="unsaved host state"):
         UnifiedHarness(checkpoint_dir=tmp_path / "unused").run(
@@ -563,9 +620,38 @@ def test_legacy_import_verifies_evidence_and_does_not_rewrite_original(monkeypat
     assert imported.tools == inputs.tools
     assert imported.gate.max_rejections == 3
     assert load_repair_input(checkpoint, destination) == imported
+    assert imported.pending_messages == {"integrator1": []}
+    with pytest.raises(ValueError, match="inbox evidence"):
+        run_repair_checkpoint(checkpoint, repair_input=destination, scratch=tmp_path / "scratch", run_id="unsafe")
+    monkeypatch.setattr(worker.LitellmModel, "_query_inner", lambda *a, **kw: completion("echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"))
+    assert set(
+        run_repair_checkpoint(
+            checkpoint,
+            repair_input=destination,
+            scratch=tmp_path / "scratch",
+            run_id="safe",
+            max_attempts=1,
+        ).seeds
+    ) == {"integrator1"}
     assert {p.name: sha256(p) for p in checkpoint.iterdir() if p.is_file()} == before
     with pytest.raises(FileExistsError):
         import_legacy_repair_input(checkpoint, journal=journal, source=source, variant=variant, launch_args=args, destination=destination)
+
+
+def test_v1_effective_input_without_inboxes_fails_before_restore(monkeypatch, tmp_path):
+    checkpoint = make_checkpoint(monkeypatch, tmp_path)
+    path = checkpoint / "repair-input.json"
+    old = json.loads(path.read_text())
+    old["version"] = 1
+    del old["pending_messages"]
+    path.write_text(json.dumps(old))
+    manifest_path = checkpoint / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["files"][path.name] = dict(bytes=path.stat().st_size, sha256=sha256(path))
+    manifest_path.write_text(json.dumps(manifest))
+    monkeypatch.setattr(ApptainerEnv, "from_checkpoint", lambda *a, **kw: pytest.fail("must fail before restore"))
+    with pytest.raises(ValueError, match="inbox evidence"):
+        run_repair_checkpoint(checkpoint, scratch=tmp_path / "scratch", run_id="old", max_attempts=1)
 
 
 @pytest.mark.parametrize("damage", ["receipt", "task", "messages", "tools", "sequence", "gate", "args", "source"])

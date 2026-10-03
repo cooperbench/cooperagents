@@ -212,6 +212,11 @@ the fully prefixed task, actual initial system/user messages, agent configuratio
 gate descriptor, assignments, and source hashes. API credentials, endpoint addresses,
 and absolute deadlines/output paths are excluded. Capture finishes before any model
 request and does not consume the agent's wall-clock budget.
+Repair input v2 also saves unread inboxes for both integrator attempts, including sender,
+recipient, content, timestamp and delivery order. Capture does not drain the live bus.
+Replay restores these queues once into its fresh bus; normal agent steps read them.
+Previously consumed messages are not redelivered, and messages sent by the new first
+attempt remain available to the new second attempt.
 
 ## Restore and repair
 
@@ -262,7 +267,7 @@ import_legacy_repair_input(
     launch_args=Path("/runs/source/training-args.txt"),
     destination=sidecar,
 )
-result = run_repair_checkpoint(checkpoint, repair_input=sidecar, scratch=scratch, run_id="new-run")
+result = run_repair_checkpoint(checkpoint, repair_input=sidecar, scratch=scratch, run_id="new-run", max_attempts=1)
 ```
 
 The supported collection sources are commits `514ed98a59c611ee5a38027c8459d6fcbcec92b8`
@@ -277,6 +282,10 @@ missing or redacted evidence fails before inference. The sidecar records evidenc
 and selected event sequences. Legacy contract-first assignments are rejected because their
 effective assignment provenance was not saved. Imported files are written only to the new
 run. Supporting a new legacy source requires evidence-backed compatibility work.
+The exact initial two-message SDK request proves only integrator1's inbox was empty.
+Legacy imports therefore support one attempt; integrator2's pending inbox is unknown.
+Existing v1 effective-input checkpoints without inbox evidence fail before restore or
+inference and must be recaptured. Missing queue state is never treated as an empty queue.
 
 ## Verification and current boundary
 

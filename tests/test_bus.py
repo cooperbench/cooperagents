@@ -9,6 +9,25 @@ import pytest
 BUSES = ["mem_bus", "redis_bus"]
 
 
+def test_inbox_snapshot_is_detached_and_restore_preserves_delivery(mem_bus):
+    from cooperagents.bus.memory import InMemoryBus
+
+    mem_bus.send(sender="a", to="future-agent", content="hint")
+    snapshot = mem_bus.snapshot_inboxes(["future-agent", "empty"])
+    expected = mem_bus.snapshot_inboxes(["future-agent", "empty"])
+    snapshot["future-agent"][0]["content"] = "changed copy"
+    assert mem_bus.receive("future-agent") == expected["future-agent"]
+    restored = InMemoryBus("replay")
+    restored.restore_inboxes(expected)
+    expected["future-agent"][0]["content"] = "changed after restore"
+    assert restored.receive("future-agent")[0]["content"] == "hint"
+    assert restored.receive("future-agent") == []
+    assert restored.receive("empty") == []
+    assert restored.message_log() == []
+    with pytest.raises(ValueError, match="fresh bus"):
+        restored.restore_inboxes(snapshot)
+
+
 @pytest.fixture(params=BUSES)
 def bus(request):
     return request.getfixturevalue(request.param)
