@@ -8,9 +8,11 @@ from types import SimpleNamespace
 import litellm
 import pytest
 
+from cooperagents.bus.memory import InMemoryBus
 from cooperagents.env.base import ExecResult
 from cooperagents.harness import _Coordinator
 from cooperagents.trajectory import Trajectory, record_call, replay
+from cooperagents.types import Assignment
 from cooperagents.vendor.mini_swe.agents.default import DefaultAgent
 from cooperagents.vendor.mini_swe.models.litellm_model import LitellmModel
 from cooperagents.workers.mini_swe_worker import run_mini_swe_agent
@@ -74,9 +76,15 @@ def test_worker_raw_io_compaction_and_replay(monkeypatch, tmp_path):
     assert replay(journal.path, at_time=rows[before - 1]["time"])["seq"] == before
 
 
-def test_actual_worker_finish_and_coordinator_io(monkeypatch, tmp_path):
+@pytest.mark.parametrize("remote", [False, True])
+def test_actual_worker_finish_and_coordinator_io(monkeypatch, tmp_path, remote):
     monkeypatch.setenv("OPENAI_API_KEY", "dummy-key")
     journal = Trajectory(tmp_path / "trajectory.jsonl")
+    sink = journal
+    if remote:
+        from test_observability import memory_trace
+
+        sink, exporter = memory_trace(journal)
     responses = []
 
     def complete(**kwargs):
@@ -91,7 +99,9 @@ def test_actual_worker_finish_and_coordinator_io(monkeypatch, tmp_path):
                 }
             ],
         }
-        response = litellm.ModelResponse(choices=[{"message": message}], usage={"prompt_tokens": 10, "completion_tokens": 1})
+        response = litellm.ModelResponse(
+            choices=[{"message": message}], usage={"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11}
+        )
         responses.append(response)
         return response
 
@@ -105,32 +115,51 @@ def test_actual_worker_finish_and_coordinator_io(monkeypatch, tmp_path):
         model_name="dummy",
         step_limit=3,
         cost_limit=5,
-        trace=partial(journal.emit, "agent1"),
+        trace=partial(sink.emit, "agent1"),
     )
     assert result.status == "submitted"
     import openai
 
+    arguments = json.dumps({"recipient": "agent1", "content": "nudge"})
+    tool_call = SimpleNamespace(function=SimpleNamespace(name="send_message", arguments=arguments))
+    def completion(**kwargs):
+        assert kwargs["tool_choice"] == "auto"
+        assert [tool["function"]["name"] for tool in kwargs["tools"]] == ["send_message"]
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content=None, tool_calls=[tool_call]))],
+            model_dump=lambda **kw: {
+                "choices": [{"message": {"content": None, "tool_calls": [{"function": {"name": "send_message", "arguments": arguments}}]}}],
+                "usage": {"prompt_tokens": 20, "completion_tokens": 5, "total_tokens": 25},
+            },
+        )
+
     monkeypatch.setattr(
         openai,
         "OpenAI",
-        lambda *a, **k: SimpleNamespace(
-            chat=SimpleNamespace(
-                completions=SimpleNamespace(
-                    create=lambda **kwargs: SimpleNamespace(
-                        choices=[SimpleNamespace(message=SimpleNamespace(content="nudge"))],
-                        model_dump=lambda **kw: {"choices": [{"message": {"content": "nudge"}}]},
-                    )
-                )
-            )
-        ),
+        lambda *a, **k: SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=completion))),
     )
-    coordinator = _Coordinator({"agent1": env}, "dummy", trace=partial(journal.emit, "coordinator"))
+    coordinator = _Coordinator(
+        {"agent1": env},
+        "dummy",
+        assignments=[Assignment(agent_id="agent1", role="lead", task="feature")],
+        bus=InMemoryBus("test"),
+        trace=partial(sink.emit, "coordinator"),
+    )
     coordinator.register("agent1", SimpleNamespace(messages=result.messages))
-    # One actual monitor tick; force trigger without waiting twenty seconds.
-    coordinator._stop = SimpleNamespace(wait=lambda seconds, ticks=iter([False, True]): next(ticks))
-    coordinator._detect = lambda aid, agent: "LOOP"
-    coordinator.run()
+    coordinator.decide(initial=True)
     assert coordinator.drain("agent1") == ["[coordinator] nudge"]
+    if remote:
+        sink.close()
+        spans = exporter.get_finished_spans()
+        roots = {s.name: s for s in spans if s.attributes.get("langfuse.internal.as_root")}
+        assert set(roots) == {"agent1", "coordinator"}
+        generations = [s for s in spans if s.attributes.get("langfuse.observation.type") == "generation"]
+        assert len(generations) == 2
+        assert all(json.loads(s.attributes["langfuse.observation.usage_details"])["input"] > 0 for s in generations)
+        assert {s.parent.span_id for s in generations} == {s.context.span_id for s in roots.values()}
+        assert all(s.attributes["session.id"] == sink.session_id for s in spans)
+        assert all(s.attributes["langfuse.observation.type"] == "agent" for s in roots.values())
+        assert any("prompt_tokens" in s.attributes.get("langfuse.observation.output", "") for s in generations)
     journal.close()
     state = replay(journal.path)
     assert state["contexts"]["agent1"] == result.messages
@@ -165,7 +194,8 @@ def test_concurrent_failures_and_recording_failure(tmp_path):
         broken.close()
 
 
-def test_two_repair_attempts_and_collection_audit(monkeypatch, tmp_path):
+@pytest.mark.parametrize("n_workers", [2, 3])
+def test_two_repair_attempts_and_collection_audit(monkeypatch, tmp_path, n_workers):
     import importlib.util
     from pathlib import Path
 
@@ -211,21 +241,42 @@ def test_two_repair_attempts_and_collection_audit(monkeypatch, tmp_path):
         coop_tools=True,
         repair_integrator=True,
         repair_attempts=2,
-        assignments=[Assignment(agent_id=f"agent{i}", role="lead" if i == 1 else "member", feature_id=i, task="finish") for i in (1, 2)],
+        assignments=[
+            Assignment(agent_id=f"agent{i}", role="lead" if i == 1 else "member", feature_id=i, task="finish")
+            for i in range(1, n_workers + 1)
+        ],
     )
     directory = tmp_path / "logs/real/team/demo/1/f1_f2"
     journal = Trajectory(directory / "trajectory.jsonl.gz")
     journal.emit("harness", "pair_start")
-    result = UnifiedHarness(trajectory=journal).run(spec, env_factory=lambda _: LocalEnv.fresh())
+    result = UnifiedHarness(trajectory=journal, checkpoint_dir=directory / "checkpoints").run(
+        spec, env_factory=lambda _: LocalEnv.fresh()
+    )
     journal.emit("harness", "pair_end")
     journal.close()
-    assert set(result.seeds) == {"agent1", "agent2", "integrator1", "integrator2"}
+    assert set(result.seeds) == {*(f"agent{i}" for i in range(1, n_workers + 1)), "integrator1", "integrator2"}
     write_run_outputs(result, run_name="real", logs_dir=tmp_path / "logs")
-    (tmp_path / "metadata.json").write_text(json.dumps({"pairs": ["demo:1:1,2"]}))
+    (tmp_path / "metadata.json").write_text(json.dumps({"pairs": ["demo:1:1,2"], "checkpoint_repair": True}))
     module_spec = importlib.util.spec_from_file_location("audit", Path(__file__).parents[1] / "scripts/audit_trajectories.py")
     module = importlib.util.module_from_spec(module_spec)
     module_spec.loader.exec_module(module)
-    assert module.audit(tmp_path)["workers"] == 2
+    audited = module.audit(tmp_path)
+    assert audited["workers"] == n_workers
+    if n_workers == 3:
+        checkpoint = directory / "checkpoints/worker-agent3"
+        manifest = checkpoint / "manifest.json"
+        saved = manifest.read_bytes()
+        manifest.unlink()
+        with pytest.raises(FileNotFoundError):
+            module.audit(tmp_path)
+        manifest.write_bytes(saved)
+        patch = checkpoint / "raw.patch"
+        saved = patch.read_bytes()
+        patch.write_text("corrupted")
+        with pytest.raises(ValueError, match="checksum mismatch"):
+            module.audit(tmp_path)
+        patch.write_bytes(saved)
+        assert "worker-agent3" in audited["entries"][0]["checkpoints"]
     trajectory = directory / "agent1_traj.json"
     damaged = json.loads(trajectory.read_text())
     damaged["messages"] = []

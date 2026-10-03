@@ -80,3 +80,34 @@ def test_container_startup_failure_is_not_a_tool_observation(monkeypatch, tmp_pa
             env.execute("true")
     assert apptainer.run_limited is original
     assert env.execute("printf recovered").stdout == "recovered"
+
+
+def test_notebook_mounts_reuse_existing_runtime_options(monkeypatch, tmp_path):
+    import json
+    from types import SimpleNamespace
+
+    from cooperagents.env.base import ExecResult
+
+    directory = tmp_path / "notes"
+    directory.mkdir()
+    captured = []
+    monkeypatch.setenv("COOPER_RUNTIME", "docker")
+    monkeypatch.setattr("cooperagents.env.docker.DockerEnv", lambda *a, **k: captured.append(k))
+    task_environment("image", volumes=["shared:/cbshared"], coordinator_dir=directory)
+    assert captured == [{"volumes": ["shared:/cbshared", f"{directory}:/coordination:ro"]}]
+    sif = tmp_path / "image.sif"
+    sif.touch()
+    manifest = tmp_path / "images.json"
+    manifest.write_text(json.dumps({"image": str(sif)}))
+    monkeypatch.setenv("COOPER_RUNTIME", "apptainer")
+    monkeypatch.setenv("COOPER_IMAGE_MANIFEST", str(manifest))
+    monkeypatch.setenv("COOPER_SCRATCH", str(tmp_path / "scratch"))
+    monkeypatch.setattr("cooperagents.env.apptainer.subprocess.run", lambda *a, **k: SimpleNamespace(returncode=0))
+    monkeypatch.setattr(ApptainerEnv, "execute", lambda *a, **k: ExecResult("commit\n", 0))
+    env = task_environment("image", volumes=["shared:/cbshared"], coordinator_dir=directory)
+    try:
+        assert f"{directory}:/coordination:ro" in env._argv
+        assert f"{tmp_path}/scratch/shared/shared:/cbshared" in env._argv
+        assert (env.root / "fs/coordination").is_dir()
+    finally:
+        env.cleanup()

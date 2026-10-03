@@ -20,14 +20,29 @@ The journal includes:
   responses, and failed call attempts. Summarizer calls use the same recorder.
 - Worker shell requests and raw environment outputs, messaging/tool outputs,
   and final status/step counts, including `integrator1` and `integrator2` when used.
-- Coordinator registration, detector inputs and inspected dirty-file outputs,
-  decisions, model requests/responses, fallback reasons, queued nudges and delivery.
+- Coordinator registration, task/action/budget observations and inspected dirty-file
+  outputs, JSON decisions and rejection reasons, model requests/responses, replies,
+  queued messages and delivery, worker completion and dropped late messages.
+- Notebook versions and full content in `notebook_update`, and short path reminders
+  in `notebook_delivery`. These reminders are separate from model-generated `nudge`
+  events and do not count as model interventions.
+
+The mounted notebook stays in `coordination/<run_id>/notebook.md` under the pair
+directory even when trajectory collection is disabled. `--no-coordinator-notebook`
+on the benchmark runner disables both the artifact and its worker channel.
+To establish that a worker read an update, inspect its shell result and subsequent
+SDK request for the file header/version and content. A reminder or the harness's
+initial mount check is not evidence that the worker read or followed the agreement.
 
 Transport credentials and known secret environment values are redacted. This is
 an agent-I/O journal, not a packet capture: SDK-internal HTTP retries and provider
 internals are not recorded. It cannot reconstruct container state, execute a new
 counterfactual action, or reproduce an unobserved response from a killed request.
 A provider call still pending at shutdown is reported as incomplete.
+
+For filesystem checkpoints as well as I/O replay, add `--checkpoint-repair` to
+the benchmark or cluster launcher. See [repair replay](repair-replay.md) for
+capture boundaries, verification and sandbox restoration.
 
 ## Replay without containers or inference
 

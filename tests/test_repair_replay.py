@@ -150,6 +150,115 @@ def completion(command, *, content=None):
     )
 
 
+@pytest.mark.parametrize("variant", ["current", "human_in_loop"])
+def test_notebook_team_checkpoint_replays_saved_integrator_inputs(monkeypatch, tmp_path, variant):
+    import shlex
+
+    from cooperagents.completion import CompletionBinding, CompletionSettings
+    from cooperagents.harness import _Coordinator
+
+    source = make_checkpoint(monkeypatch, tmp_path)
+    notebook = tmp_path / "coordination/notebook.md"
+    execute = ApptainerEnv.execute
+    requests, decisions, monitors, policy_requests = [], [], [], []
+
+    def mounted_execute(env, command, *, timeout=60):
+        if "/coordination/notebook.md" in command:
+            path = env._checkpoint_mounts["/coordination"] / "notebook.md"
+            command = command.replace("/coordination/notebook.md", shlex.quote(str(path)))
+        return execute(env, command, timeout=timeout)
+
+    monkeypatch.setattr(ApptainerEnv, "execute", mounted_execute)
+
+    def factory(actor):
+        env = ApptainerEnv.from_checkpoint(source, scratch=tmp_path / "team-scratch")
+        assert env.execute("git reset --hard HEAD && git clean -fdx").exit_code == 0
+        if actor != "merge":
+            env.write_file(
+                "compile.sh",
+                "python3 -c 'import ast,pathlib; [ast.parse(p.read_bytes()) for p in pathlib.Path(\".\").glob(\"*.py\")]'\n",
+            )
+        env._checkpoint_mounts["/coordination"] = notebook.parent
+        return env
+
+    def decide(prompt):
+        decisions.append(prompt)
+        return [{"name": "update_notebook", "arguments": json.dumps({"content": "shared ownership pending"})}]
+
+    def monitor(coordinator):
+        monitors.append(coordinator)
+        coordinator._stop.wait()
+
+    def query(model, messages, **kwargs):
+        requests.append(messages)
+        if "TEAMMATES:" in messages[1]["content"]:
+            assert "shared ownership pending" in notebook.read_text()
+            command = "printf 'broken(\\n' > a.py" if "feature one" in messages[1]["content"] else "printf 'feature = 2\\n' > b.py"
+        else:
+            assert "COORDINATOR ACKNOWLEDGMENT" not in messages[0]["content"]
+            assert "COORDINATOR NOTICES" not in messages[0]["content"]
+            command = "printf 'fixed = 1\\n' > a.py"
+        return completion(command + "; echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT")
+
+    monkeypatch.setattr(_Coordinator, "run", monitor)
+    monkeypatch.setattr(worker.LitellmModel, "_query_inner", query)
+    spec = TeamSpec(
+        run_id="notebook-team", repo="demo", task_id=1, features=[1, 2],
+        assignments=[Assignment("agent1", "feature one", feature_id=1), Assignment("agent2", "feature two", feature_id=2)],
+        worker="mini_swe", model="fixture", shared_workspace=True, coop_tools=True, seed_prior=False,
+        coordinator=True, repair_integrator=True, repair_attempts=2,
+        completion_gate=partial(validate, merged=False, build_artifact=None),
+    )
+    directory = tmp_path / "team-checkpoints"
+    result = UnifiedHarness(
+        checkpoint_dir=directory, coordinator_complete=decide, coordinator_notebook_path=notebook,
+        coordination_variant=variant,
+    ).run(spec, env_factory=factory)
+    # The broken worker exhausts the standard gate's three rejection attempts.
+    assert decisions and len(requests) == 6
+    assert set(monitors[0]._finished) == {"agent1", "agent2"}
+    assert set(result.seeds) == {"agent1", "agent2", "integrator1"}
+    checkpoint = directory / "before-integrator1"
+    saved = load_repair_input(checkpoint)
+    assert requests[-1] == [m.model_dump() for m in saved.initial_messages]
+    assert saved.gate is not None
+    run = json.loads((directory / "run.json").read_text())
+    assert run["coordination_variant"] == variant
+    assert run["spec"]["completion_gate"] == describe_gate(spec.completion_gate)
+    manifest = (checkpoint / "manifest.json").read_bytes()
+    restored = ApptainerEnv.from_checkpoint(checkpoint, scratch=tmp_path / "restore-scratch")
+    try:
+        mount = restored._checkpoint_mounts["/coordination"]
+        assert mount != notebook.parent and (mount / "notebook.md").read_text() == notebook.read_text()
+        assert f"{mount}:/coordination:ro" in restored._argv
+        (mount / "notebook.md").write_text("independent copy")
+        assert "shared ownership pending" in notebook.read_text()
+    finally:
+        restored.cleanup()
+
+    def action(request):
+        policy_requests.append(request)
+        return completion("printf 'fixed = 1\\n' > a.py; echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT")
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("replay must not restart workers/coordinator or use the historical model")
+
+    monkeypatch.setattr(UnifiedHarness, "run", forbidden)
+    monkeypatch.setattr(_Coordinator, "__init__", forbidden)
+    monkeypatch.setattr(worker.LitellmModel, "_query_inner", forbidden)
+    settings = CompletionSettings(model="policy", revision="fixed", generation={"max_tokens": 128}, timeout=30.0)
+    replay = run_repair_checkpoint(
+        checkpoint, scratch=tmp_path / "replay-scratch", run_id="replay",
+        completion=CompletionBinding(action, settings, forbidden, settings),
+    )
+    assert len(policy_requests) == 1 and policy_requests[0].actor_id == "integrator1"
+    assert policy_requests[0].messages == [m.model_dump() for m in saved.initial_messages]
+    assert policy_requests[0].tools == saved.tools
+    assert "fixed = 1" in replay.integrated.patch and "feature = 2" in replay.integrated.patch
+    assert (checkpoint / "manifest.json").read_bytes() == manifest
+    verify_checkpoint(checkpoint)
+
+
 def test_two_restores_are_independent_and_preserve_full_state(monkeypatch, tmp_path):
     checkpoint = make_checkpoint(monkeypatch, tmp_path)
     manifest = (checkpoint / "manifest.json").read_bytes()

@@ -12,6 +12,9 @@ mkdir -p "$COOPER_SCRATCH" "$APPTAINER_TMPDIR"
 cd "$COOPER_CODE"
 python3 -m venv "$COOPER_SCRATCH/venv"
 "$COOPER_SCRATCH/venv/bin/pip" install -q 'litellm==1.99.0' 'openai==2.54.0' rich tenacity jinja2 pydantic pyyaml modal redis python-dotenv platformdirs docker
+if [[ "${COOPER_LANGFUSE:-0}" == 1 ]]; then
+  "$COOPER_SCRATCH/venv/bin/pip" install -q 'langfuse==4.15.6'
+fi
 export PATH="$COOPER_SCRATCH/venv/bin:$PATH"
 export PYTHONPATH="$COOPER_CODE/src:$COOPERBENCH_DIR/src"
 export LITELLM_LOCAL_MODEL_COST_MAP=True
@@ -48,17 +51,24 @@ else
   export ENV_FILE="$COOPER_CREDENTIAL_FILE"
   read -ra pairs <<< "${COOPER_PAIRS:?}"
   args=(--pairs "${pairs[@]}" --team-only --max-agents 2 --no-seed --coop-tools --git-share
-        --completion-gate --step-limit 1000 --agent-time-limit 3600
+        --completion-gate --step-limit "${COOPER_STEP_LIMIT:-1000}" --agent-time-limit "${COOPER_AGENT_TIME_LIMIT:-3600}"
         --concurrency "${COOPER_CONCURRENCY:-1}" --eval-concurrency "${COOPER_EVAL_CONCURRENCY:-1}" --resume
         --team-name real --log-dir "$COOPER_RUN/logs")
   if [[ "${COOPER_COORDINATOR:-1}" == 1 ]]; then args+=(--coordinator); fi
+  if [[ "${COOPER_COORDINATOR_NOTEBOOK:-1}" == 0 ]]; then args+=(--no-coordinator-notebook); fi
+  args+=(--coordination-variant "${COOPER_COORDINATION_VARIANT:-current}")
   if [[ "${COOPER_REPAIR:-0}" == 1 ]]; then
     args+=(--repair-integrator --repair-attempts "${COOPER_REPAIR_ATTEMPTS:-1}")
   fi
-  if [[ "${COOPER_COLLECT_TRAJECTORIES:-0}" == 1 ]]; then args+=(--record-trajectory --skip-eval); fi
+  if [[ "${COOPER_CHECKPOINT_REPAIR:-0}" == 1 ]]; then args+=(--checkpoint-repair); fi
+  if [[ "${COOPER_RECORD_TRAJECTORIES:-0}" == 1 || "${COOPER_COLLECT_TRAJECTORIES:-0}" == 1 ]]; then
+    args+=(--record-trajectory)
+  fi
+  if [[ "${COOPER_COLLECT_TRAJECTORIES:-0}" == 1 ]]; then args+=(--skip-eval); fi
+  if [[ "${COOPER_LANGFUSE:-0}" == 1 ]]; then args+=(--langfuse); fi
   printf '%s\n' "${args[@]}" > "$COOPER_RUN/training-args.txt"
   python scripts/bench_compare.py "${args[@]}"
-  if [[ "${COOPER_COLLECT_TRAJECTORIES:-0}" == 1 ]]; then
+  if [[ "${COOPER_RECORD_TRAJECTORIES:-0}" == 1 || "${COOPER_COLLECT_TRAJECTORIES:-0}" == 1 ]]; then
     python scripts/audit_trajectories.py "$COOPER_RUN"
   fi
 fi
