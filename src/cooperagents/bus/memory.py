@@ -138,6 +138,19 @@ class InMemoryBus(TeamBus):
         with self._lock:
             return [dict(m) for m in self._message_log]
 
+    def snapshot_inboxes(self, agent_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
+        """Copy unread messages without draining the live inboxes."""
+        with self._lock:
+            return {actor: [dict(m) for m in self._inboxes.get(actor, ())] for actor in agent_ids}
+
+    def restore_inboxes(self, inboxes: dict[str, list[dict[str, Any]]]) -> None:
+        """Restore checkpoint inboxes into a fresh bus, without replaying historical sends."""
+        with self._cond:
+            if self._inboxes:
+                raise ValueError("Inbox restore requires a fresh bus")
+            self._inboxes = {actor: deque(dict(m) for m in messages) for actor, messages in inboxes.items()}
+            self._cond.notify_all()
+
     # --- spawn queue ---------------------------------------------------
 
     def spawn_request(self, *, requested_by: str, task: str, role: str = "helper", metadata: dict | None = None) -> str:

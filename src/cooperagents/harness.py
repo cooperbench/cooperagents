@@ -37,7 +37,7 @@ from contextlib import ExitStack, nullcontext
 from dataclasses import asdict, dataclass
 from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from cooperagents.agent import Agent
 from cooperagents.bus.base import TeamBus
@@ -53,6 +53,9 @@ from cooperagents.metrics import coordination_metrics, spawn_metrics
 from cooperagents.patching import strip_test_sections
 from cooperagents.planner import ancestors, plan_decomposition, topo_levels
 from cooperagents.types import AgentResult, Assignment, RunResult, SubTask, TeamSpec
+
+if TYPE_CHECKING:
+    from cooperagents.completion import CompletionBinding
 
 Planner = Callable[[list[tuple[int, str]], "str | None"], "tuple[list[SubTask], str]"]
 
@@ -1039,6 +1042,61 @@ def _repair_task(assignments: list[Assignment]) -> str:
     )
 
 
+def repair_brief(env: Environment, spec: TeamSpec, assignments: list[Assignment]) -> str:
+    task = _merge_repair_task(assignments)
+    if spec.focused_repair:
+        evidence = _gather_merge_evidence(env)
+        if evidence:
+            task += "\n\nEVIDENCE — the harness already located the damage; fix THESE directly instead of searching:\n\n" + evidence
+    return task
+
+
+def run_repair_tail(env: Environment, *, spec: TeamSpec, assignments: list[Assignment], seeds: dict[str, AgentResult],
+                    run_agent: Callable, check_gate: Callable[[], bool], gate_checks: list[dict],
+                    checkpoint_dir: Path | None = None,
+        trace=None, first_task: str | None = None, checkpoint_bus: TeamBus | None = None) -> list[dict]:
+    """Shared by full-team and checkpoint entrypoints; no initial health check here."""
+    attempts = []
+    for attempt in range(1, max(1, spec.repair_attempts) + 1):
+        task = first_task if attempt == 1 and first_task is not None else repair_brief(env, spec, assignments)
+        actor = f"integrator{attempt}"
+
+        capture_seconds = 0.0
+
+        def capture(agent, task=task, actor=actor, attempt=attempt):
+            nonlocal capture_seconds
+            capture_started = time.monotonic()
+            from cooperagents.checkpoint import save_checkpoint
+            from cooperagents.repair import capture_repair_input
+            repair_input = capture_repair_input(
+                agent, task=task, spec=spec, assignments=assignments, command_timeout=agent.env._timeout,
+                guard_git=agent.env._guard_git, time_limit_s=spec.repair_time_limit,
+                bus=checkpoint_bus,
+            )
+            save_checkpoint(env, checkpoint_dir / f"before-{actor}", metadata=dict(
+                boundary="repair_agent_start", task=task, attempt=attempt, healthy=False, gate_checks=gate_checks,
+            ), repair_input=repair_input, trace=partial(trace, actor) if trace else None)
+            capture_seconds += time.monotonic() - capture_started
+
+        started = time.monotonic()
+        result = run_agent(actor, task, capture if checkpoint_dir is not None else None)
+        seeds[actor] = result
+        if first_task is not None and result.status == "error":
+            from cooperagents.repair import RepairInfrastructureError
+
+            raise RepairInfrastructureError(f"{actor} failed: {result.error}")
+        cleanup = env.execute("find . -path ./.git -prune -o \\( -name '*.rej' -o -name '*.orig' \\) -exec rm -f {} +")
+        if first_task is not None:
+            from cooperagents.checkpoint import complete_output
+
+            complete_output(cleanup, "Repair cleanup")
+        healthy = check_gate()
+        attempts.append(dict(actor=actor, healthy=healthy, duration_seconds=time.monotonic() - started - capture_seconds))
+        if healthy:
+            break
+    return attempts
+
+
 class UnifiedHarness:
     """Runs one team on one task, growing it on demand.
 
@@ -1068,9 +1126,11 @@ class UnifiedHarness:
         coordinator_notebook_path: Path | None = None,
         coordination_variant: str = "current",
         checkpoint_dir: Path | None = None,
+        repair_completion: CompletionBinding | None = None,
     ) -> None:
         if coordinator_complete is not None and not callable(coordinator_complete):
             raise TypeError("coordinator_complete must be callable")
+        self.repair_completion = repair_completion
         self.coordinator_complete = coordinator_complete
         if coordination_variant not in ("current", "human_in_loop"):
             raise ValueError(f"Unknown coordination variant: {coordination_variant}")
@@ -1148,6 +1208,7 @@ class UnifiedHarness:
             poller=None,
             time_limit_s: int | None = None,
             monitor=None,
+            on_start=None,
         ) -> AgentResult:
             """Run one agent (mini-swe or builtin worker) on the shared tree."""
             if spec.spec_fidelity:  # S8: team injects spec-fidelity policy into the agent prompt
@@ -1180,6 +1241,8 @@ class UnifiedHarness:
                     time_limit_s=time_limit_s,
                     monitor=monitor,
                     git_share=spec.git_share,
+                    on_start=on_start,
+                    completion=self.repair_completion if role == "integrator" else None,
                     completion_gate=spec.completion_gate,
                     trace=partial(self.trajectory.emit, agent_id) if self.trajectory else None,
                 )
@@ -1617,40 +1680,21 @@ class UnifiedHarness:
                 repair_started = time.monotonic()
                 attempts = []
                 if spec.repair_integrator and not healthy:
-                    for _repair_attempt in range(max(1, spec.repair_attempts)):
-                        repair_brief = _merge_repair_task(assignments_all)
-                        if spec.focused_repair:
-                            ev = _gather_merge_evidence(env)
-                            if ev:
-                                repair_brief += (
-                                    "\n\nEVIDENCE — the harness already located the damage; fix THESE "
-                                    "directly instead of searching:\n\n" + ev
-                                )
-                        # Run ONE repair agent per attempt; stop early if the tree recovers.
-                        if self.checkpoint_dir is not None:
-                            save_checkpoint(env, self.checkpoint_dir / f"before-integrator{_repair_attempt + 1}",
-                                            metadata=dict(boundary="repair_agent_start", task=repair_brief,
-                                                          attempt=_repair_attempt + 1, healthy=healthy, gate_checks=gate_checks),
-                                            trace=partial(self.trajectory.emit, f"integrator{_repair_attempt + 1}")
-                                            if self.trajectory else None)
-                        attempt_started = time.monotonic()
-                        seeds[f"integrator{_repair_attempt + 1}"] = run_on_shared(
-                            env,
-                            f"integrator{_repair_attempt + 1}",
-                            "integrator",
-                            repair_brief,
-                            None,
-                            step_limit=spec.repair_step_limit,
-                            time_limit_s=spec.repair_time_limit,
+                    def run_repair_agent(actor, task, on_start):
+                        return run_on_shared(
+                            env, actor, "integrator", task, None,
+                            step_limit=spec.repair_step_limit, time_limit_s=spec.repair_time_limit,
+                            on_start=on_start,
                         )
-                        env.execute(
-                            "find . -path ./.git -prune -o \\( -name '*.rej' -o -name '*.orig' \\) -print0 2>/dev/null | xargs -0 -r rm -f"
-                        )
-                        healthy = check_gate()
-                        attempts.append(dict(actor=f"integrator{_repair_attempt + 1}", healthy=healthy,
-                                             duration_seconds=time.monotonic() - attempt_started))
-                        if healthy:
-                            break
+
+                    attempts = run_repair_tail(
+                        env, spec=spec, assignments=assignments_all, seeds=seeds,
+                        run_agent=run_repair_agent, check_gate=check_gate, gate_checks=gate_checks,
+                        checkpoint_dir=self.checkpoint_dir,
+                        checkpoint_bus=bus,
+                        trace=self.trajectory.emit if self.trajectory else None,
+                    )
+                    healthy = attempts[-1]["healthy"]
                 raw_integrated_patch = env.git_diff()
                 integrated_patch = strip_test_sections(raw_integrated_patch)
                 if self.checkpoint_dir is not None:
@@ -1737,6 +1781,7 @@ class UnifiedHarness:
                 command_timeout=self.command_timeout,
                 guard_git=spec.guard_git,
                 temperature=spec.temperature,
+                completion=self.repair_completion if role == "integrator" else None,
             )
         if llm is None:
             raise ValueError("builtin worker requires an LLM client")
@@ -2127,16 +2172,14 @@ class UnifiedHarness:
         planner: Planner | None = None,
     ) -> RunResult:
         if self.checkpoint_dir is not None:
-            if (
-                not spec.shared_workspace or not spec.coop_tools or spec.seed_prior or spec.worker != "mini_swe"
-                or spec.best_of_n != 1 or spec.decompose or spec.adaptive or spec.team_roles or spec.verify_fix
-                or spec.select_integration is not None or spec.allow_spawn_tool or spec.completeness_review
+            from cooperagents.repair import validate_capture_spec
+
+            validate_capture_spec(spec, self.bus)
+            ids = [a.agent_id for a in self._build_assignments(spec)]
+            if len(ids) < 2 or len(set(ids)) != len(ids) or any(
+                Path(aid).name != aid or aid in {".", "..", ""} for aid in ids
             ):
-                raise ValueError("Repair checkpoints require a single mini_swe coop-tools no-seed mechanical-merge team")
-            assignments = self._build_assignments(spec)
-            ids = [a.agent_id for a in assignments]
-            if len(ids) < 2 or len(set(ids)) != len(ids) or any(Path(aid).name != aid or aid in {".", "..", ""} for aid in ids):
-                raise ValueError("Repair checkpoints require at least two workers with unique safe IDs")
+                raise ValueError("Repair checkpoints require two workers with unique safe IDs")
         if self.langfuse:
             if (
                 spec.worker != "mini_swe" or not spec.shared_workspace or not spec.coop_tools
@@ -2174,11 +2217,11 @@ class UnifiedHarness:
         bus = self.bus or InMemoryBus(spec.run_id)
         assignments = self._build_assignments(spec)
         if self.checkpoint_dir is not None:
+            from cooperagents.repair import describe_gate
+
             self.checkpoint_dir.mkdir(parents=True, mode=0o700, exist_ok=False)
             config = asdict(spec)
-            for key in ("completion_gate", "select_integration"):
-                if config[key] is not None:
-                    config[key] = getattr(config[key], "__qualname__", str(config[key]))
+            config["completion_gate"] = describe_gate(spec.completion_gate)
             (self.checkpoint_dir / "run.json").write_text(json.dumps(dict(
                 spec=config, assignments=[asdict(a) for a in assignments], step_limit=self.step_limit,
                 cost_limit=self.cost_limit, command_timeout=self.command_timeout,

@@ -167,28 +167,64 @@ class DockerEnv(Environment):
         subprocess.run(["docker", "rm", "-f", self.name], check=False, capture_output=True)
 
     def checkpoint(self, destination: Path) -> dict:
-        from cooperagents.checkpoint import archive_tree
+        from cooperagents.checkpoint import extract_tree, save_tree_delta
+        from cooperagents.checkpoint_delta import cached_base, pack_stream
 
         info = json.loads(subprocess.check_output(["docker", "inspect", self.name]))[0]
+        image_id = info["Image"]
+        image = json.loads(subprocess.check_output(["docker", "image", "inspect", image_id]))[0]
+
+        def build(path):
+            name = f"ca-checkpoint-base-{uuid.uuid4().hex}"
+            subprocess.run(["docker", "create", "--name", name, image_id], check=True, capture_output=True)
+            try:
+                archive = path.parent / "base.tar"
+                subprocess.run(["docker", "export", "--output", str(archive), name], check=True, capture_output=True)
+                extract_tree(archive, path)
+                archive.unlink()
+            finally:
+                subprocess.run(["docker", "rm", "-fv", name], check=True, capture_output=True)
+
+        base = cached_base(Path(tempfile.gettempdir()) / "cooperagents-checkpoint-bases", image_id.removeprefix("sha256:"), build)
         paused = info["State"]["Paused"]
         if not paused:
             subprocess.run(["docker", "pause", self.name], check=True, capture_output=True)
         try:
-            # Export includes .git, ignored files and installed tools, but excludes volumes.
-            subprocess.run(["docker", "export", "--output", str(destination / "rootfs.tar"), self.name], check=True, capture_output=True)
+            with (
+                tempfile.TemporaryFile() as errors,
+                subprocess.Popen(["docker", "export", self.name], stdout=subprocess.PIPE, stderr=errors) as export,
+            ):
+                try:
+                    pack_stream(export.stdout, base, destination / "rootfs", canonicalize=True)
+                except BaseException:
+                    export.kill()
+                    raise
+                if export.wait():
+                    errors.seek(0)
+                    raise RuntimeError(f"Docker checkpoint export failed: {errors.read(4096).decode(errors='replace')}")
             mounts = []
             for i, mount in enumerate(info["Mounts"]):
                 if mount["Type"] not in {"bind", "volume"}:
                     raise ValueError(f"Unsupported checkpoint mount: {mount['Type']}")
                 with tempfile.TemporaryDirectory(prefix="ca-mount-") as temporary:
                     copied = Path(temporary) / "data"
-                    subprocess.run(["docker", "cp", f"{self.name}:{mount['Destination']}", str(copied)],
-                                   check=True, capture_output=True)
-                    name = f"mount-{i}.tar.gz"
-                    archive_tree(copied, destination / name)
-                mounts.append(dict(target=mount["Destination"], archive=name, readonly=not mount["RW"]))
-            return dict(backend="docker", archive="rootfs.tar", image=self.image, image_id=info["Image"],
-                        config=info["Config"], network_mode=info["HostConfig"]["NetworkMode"], mounts=mounts)
+                    subprocess.run(["docker", "cp", f"{self.name}:{mount['Destination']}", str(copied)], check=True, capture_output=True)
+                    empty = Path(temporary) / "empty"
+                    empty.mkdir()
+                    record = save_tree_delta(copied, empty, destination, f"mount-{i}")
+                mounts.append(dict(target=mount["Destination"], readonly=not mount["RW"], base="empty", **record))
+            return dict(
+                backend="docker",
+                format="checkpoint-tar-delta-v1",
+                archive="rootfs/filesystem.json.gz",
+                payload="rootfs/payload.tar.gz",
+                image=self.image,
+                image_id=image_id,
+                registry_digests=image.get("RepoDigests", []),
+                config=info["Config"],
+                network_mode=info["HostConfig"]["NetworkMode"],
+                mounts=mounts,
+            )
         finally:
             if not paused:
                 subprocess.run(["docker", "unpause", self.name], check=True, capture_output=True)
