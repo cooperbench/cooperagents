@@ -33,7 +33,8 @@ def test_delta_preserves_exact_tar_and_all_filesystem_changes(tmp_path):
     (target / "symlink").symlink_to("mode")
     (target / "system-link").symlink_to("/usr/bin")
     os.link(target / "mode", target / "hardlink")
-    (target / "read-only").mkdir(mode=0o555)
+    (target / "read-only").mkdir()
+    (target / "read-only").chmod(0o555)
     original = tmp_path / "original.tar.gz"
     archive_tree(target, original)
     delta = tmp_path / "delta"

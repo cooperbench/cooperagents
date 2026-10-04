@@ -35,14 +35,16 @@ def make_checkpoint(monkeypatch, tmp_path, *, gate=None, attempts=2, crlf=False,
     """Host bash replaces only Apptainer execution; restore uses the public API."""
 
     def execute(env, command, *, timeout=60):
-        repo = env.root / "fs" / env.repo_path.lstrip("/")
-        if crlf:
-            import shlex
+        # Preserve the runtime lock while replacing container execution with host bash.
+        with env._lock:
+            repo = env.root / "fs" / env.repo_path.lstrip("/")
+            if crlf:
+                import shlex
 
-            from cooperagents.env.limited_process import run_limited
+                from cooperagents.env.limited_process import run_limited
 
-            return run_limited(["bash", "-c", f"cd {shlex.quote(str(repo))} && {command}"], timeout=timeout)[0]
-        return LocalEnv(str(repo), base_commit=getattr(env, "_base_commit", "HEAD")).execute(command, timeout=timeout)
+                return run_limited(["bash", "-c", f"cd {shlex.quote(str(repo))} && {command}"], timeout=timeout)[0]
+            return LocalEnv(str(repo), base_commit=getattr(env, "_base_commit", "HEAD")).execute(command, timeout=timeout)
 
     monkeypatch.setattr(ApptainerEnv, "execute", execute)
     env = ApptainerEnv.__new__(ApptainerEnv)
