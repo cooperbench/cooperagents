@@ -322,6 +322,7 @@ def run_repair_checkpoint(
     completion: CompletionBinding | None = None,
     trajectory: Trajectory | None = None,
     max_attempts: int | None = None,
+    base_image: Path | None = None,
 ) -> RunResult:
     """Restore one independent sandbox and run only new integrator attempts."""
     from cooperagents.bus.memory import InMemoryBus
@@ -345,7 +346,7 @@ def run_repair_checkpoint(
         )
     bus = InMemoryBus(run_id)
     bus.restore_inboxes({actor: [m.model_dump(by_alias=True) for m in inputs.pending_messages[actor]] for actor in actors})
-    env = ApptainerEnv.from_checkpoint(checkpoint, scratch=scratch)
+    env = ApptainerEnv.from_checkpoint(checkpoint, scratch=scratch, **({"base_image": base_image} if base_image is not None else {}))
     seeds = {}
     checks = []
     started = time.monotonic()

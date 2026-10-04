@@ -56,6 +56,15 @@ def make_checkpoint(monkeypatch, tmp_path, *, gate=None, attempts=2, crlf=False,
 
     shutil.copytree(local.repo_path, repo, dirs_exist_ok=True)
     local.cleanup()
+    base = tmp_path / "source.base"
+    shutil.copytree(env.root / "fs", base)
+
+    def base_filesystem(image, scratch, expected_hash):
+        if not image.is_file() or sha256(image) != expected_hash:
+            raise ValueError("Checkpoint base SIF is missing or has a different SHA256")
+        return image.with_suffix(".base")
+
+    monkeypatch.setattr(ApptainerEnv, "_base_filesystem", staticmethod(base_filesystem))
     env._base_commit = env.execute("git rev-parse HEAD").stdout.strip()
     env.image = tmp_path / "source.sif"
     env.image.write_bytes(b"fixture-image")
@@ -306,6 +315,65 @@ def test_two_restores_are_independent_and_preserve_full_state(monkeypatch, tmp_p
         right.cleanup()
 
 
+def test_delta_restore_requires_matching_base_and_allows_relocation(monkeypatch, tmp_path):
+    import shutil
+
+    checkpoint = make_checkpoint(monkeypatch, tmp_path)
+    original = tmp_path / "source.sif"
+    moved = tmp_path / "relocated.sif"
+    shutil.copyfile(original, moved)
+    shutil.copytree(original.with_suffix(".base"), moved.with_suffix(".base"))
+    original.unlink()
+    with pytest.raises(ValueError, match="base SIF"):
+        ApptainerEnv.from_checkpoint(checkpoint, scratch=tmp_path / "scratch")
+    env = ApptainerEnv.from_checkpoint(checkpoint, scratch=tmp_path / "scratch", base_image=moved)
+    try:
+        assert env.read_file("worker.py") == "feature = 2\n"
+    finally:
+        env.cleanup()
+    moved.write_bytes(b"wrong image")
+    with pytest.raises(ValueError, match="base SIF"):
+        ApptainerEnv.from_checkpoint(checkpoint, scratch=tmp_path / "scratch", base_image=moved)
+    assert not list((tmp_path / "scratch").glob("ca-repair-*"))
+
+
+def test_legacy_full_snapshot_remains_readable_without_base_image(monkeypatch, tmp_path):
+    import shutil
+
+    from cooperagents.checkpoint_delta import restore
+
+    checkpoint = make_checkpoint(monkeypatch, tmp_path)
+    state = json.loads((checkpoint / "state.json").read_text())
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    runtime = state["runtime"]
+    for i, record in enumerate([runtime, *runtime["mounts"]]):
+        directory = (checkpoint / record["archive"]).parent
+        name = "rootfs.tar.gz" if i == 0 else f"mount-{i - 1}.tar.gz"
+        restore(directory, tmp_path / "source.base" if i == 0 else empty, checkpoint / name)
+        shutil.rmtree(directory)
+        record["archive"] = name
+        record.pop("format")
+        record.pop("payload")
+    state["version"] = 1
+    (checkpoint / "state.json").write_text(json.dumps(state))
+    manifest = dict(
+        version=1,
+        files={
+            p.name: dict(bytes=p.stat().st_size, sha256=sha256(p))
+            for p in checkpoint.iterdir()
+            if p.is_file() and p.name != "manifest.json"
+        },
+    )
+    (checkpoint / "manifest.json").write_text(json.dumps(manifest))
+    (tmp_path / "source.sif").unlink()
+    env = ApptainerEnv.from_checkpoint(checkpoint, scratch=tmp_path / "scratch")
+    try:
+        assert env.read_file("worker.py") == "feature = 2\n"
+    finally:
+        env.cleanup()
+
+
 @pytest.mark.parametrize("normalize_saved_patch", [False, True])
 def test_restore_preserves_crlf_and_rejects_normalized_patch(monkeypatch, tmp_path, normalize_saved_patch):
     checkpoint = make_checkpoint(monkeypatch, tmp_path, crlf=True)
@@ -414,7 +482,7 @@ def test_restore_failure_cleans_owned_tree(monkeypatch, tmp_path, failure):
     checkpoint = make_checkpoint(monkeypatch, tmp_path)
     execute = ApptainerEnv.execute
     if failure == "corrupt":
-        (checkpoint / "rootfs.tar.gz").write_bytes(b"corrupt")
+        (checkpoint / "rootfs/payload.tar.gz").write_bytes(b"corrupt")
     elif failure == "base":
 
         def fail(env, command, **kwargs):

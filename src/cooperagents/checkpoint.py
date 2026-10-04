@@ -7,6 +7,7 @@ import dataclasses
 import hashlib
 import json
 import shlex
+import shutil
 import tarfile
 from copy import copy
 from datetime import UTC, datetime
@@ -20,6 +21,43 @@ from cooperagents.trajectory import _json_default
 def archive_tree(source: Path, destination: Path) -> None:
     with tarfile.open(destination, "w:gz", compresslevel=1, dereference=False) as archive:
         archive.add(source, arcname=".")
+
+
+def remove_tree(root: Path) -> None:
+    """Remove owned read-only rootfs directories without following symlinks."""
+    import os
+
+    root.chmod(root.stat().st_mode | 0o700)
+    for directory, children, _ in os.walk(root, followlinks=False):
+        for name in children:
+            child = Path(directory) / name
+            if not child.is_symlink():
+                child.chmod(child.stat().st_mode | 0o700)
+    shutil.rmtree(root)
+
+
+def save_tree_delta(source: Path, base: Path, destination: Path, name: str) -> dict:
+    from cooperagents.checkpoint_delta import pack_tree
+
+    pack_tree(source, base, destination / name)
+    return dict(format="checkpoint-tar-delta-v1", archive=f"{name}/filesystem.json.gz", payload=f"{name}/payload.tar.gz")
+
+
+def restore_tree(checkpoint: Path, record: dict, base: Path, destination: Path) -> None:
+    """Read old full archives, or verify a delta against its immutable base."""
+    import tempfile
+
+    from cooperagents.checkpoint_delta import restore
+
+    if record.get("format") == "checkpoint-tar-delta-v1":
+        with tempfile.TemporaryDirectory(dir=destination.parent, prefix=".restore-") as temporary:
+            archive = Path(temporary) / "rootfs.tar.gz"
+            restore((checkpoint / record["archive"]).parent, base, archive)
+            extract_tree(archive, destination)
+    elif "format" not in record:
+        extract_tree(checkpoint / record["archive"], destination)
+    else:
+        raise ValueError("Unsupported checkpoint filesystem format")
 
 
 def sha256(path: Path) -> str:
@@ -117,7 +155,7 @@ def save_checkpoint(env, destination: Path, *, metadata: dict, collect_patch=Non
     (destination / "integration.patch").write_text(patch)
     (destination / "submission.patch").write_text(strip_for_submission(patch))
     state = dict(
-        version=1,
+        version=2,
         started_at=started,
         finished_at=datetime.now(UTC).isoformat(),
         repo_path=env.repo_path,
@@ -129,8 +167,8 @@ def save_checkpoint(env, destination: Path, *, metadata: dict, collect_patch=Non
         process_state_saved=False,
     )
     (destination / "state.json").write_text(json.dumps(state, default=_json_default, ensure_ascii=False, indent=2))
-    files = {p.name: dict(bytes=p.stat().st_size, sha256=sha256(p)) for p in destination.iterdir() if p.is_file()}
-    (destination / "manifest.json").write_text(json.dumps(dict(version=1, files=files), indent=2))
+    files = {str(p.relative_to(destination)): dict(bytes=p.stat().st_size, sha256=sha256(p)) for p in destination.rglob("*") if p.is_file()}
+    (destination / "manifest.json").write_text(json.dumps(dict(version=2, files=files), indent=2))
     if trace:
         trace("checkpoint_end", path=str(destination), boundary=metadata["boundary"], files=files, patch_source=source)
     return patch
@@ -138,18 +176,32 @@ def save_checkpoint(env, destination: Path, *, metadata: dict, collect_patch=Non
 
 def verify_checkpoint(path: Path) -> dict:
     manifest = json.loads((path / "manifest.json").read_text())
-    if manifest["version"] != 1 or not {"state.json", "raw.patch", "integration.patch", "submission.patch"} <= manifest["files"].keys():
+    if (
+        manifest["version"] not in {1, 2}
+        or not {"state.json", "raw.patch", "integration.patch", "submission.patch"} <= manifest["files"].keys()
+    ):
         raise ValueError("Incomplete or unsupported checkpoint manifest")
     for name, record in manifest["files"].items():
-        if not name or Path(name).name != name or name in {".", ".."}:
+        if not name or Path(name).is_absolute() or ".." in Path(name).parts or name in {".", ".."}:
             raise ValueError("Invalid checkpoint filename")
         file = path / name
+        if file.is_symlink() or not file.resolve().is_relative_to(path.resolve()):
+            raise ValueError("Checkpoint file escapes snapshot")
         if file.stat().st_size != record["bytes"] or sha256(file) != record["sha256"]:
             raise ValueError(f"Checkpoint checksum mismatch: {name}")
     state = json.loads((path / "state.json").read_text())
-    archives = [state["runtime"]["archive"], *(m["archive"] for m in state["runtime"].get("mounts", []))]
-    if state["version"] != 1 or not set(archives) <= manifest["files"].keys():
+    records = [state["runtime"], *state["runtime"].get("mounts", [])]
+    archives = [record[key] for record in records for key in ("archive", "payload") if key in record]
+    if state["version"] != manifest["version"] or not set(archives) <= manifest["files"].keys():
         raise ValueError("Missing checkpoint filesystem archive")
+    if state["version"] == 2 and any(
+        record.get("format") != "checkpoint-tar-delta-v1"
+        or "payload" not in record
+        or Path(record["archive"]).name != "filesystem.json.gz"
+        or record["payload"] != str(Path(record["archive"]).with_name("payload.tar.gz"))
+        for record in records
+    ):
+        raise ValueError("New checkpoints require filesystem deltas")
     return state
 
 

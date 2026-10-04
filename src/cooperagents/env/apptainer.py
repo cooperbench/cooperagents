@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import base64
+import json
 import os
 import re
 import shlex
-import shutil
 import subprocess
 import tempfile
 import threading
@@ -140,9 +140,9 @@ class ApptainerEnv(Environment):
         return complete_output(result, "Export integrated patch")
 
     @classmethod
-    def from_checkpoint(cls, checkpoint: Path, *, scratch: Path) -> ApptainerEnv:
+    def from_checkpoint(cls, checkpoint: Path, *, scratch: Path, base_image: Path | None = None) -> ApptainerEnv:
         """Verify and restore into a fresh owned sandbox, without rebuilding a SIF."""
-        from cooperagents.checkpoint import complete_output, extract_tree, preview_patch, verify_checkpoint
+        from cooperagents.checkpoint import complete_output, preview_patch, restore_tree, verify_checkpoint
 
         state = verify_checkpoint(checkpoint)
         runtime = state["runtime"]
@@ -169,7 +169,7 @@ class ApptainerEnv(Environment):
         env = cls.__new__(cls)
         env.root = Path(tempfile.mkdtemp(prefix="ca-repair-", dir=scratch))
         env.repo_path = str(repo)
-        env.image = Path(image)
+        env.image = base_image if base_image is not None else Path(image)
         env._image_sha256 = image_hash
         env._checkpoint_mounts = {}
         env._lock = threading.RLock()
@@ -191,7 +191,11 @@ class ApptainerEnv(Environment):
         env._host_env["HOME"] = str(env.root / "host-home")
         try:
             (env.root / "host-home").mkdir()
-            extract_tree(checkpoint / runtime["archive"], env.root / "fs")
+            if runtime.get("format") == "checkpoint-tar-delta-v1":
+                base = cls._base_filesystem(env.image, scratch, image_hash)
+            else:
+                base = env.root
+            restore_tree(checkpoint, runtime, base, env.root / "fs")
             env._argv = [
                 "apptainer",
                 "exec",
@@ -209,9 +213,11 @@ class ApptainerEnv(Environment):
                     raise ValueError("Runtime directory escapes restored rootfs")
                 source.mkdir(parents=True, exist_ok=True)
                 env._argv += ["--home" if target == "/home/agent" else "--bind", f"{source}:{target}"]
+            empty_base = env.root / "empty-base"
+            empty_base.mkdir()
             for i, mount in enumerate(mounts):
                 source = env.root / f"mount-{i}"
-                extract_tree(checkpoint / mount["archive"], source)
+                restore_tree(checkpoint, mount, empty_base, source)
                 env._checkpoint_mounts[mount["target"]] = source
                 env._argv += ["--bind", f"{source}:{mount['target']}" + (":ro" if mount["readonly"] else "")]
             env._argv += ["--pwd", "/", str(env.root / "fs")]
@@ -244,36 +250,66 @@ class ApptainerEnv(Environment):
                 self.repo_path = cwd
 
     def cleanup(self) -> None:
+        from cooperagents.checkpoint import remove_tree
+
         with self._lock:
             self._closed = True
             if not self.root.exists():
                 return
-            # Restored rootfs directories may be read-only. Make owned directories
-            # traversable/removable before rmtree; never chmod symlink targets.
-            self.root.chmod(self.root.stat().st_mode | 0o700)
-            for directory, children, _ in os.walk(self.root, followlinks=False):
-                for name in children:
-                    child = Path(directory) / name
-                    if not child.is_symlink():
-                        child.chmod(child.stat().st_mode | 0o700)
-            shutil.rmtree(self.root)
+            remove_tree(self.root)
+
+    @staticmethod
+    def _base_filesystem(image: Path, scratch: Path, expected_hash: str) -> Path:
+        from cooperagents.checkpoint import sha256
+        from cooperagents.checkpoint_delta import cached_base
+
+        if not image.is_file() or sha256(image) != expected_hash:
+            raise ValueError("Checkpoint base SIF is missing or has a different SHA256; supply the matching base_image")
+
+        def build(destination):
+            subprocess.run(
+                ["apptainer", "build", "--fix-perms", "--sandbox", str(destination), str(image)],
+                check=True,
+                capture_output=True,
+                timeout=300,
+            )
+            inspected = subprocess.run(
+                ["apptainer", "inspect", "--json", str(image)],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            labels = json.loads(inspected.stdout).get("data", {}).get("attributes", {}).get("labels", {})
+            provenance = {key: labels.get(key) for key in ("org.opencontainers.image.base.name", "org.opencontainers.image.base.digest")}
+            if any(value is not None and not isinstance(value, str) for value in provenance.values()):
+                raise ValueError("Invalid SIF base image labels")
+            (destination.parent / "image.json").write_text(json.dumps(provenance))
+
+        return cached_base(scratch / ".checkpoint-bases", expected_hash, build)
 
     def checkpoint(self, destination: Path) -> dict:
-        from cooperagents.checkpoint import archive_tree, sha256
+        from cooperagents.checkpoint import save_tree_delta, sha256
 
         with self._lock:
             if self._closed:
                 raise RuntimeError("Apptainer environment is closed")
-            archive_tree(self.root / "fs", destination / "rootfs.tar.gz")
+            image_hash = getattr(self, "_image_sha256", None) or sha256(self.image)
+            base = self._base_filesystem(self.image, self.root.parent, image_hash)
+            provenance_file = base.parent / "image.json"
+            provenance = json.loads(provenance_file.read_text()) if provenance_file.is_file() else {}
+            filesystem = save_tree_delta(self.root / "fs", base, destination, "rootfs")
             mounts = []
-            for i, (target, source) in enumerate(self._checkpoint_mounts.items()):
-                name = f"mount-{i}.tar.gz"
-                archive_tree(source, destination / name)
-                mounts.append(dict(target=target, archive=name, readonly=target == "/coordination"))
+            with tempfile.TemporaryDirectory(dir=self.root.parent) as temporary:
+                for i, (target, source) in enumerate(self._checkpoint_mounts.items()):
+                    record = save_tree_delta(source, Path(temporary), destination, f"mount-{i}")
+                    mounts.append(dict(target=target, readonly=target == "/coordination", base="empty", **record))
             return dict(
                 backend="apptainer",
-                archive="rootfs.tar.gz",
+                **filesystem,
                 image=str(self.image),
-                image_sha256=getattr(self, "_image_sha256", None) or sha256(self.image),
+                image_sha256=image_hash,
+                base_image_name=provenance.get("org.opencontainers.image.base.name"),
+                registry_digest=provenance.get("org.opencontainers.image.base.digest"),
                 mounts=mounts,
             )

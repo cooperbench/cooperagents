@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from cooperagents.checkpoint import preview_patch, save_checkpoint, verify_checkpoint
+from cooperagents.checkpoint import preview_patch, restore_tree, save_checkpoint, verify_checkpoint
 from cooperagents.env.local import LocalEnv
 from cooperagents.harness import UnifiedHarness
 from cooperagents.types import AgentResult, Assignment, TeamSpec
@@ -58,8 +58,10 @@ def test_delivery_snapshot_precedes_staging_and_preserves_non_patch_files(tmp_pa
         state = verify_checkpoint(path)
         assert state["git"]["status"]["stdout"] == before
         restored = tmp_path / "restored"
-        with tarfile.open(path / "repo.tar.gz") as archive:
-            archive.extractall(restored, filter="data")
+        empty = tmp_path / "empty"
+        empty.mkdir()
+        restore_tree(path, state["runtime"], empty, restored)
+        assert not (path / "repo.tar.gz").exists()
         clone = LocalEnv(str(restored), base_commit=env._base_commit)
         assert clone.execute("git status --porcelain=v1 --untracked-files=all").stdout == before
         assert clone.execute("git show :file.txt").stdout == "staged\n"
@@ -153,7 +155,7 @@ def test_failed_capture_has_no_completion_manifest(monkeypatch, tmp_path):
         env.cleanup()
 
 
-def test_apptainer_archives_rootfs_and_external_mounts(tmp_path):
+def test_apptainer_archives_rootfs_and_external_mounts(monkeypatch, tmp_path):
     import threading
 
     from cooperagents.env.apptainer import ApptainerEnv
@@ -169,16 +171,20 @@ def test_apptainer_archives_rootfs_and_external_mounts(tmp_path):
     (shared / "branch").write_text("worker head")
     env.image = tmp_path / "base.sif"
     env.image.write_bytes(b"image")
+    base = tmp_path / "base"
+    base.mkdir()
+    monkeypatch.setattr(ApptainerEnv, "_base_filesystem", staticmethod(lambda *args: base))
     env._checkpoint_mounts = {"/cbshared": shared}
     output = tmp_path / "snapshot"
     output.mkdir()
     saved = env.checkpoint(output)
     assert saved["image_sha256"]
-    assert saved["mounts"] == [dict(target="/cbshared", archive="mount-0.tar.gz", readonly=False)]
-    with tarfile.open(output / "rootfs.tar.gz") as archive:
-        assert archive.extractfile("./tmp/cache").read() == b"runtime cache"
-    with tarfile.open(output / "mount-0.tar.gz") as archive:
-        assert archive.extractfile("./branch").read() == b"worker head"
+    assert saved["mounts"][0]["target"] == "/cbshared"
+    restore_tree(output, saved, base, tmp_path / "restored")
+    restore_tree(output, saved["mounts"][0], base, tmp_path / "restored-mount")
+    assert (tmp_path / "restored/tmp/cache").read_text() == "runtime cache"
+    assert (tmp_path / "restored-mount/branch").read_text() == "worker head"
+    assert not (output / "rootfs.tar.gz").exists()
 
 
 def test_git_sync_waits_for_capture_and_resumes_afterwards():
@@ -207,6 +213,8 @@ def test_git_sync_waits_for_capture_and_resumes_afterwards():
 
 @pytest.mark.parametrize("failure,already_paused", [(False, False), (True, False), (False, True)])
 def test_docker_snapshot_exports_mounts_and_always_unpauses(monkeypatch, tmp_path, failure, already_paused):
+    import io
+
     from cooperagents.env.docker import DockerEnv
 
     env = object.__new__(DockerEnv)
@@ -218,21 +226,48 @@ def test_docker_snapshot_exports_mounts_and_always_unpauses(monkeypatch, tmp_pat
         HostConfig=dict(NetworkMode="none"),
         Mounts=[dict(Type="volume", Destination="/cbshared", RW=True)],
     )
-    monkeypatch.setattr("cooperagents.env.docker.subprocess.check_output", lambda _: json.dumps([info]).encode())
+    monkeypatch.setattr(
+        "cooperagents.env.docker.subprocess.check_output",
+        lambda argv: json.dumps([dict(RepoDigests=["demo@sha256:pinned"]) if argv[1] == "image" else info]).encode(),
+    )
+    base = tmp_path / "base"
+    base.mkdir()
+    monkeypatch.setattr("cooperagents.checkpoint_delta.cached_base", lambda *a: base)
     calls = []
 
     def run(argv, **kwargs):
         calls.append(argv)
-        if argv[1] == "export":
-            if failure:
-                raise OSError("export failed")
-            Path(argv[3]).write_bytes(b"filesystem archive")
         if argv[1] == "cp":
             copied = Path(argv[3])
             copied.mkdir()
             (copied / "branch").write_text("worker head")
 
     monkeypatch.setattr("cooperagents.env.docker.subprocess.run", run)
+
+    class Export:
+        def __enter__(self):
+            calls.append(["docker", "export", "worker"])
+            if failure:
+                raise OSError("export failed")
+            self.stdout = io.BytesIO()
+            with tarfile.open(fileobj=self.stdout, mode="w") as archive:
+                record = tarfile.TarInfo("changed")
+                record.size = 4
+                archive.addfile(record, io.BytesIO(b"hint"))
+            self.stdout.seek(0)
+            self.stderr = io.BytesIO()
+            return self
+
+        def __exit__(self, *args):
+            self.stdout.close()
+
+        def wait(self):
+            return 0
+
+        def kill(self):
+            pass
+
+    monkeypatch.setattr("cooperagents.env.docker.subprocess.Popen", lambda *a, **kw: Export())
     if failure:
         with pytest.raises(OSError, match="export failed"):
             env.checkpoint(tmp_path)
@@ -240,11 +275,55 @@ def test_docker_snapshot_exports_mounts_and_always_unpauses(monkeypatch, tmp_pat
         saved = env.checkpoint(tmp_path)
         assert saved["image_id"] == "sha256:base"
         assert saved["network_mode"] == "none"
-        assert saved["mounts"] == [dict(target="/cbshared", archive="mount-0.tar.gz", readonly=False)]
-        with tarfile.open(tmp_path / "mount-0.tar.gz") as archive:
-            assert archive.extractfile("./branch").read() == b"worker head"
+        assert saved["registry_digests"] == ["demo@sha256:pinned"]
+        assert saved["mounts"][0]["target"] == "/cbshared"
+        restore_tree(tmp_path, saved, base, tmp_path / "restored")
+        restore_tree(tmp_path, saved["mounts"][0], base, tmp_path / "restored-mount")
+        assert (tmp_path / "restored/changed").read_text() == "hint"
+        assert (tmp_path / "restored-mount/branch").read_text() == "worker head"
+        assert not (tmp_path / "rootfs.tar").exists()
     if already_paused:
         assert not any(call[1] in {"pause", "unpause"} for call in calls)
     else:
         assert calls[0] == ["docker", "pause", "worker"]
         assert calls[-1] == ["docker", "unpause", "worker"]
+
+
+def test_apptainer_base_cache_records_registry_provenance(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    from cooperagents.checkpoint import sha256
+    from cooperagents.env.apptainer import ApptainerEnv
+
+    image = tmp_path / "base.sif"
+    image.write_bytes(b"image")
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        if command[1] == "build":
+            Path(command[-2]).mkdir()
+            return SimpleNamespace(returncode=0)
+        return SimpleNamespace(
+            stdout=json.dumps(
+                {
+                    "data": {
+                        "attributes": {
+                            "labels": {
+                                "org.opencontainers.image.base.name": "docker://example/base:1",
+                                "org.opencontainers.image.base.digest": "sha256:registry",
+                            }
+                        }
+                    }
+                }
+            )
+        )
+
+    monkeypatch.setattr("cooperagents.env.apptainer.subprocess.run", run)
+    base = ApptainerEnv._base_filesystem(image, tmp_path, sha256(image))
+    assert ApptainerEnv._base_filesystem(image, tmp_path, sha256(image)) == base
+    assert len(calls) == 2
+    assert json.loads((base.parent / "image.json").read_text()) == {
+        "org.opencontainers.image.base.name": "docker://example/base:1",
+        "org.opencontainers.image.base.digest": "sha256:registry",
+    }

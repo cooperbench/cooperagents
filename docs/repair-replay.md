@@ -90,38 +90,47 @@ written only after every artifact is saved and hashed. Disk/archive failures,
 truncated diffs, missing snapshots and checksum mismatches fail collection or
 audit. Existing checkpoints are never overwritten.
 
-Apptainer saves the whole writable sandbox as `rootfs.tar.gz`, plus each external
-shared/notebook bind as `mount-N.tar.gz`. Restore **your own verified archives**
-on a Linux host into fresh directories, preserving permissions and symlinks:
+New checkpoints use filesystem deltas as the only write format (checkpoint/state v2).
+The promoted `cooperagents.checkpoint_delta` implementation uses the same payload and
+ordered tar metadata format as the verified historical 44-checkpoint conversion.
+Each filesystem has `payload.tar.gz` (only changed file bytes) and `filesystem.json.gz`
+(the complete target inventory, permissions, links, tar metadata and file hashes).
+An absent target entry represents a deletion. Capture streams the live tree directly
+into the packer; it never writes a full intermediate rootfs archive.
+
+Apptainer records the immutable SIF path and SHA256, plus the base image name and registry
+digest when present in the SIF labels. Custom images still require the exact SIF; upstream
+registry labels alone do not identify local modifications. The base is expanded once per image
+under the job's scratch `.checkpoint-bases/`, using a lock and atomic publication.
+Retain the corresponding SIF once; the delta does not bundle it. Restore requires that
+exact base SIF. To relocate it, supply `base_image=Path(...)` to either
+`ApptainerEnv.from_checkpoint` or `run_repair_checkpoint`. A missing or mismatched base
+fails; there is no fallback to a different image or to a full-snapshot writer.
+Every unchanged file reused from the expanded base is also checked against its saved hash.
+
+Docker records the immutable image ID and available registry digests, streams `docker export`
+into the same delta packer while the worker is paused, and always unpauses it afterwards.
+Its base container is exported/expanded once into a scratch cache; that temporary export
+is removed. Saved container `Config` and `network_mode` retain runtime settings.
+For manual Docker restoration, expand the recorded immutable image into a base directory,
+then reconstruct the rootfs on scratch:
 
 ```bash
-mkdir replay-fs
-tar -xzf /path/to/checkpoint/rootfs.tar.gz -C replay-fs --no-same-owner
-# Extract each mount archive into its own fresh directory as well.
-# Use the target/read-only mapping in state.json; never bind the old live share.
-apptainer exec --writable --containall --cleanenv \
-  --no-mount hostfs,bind-paths \
-  --home "$PWD/replay-fs/home/agent:/home/agent" \
-  --bind "$PWD/replay-fs/tmp:/tmp" \
-  --bind "$PWD/replay-fs/var/tmp:/var/tmp" \
-  --bind /etc/resolv.conf:/etc/resolv.conf:ro \
-  --pwd /workspace/repo "$PWD/replay-fs" bash
+python -m cooperagents.checkpoint_delta restore \
+  --delta /path/to/checkpoint/rootfs --base /scratch/expanded-base \
+  --output /scratch/rootfs.tar.gz
 ```
 
-Add restored bind mounts recorded in `state.json` when present, for example
-`--bind "$PWD/replay-share:/cbshared"` and
-`--bind "$PWD/replay-notebook:/coordination:ro"`. Use the recorded `repo_path`
-for tasks with a different working directory. The image SHA256 records
-provenance; the archive contains the installed filesystem needed for repair.
+Import the reconstructed filesystem into a fresh Docker container and use the recorded
+configuration, isolation and mount settings. External binds/volumes are not part of an image:
+they use the same delta format against an empty base, so their complete contents are saved.
+Restore each separately and preserve its target/read-only mapping. Local test checkpoints
+likewise use an empty-base repository delta; host tools remain outside their scope.
 
-Docker pauses the worker, saves `rootfs.tar` with `docker export`, and separately
-copies each bind/volume into a mount archive before unpausing. The saved image ID
-and container `Config` provide environment, user and working-directory settings;
-`network_mode` records the original isolation policy.
-Use `docker import rootfs.tar repair-replay:<unique-tag>` and start a fresh
-container with those recorded settings, network isolation and restored mounts. Export does not
-include volumes, so importing only the rootfs is insufficient. Local tests save
-only `repo.tar.gz`; their host tools are not checkpointed.
+Old full-snapshot v1 checkpoints remain readable for migration/replay. There is no full
+snapshot configuration option for new collection. Restore currently materializes a temporary
+gzip tar on scratch before extracting it and removes that tar afterwards; scratch must fit
+both the reconstructed archive and the live filesystem, in addition to the expanded base.
 
 Snapshots save files, not processes, RAM, network connections or a simultaneous
 global state of the team. Shared mount archives are per-worker observations;
@@ -131,8 +140,8 @@ runtime-generated mounts are not process checkpoints. The stdlib tar archives
 do not preserve extended attributes or ACLs. Host model credentials are
 not copied intentionally, but filesystem archives and saved raw conversation
 state can contain secrets already written by a task; treat them as private run
-artifacts. Full rootfs snapshots require substantial storage, especially Docker's
-uncompressed export. Start with 1–2 pairs before collecting three full rounds.
+artifacts. Delta size depends on actual changes: installed dependencies and large external
+mounts still occupy space. Retain and verify the immutable base separately.
 
 For a paired experiment, score `pre-repair/submission.patch` and
 `post-repair/submission.patch` with the same official evaluator and preserve
@@ -170,11 +179,12 @@ first-line submission marker and reached its step limit. The corrected driver
 passed in job `17657738`; the final-source rerun also passed. Those runs remain
 separate and retain their own source provenance.
 
-The final smoke stored 654,667,457 bytes (about 624 MiB) for one lightweight Go
+The historical full-snapshot smoke stored 654,667,457 bytes (about 624 MiB) for one lightweight Go
 pair. At that footprint alone, 108 pairs need about 66 GiB, exceeding the roughly
 48 GiB free observed in the project filesystem. Larger task/toolchain images can
 need more. Arrange sufficient persistent storage before a full three-round
-collection; do not assume node-local scratch is durable storage.
+collection; this historical full-snapshot footprint is not a measurement of the new delta
+format. Do not assume node-local scratch is durable storage.
 
 Run the same smoke in a CPU Slurm allocation with the project's mini-SWE
 dependencies installed:
@@ -237,7 +247,8 @@ base commit and recorded HEAD/status/stashes/patch, and cleans partial restores 
 or cancellation. Rootfs permissions and valid system symlinks are retained; archive
 writes through links or outside the owned destination are rejected. Only `/cbshared`
 (writable) and `/coordination` (read-only) checkpoint mounts are supported. The source
-SIF is provenance and is not rebuilt or required to exist during restore.
+SIF is required for delta v2 restore (and may be relocated with `base_image=`). Old full
+v1 archives remain self-contained. Base expansion and temporary tar reconstruction stay on scratch.
 
 The first attempt runs unconditionally with the saved prompt. A second attempt uses the
 current tree and fresh evidence in a new conversation. It preserves the saved prompt
