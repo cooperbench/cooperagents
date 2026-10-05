@@ -29,7 +29,10 @@ def main():
     parser.add_argument("--round", type=int, choices=(1, 2, 3))
     parser.add_argument("--no-coordinator", action="store_true")
     parser.add_argument("--no-coordinator-notebook", action="store_true")
-    parser.add_argument("--coordination-variant", choices=("current", "human_in_loop"), default="current")
+    parser.add_argument("--planning-step-limit", type=int, default=200)
+    parser.add_argument("--planning-time-limit", type=int, default=600)
+    parser.add_argument("--coordination-mode", choices=("direct", "group-chat", "group-chat-planning"), default="direct")
+    parser.add_argument("--coordination-variant", choices=("auto-prompt", "human-prompt"), default="auto-prompt")
     parser.add_argument("--step-limit", type=int, default=1000)
     parser.add_argument("--agent-time-limit", type=int, default=3600)
     parser.add_argument("--collect-trajectories", action="store_true", help="record full I/O and skip official evaluation")
@@ -40,14 +43,16 @@ def main():
     parser.add_argument("--repair-attempts", type=int, default=1)
     parser.add_argument("--cooperbench-dir", help="Immutable patched CooperBench checkout on the cluster")
     args = parser.parse_args()
+    if args.planning_step_limit < 1 or args.planning_time_limit < 1:
+        parser.error("Planning budgets must be positive")
     if args.cpus < 1 or args.concurrency < 1 or args.eval_concurrency < 1 or args.repair_attempts < 1:
         parser.error("CPUs, concurrency, and repair attempts must be positive")
     if args.step_limit < 1 or args.agent_time_limit < 1:
         parser.error("Worker step and time limits must be positive")
-    if args.coordination_variant == "human_in_loop" and (
-        args.mode != "real" or args.no_coordinator or args.no_coordinator_notebook
-    ):
-        parser.error("human_in_loop requires a real run with coordinator and notebook enabled")
+    if args.coordination_variant == "human-prompt" and (args.mode != "real" or args.no_coordinator or args.no_coordinator_notebook):
+        parser.error("human-prompt requires a real run with coordinator and notebook enabled")
+    if args.coordination_mode != "direct" and (args.mode != "real" or args.no_coordinator or args.no_coordinator_notebook):
+        parser.error("group coordination requires a real run with coordinator and notebook")
     if args.langfuse and args.mode != "real":
         parser.error("Langfuse tracing requires a real run")
     if args.checkpoint_repair and args.mode != "real":
@@ -85,11 +90,23 @@ def main():
     )
     if dirty:
         raise RuntimeError("Commit runtime inputs before submitting an immutable snapshot")
-    run_id = f"{datetime.now(UTC):%Y%m%dT%H%M%SZ}-cooperbench{f'-round{args.round}' if args.round else ''}-{sha[:8]}"
+    run_id = (f"{datetime.now(UTC):%Y%m%dT%H%M%SZ}-cooperbench-{args.coordination_variant}-{args.coordination_mode}"
+              f"{f'-round{args.round}' if args.round else ''}-{sha[:8]}")
     code = f"{args.root}/code/cooperagents-{run_id}"
     run = f"{args.root}/runs/{run_id}"
     archive = subprocess.check_output(
-        ["git", "archive", "--format=tar", "HEAD", "src", "scripts", "datasets/cb-mixture-36/manifest.json", "pyproject.toml"], cwd=repo
+        [
+            "git",
+            "archive",
+            "--format=tar",
+            "HEAD",
+            "src",
+            "scripts",
+            "datasets/cb-mixture-36/manifest.json",
+            "datasets/cb-mixture-36/pairs.txt",
+            "pyproject.toml",
+        ],
+        cwd=repo,
     )
     wall_time = args.wall_time or ("00:30:00" if args.mode == "dummy" else "02:00:00")
     metadata = dict(
@@ -118,6 +135,9 @@ def main():
         coordinator=not args.no_coordinator,
         coordinator_notebook=not args.no_coordinator and not args.no_coordinator_notebook,
         coordination_variant=args.coordination_variant,
+        coordination_mode=args.coordination_mode,
+        planning_step_limit=args.planning_step_limit,
+        planning_time_limit=args.planning_time_limit,
         repair_integrator=args.repair_integrator,
         repair_attempts=args.repair_attempts if args.repair_integrator else 0,
     )
@@ -130,13 +150,17 @@ def main():
                 f"coordinator = {str(not args.no_coordinator).lower()}\n"
                 f"coordinator_notebook = {str(not args.no_coordinator and not args.no_coordinator_notebook).lower()}\n"
                 f"coordination_variant = {args.coordination_variant!r}\n"
+                f"coordination_mode = {args.coordination_mode!r}\n"
+                f"planning_step_limit = {args.planning_step_limit}\n"
+                f"planning_time_limit = {args.planning_time_limit}\n"
                 "completion_gate = true\npresub_merge = false\n"
                 f"repair = {str(args.repair_integrator).lower()}\n"
                 f"repair_attempts = {args.repair_attempts if args.repair_integrator else 0}\n"
                 f"checkpoint_repair = {str(args.checkpoint_repair).lower()}\n"
             ),
-            "checkpoint.json": json.dumps(dict(enabled=args.checkpoint_repair, format="filesystem-v1",
-                                                location="logs/real/team/<repo>/<task>/<features>/checkpoints")),
+            "checkpoint.json": json.dumps(
+                dict(enabled=args.checkpoint_repair, format="filesystem-v1", location="logs/real/team/<repo>/<task>/<features>/checkpoints")
+            ),
         }
         if reports:
             records["images.json"] = json.dumps(images)
@@ -150,7 +174,12 @@ def main():
     env.setdefault("KRB5CCNAME", str(Path.home() / ".kerberos-cache"))
     q = shlex.quote
     subprocess.run(
-        ["ssh", args.host, f"mkdir -p {q(code)} {q(run)}/logs; tar -xf - -C {q(code)}; cp {q(code)}/_run/* {q(run)}/"],
+        [
+            "ssh",
+            args.host,
+            f"mkdir -p {q(args.root)}/code {q(args.root)}/runs && mkdir {q(code)} && mkdir {q(run)} "
+            f"&& mkdir {q(run)}/logs && tar -xf - -C {q(code)} && cp {q(code)}/_run/* {q(run)}/",
+        ],
         input=buffer.getvalue(),
         env=env,
         check=True,
@@ -167,6 +196,9 @@ def main():
         COOPER_COORDINATOR="0" if args.no_coordinator else "1",
         COOPER_COORDINATOR_NOTEBOOK="0" if args.no_coordinator_notebook else "1",
         COOPER_COORDINATION_VARIANT=args.coordination_variant,
+        COOPER_COORDINATION_MODE=args.coordination_mode,
+        COOPER_PLANNING_STEP_LIMIT=str(args.planning_step_limit),
+        COOPER_PLANNING_TIME_LIMIT=str(args.planning_time_limit),
         COOPER_STEP_LIMIT=str(args.step_limit),
         COOPER_AGENT_TIME_LIMIT=str(args.agent_time_limit),
         COOPER_REPAIR="1" if args.repair_integrator else "0",

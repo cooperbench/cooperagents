@@ -52,7 +52,21 @@ SEND_MESSAGE_TOOL = {
     },
 }
 
-KNOWN_TOOLS = {"bash", "send_message", "task_create", "task_update", "task_list", "task_claim", "spawn_helper"}
+CONFIRM_PLAN_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "confirm_plan",
+        "description": "Confirm the current delivered planning notebook; sole action in the response.",
+        "parameters": {
+            "type": "object",
+            "properties": {"version": {"type": "integer"}},
+            "required": ["version"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+KNOWN_TOOLS = {"confirm_plan", "bash", "send_message", "task_create", "task_update", "task_list", "task_claim", "spawn_helper"}
 
 
 def parse_toolcall_actions(tool_calls: list, *, format_error_template: str) -> list[dict]:
@@ -76,12 +90,19 @@ def parse_toolcall_actions(tool_calls: list, *, format_error_template: str) -> l
         except Exception as e:
             error_msg = f"Error parsing tool call arguments: {e}. "
 
+        if not isinstance(args, dict):
+            error_msg += "Tool arguments must be an object. "
+            args = {}
+        if "tool_name" in args or "tool_call_id" in args:
+            error_msg += "Tool identity fields are reserved. "
         tool_name = tool_call.function.name
 
         if tool_name not in KNOWN_TOOLS:
             error_msg += f"Unknown tool '{tool_name}'."
         elif tool_name == "bash" and "command" not in args:
             error_msg += "Missing 'command' argument in bash tool call."
+        elif tool_name == "confirm_plan" and (set(args) != {"version"} or type(args.get("version")) is not int):
+            error_msg += "confirm_plan requires one integer version."
         elif tool_name == "send_message":
             if "recipient" not in args:
                 error_msg += "Missing 'recipient' argument in send_message tool call."
@@ -116,7 +137,7 @@ def format_toolcall_observation_messages(
     not_executed = {"output": "", "returncode": -1, "exception_info": "action was not executed"}
     padded_outputs = outputs + [not_executed] * (len(actions) - len(outputs))
     results = []
-    for action, output in zip(actions, padded_outputs):
+    for action, output in zip(actions, padded_outputs, strict=False):
         content = Template(observation_template, undefined=StrictUndefined).render(
             output=output, **(template_vars or {})
         )

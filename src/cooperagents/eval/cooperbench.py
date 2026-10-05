@@ -104,6 +104,10 @@ def write_run_outputs(
                     )
                 )
 
+    # Preserve raw evidence independently of the official submission filter.
+    for actor, patch in result.metrics.get("raw_worker_patches", {}).items():
+        (log_dir / f"{actor}.raw.patch").write_text(patch)
+
     # Helper patches are auxiliary artifacts (not scored directly).
     for helper_id, r in result.helpers.items():
         (log_dir / f"{helper_id}.patch").write_text(r.patch)

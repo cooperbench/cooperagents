@@ -403,6 +403,17 @@ class DefaultAgent:
                         and "context window" not in es):
                     raise
                 self._emergency_truncate()
+        coordinator = getattr(self, "coordinator", None)
+        if coordinator is not None and coordinator.coordination_mode != "direct":
+            if getattr(self, "_restored_compaction", 0) != self._compaction_count:
+                coordinator.restore_context(self.agent_id, self)
+                self._restored_compaction = self._compaction_count
+        if coordinator is not None and coordinator.coordination_mode != "direct":
+            snapshot = coordinator.before_query(self.agent_id, self)
+            if hasattr(self, "_planning_tools"):
+                self.model._tools = [
+                    tool for tool in self._planning_tools if snapshot["phase"] == "planning" or tool["function"]["name"] != "confirm_plan"
+                ]
         self.n_calls += 1
         try:
             message = self.model.query(self.messages)
@@ -423,6 +434,8 @@ class DefaultAgent:
             for attempt in range(3):
                 self.config.compaction_keep_recent_turns = max(0, keep - attempt)
                 self._emergency_truncate()
+                if coordinator is not None:
+                    coordinator.restore_context(self.agent_id, self, request=True)
                 try:
                     message = self.model.query(self.messages)
                     break
@@ -457,6 +470,7 @@ class DefaultAgent:
 
         actions = message.get("extra", {}).get("actions", [])
         outputs = []
+        self._sole_confirmation = len(actions) == 1 and actions[0].get("tool_name") == "confirm_plan"
         for action in actions:
             tool_name = action.get("tool_name", "bash")
             handler = getattr(self, "tool_handlers", {}).get(tool_name)
@@ -509,6 +523,8 @@ class DefaultAgent:
         recipient = action.get("recipient", "")
         content = action.get("content", "")
         wait = action.get("wait", False)
+        if wait and getattr(self.comm, "group", None) is not None:
+            return {"output": "wait is unavailable in group chat", "returncode": 1, "exception_info": ""}
 
         if wait and hasattr(self.comm, "send_and_wait"):
             replies = self.comm.send_and_wait(recipient, content, timeout=60)

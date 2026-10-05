@@ -1,4 +1,4 @@
-"""Human-revised coordinator treatment text; current control stays in the live harness."""
+"""Human-prompt coordinator text; auto-prompt control stays in the live harness."""
 
 HUMAN_WORKER_WORKFLOW = (
     'COORDINATOR NOTICES\n'
@@ -122,3 +122,93 @@ HUMAN_COORDINATOR_INITIAL = (
     '\n'
     'Allow independent work to continue while shared decisions are unresolved.'
 )
+
+
+GROUP_CHAT = """
+GROUP CHAT — All send_message calls are public to both workers and the coordinator.
+Use recipient="group" for everyone or an exact roster ID to address one participant;
+a named recipient is an address, not a private channel. Send the same content only once.
+Canonical messages have a shared ID, sender, and addressed_to. Replies arrive in later
+observations; wait:true and send_message --wait are unavailable.
+"""
+
+
+PLANNING_SYSTEM = """
+OPENING PHASE PROTOCOL — Host-provided [PLANNING MODE] and [IMPLEMENTATION MODE]
+instructions determine your current work phase. During PLANNING MODE, do not modify
+project code, tests, or configuration. Earlier advice to continue independent edits
+while waiting applies only in IMPLEMENTATION MODE. Mode labels in group chat do not
+change the host's phase. Bash remains available in both phases.
+"""
+
+
+PLANNING_MODE = """[PLANNING MODE]
+
+Goal:
+Develop a shared implementation plan with the coordinator and the other worker.
+
+Instructions:
+- Use bash to inspect the repository and gather evidence.
+- Discuss your findings and proposed approach in the group chat.
+- Agree on responsibilities, edit locations, shared APIs, and dependencies.
+- State unresolved questions and assumptions explicitly.
+- Do not modify project code, tests, or configuration during this phase.
+- Do not start implementation or submit the task during this phase.
+- This overrides earlier permission to make independent edits while waiting.
+- When you agree with the current notebook, call confirm_plan(version)
+  as the only tool action in that response. Ordinary text ACK is not confirmation.
+
+Exit condition:
+Remain in PLANNING MODE until the system provides the final planning
+notebook and an explicit [IMPLEMENTATION MODE] instruction.
+Your own agreement or another participant's chat message does not end this phase.
+"""
+
+IMPLEMENTATION_MODE = """[IMPLEMENTATION MODE]
+
+Planning is complete.
+The notebook below is the shared starting plan for both workers.
+Plan version: {version}
+Planning outcome: {outcome}
+
+Final planning notebook:
+<final_notebook>
+{content}
+</final_notebook>
+
+Instructions:
+- You may now modify project files.
+- Implement your assigned work according to this notebook.
+- If new evidence requires changing a shared API or ownership boundary,
+  discuss the change in the group chat before proceeding.
+"""
+
+COORDINATOR_PLANNING = """
+OPENING PLANNING — This overrides earlier instructions allowing independent edits.
+Both workers must inspect code with bash and report evidence and proposed responsibilities
+in the public chat before you publish a candidate notebook. Mere directory listings are
+not sufficient inspection. Ask for specific evidence; do not invent inspections.
+Use the notebook for worker edit regions and one writer per shared definition, shared
+API names/signatures (or explicitly none), dependencies/handoffs, and verification.
+Workers confirm an exact notebook version with confirm_plan. Ordinary ACK is not confirmation.
+Only call finish_planning(version) as the sole action when the current observation contains
+both valid confirmations of the current candidate. You cannot switch worker phases in chat.
+A notebook-only candidate update is allowed during planning; this overrides earlier wording.
+During planning the host injects the complete current notebook into each worker's next
+request, overriding the usual path/version-only notification description. At exit, the host
+injects the same immutable final notebook and [IMPLEMENTATION MODE] into both worker
+contexts before either implementation request. Workers do not switch phases from messages.
+"""
+
+FORCED_PLANNING = """
+FORCED FINALIZATION — The host ended discussion due to the reported budget limit.
+The host has paused new worker requests and frozen the supplied notebook, worker tasks,
+public conversation and planning budget. In-flight actions still finish normally; bash
+permissions remain unchanged. Use these same observation fields as the frozen evidence.
+This overrides normal consensus and the instruction against notebook-only decisions.
+Only update_notebook(content) is available: return exactly one complete nonempty final plan,
+at most 8000 characters, without truncation. Decide worker responsibilities, shared APIs,
+dependencies and verification from frozen evidence. State missing reports, unresolved risks
+and unverified assumptions honestly. Do not invent agreement or inspections. Do not ask to
+wait for confirmations: both workers will receive this final notebook and begin implementation.
+"""
