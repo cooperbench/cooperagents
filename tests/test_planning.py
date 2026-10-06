@@ -447,6 +447,73 @@ def test_mixed_confirmation_preserves_bash_and_rejects_embedded_wait(tmp_path):
     assert len(c._chat) == previous and "wait is unavailable" in worker.messages[-1]["content"]
 
 
+@pytest.mark.parametrize("trigger", ["worker_exit", "stopped", "total_budget"])
+def test_planning_failure_records_elapsed_once(tmp_path, monkeypatch, trigger):
+    now = [1000.0]
+    monkeypatch.setattr("cooperagents.harness.time.time", lambda: now[0])
+    c = planning(tmp_path)
+    now[0] += 150
+    if trigger == "worker_exit":
+        c.mark_finished("agent1", "submitted")
+    elif trigger == "stopped":
+        c.stop()
+    else:
+        c._agents["agent1"].config.wall_deadline = now[0]
+        with pytest.raises(RuntimeError, match="total_budget"):
+            c.before_query("agent2", c._agents["agent2"])
+    metrics = c.planning_metrics()["planning"]
+    assert metrics["outcome"] == "error"
+    assert metrics["discussion_seconds"] == 150
+    assert metrics["finalizing_seconds"] == 0
+    now[0] += 20
+    c.mark_finished("agent2", "error")
+    assert c.planning_metrics()["planning"] == metrics
+
+
+def test_forced_finalization_failure_records_elapsed(tmp_path, monkeypatch):
+    now = [1000.0]
+    monkeypatch.setattr("cooperagents.harness.time.time", lambda: now[0])
+    c = planning(tmp_path)
+    now[0] += 600
+
+    def complete(_):
+        now[0] += 12
+        raise ConnectionError("synthetic finalization failure")
+
+    c._complete = complete
+    c.decide()
+    metrics = c.planning_metrics()["planning"]
+    assert metrics["outcome"] == "error" and c._planning_reason.startswith("Completion failed")
+    assert metrics["discussion_seconds"] == 600
+    assert metrics["finalizing_seconds"] == 12
+    now[0] += 20
+    c.stop()
+    assert c.planning_metrics()["planning"] == metrics
+
+
+def test_failure_preserves_elapsed_outside_planning_phases(tmp_path, monkeypatch):
+    now = [1000.0]
+    monkeypatch.setattr("cooperagents.harness.time.time", lambda: now[0])
+    unstarted = coordinator(coordination_mode="group-chat-planning")
+    unstarted.stop()
+    assert unstarted.planning_metrics()["planning"]["discussion_seconds"] == 0
+
+    c = planning(tmp_path)
+    publish_plan(c)
+    for aid in c._assignments:
+        c.confirm_plan(aid, {"version": c._version}, sole=True)
+    c._complete = lambda _: [tool("finish_planning", version=c._version)]
+    now[0] += 30
+    c.decide()
+    assert c.phase == "implementation"
+    now[0] += 20
+    c.mark_finished("agent1", "limit")  # Final plan has not reached both workers yet.
+    metrics = c.planning_metrics()["planning"]
+    assert metrics["outcome"] == "error"
+    assert metrics["discussion_seconds"] == 30
+    assert metrics["finalizing_seconds"] == 0
+
+
 def test_write_error_exit_and_total_budget_wake_all(tmp_path, monkeypatch):
     c = planning(tmp_path)
     publish_plan(c)

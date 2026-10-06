@@ -560,6 +560,11 @@ class _Coordinator:
     def _fail_planning_locked(self, reason: str) -> None:
         if self.phase == "failed":
             return
+        now = time.time()
+        if self.phase == "planning" and self._planning_started is not None:
+            self._planning_duration = now - self._planning_started
+        elif self.phase == "finalizing" and self._finalizing_started is not None:
+            self._finalizing_duration = now - self._finalizing_started
         self.phase = "failed"
         self._planning_outcome, self._planning_reason = "error", reason
         self._emit("planning_failed", reason=reason, phase=self.phase, budget=self._planning_snapshot_locked())
