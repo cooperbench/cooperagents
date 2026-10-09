@@ -18,6 +18,9 @@ def get_adapter(name: str) -> BenchmarkAdapter:
     if name == "cooperbench":
         from cooperagents.adapters.cooperbench import CooperBenchAdapter
         return CooperBenchAdapter()
+    if name == "swebench":
+        from cooperagents.adapters.swebench import SWEBenchAdapter
+        return SWEBenchAdapter()
     raise KeyError(f"unknown benchmark adapter: {name!r}")
 
 

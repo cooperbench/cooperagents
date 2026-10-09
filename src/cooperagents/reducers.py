@@ -19,6 +19,7 @@ Two families, mirroring cooperagents' existing selection seams:
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from typing import Any
 
 from cooperagents.env.artifact import StateArtifact
 from cooperagents.llm import LLMClient
@@ -79,4 +80,26 @@ def lead_synthesis(llm: LLMClient, *, lead_id: str = "integrator") -> Reducer:
     return reduce
 
 
-__all__ = ["Reducer", "best_of_first_nonempty", "lead_synthesis"]
+def select_by(key: Callable[[AgentResult], Any]) -> Reducer:
+    """Reducer that submits the candidate maximizing ``key``.
+
+    For benchmarks whose deliverable is a verifiable outcome rather than free
+    text (PlanCraft success, a graded state), selection is the correct combine
+    step: run N independent attempts, then submit the best by an intrinsic key
+    (e.g. success first, then fewest steps). Ties keep the earliest candidate.
+    """
+
+    def reduce(results: Sequence[AgentResult]) -> AgentResult:
+        candidates = _nonempty(results) or list(results)
+        best = candidates[0]
+        best_key = key(best)
+        for cand in candidates[1:]:
+            ck = key(cand)
+            if ck > best_key:
+                best, best_key = cand, ck
+        return best
+
+    return reduce
+
+
+__all__ = ["Reducer", "best_of_first_nonempty", "lead_synthesis", "select_by"]

@@ -62,3 +62,29 @@ def test_wrong_impossible_on_solvable_scores_zero():
     _b, res = _run(solvable, [Action(tool="impossible", args={"reason": "giving up"})])
     score = bench.scorer().score(solvable, res.artifact.text())
     assert not score.passed  # incorrect stop on a solvable task == failure
+
+
+def test_team_reducer_selects_successful_episode():
+    import json
+
+    from cooperagents.env.artifact import StateArtifact
+    from cooperagents.types import AgentResult
+
+    bench = PlanCraftBenchmark()
+    reducer = bench.team_reducer(llm=None)
+    fail = AgentResult("a1", "member", "submitted", artifact=StateArtifact(state=json.dumps({"success": False, "steps": 5})))
+    win = AgentResult("a2", "member", "submitted", artifact=StateArtifact(state=json.dumps({"success": True, "steps": 8})))
+    assert reducer([fail, win]).agent_id == "a2"
+    assert reducer([win, fail]).agent_id == "a2"
+
+
+def test_team_reducer_prefers_fewer_steps_when_both_succeed():
+    import json
+
+    from cooperagents.env.artifact import StateArtifact
+    from cooperagents.types import AgentResult
+
+    reducer = PlanCraftBenchmark().team_reducer(llm=None)
+    slow = AgentResult("slow", "member", "submitted", artifact=StateArtifact(state=json.dumps({"success": True, "steps": 20})))
+    fast = AgentResult("fast", "member", "submitted", artifact=StateArtifact(state=json.dumps({"success": True, "steps": 6})))
+    assert reducer([slow, fast]).agent_id == "fast"

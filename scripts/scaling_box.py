@@ -21,6 +21,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+_ROOT = Path(__file__).resolve().parents[1]
+_DOTENV = _ROOT / ".env"
+if _DOTENV.exists():
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(_DOTENV, override=False)
+    except ImportError:
+        pass
+
 from cooperagents.benchmarks import get_benchmark  # noqa: E402
 from cooperagents.benchmarks.runner import box_sweep  # noqa: E402
 from cooperagents.llm import LiteLLMClient  # noqa: E402
@@ -59,10 +68,13 @@ def main() -> None:
         by_model.setdefault(r.model, {})[r.mode] = r.success_rate
     print(f"=== {args.benchmark} ({args.split}) ===")
     for model, d in by_model.items():
-        solo, team = d.get("solo"), d.get("team")
-        line = f"{model}: solo {solo:.3f}  team {team:.3f}" if solo is not None and team is not None else str(d)
+        parts = [f"{k} {v:.3f}" for k, v in d.items()]
+        line = f"{model}: " + "  ".join(parts)
+        solo, iso, team = d.get("solo"), d.get("solo-iso"), d.get("team")
         if solo is not None and team is not None and solo > 0:
-            line += f"  rel {100 * (team - solo) / solo:+.1f}%"
+            line += f"  rel(vs solo) {100 * (team - solo) / solo:+.1f}%"
+        if iso is not None and team is not None and iso > 0:
+            line += f"  rel(vs solo-iso) {100 * (team - iso) / iso:+.1f}%"
         print(line)
 
     out = args.out or f"scaling_box_{args.benchmark}.json"

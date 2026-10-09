@@ -28,7 +28,7 @@ from cooperagents.env.base import Environment
 from cooperagents.eval.scoring import Scorer, TaskScore
 from cooperagents.harness import UnifiedHarness
 from cooperagents.llm import LLMClient
-from cooperagents.reducers import Reducer, best_of_first_nonempty, lead_synthesis
+from cooperagents.reducers import Reducer
 from cooperagents.types import Assignment, TeamSpec
 
 LLMFactory = Callable[[str, str], LLMClient]  # (agent_id, role) -> client
@@ -103,11 +103,20 @@ def box_sweep(
     limit: int | None = None,
     team_size: int = 3,
     step_limit: int = 30,
+    iso_compute: bool = True,
 ) -> list[ConfigResult]:
-    """Run solo + team for each model over one benchmark split.
+    """Run solo + team (+ optional iso-compute solo) for each model over one split.
 
-    Returns one :class:`ConfigResult` per (model, mode) — the points that form
-    the cooperagents ``solo`` and ``team`` boxes on this benchmark's panel.
+    Emits one :class:`ConfigResult` per (model, mode) — the points that form the
+    cooperagents boxes on this benchmark's panel:
+
+      * ``solo`` — single agent, the SAS baseline.
+      * ``solo-iso`` — single agent granted team_size x the step budget, so the
+        team gain can be read net of raw compute (compute-matched delta). Emitted
+        only when ``iso_compute`` and ``team_size > 1``.
+      * ``team`` — team_size agents combined by the benchmark's own reducer
+        (``benchmark.team_reducer``): lead-synthesis for text answers, selection
+        for verifiable-outcome benchmarks such as PlanCraft.
     """
     instances = list(benchmark.instances(split))
     if limit is not None:
@@ -121,7 +130,11 @@ def box_sweep(
         solo = run_config(benchmark, instances, llm_factory=factory, team_size=1, step_limit=step_limit)
         results.append(ConfigResult(model, "solo", success_rate(solo), len(solo), solo))
 
-        reducer = lead_synthesis(make_llm(model)) if team_size > 1 else best_of_first_nonempty
+        if iso_compute and team_size > 1:
+            iso = run_config(benchmark, instances, llm_factory=factory, team_size=1, step_limit=step_limit * team_size)
+            results.append(ConfigResult(model, "solo-iso", success_rate(iso), len(iso), iso))
+
+        reducer = benchmark.team_reducer(make_llm(model)) if team_size > 1 else None
         team = run_config(
             benchmark,
             instances,

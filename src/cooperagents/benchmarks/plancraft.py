@@ -21,7 +21,8 @@ from cooperagents.benchmarks.base import StateBenchmark
 from cooperagents.env.artifact import Artifact, StateArtifact
 from cooperagents.env.state import StateEnv
 from cooperagents.eval.scoring import Scorer, TaskScore
-from cooperagents.llm import Action
+from cooperagents.llm import Action, LLMClient
+from cooperagents.reducers import Reducer, select_by
 from cooperagents.tools import ToolSet
 
 # Episode budget the PlanCraft paper/harness uses.
@@ -92,6 +93,17 @@ class PlanCraftScorer(Scorer):
         )
 
 
+def _episode_key(result: Any) -> tuple[int, int]:
+    """Rank a PlanCraft episode: success first, then fewer steps."""
+    art = result.artifact
+    try:
+        data = json.loads(art.state) if art is not None and art.state else {}
+    except (ValueError, TypeError):
+        data = {}
+    steps = data.get("steps")
+    return (1 if data.get("success") else 0, -int(steps) if isinstance(steps, int) else -999)
+
+
 class PlanCraftBenchmark(StateBenchmark):
     name = "plancraft"
 
@@ -140,6 +152,12 @@ class PlanCraftBenchmark(StateBenchmark):
 
     def scorer(self) -> Scorer:
         return PlanCraftScorer()
+
+    def team_reducer(self, llm: LLMClient) -> Reducer:
+        # PlanCraft's deliverable is a verifiable episode outcome, so the team
+        # combine is selection (success first, then fewer steps), not text
+        # synthesis. The llm is unused.
+        return select_by(_episode_key)
 
 
 __all__ = ["PlanCraftBenchmark", "PlanCraftToolSet", "PlanCraftScorer"]

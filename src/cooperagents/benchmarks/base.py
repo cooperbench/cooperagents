@@ -19,6 +19,8 @@ from typing import Any
 
 from cooperagents.env.state import StateEnv
 from cooperagents.eval.scoring import Scorer
+from cooperagents.llm import LLMClient
+from cooperagents.reducers import Reducer, lead_synthesis
 from cooperagents.tools import ToolSet
 
 
@@ -47,6 +49,12 @@ class StateBenchmark(abc.ABC):
     @abc.abstractmethod
     def scorer(self) -> Scorer:
         """The official grader for this benchmark's deliverable."""
+
+    def team_reducer(self, llm: LLMClient) -> Reducer:
+        """The combine step for the team configuration. Defaults to
+        lead-synthesis over the agents' answers; benchmarks whose deliverable is
+        a verifiable outcome (e.g. PlanCraft) override this with a selector."""
+        return lead_synthesis(llm)
 
     def instance_id(self, instance: Any) -> str:
         return str(getattr(instance, "id", getattr(instance, "instance_id", "")))

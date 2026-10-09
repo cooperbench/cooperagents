@@ -81,6 +81,42 @@ with unconfigured real-service shells that raise a clear "provide X" error until
 you inject real services — so the registry is safe to import without keys, and the
 smoke path is reached by constructing the benchmark directly with fakes.
 
+## v3 additions: code benchmarks (git substrate)
+
+Version 3 of the paper expands the evaluation from four to six benchmarks
+(N=260 configurations). The two additions are software-engineering benchmarks:
+SWE-bench Verified (resolve a GitHub issue in a repository) and Terminal-Bench
+(terminal tasks).
+
+Both run on cooperagents' original git substrate (the `BenchmarkAdapter`
+contract: `image` / `task_for` / `submit` / `evaluate`), which is separate from
+the state substrate used by the four non-code benchmarks. They run through the
+git-substrate runner (`scripts/bench_programbench.py`, selected by the
+`COOPER_BENCHMARK` environment variable) with the mini-swe worker, and are scored
+by each benchmark's official evaluator.
+
+Terminal-Bench uses the existing adapter at
+`src/cooperagents/adapters/terminalbench.py` (Terminal-Bench 3.0 / Harbor tasks;
+dataset root via `TB3_ROOT`).
+
+SWE-bench Verified uses `src/cooperagents/adapters/swebench.py`, configured by
+environment variables:
+
+- `SWEBENCH_DATASET` — HuggingFace dataset id (default `princeton-nlp/SWE-bench_Verified`).
+- `SWEBENCH_DATA` — path to a local JSONL to load instances offline instead of HuggingFace.
+- `SWEBENCH_IMAGE_TEMPLATE` — per-instance image name (default `swebench/sweb.eval.x86_64.{id}:latest`); set to the Epoch `ghcr.io/epoch-research/...` or a locally built name as needed.
+- `SWEBENCH_MODEL_NAME` — the `model_name_or_path` written into predictions (default `cooperagents`).
+- `SWEBENCH_MAX_WORKERS` — evaluator worker count (default `4`).
+
+The agent edits the repository at `/testbed` inside the per-instance image and the
+submission is its git diff. `evaluate()` writes a `predictions.jsonl` entry and
+runs the official harness (`python -m swebench.harness.run_evaluation`), which
+applies the patch to a fresh image and runs the task's FAIL_TO_PASS / PASS_TO_PASS
+tests. A real run requires the `swebench` package and the per-instance Docker
+images; the adapter wiring (image name, task text, predictions format, instance
+loading) is unit-tested offline, and the live scoring path requires that
+infrastructure.
+
 ## Setup
 
 Clone the two offline benchmarks as siblings of cooperagents and install PlanCraft:
@@ -112,6 +148,98 @@ COOPER_MODELS="gemini/gemini-2.5-flash,gemini/gemini-2.5-pro" uv run python scri
 Each run prints, per model, the solo and team success rates and the relative
 solo-to-team delta, and writes the per-configuration rows to a JSON file for
 plotting.
+
+## Running via SAP AI Core
+
+cooperagents reaches models through litellm, which supports the SAP Generative AI
+Hub (SAP AI Core) via the `sap/` provider prefix. No code change is required:
+`LiteLLMClient` passes the model string to litellm, which performs the OAuth2
+token exchange, resolves the deployment from the resource group, and routes the
+request. (Verified with litellm 1.102.1, provider `SAP_GENERATIVE_AI_HUB`.)
+
+Credentials are read from the environment and must never be committed. Use either
+the service-key JSON or the individual values.
+
+```
+export AICORE_SERVICE_KEY="$(cat service_key.json)"
+export AICORE_RESOURCE_GROUP=default
+```
+
+```
+export AICORE_CLIENT_ID=...
+export AICORE_CLIENT_SECRET=...
+export AICORE_AUTH_URL=...
+export AICORE_BASE_URL=...
+export AICORE_RESOURCE_GROUP=default
+```
+
+Model strings use the `sap/` prefix with a model id deployed in the resource
+group, for example `sap/gemini-2.5-flash` or `sap/anthropic--claude-3.5-sonnet`.
+The id must match a deployment; litellm lists deployments at
+`AICORE_BASE_URL/lm/deployments`.
+
+Confirm attachment with a single call before a full sweep:
+
+```
+uv run python scripts/aicore_smoke.py --model sap/gemini-2.5-flash
+```
+
+Then run the sweep with the `sap/` model string:
+
+```
+uv run python scripts/scaling_box.py --benchmark plancraft --models sap/gemini-2.5-flash --limit 20
+```
+
+Requests routed through SAP AI Core consume BTP credits rather than direct Gemini
+billing; the token counts in the cost estimate still apply.
+
+## Cost estimate (Gemini)
+
+Estimated API cost for a k=3 run of both configurations (solo and team) across
+all four benchmarks on gemini-2.5-flash (the scaling_box.py default). Pricing as
+of 2026-09-29: gemini-2.5-flash is $0.30 per 1M input tokens and $2.50 per 1M
+output tokens; gemini-2.5-pro is $1.25 / $10.00 input/output.
+
+Cost model: one LLM call per agent step. Per-instance call counts are
+solo = S and team = 3*S + R, where S is the average steps per agent and R is the
+reducer LLM-call count. Both S and R differ per benchmark because the team setup
+differs:
+
+| Benchmark | Team setup | Reducer calls R | Avg steps S | Input tokens/call |
+| --- | --- | --- | --- | --- |
+| PlanCraft | N independent simulators + mechanical success-selection | 0 | 15 | ~2500 |
+| WorkBench | N concurrent thread-local sandboxes + synthesis | 1 | 5 | ~2000 |
+| BrowseComp-Plus | search fan-out + lead-synthesis | 1 | 8 | ~4000 |
+| Finance-Agent | decompose (planner + workers + synthesis) | 2 | 10 | ~4000 |
+
+Output is estimated at ~300 tokens per call (the action JSON). Per-instance cost
+for both configurations at k=3 on gemini-2.5-flash:
+
+| Benchmark | Calls/instance (x k=3) | Cost/instance |
+| --- | --- | --- |
+| PlanCraft | 180 | $0.27 |
+| WorkBench | 63 | $0.085 |
+| BrowseComp-Plus | 99 | $0.19 |
+| Finance-Agent | 126 | $0.25 |
+
+Scenario totals (both configurations, k=3, gemini-2.5-flash):
+
+| Scenario | Instances per benchmark | Total |
+| --- | --- | --- |
+| Pilot | 20 each | ~$16 |
+| Paper-scale | PlanCraft 110, WorkBench 690, BrowseComp 100, Finance 50 | ~$120 |
+
+Main cost driver: Gemini 2.5 thinking tokens. Gemini 2.5 Flash bills thinking
+tokens as output and enables thinking by default; LiteLLMClient does not set a
+thinking budget. With ~1000-2000 thinking tokens per call, the output component
+increases by a factor of about 4 to 7, raising the paper-scale estimate to about
+$300 to $500. Set a thinking budget in LiteLLMClient to hold the lower estimate.
+gemini-2.5-pro raises all figures by a factor of about 4 to 5.
+
+Caveats: S (average steps) and the input-token sizes are estimates; the largest
+uncertainties are the thinking-token setting and S. The estimate excludes an
+iso-compute solo configuration; adding one (solo granted N times the budget for
+compute-matching) increases the solo-configuration cost proportionally.
 
 ## Comparability notes
 
