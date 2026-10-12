@@ -47,7 +47,7 @@ class ApptainerEnv(Environment):
                 check=True,
                 capture_output=True,
                 text=True,
-                timeout=300,
+                timeout=1800,
             )
             for directory in ("tmp", "var/tmp", "home/agent", "workspace", "patches", "cbshared"):
                 (self.root / "fs" / directory).mkdir(parents=True, exist_ok=True)
