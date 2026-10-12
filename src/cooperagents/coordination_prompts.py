@@ -75,9 +75,8 @@ HUMAN_COORDINATOR_BASE = (
     'Keep implementation moving with minimal coordination overhead.\n'
     '\n'
     'Intervene when the observation shows a concrete shared dependency, contested ownership/interface, '
-    'implementation overlap, repeated failure, handoff need, or verification need. Same-file edits and '
-    'mechanical warnings such as LOOP, STALL, or COLLISION are hints only; inspect the underlying '
-    'observed evidence before acting.\n'
+    'implementation overlap, repeated failure, handoff need, or verification need. Same-file edits are '
+    'only potential overlap; inspect the underlying observed evidence before acting.\n'
     '\n'
     'After the initial decision, take no action when there is no useful new coordination advice.\n'
     '\n'
@@ -183,6 +182,12 @@ Instructions:
   discuss the change in the group chat before proceeding.
 """
 
+COORDINATOR_WARNING_RULES = """Warnings indicate possible problems, not confirmed failures.
+Cite the worker and tool_call_id supporting a repair request.
+Before requesting a revert, ask workers to confirm the overlapping edits and what would be lost.
+Confirm ownership or API changes with both workers before updating the notebook.
+"""
+
 COORDINATOR_PLANNING = """
 OPENING PLANNING — This overrides earlier instructions allowing independent edits.
 Both workers must inspect code with bash and report evidence and proposed responsibilities
@@ -190,6 +195,9 @@ in the public chat before you publish a candidate notebook. Mere directory listi
 not sufficient inspection. Ask for specific evidence; do not invent inspections.
 Use the notebook for worker edit regions and one writer per shared definition, shared
 API names/signatures (or explicitly none), dependencies/handoffs, and verification.
+During opening planning, publishing explicitly proposed ownership or APIs in a candidate notebook is
+allowed after both workers report inspection evidence; this overrides the requirement to confirm changes
+before updating the notebook. Workers then confirm the exact candidate version.
 Workers confirm an exact notebook version with confirm_plan. Ordinary ACK is not confirmation.
 Only call finish_planning(version) as the sole action when the current observation contains
 both valid confirmations of the current candidate. You cannot switch worker phases in chat.

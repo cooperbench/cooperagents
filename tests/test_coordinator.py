@@ -204,7 +204,8 @@ def test_observations_pair_actions_results_and_budget(monkeypatch):
     assert worker["modified_files"] == ["space name.py"]
     actions = worker["recent_actions"]
     assert actions[0]["action"] == native and actions[0]["result"]["returncode"] == 1
-    assert actions[1]["result"]["output"].endswith("[truncated]")
+    assert actions[1]["result"]["output"] == "x" * 300 + "\n[truncated]\n" + "x" * 700
+    assert actions[1]["result"]["output_chars"] == 2000
     assert actions[2]["result"] is None
     assert c.drain("agent1") == []  # no automatic budget reminders
     c.mark_finished("agent1", "limit")
@@ -230,8 +231,10 @@ def test_mechanical_warnings_are_observations_not_automatic_messages():
     c._envs["agent2"].execute = lambda *a, **k: ExecResult(" M shared.py\0", 0)
     c.decide()
     first, second = observations[0]["workers"]
-    assert [warning.split(":", 1)[0] for warning in first["warnings"]] == ["LOOP", "STALL", "COLLISION"]
-    assert second["warnings"] == ["COLLISION: modified files overlap with agent1: shared.py"]
+    assert [warning.split(":", 1)[0] for warning in first["warnings"]] == ["STALL", "COLLISION"]
+    assert second["warnings"] == [
+        'COLLISION: same file modified; regions unknown with agent1: "shared.py" (source=current path observation)'
+    ]
     assert c.events() == [] and c.drain("agent1") == [] and c.drain("agent2") == []
 
 
@@ -252,6 +255,7 @@ def test_initial_prompt_keeps_evidence_pending_and_supplies_feature_identity(tmp
     c.decide()
     initial, later = [json.loads(prompt.split("OBSERVATION:\n")[1]) for prompt in prompts]
     assert initial["initial"] and not later["initial"]
+    assert "collected_at" not in initial and "collected_at" not in later
     assert initial["task_id"] == later["task_id"] == 27
     assert [(w["id"], w["feature_id"]) for w in initial["workers"]] == [("agent1", 3), ("agent2", 4)]
     assert all(w["status"] == "not_started" and not w["recent_actions"] for w in initial["workers"])
@@ -292,9 +296,8 @@ def test_human_prompt_initial_prompt_and_direct_message_wrapper(tmp_path):
         'Keep implementation moving with minimal coordination overhead.\n'
         '\n'
         'Intervene when the observation shows a concrete shared dependency, contested ownership/interface, '
-        'implementation overlap, repeated failure, handoff need, or verification need. Same-file edits and '
-        'mechanical warnings such as LOOP, STALL, or COLLISION are hints only; inspect the underlying '
-        'observed evidence before acting.\n'
+        'implementation overlap, repeated failure, handoff need, or verification need. Same-file edits are '
+        'only potential overlap; inspect the underlying observed evidence before acting.\n'
         '\n'
         'After the initial decision, take no action when there is no useful new coordination advice.\n'
         '\n'
@@ -339,11 +342,14 @@ def test_human_prompt_initial_prompt_and_direct_message_wrapper(tmp_path):
         '\n'
         'OBSERVATION:\n'
     )
+    from cooperagents.coordination_prompts import COORDINATOR_WARNING_RULES
+
+    expected_initial = expected_initial.replace("\nOBSERVATION:\n", "\n" + COORDINATOR_WARNING_RULES + "\nOBSERVATION:\n")
     assert prompts[0].startswith(expected_initial)
     assert json.loads(prompts[0][len(expected_initial):])["initial"] is True
     c.register("agent1", SimpleNamespace(n_calls=1, messages=[]))
     c.decide()
-    expected_later = expected_initial.split("## 5. Initial decision\n")[0] + "OBSERVATION:\n"
+    expected_later = expected_initial.split("## 5. Initial decision\n")[0] + COORDINATOR_WARNING_RULES + "\nOBSERVATION:\n"
     assert prompts[1].startswith(expected_later)
     assert json.loads(prompts[1][len(expected_later):])["initial"] is False
     c._apply_actions(c._parse_actions([message("propose scope")]))

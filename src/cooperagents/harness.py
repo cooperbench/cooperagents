@@ -27,11 +27,13 @@ it (the conventional lead-merges-the-team pattern).
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 import tempfile
 import threading
 import time
+from collections import Counter
 from collections.abc import Callable
 from contextlib import ExitStack, nullcontext
 from dataclasses import asdict, dataclass
@@ -44,6 +46,7 @@ from cooperagents.bus.base import TeamBus
 from cooperagents.bus.memory import InMemoryBus
 from cooperagents.coordination_prompts import (
     COORDINATOR_PLANNING,
+    COORDINATOR_WARNING_RULES,
     FORCED_PLANNING,
     GROUP_CHAT,
     HUMAN_COORDINATOR_BASE,
@@ -54,6 +57,8 @@ from cooperagents.coordination_prompts import (
     PLANNING_SYSTEM,
 )
 from cooperagents.env.base import Environment
+from cooperagents.git_snapshots import GitEvidence
+from cooperagents.git_snapshots import GitShareSync as _GitShareSync
 from cooperagents.llm import LLMClient
 from cooperagents.metrics import coordination_metrics, spawn_metrics
 from cooperagents.patching import strip_test_sections
@@ -238,7 +243,6 @@ The harness executes your returned actions; workers inspect code and may report 
 Their patches will be merged. Help them agree on responsibilities, file regions and shared interfaces before
 contested edits, resolve concrete overlaps or repeated failures during implementation, and decide when remaining
 step/time budgets warrant a specific handoff or verification reminder. Same-file edits are only potential overlap.
-Worker warnings are mechanical hints (LOOP, STALL, COLLISION), not proof that an intervention is needed.
 Check the underlying actions and results before deciding whether to message anyone.
 Use the supplied observations and replies; do not invent inspected code, agreement, completed tests or token budgets.
 Use task_id and each worker's id/feature_id exactly as supplied; a feature is not a separate task ID.
@@ -392,6 +396,7 @@ class _Coordinator:
         self._pending: list[dict] = []
         self._processed: tuple = ()
         self._last_error = ""
+        self._git_sync: _GitShareSync | None = None
         self._notebook_path = notebook_path
         self._notebook = ""
         self._version = -1
@@ -1029,16 +1034,36 @@ class _Coordinator:
                     if call_id
                     else (outputs[index] if index < len(outputs) and not outputs[index].get("tool_call_id") else None)
                 )
-                record = {"action": {k: cls._clip(v) if isinstance(v, str) else v for k, v in action.items()}, "result": None}
+                record: dict[str, Any] = {
+                    "action": {k: cls._clip(v) if isinstance(v, str) and k != "tool_call_id" else v for k, v in action.items()},
+                    "result": None,
+                }
                 if output is not None:
                     extra = output["extra"]
+                    raw = str(extra.get("raw_output", ""))
                     record["result"] = {
                         "returncode": extra.get("returncode"),
-                        "output": cls._clip(str(extra.get("raw_output", ""))),
+                        "output": raw if len(raw) <= 1000 else raw[:300] + "\n[truncated]\n" + raw[-700:],
+                        "output_truncated": len(raw) > 1000,
+                        "output_chars": len(raw),
                         "exception_info": cls._clip(str(extra.get("exception_info") or "")),
                     }
+                    command = action.get("command")
+                    code = extra.get("returncode")
+                    if (
+                        action.get("tool_name") == "bash" and isinstance(command, str) and command.strip()
+                        and isinstance(code, int) and not isinstance(code, bool)
+                        and extra.get("exception_info") != "action was not executed"
+                        and "[output truncated after " not in raw
+                    ):
+                        record["_loop_signature"] = (command, code, raw)
                 records.append(record)
-        return records[-6:]
+        recent = records[-6:]
+        for record in recent:
+            signature = record.get("_loop_signature")
+            if signature is not None:
+                record["_loop_signature"] = (signature[0], signature[1], hashlib.sha256(signature[2].encode()).hexdigest())
+        return recent
 
     def _dirty_files(self, aid: str) -> list[str] | None:
         from cooperagents.trajectory import record_call
@@ -1058,16 +1083,14 @@ class _Coordinator:
         )
 
     @staticmethod
-    def _add_warnings(workers: list[dict]) -> None:
+    def _add_warnings(workers: list[dict], git_evidence: GitEvidence | None = None) -> None:
         for worker in workers:
             warnings = worker["warnings"] = []
             actions = worker["recent_actions"]
-            commands = [record["action"].get("command", "") for record in actions]
-            commands = [command for command in commands if isinstance(command, str) and command.strip()]
-            if len(commands) >= 6:
-                heads = [" ".join(command.split()[:2]) for command in commands[-6:]]
-                if max(heads.count(head) for head in set(heads)) >= 4:
-                    warnings.append("LOOP: at least 4 of the last 6 commands share their first two words")
+            signatures = [record.pop("_loop_signature", None) for record in actions]
+            counts = Counter(signature for signature in signatures if signature is not None)
+            if counts and max(counts.values()) >= 4:
+                warnings.append("LOOP: repeated action with unchanged result")
             results = [record["result"] for record in actions if record["result"] is not None]
             if len(results) >= 4:
                 recent = results[-4:]
@@ -1080,9 +1103,25 @@ class _Coordinator:
             for peer in workers:
                 if peer is worker:
                     continue
-                overlap = sorted(files.intersection(peer["modified_files"] or []))
-                if overlap:
-                    warnings.append(f"COLLISION: modified files overlap with {peer['id']}: {', '.join(overlap[:3])}")
+                current_common = files.intersection(peer["modified_files"] or [])
+                pair = tuple(sorted((worker["id"], peer["id"])))
+                comparison = git_evidence.comparisons.get(pair) if git_evidence else None
+                overlaps = comparison.overlaps if comparison and comparison.error is None else {}
+                unknown_snapshot = set(comparison.unknown) if comparison else set()
+                covered = comparison.covered if comparison and comparison.error is None else frozenset()
+                unknown_current = current_common.difference(covered)
+                for path in sorted(set(overlaps) | unknown_snapshot | unknown_current)[:3]:
+                    quoted = json.dumps(path, ensure_ascii=False)
+                    if path in overlaps:
+                        warnings.append(
+                            f"COLLISION: possible overlapping edits with {peer['id']}: {quoted} "
+                            f"({pair[0]}/{pair[1]}: {overlaps[path]}; source=snapshot)"
+                        )
+                    else:
+                        source = "snapshot" if path in unknown_snapshot else "current path observation"
+                        warnings.append(
+                            f"COLLISION: same file modified; regions unknown with {peer['id']}: {quoted} (source={source})"
+                        )
 
     def decide(self, *, initial: bool = False) -> None:
         replies = self._bus.receive("coordinator")
@@ -1152,13 +1191,16 @@ class _Coordinator:
                     "recent_actions": self._recent_actions(list(getattr(agent, "messages", []))),
                 }
             )
-        self._add_warnings(workers)
+        git_evidence = self._git_sync.evidence() if self._git_sync is not None else GitEvidence()
+        self._add_warnings(workers, git_evidence)
         observation = {
             "repo": self._repo,
             "task_id": self._task_id,
             "initial": initial,
             "workers": workers,
         }
+        if not forced:
+            observation["git_snapshots"] = git_evidence.metadata()
         if self.coordination_mode == "direct":
             observation["replies"] = list(self._pending)
         observation["previous_error"] = self._last_error
@@ -1176,6 +1218,7 @@ class _Coordinator:
                     "but leave concrete edit boundaries and ownership pending worker evidence and confirmation. "
                     "Do not guess filenames, existing symbols or new shared APIs, or declare coordination complete.\n"
                 )
+        protocol += "\n" + COORDINATOR_WARNING_RULES
         if self._notebook_path is not None:
             observation["notebook"] = {"version": version, "content": notebook}
             if self.coordination_variant == "auto-prompt":
@@ -1307,34 +1350,6 @@ class _Coordinator:
 
 
 _GITSHARE = "/cbshared/repo.git"
-
-
-class _GitShareSync:
-    """TK-git: harness-side push of each agent's working tree to a per-agent
-    branch on the shared bare repository. `git stash create` produces a commit
-    object from the dirty tree while leaving the agent's HEAD, index, and
-    working tree unchanged; a clean tree pushes HEAD."""
-
-    def __init__(self, envs: dict[str, Environment]) -> None:
-        self._envs = envs
-        self._stop = threading.Event()
-        self._locks = {aid: threading.Lock() for aid in envs}
-
-    def stop(self) -> None:
-        self._stop.set()
-
-    def run(self) -> None:
-        while not self._stop.wait(45):
-            for aid, env in list(self._envs.items()):
-                try:
-                    with self._locks[aid]:
-                        env.execute(
-                            "C=$(git stash create 2>/dev/null); "
-                            f"git push -q -f shared ${{C:-HEAD}}:refs/heads/{aid} 2>/dev/null || true",
-                            timeout=60,
-                        )
-                except Exception:  # noqa: BLE001 - sync must never disturb the run
-                    pass
 
 
 class _TeammatePoller:
@@ -1880,15 +1895,28 @@ class UnifiedHarness:
                 gitsync = None
                 if spec.git_share:
                     first = True
+                    initial_heads, published = {}, set()
                     for _aid, _e in coop_envs.items():
+                        if coordinator is not None:
+                            try:
+                                head = _e.execute("git rev-parse HEAD", timeout=5)
+                                initial_heads[_aid] = head.stdout.strip() if head.exit_code == 0 else ""
+                            except Exception:
+                                initial_heads[_aid] = ""
                         if first:
                             _e.execute(f"git init -q --bare {_GITSHARE} 2>/dev/null || true")
                             first = False
                         _e.execute(f"git remote add shared {_GITSHARE} 2>/dev/null || true")
-                        _e.execute(f"git push -q shared HEAD:refs/heads/{_aid} 2>/dev/null || true")
-                    gitsync = _GitShareSync(coop_envs)
-                    cleanup.callback(gitsync.stop)
-                    threading.Thread(target=gitsync.run, daemon=True).start()
+                        push = _e.execute(f"git push -q shared HEAD:refs/heads/{_aid} 2>/dev/null")
+                        if push.exit_code == 0:
+                            published.add(_aid)
+                    gitsync = _GitShareSync(coop_envs, observe=coordinator is not None)
+                    if coordinator is not None:
+                        gitsync.initialize(initial_heads, published)
+                        coordinator._git_sync = gitsync
+                    gitsync_thread = threading.Thread(target=gitsync.run, daemon=True)
+                    cleanup.callback(gitsync.finish, gitsync_thread)
+                    gitsync_thread.start()
                 coordinator_thread = None
                 if coordinator is not None:
                     coordinator.verify_mounts()

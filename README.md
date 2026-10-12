@@ -311,3 +311,26 @@ receipts, preserves `agreed`, `forced` and `error` samples, and reports paired c
 and separate worker/coordinator costs. Missing scoring or infrastructure failures
 produce coverage information and withheld rates. Zero or missing cost/usage does
 not imply free service. The summarizer never calls an LLM judge or launches jobs.
+
+### Coordinator observation and warnings
+
+Coordinator observations retain the last six action/result records. Long `result.output`
+values show the first 300 and last 700 characters, with `output_truncated` and `output_chars`.
+No tool execution-state field is added. The environment's existing output limit still applies.
+
+`LOOP` requires four completed bash actions in that six-record window to have the same full
+command, return code, and available raw output digest. Missing, unexecuted, and environment-
+truncated results are excluded. Context compaction can reduce the available window. `STALL`
+keeps its existing behavior.
+
+With coordinator and Git sharing enabled, `COLLISION` compares the existing periodically
+published snapshots against the common initial commit. Disjoint text regions do not warn;
+overlaps are advisory, not proof of a merge conflict. `git_snapshots` identifies the exact
+SHAs/times and unavailable evidence. Existing current path observations can report
+`regions unknown` for common paths outside the snapshot comparison. Stash snapshots omit
+untracked files and can lag behind edits; differing SHAs can also have identical trees.
+
+These changes do not enable merge repair or alter worker messages, submission checks,
+scoring, or the default ten-decision identity reminder. Opening planning may publish a
+proposed candidate before workers confirm its exact version; forced finalization retains
+its existing confirmation override.
