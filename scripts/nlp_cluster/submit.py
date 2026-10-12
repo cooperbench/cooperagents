@@ -96,9 +96,9 @@ def main():
     initial_plans = {}
     plan_files = {}
     if args.initial_plan_dir is not None:
-        if (args.mode != "real" or args.coordination_variant != "auto-prompt" or args.coordination_mode != "group-chat"
+        if (args.mode != "real" or args.coordination_mode != "group-chat"
                 or args.no_coordinator or args.no_coordinator_notebook):
-            parser.error("Initial plans require a real auto-prompt group-chat run with coordinator and notebook")
+            parser.error("Initial plans require a real group-chat run with coordinator and notebook")
         sys.path.insert(0, str(repo / "src"))
         from cooperagents.initial_plan import InitialPlan, initial_plan_path
 

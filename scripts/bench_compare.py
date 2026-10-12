@@ -509,8 +509,8 @@ def main() -> None:
         items = items[: args.limit]
 
     if args.initial_plan_dir is not None:
-        if args.coordination_mode != "group-chat" or args.coordination_variant != "auto-prompt" or not args.team_only:
-            ap.error("Initial plan injection requires auto-prompt group-chat and --team-only")
+        if args.coordination_mode != "group-chat" or not args.team_only:
+            ap.error("Initial plan injection requires group-chat and --team-only")
         if args.reverse_order or args.task_board or args.claim_mode or args.allow_spawn:
             ap.error("Initial plan injection requires the original two-worker roster")
         # Validate all selected bundles before any pair can call a model.

@@ -360,8 +360,8 @@ class _Coordinator:
         self.coordinator_implementation_enabled = coordinator_implementation_enabled
         self.initial_plan = initial_plan
         self._summary_delivered: set[str] = set()
-        if initial_plan is not None and (coordination_mode != "group-chat" or coordination_variant != "auto-prompt"):
-            raise ValueError("Initial plan injection requires auto-prompt group-chat")
+        if initial_plan is not None and coordination_mode != "group-chat":
+            raise ValueError("Initial plan injection requires group-chat")
         self.coordination_variant = coordination_variant
         self.trace = trace
         self.error: Exception | None = None
@@ -1711,8 +1711,8 @@ class UnifiedHarness:
         self.coordination_mode = coordination_mode
         self.coordinator_implementation_enabled = coordinator_implementation_enabled
         self.initial_plan = initial_plan
-        if initial_plan is not None and (coordination_mode != "group-chat" or coordination_variant != "auto-prompt"):
-            raise ValueError("Initial plan injection requires auto-prompt group-chat")
+        if initial_plan is not None and coordination_mode != "group-chat":
+            raise ValueError("Initial plan injection requires group-chat")
         self.coordination_variant = coordination_variant
         self.coordinator_notebook_path = Path(coordinator_notebook_path).resolve() if coordinator_notebook_path is not None else None
         self.trajectory = trajectory

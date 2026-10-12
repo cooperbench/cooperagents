@@ -134,7 +134,7 @@ unchanged. The benchmark and NLP submission CLIs accept this flag; direct
 `UnifiedHarness` callers use `coordinator_implementation_enabled=False`.
 This disables model intervention, not the coordinator host that delivers chat.
 
-Add `--initial-plan-dir <directory>` to start an `auto-prompt` / `group-chat`
+Add `--initial-plan-dir <directory>` to start an `auto-prompt` or `human-prompt` / `group-chat`
 team from reviewed notebook, public discussion and per-worker memory bundles.
 Pair, feature text hashes and clean source HEAD must match the bundle. The host
 restores the checkpoint before the first worker request; both workers receive the

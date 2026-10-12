@@ -68,7 +68,7 @@ def test_invalid_bundles_fail_before_run(tmp_path, bundle, change):
 
 def test_stale_spec_or_wrong_arm_fails_before_environment(tmp_path, bundle):
     plan = save_plan(tmp_path, bundle)
-    with pytest.raises(ValueError, match="auto-prompt group-chat"):
+    with pytest.raises(ValueError, match="requires group-chat"):
         UnifiedHarness(initial_plan=plan)
     h = UnifiedHarness(initial_plan=plan, coordination_mode="group-chat", coordinator_notebook_path=tmp_path / "notebook.md")
     spec = TeamSpec(
@@ -87,8 +87,9 @@ def test_stale_spec_or_wrong_arm_fails_before_environment(tmp_path, bundle):
         h.run(spec, env_factory=lambda _: pytest.fail("must validate before environment creation"))
 
 
+@pytest.mark.parametrize("variant", ["auto-prompt", "human-prompt"])
 @pytest.mark.parametrize("inject", [False, True])
-def test_real_loop_starts_with_clean_base_full_budget_and_native_tools(tmp_path, monkeypatch, bundle, inject):
+def test_real_loop_starts_with_clean_base_full_budget_and_native_tools(tmp_path, monkeypatch, bundle, inject, variant):
     import litellm
 
     source = LocalEnv.fresh()
@@ -155,6 +156,7 @@ def test_real_loop_starts_with_clean_base_full_budget_and_native_tools(tmp_path,
             step_limit=400,
             command_timeout=10,
             coordination_mode="group-chat",
+            coordination_variant=variant,
             initial_plan=plan,
             coordinator_implementation_enabled=False,
             coordinator_notebook_path=path,
@@ -214,8 +216,9 @@ def test_real_loop_starts_with_clean_base_full_budget_and_native_tools(tmp_path,
         source.cleanup()
 
 
+@pytest.mark.parametrize("variant", ["auto-prompt", "human-prompt"])
 @pytest.mark.parametrize("newline", ["\n", "\r\n"])
-def test_native_submit_archives_exact_plan_and_pins_digest(tmp_path, monkeypatch, bundle, newline):
+def test_native_submit_archives_exact_plan_and_pins_digest(tmp_path, monkeypatch, bundle, newline, variant):
     path = tmp_path / "fixture_task-1-f1_f2.json"
     path.write_bytes(json.dumps(bundle, indent=2).replace("\n", newline).encode())
     plan = InitialPlan.load(path, expected_pair=bundle["pair"])
@@ -234,6 +237,8 @@ def test_native_submit_archives_exact_plan_and_pins_digest(tmp_path, monkeypatch
             "/private/profile",
             "--coordination-mode",
             "group-chat",
+            "--coordination-variant",
+            variant,
             "--initial-plan-dir",
             str(tmp_path),
             "--pairs",
@@ -266,6 +271,7 @@ def test_native_submit_archives_exact_plan_and_pins_digest(tmp_path, monkeypatch
     with tarfile.open(fileobj=io.BytesIO(uploaded[0])) as t:
         meta = json.loads(t.extractfile("_run/metadata.json").read())
         assert meta["initial_plans"] == {bundle["pair"]: plan.bundle_sha256}
+        assert meta["coordination_variant"] == variant
         assert (
             t.extractfile("_run/data/initial-plans/fixture_task-1-f1_f2.json").read()
             == (tmp_path / "fixture_task-1-f1_f2.json").read_bytes()
