@@ -6,6 +6,7 @@ import json
 import os
 import shlex
 import subprocess
+import sys
 import tarfile
 from datetime import UTC, datetime
 from pathlib import Path
@@ -28,6 +29,9 @@ def main():
     parser.add_argument("--wall-time", help="Slurm time limit, HH:MM:SS")
     parser.add_argument("--round", type=int, choices=(1, 2, 3))
     parser.add_argument("--no-coordinator", action="store_true")
+    parser.add_argument("--initial-plan-dir", type=Path, help="Reviewed planning checkpoints for the selected pairs")
+    parser.add_argument("--no-implementation-coordinator", action="store_true",
+                        help="skip coordinator model decisions during implementation; retain planning and chat")
     parser.add_argument("--no-coordinator-notebook", action="store_true")
     parser.add_argument("--planning-step-limit", type=int, default=200)
     parser.add_argument("--planning-time-limit", type=int, default=600)
@@ -44,6 +48,8 @@ def main():
     parser.add_argument("--repair-attempts", type=int, default=1)
     parser.add_argument("--cooperbench-dir", help="Immutable patched CooperBench checkout on the cluster")
     args = parser.parse_args()
+    if args.no_implementation_coordinator and (args.no_coordinator or args.mode != "real"):
+        parser.error("--no-implementation-coordinator requires a real run with coordinator enabled")
     if args.worker_reminder_interval < 0:
         parser.error("Worker reminder interval must be nonnegative")
     if args.planning_step_limit < 1 or args.planning_time_limit < 1:
@@ -87,6 +93,20 @@ def main():
     if args.mode == "real" and not args.env_file:
         parser.error("--env-file is required for real runs")
     repo = Path(__file__).resolve().parents[2]
+    initial_plans = {}
+    plan_files = {}
+    if args.initial_plan_dir is not None:
+        if (args.mode != "real" or args.coordination_variant != "auto-prompt" or args.coordination_mode != "group-chat"
+                or args.no_coordinator or args.no_coordinator_notebook):
+            parser.error("Initial plans require a real auto-prompt group-chat run with coordinator and notebook")
+        sys.path.insert(0, str(repo / "src"))
+        from cooperagents.initial_plan import InitialPlan, initial_plan_path
+
+        for pair in args.pairs:
+            path = initial_plan_path(args.initial_plan_dir, pair)
+            plan = InitialPlan.load(path, expected_pair=pair)
+            initial_plans[pair] = plan.bundle_sha256
+            plan_files[f"data/initial-plans/{path.name}"] = path.read_bytes()
     sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
     dirty = subprocess.check_output(
         ["git", "status", "--porcelain", "--", "src", "scripts", "configs", "datasets/cb-mixture-36", "pyproject.toml"], cwd=repo
@@ -139,6 +159,8 @@ def main():
         coordinator_notebook=not args.no_coordinator and not args.no_coordinator_notebook,
         coordination_variant=args.coordination_variant,
         coordination_mode=args.coordination_mode,
+        coordinator_implementation_enabled=not args.no_implementation_coordinator,
+        initial_plans=initial_plans,
         planning_step_limit=args.planning_step_limit,
         planning_time_limit=args.planning_time_limit,
         worker_reminder_interval=args.worker_reminder_interval,
@@ -155,6 +177,7 @@ def main():
                 f"coordinator_notebook = {str(not args.no_coordinator and not args.no_coordinator_notebook).lower()}\n"
                 f"coordination_variant = {args.coordination_variant!r}\n"
                 f"coordination_mode = {args.coordination_mode!r}\n"
+                f"coordinator_implementation_enabled = {str(not args.no_implementation_coordinator).lower()}\n"
                 f"planning_step_limit = {args.planning_step_limit}\n"
                 f"planning_time_limit = {args.planning_time_limit}\n"
                 f"worker_reminder_interval = {args.worker_reminder_interval}\n"
@@ -167,11 +190,12 @@ def main():
                 dict(enabled=args.checkpoint_repair, format="filesystem-v1", location="logs/real/team/<repo>/<task>/<features>/checkpoints")
             ),
         }
+        records.update(plan_files)
         if reports:
             records["images.json"] = json.dumps(images)
             records["images.sha256.json"] = json.dumps(checksums)
         for name, value in records.items():
-            data = value.encode()
+            data = value if isinstance(value, bytes) else value.encode()
             info = tarfile.TarInfo(f"_run/{name}")
             info.size = len(data)
             tar.addfile(info, io.BytesIO(data))
@@ -183,7 +207,7 @@ def main():
             "ssh",
             args.host,
             f"mkdir -p {q(args.root)}/code {q(args.root)}/runs && mkdir {q(code)} && mkdir {q(run)} "
-            f"&& mkdir {q(run)}/logs && tar -xf - -C {q(code)} && cp {q(code)}/_run/* {q(run)}/",
+            f"&& mkdir {q(run)}/logs && tar -xf - -C {q(code)} && cp -r {q(code)}/_run/. {q(run)}/",
         ],
         input=buffer.getvalue(),
         env=env,
@@ -202,6 +226,8 @@ def main():
         COOPER_COORDINATOR_NOTEBOOK="0" if args.no_coordinator_notebook else "1",
         COOPER_COORDINATION_VARIANT=args.coordination_variant,
         COOPER_COORDINATION_MODE=args.coordination_mode,
+        COOPER_COORDINATOR_IMPLEMENTATION_ENABLED="0" if args.no_implementation_coordinator else "1",
+        COOPER_INITIAL_PLAN_DIR=f"{run}/data/initial-plans" if initial_plans else "",
         COOPER_PLANNING_STEP_LIMIT=str(args.planning_step_limit),
         COOPER_PLANNING_TIME_LIMIT=str(args.planning_time_limit),
         COOPER_WORKER_REMINDER_INTERVAL=str(args.worker_reminder_interval),

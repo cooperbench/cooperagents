@@ -77,6 +77,8 @@ PYCONFIG
         --team-name real --log-dir "$COOPER_RUN/logs")
   if [[ "${COOPER_COORDINATOR:-1}" == 1 ]]; then args+=(--coordinator); fi
   if [[ "${COOPER_COORDINATOR_NOTEBOOK:-1}" == 0 ]]; then args+=(--no-coordinator-notebook); fi
+  if [[ "${COOPER_COORDINATOR_IMPLEMENTATION_ENABLED:-1}" == 0 ]]; then args+=(--no-implementation-coordinator); fi
+  if [[ -n "${COOPER_INITIAL_PLAN_DIR:-}" ]]; then args+=(--initial-plan-dir "$COOPER_INITIAL_PLAN_DIR"); fi
   args+=(--coordination-variant "${COOPER_COORDINATION_VARIANT:-auto-prompt}"
          --coordination-mode "${COOPER_COORDINATION_MODE:-direct}"
          --planning-step-limit "${COOPER_PLANNING_STEP_LIMIT:-200}"

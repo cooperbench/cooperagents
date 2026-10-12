@@ -6,12 +6,32 @@ import json
 from collections import Counter
 from pathlib import Path
 
+from cooperagents.initial_plan import InitialPlan
 from cooperagents.trajectory import open_events, replay
+
+
+def audit_worker_summaries(rows: list[dict], plan: InitialPlan) -> None:
+    """Check the immutable memory, its recipient and first native model input."""
+    deliveries = [r for r in rows if r["event"] == "worker_summary_delivery"]
+    expected = dict(plan.worker_summaries)
+    if len(deliveries) != len(expected) or {r["data"]["target"] for r in deliveries} != set(expected):
+        raise ValueError("Worker summary delivery roster differs from the approved bundle")
+    for row in deliveries:
+        aid, content = row["data"]["target"], row["data"]["content"]
+        first = next(r for r in rows if r["actor"] == aid and r["event"] == "request")
+        if content != expected[aid] or row["seq"] >= first["seq"] or not row["data"].get("synthetic"):
+            raise ValueError("Worker summary differs from the approved bundle or was delivered too late")
+        messages = first["data"]["request"]["messages"]
+        if sum(m.get("role") == "assistant" and m.get("content") == content for m in messages) != 1:
+            raise ValueError("Worker summary is missing from its first native model input")
 
 
 def audit_coordination(rows: list[dict], result: dict) -> dict:
     """Verify host protocol, separately from human review of code-edit behavior."""
     mode = result.get("metrics", {}).get("coordination_mode", "direct")
+    injected = result.get("metrics", {}).get("planning", {}).get("outcome") == "injected"
+    has_plan = mode == "group-chat-planning" or injected
+    injections = []
     messages, deliveries, requests, finalizing, ended, failed = {}, {}, {}, [], [], []
     pending_public = {}
     requested_public = Counter()
@@ -40,6 +60,8 @@ def audit_coordination(rows: list[dict], result: dict) -> dict:
                 expected = messages.get(record["message_id"])
                 if expected is None or any(record[key] != expected[key] for key in ("sender", "addressed_to", "content")):
                     raise ValueError("Coordinator model input contains changed/noncanonical public records")
+        elif event == "initial_plan_injected":
+            injections.append(row)
         elif event == "group_message":
             mid = data["message_id"]
             if mid != len(messages) + 1 or data["sender"] not in ("agent1", "agent2", "coordinator"):
@@ -82,6 +104,12 @@ def audit_coordination(rows: list[dict], result: dict) -> dict:
                     raise ValueError("Forced plan step budget was not exhausted")
                 if data["reason"] == "time_limit" and budget["seconds_remaining"] > 0:
                     raise ValueError("Forced plan time budget was not exhausted")
+            elif data["outcome"] == "injected":
+                if not injected or len(injections) != 1 or confirmations or any(worker_requests.values()):
+                    raise ValueError("Injected plan lacks an honest pre-worker boundary")
+                expected_ids = injections[0]["data"]["history_message_ids"]
+                if expected_ids != list(range(1, len(messages) + 1)) or any(not m.get("synthetic") for m in messages.values()):
+                    raise ValueError("Injected history is not fully labeled canonical synthetic evidence")
             else:
                 raise ValueError("Unknown planning end outcome")
         elif event == "plan_delivery":
@@ -92,7 +120,7 @@ def audit_coordination(rows: list[dict], result: dict) -> dict:
             deliveries[data["target"]] = row
         elif event == "worker_request":
             worker_requests[data["target"]] = row
-            if mode == "group-chat-planning" and data["phase"] == "implementation":
+            if has_plan and data["phase"] == "implementation":
                 if set(deliveries) != {"agent1", "agent2"} or max(d["seq"] for d in deliveries.values()) >= row["seq"]:
                     raise ValueError("Implementation request preceded both final plan deliveries")
                 requests[data["target"]] = row
@@ -110,7 +138,7 @@ def audit_coordination(rows: list[dict], result: dict) -> dict:
                 if canonical not in content:
                     raise ValueError("Public message absent or changed in actual model request")
                 requested_public[row["actor"]] += 1
-            if mode == "group-chat-planning" and snapshot["phase"] == "implementation":
+            if has_plan and snapshot["phase"] == "implementation":
                 expected = ended[-1]["data"]["content"]
                 texts = [m.get("content") or "" for m in data["request"]["messages"]]
                 if not any(t.startswith("[IMPLEMENTATION MODE]") and expected in t for t in texts):
@@ -118,7 +146,7 @@ def audit_coordination(rows: list[dict], result: dict) -> dict:
                 actual_implementation_requests[row["actor"]] += 1
         elif event == "planning_failed":
             failed.append(row)
-    if mode == "group-chat-planning":
+    if has_plan:
         outcome = result["metrics"]["planning"]["outcome"]
         if outcome == "error":
             if not failed or any(data["data"]["phase"] == "implementation" for data in requests.values()):
@@ -148,6 +176,7 @@ def audit_coordination(rows: list[dict], result: dict) -> dict:
         group_messages=len(messages),
         group_delivery_positions=dict(group_deliveries),
         planning_outcome=result.get("metrics", {}).get("planning", {}).get("outcome"),
+        initial_plan_bundle_sha256=injections[0]["data"]["bundle_sha256"] if len(injections) == 1 else None,
         final_deliveries=sorted(deliveries),
         public_records_in_requests=dict(requested_public),
         public_records_without_later_request={k: sorted(v) for k, v in pending_public.items()},
@@ -210,6 +239,22 @@ def audit(run: Path) -> dict:
                 raise ValueError(f"{pair}/{actor}: final status or step mismatch")
             if counts[f"{actor}:request"] == 0 and not result.get("metrics", {}).get("planning_failed"):
                 raise ValueError(f"{pair}/{actor}: missing requests")
+        coordination = audit_coordination(rows, result)
+        approved_digest = metadata.get("initial_plans", {}).get(pair)
+        if approved_digest is not None or coordination["planning_outcome"] == "injected":
+            from cooperagents.initial_plan import InitialPlan, initial_plan_path
+
+            plan = InitialPlan.load(initial_plan_path(run / "data/initial-plans", pair), expected_pair=pair)
+            if plan.bundle_sha256 != approved_digest or coordination["initial_plan_bundle_sha256"] != approved_digest:
+                raise ValueError("Injected plan differs from the immutable run input")
+            ending = next(r["data"] for r in rows if r["event"] == "planning_end")
+            history = [r["data"] for r in rows if r["event"] == "group_message"][:len(plan.history)]
+            if ending["content"] != plan.content or any(
+                (r["sender"], r["addressed_to"], r["content"]) != (m.sender, m.addressed_to, m.content)
+                for r, m in zip(history, plan.history, strict=True)
+            ):
+                raise ValueError("Injected notebook/history differs from the approved bundle")
+            audit_worker_summaries(rows, plan)
         checkpoints = {}
         if metadata.get("checkpoint_repair"):
             from cooperagents.checkpoint import verify_checkpoint
@@ -244,7 +289,7 @@ def audit(run: Path) -> dict:
                 counts=dict(counts),
                 agents=ends,
                 checkpoints=checkpoints,
-                coordination=audit_coordination(rows, result),
+                coordination=coordination,
             )
         )
     return dict(

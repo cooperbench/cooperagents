@@ -59,6 +59,7 @@ from cooperagents.coordination_prompts import (
 from cooperagents.env.base import Environment
 from cooperagents.git_snapshots import GitEvidence
 from cooperagents.git_snapshots import GitShareSync as _GitShareSync
+from cooperagents.initial_plan import InitialPlan
 from cooperagents.llm import LLMClient
 from cooperagents.metrics import coordination_metrics, spawn_metrics
 from cooperagents.patching import strip_test_sections
@@ -328,6 +329,8 @@ class _Coordinator:
         notebook_path: Path | None = None,
         coordination_variant: str = "auto-prompt",
         coordination_mode: str = "direct",
+        coordinator_implementation_enabled: bool = True,
+        initial_plan: InitialPlan | None = None,
         planning_step_limit: int = 200,
         planning_time_limit_s: int = 600,
         worker_reminder_interval: int = 10,
@@ -354,6 +357,11 @@ class _Coordinator:
         self.planning_step_limit = planning_step_limit
         self.planning_time_limit_s = planning_time_limit_s
         self.coordination_mode = coordination_mode
+        self.coordinator_implementation_enabled = coordinator_implementation_enabled
+        self.initial_plan = initial_plan
+        self._summary_delivered: set[str] = set()
+        if initial_plan is not None and (coordination_mode != "group-chat" or coordination_variant != "auto-prompt"):
+            raise ValueError("Initial plan injection requires auto-prompt group-chat")
         self.coordination_variant = coordination_variant
         self.trace = trace
         self.error: Exception | None = None
@@ -371,7 +379,7 @@ class _Coordinator:
         self._chat_positions = {aid: 0 for aid in (*self._assignments, "coordinator")}
         self._condition = threading.Condition(self._lock)
         self._wake = threading.Event()
-        self._planning = coordination_mode == "group-chat-planning"
+        self._planning = coordination_mode == "group-chat-planning" or initial_plan is not None
         self.phase = "planning" if self._planning else "implementation"
         self._planning_started: float | None = None
         self._planning_deadline: float | None = None
@@ -477,7 +485,7 @@ class _Coordinator:
             )
         return _COORDINATION_WORKFLOW + note + (GROUP_CHAT if self.coordination_mode != "direct" else "") + phase_protocol
 
-    def publish(self, sender: str, recipient: str, content: str) -> None:
+    def publish(self, sender: str, recipient: str, content: str, *, synthetic: bool = False) -> None:
         """Canonical public record; callers bind sender rather than trusting model arguments."""
         with self._lock:
             if sender not in self._chat_positions or recipient not in (*self._chat_positions, "group"):
@@ -491,14 +499,15 @@ class _Coordinator:
                 content = content[: 1200 - len(suffix)] + suffix
             row = dict(message_id=len(self._chat) + 1, sender=sender, addressed_to=recipient, content=content)
             self._chat.append(row)
-            if self._planning and self.phase == "planning" and sender in self._assignments:
+            if self._planning and self.phase == "planning" and sender in self._assignments and not synthetic:
                 self._participants.add(sender)
                 if sender in self._confirmations:
                     del self._confirmations[sender]
                     self._emit("plan_confirmation", target=sender, accepted=False, reason="new_discussion", version=self._version)
                 self._condition.notify_all()
                 self._wake.set()
-            self._emit("group_message", **row, phase=self.phase)
+            provenance = {"synthetic": True} if synthetic else {}
+            self._emit("group_message", **row, phase=self.phase, **provenance)
 
     @staticmethod
     def _chat_text(row: dict) -> str:
@@ -541,6 +550,31 @@ class _Coordinator:
                 )
             )
             self._emit("group_delivery", target=agent_id, message_ids=[r["message_id"] for r in recent], restored=True)
+
+    def inject_initial_plan(self) -> None:
+        """Skip model planning, retain honest provenance and the native delivery barrier."""
+        plan = self.initial_plan
+        if plan is None or self._agents or self._chat or self._final_plan is not None:
+            raise ValueError("Initial plan can only be injected once before workers start")
+        plan.validate_assignments(self._repo, self._task_id, list(self._assignments.values()))
+        for aid, env in self._envs.items():
+            result = env.execute("git rev-parse HEAD", timeout=10)
+            if result.exit_code or result.stdout.strip() != plan.source_base_commit:
+                raise ValueError(f"Initial plan base source mismatch for {aid}")
+            if env.execute("git diff --quiet HEAD", timeout=10).exit_code:
+                raise ValueError(f"Initial plan requires unchanged base code for {aid}")
+        with self._condition:
+            self._planning_started = time.time()
+            self._planning_deadline = self._planning_started  # Synthetic preparation has no rollout budget.
+            for message in plan.history:
+                self.publish(message.sender, message.addressed_to, message.content, synthetic=True)
+            self.update_notebook(plan.content)
+            self._emit(
+                "initial_plan_injected", pair=plan.pair, source_base_commit=plan.source_base_commit,
+                bundle_sha256=plan.bundle_sha256, synthetic=True, history_message_ids=list(range(1, len(plan.history) + 1)),
+                feature_sha256=dict(plan.feature_sha256),
+            )
+            self._set_final_plan_locked("injected")
 
     def start_planning(self) -> None:
         with self._condition:
@@ -691,6 +725,12 @@ class _Coordinator:
             self._condition.notify_all()
             return {"output": f"Plan confirmation: {reason}", "returncode": 0 if accepted else 1, "exception_info": ""}
 
+    def _implementation_text(self) -> str:
+        text = IMPLEMENTATION_MODE.format(**self._final_plan)
+        if self.initial_plan is not None:
+            text = text.replace("Planning outcome: injected\n", "")
+        return text
+
     def _restore_plan_locked(self, aid: str, agent) -> None:
         if not self._planning or self.phase in ("finalizing", "failed"):
             return
@@ -702,7 +742,15 @@ class _Coordinator:
                     + f"\nCurrent notebook version: {self._version}\n<planning_notebook>\n{self._notebook}\n</planning_notebook>"
                 )
             else:
-                text = IMPLEMENTATION_MODE.format(**self._final_plan)
+                if self.initial_plan is not None and aid not in self._summary_delivered:
+                    summary = dict(self.initial_plan.worker_summaries).get(aid)
+                    if summary is not None:
+                        agent.add_messages(agent.model.format_message(
+                            role="assistant", content=summary, extra={"summary": True},
+                        ))
+                        self._summary_delivered.add(aid)
+                        self._emit("worker_summary_delivery", target=aid, content=summary, synthetic=True)
+                text = self._implementation_text()
             agent.add_messages(agent.model.format_message(role="user", content=text))
             self._plan_context[aid] = marker
             if self.phase == "implementation" and aid not in self._delivered:
@@ -778,7 +826,7 @@ class _Coordinator:
                     PLANNING_MODE + f"\nCurrent notebook version: {self._version}\n"
                     f"<planning_notebook>\n{self._notebook}\n</planning_notebook>"
                     if self.phase == "planning"
-                    else IMPLEMENTATION_MODE.format(**self._final_plan)
+                    else self._implementation_text()
                 )
             self._requests[aid] = snapshot
             if self._planning and self.phase == "planning":
@@ -790,6 +838,7 @@ class _Coordinator:
         with self._lock:
             return dict(
                 coordination_mode=self.coordination_mode,
+                coordinator_implementation_enabled=self.coordinator_implementation_enabled,
                 group_messages=len(self._chat),
                 coordinator_calls=self._coordinator_calls,
                 group_delivery_positions=dict(self._chat_positions),
@@ -1124,6 +1173,9 @@ class _Coordinator:
                         )
 
     def decide(self, *, initial: bool = False) -> None:
+        with self._lock:
+            if self.phase == "implementation" and not self.coordinator_implementation_enabled:
+                return
         replies = self._bus.receive("coordinator")
         self._pending.extend(replies)
         if replies:
@@ -1138,6 +1190,11 @@ class _Coordinator:
             decision_phase = self.phase
             decision_version = self._version
             planning = self._planning_snapshot_locked() if self._planning else None
+            if self.initial_plan is not None:
+                planning = {
+                    "phase": self.phase,
+                    "final_plan": {key: self._final_plan[key] for key in ("version", "content", "sha256")},
+                }
             self._observed_confirmations = dict(self._confirmations)
             agents, finished = dict(self._agents), dict(self._finished)
             version, notebook = self._version, self._notebook
@@ -1630,6 +1687,8 @@ class UnifiedHarness:
         coordinator_notebook_path: Path | None = None,
         coordination_variant: str = "auto-prompt",
         coordination_mode: str = "direct",
+        coordinator_implementation_enabled: bool = True,
+        initial_plan: InitialPlan | None = None,
         planning_step_limit: int = 200,
         planning_time_limit_s: int = 600,
         worker_reminder_interval: int = 10,
@@ -1650,6 +1709,10 @@ class UnifiedHarness:
         self.planning_step_limit = planning_step_limit
         self.planning_time_limit_s = planning_time_limit_s
         self.coordination_mode = coordination_mode
+        self.coordinator_implementation_enabled = coordinator_implementation_enabled
+        self.initial_plan = initial_plan
+        if initial_plan is not None and (coordination_mode != "group-chat" or coordination_variant != "auto-prompt"):
+            raise ValueError("Initial plan injection requires auto-prompt group-chat")
         self.coordination_variant = coordination_variant
         self.coordinator_notebook_path = Path(coordinator_notebook_path).resolve() if coordinator_notebook_path is not None else None
         self.trajectory = trajectory
@@ -1875,6 +1938,8 @@ class UnifiedHarness:
                         notebook_path=self.coordinator_notebook_path if spec.coordinator_notebook else None,
                         coordination_variant=self.coordination_variant,
                         coordination_mode=self.coordination_mode,
+                        coordinator_implementation_enabled=self.coordinator_implementation_enabled,
+                        initial_plan=self.initial_plan,
                         planning_step_limit=self.planning_step_limit,
                         planning_time_limit_s=self.planning_time_limit_s,
                         worker_reminder_interval=self.worker_reminder_interval,
@@ -1920,10 +1985,13 @@ class UnifiedHarness:
                 coordinator_thread = None
                 if coordinator is not None:
                     coordinator.verify_mounts()
-                    try:
-                        coordinator.decide(initial=True)
-                    except Exception as exc:
-                        raise RuntimeError("Coordinator failed during initial decision") from exc
+                    if self.initial_plan is not None:
+                        coordinator.inject_initial_plan()
+                    else:
+                        try:
+                            coordinator.decide(initial=True)
+                        except Exception as exc:
+                            raise RuntimeError("Coordinator failed during initial decision") from exc
                     coordinator.start_planning()
                     coordinator_thread = threading.Thread(target=coordinator.run, daemon=True)
                     coordinator_thread.start()
@@ -2792,6 +2860,8 @@ class UnifiedHarness:
                 return result
             finally:
                 sink.close(failed=failed)
+        if not self.coordinator_implementation_enabled and not spec.coordinator:
+            raise ValueError("Disabling implementation decisions requires coordinator enabled")
         if self.coordination_variant == "human-prompt" and not (spec.coordinator and spec.coordinator_notebook):
             raise ValueError("Human-prompt coordination requires coordinator and notebook")
         if (spec.coordinator or self.coordinator_complete is not None) and (
@@ -2818,6 +2888,7 @@ class UnifiedHarness:
                 spec=config, assignments=[asdict(a) for a in assignments], step_limit=self.step_limit,
                 cost_limit=self.cost_limit, command_timeout=self.command_timeout,
                 coordination_variant=self.coordination_variant,
+                coordinator_implementation_enabled=self.coordinator_implementation_enabled,
             ), indent=2))
         if spec.coordinator:
             ids = [a.agent_id for a in assignments]
@@ -2833,6 +2904,12 @@ class UnifiedHarness:
             raise ValueError("Group coordination requires two workers, coordinator, notebook, and no wait-protocol")
         if self.coordination_mode == "group-chat-planning" and (spec.task_board or spec.claim_mode or spec.allow_spawn_tool):
             raise ValueError("Opening planning does not support task-board, claim-mode, or helpers")
+        if self.initial_plan is not None:
+            if (not spec.shared_workspace or spec.worker != "mini_swe" or not spec.coop_tools or spec.seed_prior
+                    or spec.best_of_n != 1 or spec.adaptive or spec.decompose or spec.contract_first
+                    or spec.task_board or spec.claim_mode or spec.allow_spawn_tool):
+                raise ValueError("Initial plan requires the standard two-worker no-seed coop-tools implementation path")
+            self.initial_plan.validate_assignments(spec.repo, spec.task_id, assignments)
         if spec.adaptive:
             return self._run_adaptive(spec, assignments, bus, env_factory, llm, llm_factory)
         if spec.decompose:

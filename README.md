@@ -126,6 +126,22 @@ existing shell tool. Updates replace the file atomically; the poller never pushe
 its full text. After context compaction, the next poll repeats the read reminder.
 Reading consumes normal worker budget and is not guaranteed by the harness.
 
+Add `--no-implementation-coordinator` to skip coordinator model decisions once
+implementation begins. Opening planning and forced finalization still run; group
+chat, notebook delivery and worker reminders remain available. In `group-chat`
+without opening planning this also skips the initial decision. The default is
+unchanged. The benchmark and NLP submission CLIs accept this flag; direct
+`UnifiedHarness` callers use `coordinator_implementation_enabled=False`.
+This disables model intervention, not the coordinator host that delivers chat.
+
+Add `--initial-plan-dir <directory>` to start an `auto-prompt` / `group-chat`
+team from reviewed notebook, public discussion and per-worker memory bundles.
+Pair, feature text hashes and clean source HEAD must match the bundle. The host
+restores the checkpoint before the first worker request; both workers receive the
+final plan before either starts implementation. Provenance stays in audit records.
+Use `--no-implementation-coordinator` in both comparison arms to disable runtime
+model intervention; the no-plan arm omits `--initial-plan-dir`.
+
 Add `--no-coordinator-notebook` for the same coordinator with messages only.
 ProgramBench's `coopgitc2` arm accepts the same flag. The implementation and
 [k=3 comparison plan](thoughts/shared/plans/2026-09-27-coordinator-notebook.md)
