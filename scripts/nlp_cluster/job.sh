@@ -80,7 +80,8 @@ PYCONFIG
   args+=(--coordination-variant "${COOPER_COORDINATION_VARIANT:-auto-prompt}"
          --coordination-mode "${COOPER_COORDINATION_MODE:-direct}"
          --planning-step-limit "${COOPER_PLANNING_STEP_LIMIT:-200}"
-         --planning-time-limit "${COOPER_PLANNING_TIME_LIMIT:-600}")
+         --planning-time-limit "${COOPER_PLANNING_TIME_LIMIT:-600}"
+         --worker-reminder-interval "${COOPER_WORKER_REMINDER_INTERVAL:-10}")
   if [[ "${COOPER_REPAIR:-0}" == 1 ]]; then
     args+=(--repair-integrator --repair-attempts "${COOPER_REPAIR_ATTEMPTS:-1}")
   fi

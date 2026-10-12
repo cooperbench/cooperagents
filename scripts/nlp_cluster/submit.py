@@ -31,6 +31,7 @@ def main():
     parser.add_argument("--no-coordinator-notebook", action="store_true")
     parser.add_argument("--planning-step-limit", type=int, default=200)
     parser.add_argument("--planning-time-limit", type=int, default=600)
+    parser.add_argument("--worker-reminder-interval", type=int, default=10, help="remind every N worker decisions; 0 disables")
     parser.add_argument("--coordination-mode", choices=("direct", "group-chat", "group-chat-planning"), default="direct")
     parser.add_argument("--coordination-variant", choices=("auto-prompt", "human-prompt"), default="auto-prompt")
     parser.add_argument("--step-limit", type=int, default=1000)
@@ -43,6 +44,8 @@ def main():
     parser.add_argument("--repair-attempts", type=int, default=1)
     parser.add_argument("--cooperbench-dir", help="Immutable patched CooperBench checkout on the cluster")
     args = parser.parse_args()
+    if args.worker_reminder_interval < 0:
+        parser.error("Worker reminder interval must be nonnegative")
     if args.planning_step_limit < 1 or args.planning_time_limit < 1:
         parser.error("Planning budgets must be positive")
     if args.cpus < 1 or args.concurrency < 1 or args.eval_concurrency < 1 or args.repair_attempts < 1:
@@ -138,6 +141,7 @@ def main():
         coordination_mode=args.coordination_mode,
         planning_step_limit=args.planning_step_limit,
         planning_time_limit=args.planning_time_limit,
+        worker_reminder_interval=args.worker_reminder_interval,
         repair_integrator=args.repair_integrator,
         repair_attempts=args.repair_attempts if args.repair_integrator else 0,
     )
@@ -153,6 +157,7 @@ def main():
                 f"coordination_mode = {args.coordination_mode!r}\n"
                 f"planning_step_limit = {args.planning_step_limit}\n"
                 f"planning_time_limit = {args.planning_time_limit}\n"
+                f"worker_reminder_interval = {args.worker_reminder_interval}\n"
                 "completion_gate = true\npresub_merge = false\n"
                 f"repair = {str(args.repair_integrator).lower()}\n"
                 f"repair_attempts = {args.repair_attempts if args.repair_integrator else 0}\n"
@@ -199,6 +204,7 @@ def main():
         COOPER_COORDINATION_MODE=args.coordination_mode,
         COOPER_PLANNING_STEP_LIMIT=str(args.planning_step_limit),
         COOPER_PLANNING_TIME_LIMIT=str(args.planning_time_limit),
+        COOPER_WORKER_REMINDER_INTERVAL=str(args.worker_reminder_interval),
         COOPER_STEP_LIMIT=str(args.step_limit),
         COOPER_AGENT_TIME_LIMIT=str(args.agent_time_limit),
         COOPER_REPAIR="1" if args.repair_integrator else "0",

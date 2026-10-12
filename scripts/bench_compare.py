@@ -215,6 +215,7 @@ def run_team(
     coordination_mode: str = "direct",
     planning_step_limit: int = 200,
     planning_time_limit: int = 600,
+    worker_reminder_interval: int = 10,
     focused_repair: bool = False,
     repair_time: int = 0,
     apply_merge: bool = False,
@@ -317,6 +318,7 @@ def run_team(
         coordination_mode=coordination_mode,
         planning_step_limit=planning_step_limit,
         planning_time_limit_s=planning_time_limit,
+        worker_reminder_interval=worker_reminder_interval,
         checkpoint_dir=pair_dir / "checkpoints" if checkpoint_repair else None,
     )
     img = image_name(item.repo, item.task_id)
@@ -346,6 +348,7 @@ def run_team(
             coordination_mode=coordination_mode,
             planning_step_limit=planning_step_limit,
             planning_time_limit_s=planning_time_limit,
+            worker_reminder_interval=worker_reminder_interval,
         )
     try:
         worker_ids = {a.agent_id for a in assignments}
@@ -412,6 +415,7 @@ def main() -> None:
                     help="keep the same coordinator policy and messages, with no notebook or mount")
     ap.add_argument("--planning-step-limit", type=int, default=200)
     ap.add_argument("--planning-time-limit", type=int, default=600)
+    ap.add_argument("--worker-reminder-interval", type=int, default=10, help="remind every N worker decisions; 0 disables")
     ap.add_argument("--coordination-mode", choices=("direct", "group-chat", "group-chat-planning"), default="direct")
     ap.add_argument("--coordination-variant", choices=("auto-prompt", "human-prompt"), default="auto-prompt")
     ap.add_argument("--focused-repair", action="store_true", help="R2: harness gathers merge-damage evidence into the repair brief")
@@ -463,6 +467,8 @@ def main() -> None:
     ap.add_argument("--checkpoint-repair", action="store_true", help="save worker and repair filesystems and full I/O for replay")
     ap.add_argument("--skip-eval", action="store_true", help="write generation artifacts without scoring")
     args = ap.parse_args()
+    if args.worker_reminder_interval < 0:
+        ap.error("Worker reminder interval must be nonnegative")
     if args.planning_step_limit < 1 or args.planning_time_limit < 1:
         ap.error("Planning budgets must be positive")
     if args.coordination_variant == "human-prompt" and (not args.coordinator or args.no_coordinator_notebook):
@@ -551,6 +557,7 @@ def main() -> None:
                     coordination_mode=args.coordination_mode,
                     planning_step_limit=args.planning_step_limit,
                     planning_time_limit=args.planning_time_limit,
+                    worker_reminder_interval=args.worker_reminder_interval,
                     focused_repair=args.focused_repair,
                     repair_time=args.repair_time,
                     apply_merge=args.apply_merge,

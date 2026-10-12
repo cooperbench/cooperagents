@@ -326,6 +326,7 @@ class _Coordinator:
         coordination_mode: str = "direct",
         planning_step_limit: int = 200,
         planning_time_limit_s: int = 600,
+        worker_reminder_interval: int = 10,
         repo: str = "",
         task_id: int = 0,
         step_limit: int = 0,
@@ -343,6 +344,9 @@ class _Coordinator:
             raise ValueError(f"Unknown coordination mode: {coordination_mode}")
         if planning_step_limit < 1 or planning_time_limit_s < 1:
             raise ValueError("Planning budgets must be positive")
+        if worker_reminder_interval < 0:
+            raise ValueError("Worker reminder interval must be nonnegative")
+        self.worker_reminder_interval = worker_reminder_interval
         self.planning_step_limit = planning_step_limit
         self.planning_time_limit_s = planning_time_limit_s
         self.coordination_mode = coordination_mode
@@ -706,6 +710,33 @@ class _Coordinator:
                     content=self._final_plan["content"],
                 )
                 self._condition.notify_all()
+
+    def worker_reminder(self, aid: str, decision: int) -> str | None:
+        """Fixed cadence over worker decisions, including both execution phases."""
+        if not self.worker_reminder_interval or decision % self.worker_reminder_interval:
+            return None
+        with self._lock:
+            assignment = self._assignments[aid]
+            task = (
+                f"Your assigned task is feature {assignment.feature_id}."
+                if assignment.feature_id is not None
+                else "Your assigned task is the original task provided at the start."
+            )
+            notebook = (
+                "Latest coordination notebook:\n"
+                f"- Version: {self._version}\n"
+                "- Path: /coordination/notebook.md\n\n"
+                f"Follow the notebook entries addressed to {aid}.\n"
+                "If you have not read this version, or no longer remember your\n"
+                "assignment, read the notebook before continuing.\n"
+                if self._notebook_path is not None
+                else "No coordination notebook is enabled.\n"
+            )
+            return (
+                f"[HARNESS REMINDER]\nYou are {aid}, a worker.\n{task}\n"
+                f"Current phase: {self.phase}.\n\n{notebook}"
+                "Your original feature requirements still define the task goal."
+            )
 
     def before_query(self, aid: str, agent) -> dict:
         with self._condition:
@@ -1586,6 +1617,7 @@ class UnifiedHarness:
         coordination_mode: str = "direct",
         planning_step_limit: int = 200,
         planning_time_limit_s: int = 600,
+        worker_reminder_interval: int = 10,
         checkpoint_dir: Path | None = None,
     ) -> None:
         if coordinator_complete is not None and not callable(coordinator_complete):
@@ -1597,6 +1629,9 @@ class UnifiedHarness:
             raise ValueError(f"Unknown coordination mode: {coordination_mode}")
         if planning_step_limit < 1 or planning_time_limit_s < 1:
             raise ValueError("Planning budgets must be positive")
+        if worker_reminder_interval < 0:
+            raise ValueError("Worker reminder interval must be nonnegative")
+        self.worker_reminder_interval = worker_reminder_interval
         self.planning_step_limit = planning_step_limit
         self.planning_time_limit_s = planning_time_limit_s
         self.coordination_mode = coordination_mode
@@ -1827,6 +1862,7 @@ class UnifiedHarness:
                         coordination_mode=self.coordination_mode,
                         planning_step_limit=self.planning_step_limit,
                         planning_time_limit_s=self.planning_time_limit_s,
+                        worker_reminder_interval=self.worker_reminder_interval,
                         repo=spec.repo,
                         task_id=spec.task_id,
                         step_limit=self.step_limit,

@@ -414,6 +414,10 @@ class DefaultAgent:
                 self.model._tools = [
                     tool for tool in self._planning_tools if snapshot["phase"] == "planning" or tool["function"]["name"] != "confirm_plan"
                 ]
+        reminder = coordinator.worker_reminder(self.agent_id, self.n_calls + 1) if coordinator is not None else None
+        reminder_message = self.model.format_message(role="user", content=reminder) if reminder is not None else None
+        if reminder_message is not None:
+            self.add_messages(reminder_message)
         self.n_calls += 1
         try:
             message = self.model.query(self.messages)
@@ -436,6 +440,9 @@ class DefaultAgent:
                 self._emergency_truncate()
                 if coordinator is not None:
                     coordinator.restore_context(self.agent_id, self, request=True)
+                # Preserve the scheduled reminder if overflow truncation dropped it.
+                if reminder_message is not None and reminder_message not in self.messages:
+                    self.add_messages(reminder_message)
                 try:
                     message = self.model.query(self.messages)
                     break

@@ -224,6 +224,21 @@ exception paths. A hard process kill cannot guarantee delivery. Custom
 observations and decisions are captured, but raw model usage requires recording
 inside that callback.
 
+### Worker identity reminder
+
+Coordinator workers receive a `[HARNESS REMINDER]` user message immediately before
+model decisions 10, 20, 30, ... by default. Each worker counts independently across
+planning and implementation. The reminder names the real worker ID, original feature,
+current phase, and latest notebook version/path. It adds no ownership summary and does
+not force a notebook read. Without a notebook, it states that no notebook is enabled.
+
+`--worker-reminder-interval 10` sets the fixed cadence; `0` disables it. This applies
+to both prompt strategies and all coordinator communication modes. Solo workers and
+runs without a coordinator receive no reminder. Phase changes, notebook updates, and
+compaction do not trigger additional reminders. A scheduled reminder is appended after
+compaction; overflow retries retain that same reminder without counting a new decision.
+The NLP launcher forwards the interval into metadata, variant, and actual arguments.
+
 ### Public group chat and opening planning
 
 `--coordination-variant auto-prompt|human-prompt` selects the prompt strategy.

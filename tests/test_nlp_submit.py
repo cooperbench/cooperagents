@@ -9,9 +9,10 @@ from pathlib import Path
 import pytest
 
 
+@pytest.mark.parametrize("interval", [None, 0, 7])
 @pytest.mark.parametrize("variant", ["auto-prompt", "human-prompt"])
 @pytest.mark.parametrize("mode", ["direct", "group-chat", "group-chat-planning"])
-def test_qualified_image_pins_resources_and_node(monkeypatch, tmp_path, variant, mode):
+def test_qualified_image_pins_resources_and_node(monkeypatch, tmp_path, variant, mode, interval):
     spec = importlib.util.spec_from_file_location("nlp_submit", Path(__file__).parents[1] / "scripts/nlp_cluster/submit.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -54,7 +55,7 @@ def test_qualified_image_pins_resources_and_node(monkeypatch, tmp_path, variant,
             "200",
             "--planning-time-limit",
             "600",
-        ],
+        ] + ([] if interval is None else ["--worker-reminder-interval", str(interval)]),
     )
     archive = io.BytesIO()
     with tarfile.open(fileobj=archive, mode="w"):
@@ -88,11 +89,15 @@ def test_qualified_image_pins_resources_and_node(monkeypatch, tmp_path, variant,
     assert "--time=02:00:00" in submission
     assert "COOPER_LANGFUSE=1" in submission
     assert f"COOPER_COORDINATION_VARIANT={variant}" in submission
+    assert f"COOPER_WORKER_REMINDER_INTERVAL={10 if interval is None else interval}" in submission
     with tarfile.open(fileobj=io.BytesIO(uploaded_archive)) as snapshot:
         metadata = json.loads(snapshot.extractfile("_run/metadata.json").read())
         assert metadata["coordination_variant"] == variant
         assert metadata["coordination_mode"] == mode
         assert metadata["planning_step_limit"] == 200 and metadata["planning_time_limit"] == 600
+        assert metadata["worker_reminder_interval"] == (10 if interval is None else interval)
+        variant_data = snapshot.extractfile("_run/variant.toml").read()
+        assert f"worker_reminder_interval = {10 if interval is None else interval}".encode() in variant_data
         assert f"{variant}-{mode}" in metadata["run_id"]
         assert f"coordination_variant = '{variant}'".encode() in snapshot.extractfile("_run/variant.toml").read()
     report.write_text(json.dumps(dict(passed=False, task=dict(repo="go_chi_task", task_id=26, pairs=[[1, 2]]))))
