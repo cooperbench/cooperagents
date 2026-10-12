@@ -1114,13 +1114,13 @@ class _Coordinator:
                     quoted = json.dumps(path, ensure_ascii=False)
                     if path in overlaps:
                         warnings.append(
-                            f"COLLISION: possible overlapping edits with {peer['id']}: {quoted} "
+                            f"POTENTIAL_CONFLICT: possible overlapping edits with {peer['id']}: {quoted} "
                             f"({pair[0]}/{pair[1]}: {overlaps[path]}; source=snapshot)"
                         )
                     else:
                         source = "snapshot" if path in unknown_snapshot else "current path observation"
                         warnings.append(
-                            f"COLLISION: same file modified; regions unknown with {peer['id']}: {quoted} (source={source})"
+                            f"POTENTIAL_CONFLICT: same file modified; regions unknown with {peer['id']}: {quoted} (source={source})"
                         )
 
     def decide(self, *, initial: bool = False) -> None:

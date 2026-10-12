@@ -323,12 +323,16 @@ command, return code, and available raw output digest. Missing, unexecuted, and 
 truncated results are excluded. Context compaction can reduce the available window. `STALL`
 keeps its existing behavior.
 
-With coordinator and Git sharing enabled, `COLLISION` compares the existing periodically
+With coordinator and Git sharing enabled, `POTENTIAL_CONFLICT` compares the existing periodically
 published snapshots against the common initial commit. Disjoint text regions do not warn;
 overlaps are advisory, not proof of a merge conflict. `git_snapshots` identifies the exact
 SHAs/times and unavailable evidence. Existing current path observations can report
 `regions unknown` for common paths outside the snapshot comparison. Stash snapshots omit
 untracked files and can lag behind edits; differing SHAs can also have identical trees.
+
+The coordinator receives do/no-do examples for verifying potential overlap before a repair.
+These are illustrative options, not a required checklist or sequence; similar evidence-based
+actions are allowed. Actual Git merge conflicts retain their existing meaning.
 
 These changes do not enable merge repair or alter worker messages, submission checks,
 scoring, or the default ten-decision identity reminder. Opening planning may publish a

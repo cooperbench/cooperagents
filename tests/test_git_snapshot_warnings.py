@@ -46,7 +46,7 @@ def test_output_head_tail_metadata_and_no_execution_state(size):
     assert result["output_chars"] == len(raw)
     assert result["output_truncated"] == (len(raw) > 1000)
     assert "state" not in result and "status" not in result
-    assert observation["collected_at"].endswith("+00:00")
+    assert "collected_at" not in observation
     assert "_loop_signature" not in json.dumps(observation)
 
 
@@ -81,10 +81,13 @@ def test_loop_window_compaction_and_full_command():
 @pytest.mark.parametrize("variant", ["auto-prompt", "human-prompt"])
 def test_rules_once_and_planning_exception(tmp_path, variant):
     _, prompt = observed([], notebook_path=tmp_path / "notebook.md", coordination_variant=variant, coordination_mode="group-chat-planning")
-    for rule in COORDINATOR_WARNING_RULES.strip().splitlines():
-        assert prompt.count(rule) == 1
+    for rule in filter(None, COORDINATOR_WARNING_RULES.strip().splitlines()):
+        assert prompt.splitlines().count(rule) == 1
     assert "publishing explicitly proposed ownership or APIs" in prompt
     assert "Workers then confirm the exact candidate version." in prompt
+    assert "do examples:" in prompt and "no do examples:" in prompt
+    assert "not a required checklist or sequence" in prompt
+    assert "You do not need to perform every example." in prompt
 
 
 def test_stall_behavior_retains_output_prefix():
@@ -181,7 +184,10 @@ def test_overlap_regions_with_insertions(git_pair, kind):
     pair = sync.evidence().comparisons[("agent1", "agent2")]
     assert "shared.py" in pair.overlaps and pair.error is None
     observation = snapshot_observation(sync, envs)
-    assert all(any("possible overlapping edits" in warning for warning in w["warnings"]) for w in observation["workers"])
+    assert all(
+        any(warning.startswith("POTENTIAL_CONFLICT: possible overlapping edits") for warning in w["warnings"])
+        for w in observation["workers"]
+    )
 
 
 def test_identical_file_versions_suppress_snapshot_warning(git_pair):

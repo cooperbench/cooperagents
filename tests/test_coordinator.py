@@ -231,9 +231,9 @@ def test_mechanical_warnings_are_observations_not_automatic_messages():
     c._envs["agent2"].execute = lambda *a, **k: ExecResult(" M shared.py\0", 0)
     c.decide()
     first, second = observations[0]["workers"]
-    assert [warning.split(":", 1)[0] for warning in first["warnings"]] == ["STALL", "COLLISION"]
+    assert [warning.split(":", 1)[0] for warning in first["warnings"]] == ["STALL", "POTENTIAL_CONFLICT"]
     assert second["warnings"] == [
-        'COLLISION: same file modified; regions unknown with agent1: "shared.py" (source=current path observation)'
+        'POTENTIAL_CONFLICT: same file modified; regions unknown with agent1: "shared.py" (source=current path observation)'
     ]
     assert c.events() == [] and c.drain("agent1") == [] and c.drain("agent2") == []
 

@@ -186,6 +186,28 @@ COORDINATOR_WARNING_RULES = """Warnings indicate possible problems, not confirme
 Cite the worker and tool_call_id supporting a repair request.
 Before requesting a revert, ask workers to confirm the overlapping edits and what would be lost.
 Confirm ownership or API changes with both workers before updating the notebook.
+
+POTENTIAL_CONFLICT indicates possible overlapping edits, not a confirmed merge conflict.
+
+The do examples are illustrative options, not a required checklist or sequence.
+Choose, combine, or adapt them to the situation; similar evidence-based
+actions are also valid. You do not need to perform every example.
+
+The no do examples illustrate mistakes to avoid and are not exhaustive.
+
+do examples:
+1. Ask each worker to inspect its own current changes and verify whether
+   the reported potential conflict exists.
+2. Ask workers to compare the relevant regions, distinguish their own
+   changes from peer code, and report the evidence.
+3. If workers confirm a problem, ask them to assess the smallest correction
+   and what existing work would be lost before proceeding.
+
+no do examples:
+1. Treat a potential-conflict warning as a confirmed merge failure.
+2. Attribute code shown in a peer-branch diff to the worker viewing it.
+3. Request a full-file rollback to HEAD before workers verify the problem
+   and its impact.
 """
 
 COORDINATOR_PLANNING = """
