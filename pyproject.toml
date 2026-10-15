@@ -17,7 +17,14 @@ llm = ["litellm>=1.40", "openai>=1.40"]
 mini = ["litellm>=1.40", "jinja2>=3.1", "pydantic>=2.0", "tenacity>=8.0", "pyyaml>=6.0"]
 # Non-code benchmarks (state substrate). PlanCraft is a pip package; WorkBench is
 # imported from a sibling checkout (see docs/SCALING_BENCHMARKS.md), not installed.
-benchmarks = ["plancraft>=0.4"]
+# datasets+pandas back the HuggingFace loaders (SWE-bench instances, Finance CSV);
+# tavily-python backs the Finance live web-search backend.
+benchmarks = ["plancraft>=0.4", "datasets>=2.0", "pandas>=2.0", "tavily-python>=0.5"]
+# Code benchmarks (git substrate) pull heavy infra and have strict Python floors
+# incompatible with this project's requires-python>=3.11, so they are NOT declared
+# as resolvable extras. Install them manually into a 3.12+ venv when running those
+# benchmarks:  uv pip install swebench            (SWE-bench Verified)
+#              uv pip install terminal-bench      (Terminal-Bench; needs Python>=3.12)
 dev = [
     "pytest>=8.0",
     "ruff>=0.6",

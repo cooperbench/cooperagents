@@ -263,6 +263,25 @@ def main() -> None:
         f"arm={args.arm} rep={args.rep} duration_s={dur:.0f} steps={res.total_steps} "
         f"patch_bytes={len(patch)}\n"
     )
+    # Consistent per-task capture line (mirrors the state runner's tasks.jsonl).
+    # success is null: git-substrate scoring is a separate Docker evaluate step,
+    # not inline — see metrics.json / submission.tar.gz for the gradable artifact.
+    summary = {
+        "benchmark": os.getenv("COOPER_BENCHMARK", "programbench"),
+        "instance_id": args.instance,
+        "mode": args.arm,
+        "rep": args.rep,
+        "success": None,
+        "steps": res.total_steps,
+        "duration_s": round(dur, 1),
+        "patch_bytes": len(patch),
+        "repair": repair_meta or None,
+        "out_dir": str(out_root),
+    }
+    with (Path(args.runs_dir) / "tasks.jsonl").open("a") as _fp:
+        _fp.write(_json.dumps(summary, default=str) + "\n")
+        _fp.flush()
+        os.fsync(_fp.fileno())
     print(f"[{run_name}] submission at {out_root}/submission.tar.gz")
 
 

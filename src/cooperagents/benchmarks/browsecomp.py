@@ -116,8 +116,16 @@ class _UnconfiguredJudge:
 
 
 def _harvest(env: StateEnv) -> Artifact:
+    # The visited-doc list stays in ``state`` so StateArtifact.text() (answer or
+    # state or trajectory) is byte-identical to before — the judge grades the same
+    # candidate. ``trajectory`` now carries the real action/observation log for
+    # inspection, which does not affect text() when answer/state are present.
     visited = env.store.get("visited", [])
-    return StateArtifact(answer=env.answer, trajectory="visited: " + ", ".join(visited))
+    return StateArtifact(
+        answer=env.answer,
+        state="visited: " + ", ".join(visited),
+        trajectory="\n".join(env.log),
+    )
 
 
 class BrowseCompToolSet(ToolSet):
@@ -135,20 +143,26 @@ class BrowseCompToolSet(ToolSet):
         assert isinstance(env, StateEnv)
         if action.tool == "search":
             k = int(action.args.get("k", 5) or 5)
-            hits = self._retriever.search(str(action.args.get("query", "")), k)
+            query = str(action.args.get("query", ""))
+            hits = self._retriever.search(query, k)
             env.store.setdefault("visited", [])
             for doc_id, _snippet in hits:
                 if doc_id not in env.store["visited"]:
                     env.store["visited"].append(doc_id)
-            return "\n".join(f"[{d}] {s}" for d, s in hits) or "(no results)", False
+            obs = "\n".join(f"[{d}] {s}" for d, s in hits) or "(no results)"
+            env.record(f"search({query!r}, k={k}) -> {len(hits)} hits: {[d for d, _ in hits]}")
+            return obs, False
         if action.tool == "open":
             doc_id = str(action.args.get("doc_id", ""))
             env.store.setdefault("visited", [])
             if doc_id not in env.store["visited"]:
                 env.store["visited"].append(doc_id)
-            return self._retriever.open(doc_id) or "(unknown document)", False
+            text = self._retriever.open(doc_id) or "(unknown document)"
+            env.record(f"open({doc_id!r}) -> {len(text)} chars")
+            return text, False
         if action.tool == "submit_answer":
             env.answer = str(action.args.get("answer", ""))
+            env.record(f"submit_answer -> {env.answer[:200]!r}")
             return "answer recorded", True
         return None
 
@@ -160,8 +174,23 @@ class BrowseCompScorer(Scorer):
         self._judge = judge
 
     def score(self, instance: Any, submission: str) -> TaskScore:
-        ok = self._judge.judge(getattr(instance, "query", ""), submission, getattr(instance, "answer", ""))
-        return TaskScore(instance_id=str(getattr(instance, "instance_id", "")), success=1.0 if ok else 0.0)
+        query = getattr(instance, "query", "")
+        gold = getattr(instance, "answer", "")
+        ok = self._judge.judge(query, submission, gold)
+        # detail is diagnostic only — never graded — so a FAIL is attributable
+        # (true judge NO vs empty-gold/malformed vs the masked no-answer case).
+        answered = bool(submission.strip()) and not submission.startswith("visited:")
+        return TaskScore(
+            instance_id=str(getattr(instance, "instance_id", "")),
+            success=1.0 if ok else 0.0,
+            detail={
+                "gold": gold,
+                "query": str(query)[:200],
+                "judge": "YES" if ok else "NO",
+                "answer_submitted": answered,
+                "candidate": submission[:300],
+            },
+        )
 
 
 class BrowseCompBenchmark(StateBenchmark):

@@ -15,6 +15,10 @@ def get_benchmark(name: str) -> StateBenchmark:
         from cooperagents.benchmarks.plancraft import PlanCraftBenchmark
 
         return PlanCraftBenchmark()
+    if name == "plancraft-coop":
+        from cooperagents.benchmarks.plancraft_coop import PlanCraftCoopBenchmark
+
+        return PlanCraftCoopBenchmark()
     if name == "workbench":
         from cooperagents.benchmarks.workbench import WorkBenchBenchmark
 
@@ -23,6 +27,10 @@ def get_benchmark(name: str) -> StateBenchmark:
         from cooperagents.benchmarks.browsecomp import browsecomp_from_env
 
         return browsecomp_from_env()
+    if name == "browsecomp-coop":
+        from cooperagents.benchmarks.browsecomp_coop import browsecomp_coop_from_env
+
+        return browsecomp_coop_from_env()
     if name == "finance":
         from cooperagents.benchmarks.finance import finance_from_env
 

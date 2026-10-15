@@ -137,7 +137,14 @@ class _UnconfiguredGrader:
 
 
 def _harvest(env: StateEnv) -> Artifact:
-    return StateArtifact(answer=env.answer, state=json.dumps(env.store.get("sources", [])))
+    # trajectory is additive: StateArtifact.text() returns answer or state
+    # (sources JSON) first, so adding the action log never changes the graded
+    # deliverable — it only makes the agent's tool history inspectable.
+    return StateArtifact(
+        answer=env.answer,
+        state=json.dumps(env.store.get("sources", [])),
+        trajectory="\n".join(env.log),
+    )
 
 
 class FinanceToolSet(ToolSet):
@@ -156,20 +163,25 @@ class FinanceToolSet(ToolSet):
     def dispatch(self, env: Environment, action: Action) -> tuple[str, bool] | None:
         assert isinstance(env, StateEnv)
         a = action.args
+        obs: str | None = None
         if action.tool == "google_search":
-            return self._b.google_search(str(a.get("query", ""))), False
-        if action.tool == "edgar_search":
-            return self._b.edgar_search(str(a.get("query", "")), str(a.get("form_type", "")), str(a.get("cik", ""))), False
-        if action.tool == "parse_html":
-            return self._b.parse_html(str(a.get("url", ""))), False
-        if action.tool == "retrieve_information":
-            return self._b.retrieve_information(str(a.get("query", ""))), False
-        if action.tool == "submit_answer":
+            obs = self._b.google_search(str(a.get("query", "")))
+        elif action.tool == "edgar_search":
+            obs = self._b.edgar_search(str(a.get("query", "")), str(a.get("form_type", "")), str(a.get("cik", "")))
+        elif action.tool == "parse_html":
+            obs = self._b.parse_html(str(a.get("url", "")))
+        elif action.tool == "retrieve_information":
+            obs = self._b.retrieve_information(str(a.get("query", "")))
+        elif action.tool == "submit_answer":
             env.answer = str(a.get("answer", ""))
             sources = a.get("sources", [])
             env.store["sources"] = sources if isinstance(sources, list) else [str(sources)]
+            env.record(f"submit_answer -> {env.answer[:200]!r} sources={len(env.store['sources'])}")
             return "answer recorded", True
-        return None
+        else:
+            return None
+        env.record(f"{action.tool}({dict(a)}) -> {str(obs)[:200]!r}")
+        return obs, False
 
 
 class FinanceScorer(Scorer):
@@ -179,13 +191,22 @@ class FinanceScorer(Scorer):
         self._grader = grader
 
     def score(self, instance: Any, submission: str) -> TaskScore:
-        raw = self._grader.grade(
-            getattr(instance, "question", ""),
-            submission,
-            getattr(instance, "rubric", ""),
-            getattr(instance, "reference", ""),
+        reference = getattr(instance, "reference", "")
+        rubric = getattr(instance, "rubric", "")
+        raw = self._grader.grade(getattr(instance, "question", ""), submission, rubric, reference)
+        # detail is diagnostic only (never graded): a success=0 record can now be
+        # told apart as a genuine miss vs an empty submission vs a silent grader-0.
+        return TaskScore(
+            instance_id=str(getattr(instance, "instance_id", "")),
+            success=float(raw),
+            detail={
+                "raw": raw,
+                "answer_chars": len(submission),
+                "rubric_present": bool(str(rubric).strip()),
+                "reference": str(reference)[:200],
+                "grader": type(self._grader).__name__,
+            },
         )
-        return TaskScore(instance_id=str(getattr(instance, "instance_id", "")), success=float(raw))
 
 
 class FinanceAgentBenchmark(StateBenchmark):

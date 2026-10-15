@@ -18,6 +18,7 @@ Two families, mirroring cooperagents' existing selection seams:
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Sequence
 from typing import Any
 
@@ -80,6 +81,49 @@ def lead_synthesis(llm: LLMClient, *, lead_id: str = "integrator") -> Reducer:
     return reduce
 
 
+def lead_selection(llm: LLMClient, *, lead_id: str = "integrator") -> Reducer:
+    """Build a reducer where a lead CHOOSES the single best candidate artifact.
+
+    For benchmarks whose deliverable is structured/verifiable (e.g. WorkBench's
+    action list) rather than free text, a lead cannot safely compose a NEW answer
+    (synthesized prose is ungradeable), and an arbitrary first-non-empty pick is
+    not meaningful. Instead the lead reads the task and every candidate solution
+    and SELECTS the one it judges most likely to accomplish the task. It sees the
+    agents' work and the task — never the grader — so this is self-selection, not
+    an oracle; it returns an existing agent's artifact unchanged, so the result
+    is always valid for the scorer.
+    """
+
+    def reduce(results: Sequence[AgentResult]) -> AgentResult:
+        candidates = _nonempty(results)
+        if not candidates:
+            return best_of_first_nonempty(results)
+        if llm is None or len(candidates) == 1:
+            return candidates[0]
+        task = ""
+        for m in candidates[0].messages:
+            if m.get("role") == "user":
+                task = str(m.get("content", ""))
+                break
+        listing = "\n\n".join(
+            f"[{i}] (agent {r.agent_id}):\n{r.artifact.text() if r.artifact else ''}" for i, r in enumerate(candidates)
+        )
+        prompt = (
+            "You are the team lead. Your teammates each produced a candidate solution to the task "
+            "below. Choose the SINGLE candidate most likely to accomplish the task correctly and "
+            "completely. Reply with ONLY the candidate number.\n\n"
+            f"## Task\n{task}\n\n## Candidates\n{listing}"
+        )
+        action = llm.decide(agent_id=lead_id, role="lead", messages=[{"role": "user", "content": prompt}], tools=[])
+        match = re.search(r"\d+", action.thought or "")
+        idx = int(match.group()) if match else 0
+        if not (0 <= idx < len(candidates)):
+            idx = 0
+        return candidates[idx]
+
+    return reduce
+
+
 def select_by(key: Callable[[AgentResult], Any]) -> Reducer:
     """Reducer that submits the candidate maximizing ``key``.
 
@@ -102,4 +146,4 @@ def select_by(key: Callable[[AgentResult], Any]) -> Reducer:
     return reduce
 
 
-__all__ = ["Reducer", "best_of_first_nonempty", "lead_synthesis", "select_by"]
+__all__ = ["Reducer", "best_of_first_nonempty", "lead_synthesis", "lead_selection", "select_by"]

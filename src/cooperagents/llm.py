@@ -125,13 +125,16 @@ class LiteLLMClient:
     "args": {...}}``; malformed replies degrade to a ``finish`` action.
     """
 
-    def __init__(self, model: str, *, temperature: float = 0.0, max_tokens: int = 2048) -> None:
+    def __init__(self, model: str, *, temperature: float = 0.0, max_tokens: int = 2048, system_prompt: str | None = None) -> None:
         self.model = model
         self.temperature = temperature
         self.max_tokens = max_tokens
+        self._system_override = system_prompt
 
     def _system_prompt(self, tools: list[dict[str, Any]]) -> str:
         catalog = "\n".join(f"- {t['name']}: {t['description']}" for t in tools)
+        if self._system_override is not None:
+            return f"{self._system_override}\n\nAvailable tools (use ONLY these):\n{catalog}"
         return (
             "You are an agent on a software team. At each step respond with a SINGLE JSON object "
             'of the form {"thought": "...", "tool": "<name>", "args": {...}} and nothing else.\n'

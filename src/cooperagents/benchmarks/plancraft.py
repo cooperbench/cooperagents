@@ -84,7 +84,14 @@ class PlanCraftScorer(Scorer):
     name = "plancraft"
 
     def score(self, instance: Any, submission: str) -> TaskScore:
-        data = json.loads(submission) if submission.strip() else {}
+        # A PlanCraft episode always harvests valid JSON, but guard anyway so a
+        # malformed submission scores as a failure rather than aborting a sweep.
+        try:
+            data = json.loads(submission) if submission.strip() else {}
+            if not isinstance(data, dict):
+                data = {}
+        except (ValueError, TypeError):
+            data = {}
         ok = bool(data.get("success", False))
         return TaskScore(
             instance_id=str(getattr(instance, "id", "")),
@@ -117,6 +124,8 @@ class PlanCraftBenchmark(StateBenchmark):
         return list(get_plancraft_examples(split=split))
 
     def _gym(self, instance: Any):
+        from copy import deepcopy
+
         from plancraft.environment.actions import (
             ImpossibleActionHandler,
             MoveActionHandler,
@@ -124,8 +133,11 @@ class PlanCraftBenchmark(StateBenchmark):
         )
         from plancraft.simple import PlancraftGymWrapper
 
+        # deepcopy so each agent's gym is a fully independent clone of the one
+        # shared problem instance — concurrent team agents must not share mutable
+        # problem state (matches the paper's per-agent deepcopy of the task).
         return PlancraftGymWrapper(
-            example=instance,
+            example=deepcopy(instance),
             actions=[MoveActionHandler(), SmeltActionHandler(), ImpossibleActionHandler()],
             max_steps=self.max_steps,
             resolution=self.resolution,

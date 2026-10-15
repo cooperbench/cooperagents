@@ -34,7 +34,8 @@ from cooperagents.env.artifact import Artifact, StateArtifact
 from cooperagents.env.base import Environment
 from cooperagents.env.state import StateEnv
 from cooperagents.eval.scoring import Scorer, TaskScore
-from cooperagents.llm import Action
+from cooperagents.llm import Action, LLMClient
+from cooperagents.reducers import Reducer, lead_selection
 from cooperagents.tools import ToolSet
 
 # WorkBench's fixed benchmark clock (now = Thursday 2023-11-30).
@@ -109,8 +110,12 @@ class WorkBenchInstance:
 
 
 def _harvest(env: StateEnv) -> Artifact:
+    # ``state`` (the executed side-effect action list) is the graded deliverable
+    # and is left byte-identical; ``trajectory`` is additive and records EVERY
+    # call (including read-only ones, args, and results) for fault inspection
+    # without affecting text() (which returns state before trajectory).
     actions = env.store.get("actions", [])
-    return StateArtifact(state=json.dumps(actions))
+    return StateArtifact(state=json.dumps(actions), trajectory="\n".join(env.log))
 
 
 class WorkBenchToolSet(ToolSet):
@@ -140,8 +145,10 @@ class WorkBenchToolSet(ToolSet):
             result = tool.func(**action.args)
         except Exception as e:  # noqa: BLE001 - surface tool errors to the agent
             result = f"error: {e}"
-        if action.tool in self._side:
+        side = action.tool in self._side
+        if side:
             env.store.setdefault("actions", []).append(self._to_call(action.tool, args))
+        env.record(f"{action.tool}({args}){' [side-effect]' if side else ''} -> {str(result)[:300]}")
         return str(result), False
 
 
@@ -154,7 +161,19 @@ class WorkBenchScorer(Scorer):
         self._has_side_effects = wb["has_side_effects"]
 
     def score(self, instance: Any, submission: str) -> TaskScore:
-        predicted = json.loads(submission) if submission.strip() else []
+        # Guard against a non-JSON submission (e.g. a team arm that synthesized
+        # prose): grade it as a failure rather than letting one malformed task
+        # abort a multi-hour sweep.
+        try:
+            predicted = json.loads(submission) if submission.strip() else []
+            if not isinstance(predicted, list):
+                raise ValueError("submission is not an action list")
+        except (ValueError, TypeError):
+            return TaskScore(
+                instance_id=str(getattr(instance, "instance_id", "")),
+                success=0.0,
+                detail={"side_effects": False, "n_actions": 0, "malformed_submission": True},
+            )
         gt = list(getattr(instance, "outcome", []))
         # The official scorer executes actions against the thread-local sandbox
         # and resets it; serialize to keep concurrent scoring deterministic.
@@ -205,6 +224,15 @@ class WorkBenchBenchmark(StateBenchmark):
 
     def scorer(self) -> Scorer:
         return WorkBenchScorer()
+
+    def team_reducer(self, llm: LLMClient) -> Reducer:
+        # WorkBench's deliverable is a structured action list in the artifact
+        # ``state`` (graded by json.loads + DB re-execution), NOT free text. Prose
+        # synthesis would be ungradeable and an arbitrary first-non-empty pick is
+        # not meaningful, so the team combine is a lead SELECTION: the lead reads
+        # the task and every candidate action list and chooses the best. It never
+        # sees the grader (not an oracle) and returns an existing valid artifact.
+        return lead_selection(llm)
 
 
 __all__ = ["WorkBenchBenchmark", "WorkBenchToolSet", "WorkBenchScorer", "WorkBenchInstance", "find_workbench"]

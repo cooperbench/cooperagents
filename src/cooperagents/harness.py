@@ -44,6 +44,27 @@ from cooperagents.types import AgentResult, Assignment, RunResult, SubTask, Team
 Planner = Callable[[list[tuple[int, str]], "str | None"], "tuple[list[SubTask], str]"]
 
 
+def _state_team_block(self_id: str, assignments: list[Assignment]) -> str:
+    """cooperagents' native team-coordination brief for the STATE substrate.
+
+    The state path gives every agent its own isolated environment (its own clone
+    of the one shared problem) and a shared bus; this block is what makes agents
+    actually use the bus — it is the non-code analogue of the git-path teammate
+    block (see ``run_coop``). Coordination is cooperagents' own mechanism
+    (real-time messages/broadcast), not the paper's round orchestrator.
+    """
+    mates = ", ".join(a.agent_id for a in assignments if a.agent_id != self_id)
+    return (
+        f"\n\nTEAMMATES: {mates} are solving the SAME problem RIGHT NOW, each in their own "
+        "separate environment that you cannot see (and they cannot see yours). Share what you "
+        "learn: use the broadcast tool to send useful findings to the whole team (a recipe, a "
+        "working sub-step, a dead end to avoid), and act on incoming '[message from ...]' notes "
+        "from teammates. Coordinating well should let the team solve the problem more reliably "
+        "than working alone."
+    )
+
+
+
 def _seed_patch(env: Environment, patch: str) -> None:
     """Apply a teammate/ancestor delta into a fresh container and commit it, so
     the agent starts from a clean coherent base (a dirty tree confuses it)."""
@@ -1667,9 +1688,14 @@ class UnifiedHarness:
 
         start_time = time.time()
         supervisor: threading.Thread | None = None
+        # cooperagents team coordination: on a multi-agent STATE run, tell each
+        # agent about its teammates so it actually uses the shared bus (the state
+        # path otherwise leaves the bus unused). Solo runs are untouched.
+        coordinate = spec.artifact_backend == "state" and len(assignments) > 1
         try:
             for a in assignments:
-                start(a.agent_id, a.role, a.task, a.feature_id, is_helper=False)
+                task = a.task + _state_team_block(a.agent_id, assignments) if coordinate else a.task
+                start(a.agent_id, a.role, task, a.feature_id, is_helper=False)
             if spawning:
                 supervisor = threading.Thread(target=supervise, daemon=True)
                 supervisor.start()
@@ -1695,6 +1721,10 @@ class UnifiedHarness:
             elif len(ordered) == 1:
                 integrated = ordered[0]
 
+        msg_log = bus.message_log()
+        by_sender: dict[str, int] = {}
+        for m in msg_log:
+            by_sender[m["from"]] = by_sender.get(m["from"], 0) + 1
         return RunResult(
             run_id=spec.run_id,
             repo=spec.repo,
@@ -1704,7 +1734,11 @@ class UnifiedHarness:
             helpers=helpers,
             integrated=integrated,
             duration_seconds=duration,
-            metrics=coordination_metrics(bus.task_events(), final_tasks=bus.list_tasks()),
+            metrics={
+                **coordination_metrics(bus.task_events(), final_tasks=bus.list_tasks()),
+                "messages_total": len(msg_log),
+                "messages_by_sender": by_sender,
+            },
             spawn_metrics=spawn_metrics(bus.spawn_events()) if spawning else {},
         )
 
