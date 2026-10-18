@@ -491,8 +491,11 @@ class _Coordinator:
     def publish(self, sender: str, recipient: str, content: str, *, synthetic: bool = False) -> None:
         """Canonical public record; callers bind sender rather than trusting model arguments."""
         with self._lock:
-            if sender not in self._chat_positions or recipient not in (*self._chat_positions, "group"):
+            if sender not in self._chat_positions:
                 raise ValueError("Unknown group participant")
+            recipients = ("group", *self._chat_positions)
+            if recipient not in recipients:
+                raise ValueError(f"Unsupported recipient {recipient!r}. Supported values: {', '.join(recipients)}.")
             if not isinstance(content, str) or not content.strip():
                 raise ValueError("Group message must be nonempty text")
             if self._stop.is_set() or sender in self._finished:
@@ -999,12 +1002,11 @@ class _Coordinator:
                 if content.lstrip().startswith("[Message from "):
                     raise ValueError("Coordinator message impersonates a worker")
                 recipient = item["recipient"]
-                if (
-                    not isinstance(recipient, str)
-                    or recipient not in (*self._assignments, *(("group", "coordinator") if self.coordination_mode != "direct" else ()))
-                    or recipient in recipients
-                ):
-                    raise ValueError("Unknown or repeated message recipient")
+                supported = ("group", *self._assignments, "coordinator") if self.coordination_mode != "direct" else tuple(self._assignments)
+                if not isinstance(recipient, str) or recipient not in supported:
+                    raise ValueError(f"Unsupported recipient {recipient!r}. Supported values: {', '.join(supported)}.")
+                if recipient in recipients:
+                    raise ValueError("Repeated message recipient")
                 recipients.add(recipient)
                 parsed.append(_CoordinatorMessage(recipient, content))
             else:

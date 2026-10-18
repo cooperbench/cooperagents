@@ -505,17 +505,20 @@ class DefaultAgent:
                 sm_matches = _parse_send_messages(cmd)
                 if sm_matches:
                     sm_outputs = []
+                    sm_returncode = 0
                     for recipient, content, wait in sm_matches:
                         r = record_call(self.trace, self._handle_send_message,
                                         action={"recipient": recipient, "content": content, "wait": wait})
                         sm_outputs.append(r["output"])
+                        sm_returncode = sm_returncode or r["returncode"]
                     remaining = _strip_send_message(cmd)
                     combined = "\n".join(sm_outputs)
                     if not remaining.strip():
-                        outputs.append({"output": combined, "returncode": 0, "exception_info": ""})
+                        outputs.append({"output": combined, "returncode": sm_returncode, "exception_info": ""})
                         continue
                     env_out = self.env.execute({**action, "command": remaining})
                     env_out["output"] = combined + "\n" + env_out.get("output", "")
+                    env_out["returncode"] = env_out.get("returncode", 0) or sm_returncode
                     outputs.append(env_out)
                     continue
 
@@ -546,7 +549,10 @@ class DefaultAgent:
                 output += f"\n\n[Reply from {r['from']}]: {r['content']}"
             return {"output": output, "returncode": 0, "exception_info": ""}
 
-        self.comm.send(recipient, content)
+        try:
+            self.comm.send(recipient, content)
+        except ValueError as exc:
+            return {"output": f"send_message failed: {exc}", "returncode": 1, "exception_info": ""}
         self.log(f"SENT to {recipient}: {content[:80]}...")
         self.sent_messages.append({"to": recipient, "content": content})
         return {"output": f"Message sent to {recipient}", "returncode": 0, "exception_info": ""}

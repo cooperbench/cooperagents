@@ -447,6 +447,74 @@ def test_mixed_confirmation_preserves_bash_and_rejects_embedded_wait(tmp_path):
     assert len(c._chat) == previous and "wait is unavailable" in worker.messages[-1]["content"]
 
 
+@pytest.mark.parametrize("mode", ["group-chat", "group-chat-planning"])
+@pytest.mark.parametrize("kind", ["send_message", "bash", "bash-with-command", "bash-with-failed-command"])
+@pytest.mark.parametrize(("recipient", "content", "error"), [
+    ("all", "Please confirm the API.", "Unsupported recipient 'all'. Supported values: group, agent1, agent2, coordinator."),
+    ("group", "   ", "Group message must be nonempty text"),
+])
+def test_group_message_error_allows_correction(tmp_path, mode, kind, recipient, content, error):
+    from cooperagents.vendor.mini_swe.agents.default import DefaultAgent
+    from cooperagents.vendor.mini_swe.models.utils.actions_toolcall import format_toolcall_observation_messages
+    from cooperagents.workers.mini_swe_worker import BusComm, _solo_config
+
+    c = coordinator(coordination_mode=mode, notebook_path=tmp_path / "notebook.md")
+    c.start_planning()
+    commands, requests = [], []
+    remaining_command = "\nprintf inspected" if kind.startswith("bash-with-") else ""
+    command_returncode = 7 if kind == "bash-with-failed-command" else 0
+
+    def action(to, text):
+        if kind == "send_message":
+            return dict(tool_name="send_message", recipient=to, content=text, tool_call_id="message-call")
+        return dict(tool_name="bash", command=f"send_message {to} {json.dumps(text)}{remaining_command}", tool_call_id="bash-call")
+
+    pending = iter([action(recipient, content), action("group", "Corrected group update")])
+
+    def query(messages):
+        requests.append(json.loads(json.dumps(messages)))
+        return {"role": "assistant", "content": "", "extra": {"actions": [next(pending)]}}
+
+    model = SimpleNamespace(
+        query=query, get_template_vars=lambda: {}, format_message=lambda **kwargs: kwargs,
+        format_observation_messages=lambda message, outputs, template_vars: format_toolcall_observation_messages(
+            actions=message["extra"]["actions"], outputs=outputs,
+            observation_template=_solo_config()["model"]["observation_template"], template_vars=template_vars,
+        ),
+    )
+    worker = DefaultAgent(
+        model,
+        SimpleNamespace(
+            get_template_vars=lambda: {},
+            execute=lambda a: commands.append(a["command"]) or {
+                "output": "inspected", "returncode": command_returncode, "exception_info": "",
+            },
+        ),
+        agent_id="agent1", comm=BusComm(c._bus, "agent1", group=c),
+        system_template="system", instance_template="task", cost_limit=0, compaction_enabled=False,
+    )
+    worker.coordinator = c
+    c.register("agent1", worker)
+    initial_phase = c.phase
+    feedback = worker.step()[0]
+    assert feedback["role"] == "tool"
+    assert json.loads(feedback["content"]) == {
+        "returncode": command_returncode or 1,
+        "output": f"send_message failed: {error}" + ("\ninspected" if remaining_command else ""),
+    }
+    assert not c._chat and not worker.sent_messages and not c._finished
+    assert c.phase == initial_phase
+
+    corrected = worker.step()[0]
+    assert feedback in requests[1]
+    assert json.loads(corrected["content"])["returncode"] == command_returncode
+    assert worker.n_calls == 2 and c.phase == initial_phase and not c._finished
+    assert len(c._chat) == 1 and c._chat[0]["addressed_to"] == "group"
+    assert c._chat[0]["content"] == "Corrected group update"
+    assert worker.sent_messages == [{"to": "group", "content": "Corrected group update"}]
+    assert commands == (["printf inspected"] * 2 if remaining_command else [])
+
+
 @pytest.mark.parametrize("trigger", ["worker_exit", "stopped", "total_budget"])
 def test_planning_failure_records_elapsed_once(tmp_path, monkeypatch, trigger):
     now = [1000.0]

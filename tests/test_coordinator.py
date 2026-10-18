@@ -47,6 +47,35 @@ def test_coordination_variant_names(tmp_path):
             coordinator(coordination_variant=old_name)
 
 
+@pytest.mark.parametrize("mode", ["direct", "group-chat", "group-chat-planning"])
+def test_unsupported_recipient_feedback_lists_supported_values(tmp_path, monkeypatch, mode):
+    monkeypatch.setattr(
+        "cooperagents.planner._default_planner_complete",
+        lambda *args, **kwargs: lambda _: [message("Please confirm the API.", "all")],
+    )
+    c = coordinator(
+        coordination_mode=mode, notebook_path=tmp_path / "notebook.md",
+        complete=None,
+    )
+    c.decide(initial=True)
+    supported = "agent1, agent2" if mode == "direct" else "group, agent1, agent2, coordinator"
+    expected = f"Unsupported recipient 'all'. Supported values: {supported}."
+    assert c._last_error == expected and not c._chat and not c.events()
+
+    def corrected(prompt):
+        observation = json.loads(prompt.split("OBSERVATION:\n", 1)[1])
+        assert observation["previous_error"] == expected
+        return [message("Corrected message", "agent2")]
+
+    c._complete = corrected
+    c.decide(initial=True)
+    assert c._last_error == ""
+    if mode == "direct":
+        assert "Corrected message" in "\n".join(c.drain("agent2"))
+    else:
+        assert len(c._chat) == 1 and c._chat[0]["addressed_to"] == "agent2"
+
+
 def test_invalid_batch_and_failed_write_have_no_effect(tmp_path, monkeypatch):
     path = tmp_path / "notebook.md"
     c = coordinator(notebook_path=path)
