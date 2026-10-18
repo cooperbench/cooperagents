@@ -90,38 +90,47 @@ written only after every artifact is saved and hashed. Disk/archive failures,
 truncated diffs, missing snapshots and checksum mismatches fail collection or
 audit. Existing checkpoints are never overwritten.
 
-Apptainer saves the whole writable sandbox as `rootfs.tar.gz`, plus each external
-shared/notebook bind as `mount-N.tar.gz`. Restore **your own verified archives**
-on a Linux host into fresh directories, preserving permissions and symlinks:
+New checkpoints use filesystem deltas as the only write format (checkpoint/state v2).
+The promoted `cooperagents.checkpoint_delta` implementation uses the same payload and
+ordered tar metadata format as the verified historical 44-checkpoint conversion.
+Each filesystem has `payload.tar.gz` (only changed file bytes) and `filesystem.json.gz`
+(the complete target inventory, permissions, links, tar metadata and file hashes).
+An absent target entry represents a deletion. Capture streams the live tree directly
+into the packer; it never writes a full intermediate rootfs archive.
+
+Apptainer records the immutable SIF path and SHA256, plus the base image name and registry
+digest when present in the SIF labels. Custom images still require the exact SIF; upstream
+registry labels alone do not identify local modifications. The base is expanded once per image
+under the job's scratch `.checkpoint-bases/`, using a lock and atomic publication.
+Retain the corresponding SIF once; the delta does not bundle it. Restore requires that
+exact base SIF. To relocate it, supply `base_image=Path(...)` to either
+`ApptainerEnv.from_checkpoint` or `run_repair_checkpoint`. A missing or mismatched base
+fails; there is no fallback to a different image or to a full-snapshot writer.
+Every unchanged file reused from the expanded base is also checked against its saved hash.
+
+Docker records the immutable image ID and available registry digests, streams `docker export`
+into the same delta packer while the worker is paused, and always unpauses it afterwards.
+Its base container is exported/expanded once into a scratch cache; that temporary export
+is removed. Saved container `Config` and `network_mode` retain runtime settings.
+For manual Docker restoration, expand the recorded immutable image into a base directory,
+then reconstruct the rootfs on scratch:
 
 ```bash
-mkdir replay-fs
-tar -xzf /path/to/checkpoint/rootfs.tar.gz -C replay-fs --no-same-owner
-# Extract each mount archive into its own fresh directory as well.
-# Use the target/read-only mapping in state.json; never bind the old live share.
-apptainer exec --writable --containall --cleanenv \
-  --no-mount hostfs,bind-paths \
-  --home "$PWD/replay-fs/home/agent:/home/agent" \
-  --bind "$PWD/replay-fs/tmp:/tmp" \
-  --bind "$PWD/replay-fs/var/tmp:/var/tmp" \
-  --bind /etc/resolv.conf:/etc/resolv.conf:ro \
-  --pwd /workspace/repo "$PWD/replay-fs" bash
+python -m cooperagents.checkpoint_delta restore \
+  --delta /path/to/checkpoint/rootfs --base /scratch/expanded-base \
+  --output /scratch/rootfs.tar.gz
 ```
 
-Add restored bind mounts recorded in `state.json` when present, for example
-`--bind "$PWD/replay-share:/cbshared"` and
-`--bind "$PWD/replay-notebook:/coordination:ro"`. Use the recorded `repo_path`
-for tasks with a different working directory. The image SHA256 records
-provenance; the archive contains the installed filesystem needed for repair.
+Import the reconstructed filesystem into a fresh Docker container and use the recorded
+configuration, isolation and mount settings. External binds/volumes are not part of an image:
+they use the same delta format against an empty base, so their complete contents are saved.
+Restore each separately and preserve its target/read-only mapping. Local test checkpoints
+likewise use an empty-base repository delta; host tools remain outside their scope.
 
-Docker pauses the worker, saves `rootfs.tar` with `docker export`, and separately
-copies each bind/volume into a mount archive before unpausing. The saved image ID
-and container `Config` provide environment, user and working-directory settings;
-`network_mode` records the original isolation policy.
-Use `docker import rootfs.tar repair-replay:<unique-tag>` and start a fresh
-container with those recorded settings, network isolation and restored mounts. Export does not
-include volumes, so importing only the rootfs is insufficient. Local tests save
-only `repo.tar.gz`; their host tools are not checkpointed.
+Old full-snapshot v1 checkpoints remain readable for migration/replay. There is no full
+snapshot configuration option for new collection. Restore currently materializes a temporary
+gzip tar on scratch before extracting it and removes that tar afterwards; scratch must fit
+both the reconstructed archive and the live filesystem, in addition to the expanded base.
 
 Snapshots save files, not processes, RAM, network connections or a simultaneous
 global state of the team. Shared mount archives are per-worker observations;
@@ -131,8 +140,8 @@ runtime-generated mounts are not process checkpoints. The stdlib tar archives
 do not preserve extended attributes or ACLs. Host model credentials are
 not copied intentionally, but filesystem archives and saved raw conversation
 state can contain secrets already written by a task; treat them as private run
-artifacts. Full rootfs snapshots require substantial storage, especially Docker's
-uncompressed export. Start with 1–2 pairs before collecting three full rounds.
+artifacts. Delta size depends on actual changes: installed dependencies and large external
+mounts still occupy space. Retain and verify the immutable base separately.
 
 For a paired experiment, score `pre-repair/submission.patch` and
 `post-repair/submission.patch` with the same official evaluator and preserve
@@ -170,11 +179,12 @@ first-line submission marker and reached its step limit. The corrected driver
 passed in job `17657738`; the final-source rerun also passed. Those runs remain
 separate and retain their own source provenance.
 
-The final smoke stored 654,667,457 bytes (about 624 MiB) for one lightweight Go
+The historical full-snapshot smoke stored 654,667,457 bytes (about 624 MiB) for one lightweight Go
 pair. At that footprint alone, 108 pairs need about 66 GiB, exceeding the roughly
 48 GiB free observed in the project filesystem. Larger task/toolchain images can
 need more. Arrange sufficient persistent storage before a full three-round
-collection; do not assume node-local scratch is durable storage.
+collection; this historical full-snapshot footprint is not a measurement of the new delta
+format. Do not assume node-local scratch is durable storage.
 
 Run the same smoke in a CPU Slurm allocation with the project's mini-SWE
 dependencies installed:
@@ -186,3 +196,147 @@ PYTHONPATH=src LITELLM_LOCAL_MODEL_COST_MAP=True \
   --image-sha256 23927242c619a73414449d7cc7ba56d6cc5598adc8639f60ac86b6b1f83af4eb \
   --scratch /path/to/job-owned/scratch
 ```
+
+# Repair-only checkpoint replay API
+
+The checkpoint API saves complete filesystem state at a repair boundary. The replay
+entrypoint restores a fresh Apptainer sandbox and runs only integrator attempts. It
+returns the existing `RunResult`; official evaluation uses the existing result writer
+and evaluation API. The original checkpoint is never overwritten.
+
+## Capture
+
+Construct `UnifiedHarness(checkpoint_dir=Path(...))` for a single mini-SWE, coop-tools,
+no-seed mechanical-merge team. Use its default fresh in-memory bus. Checkpoint capture
+supports one or two repair attempts, ordinary messaging, Git share, and prompt flags.
+It rejects task boards, claim mode, custom bus state, spawn, adaptive/decomposed teams,
+best-of-N, and other integration modes.
+
+The completion gate may be disabled or supplied as
+`functools.partial(cooperagents.verification.validate, merged=False, build_artifact=None)`.
+Arbitrary callable gates cannot be serialized.
+
+`before-integrator1/repair-input.json` is covered by the checkpoint manifest. It captures
+the fully prefixed task, actual initial system/user messages, agent configuration
+(including compaction), model formatting, exact tools, generation settings, budgets,
+gate descriptor, assignments, and source hashes. API credentials, endpoint addresses,
+and absolute deadlines/output paths are excluded. Capture finishes before any model
+request and does not consume the agent's wall-clock budget.
+Repair input v2 also saves unread inboxes for both integrator attempts, including sender,
+recipient, content, timestamp and delivery order. Capture does not drain the live bus.
+Replay restores these queues once into its fresh bus; normal agent steps read them.
+Previously consumed messages are not redelivered, and messages sent by the new first
+attempt remain available to the new second attempt.
+
+## Restore and repair
+
+```python
+from pathlib import Path
+from cooperagents.repair import run_repair_checkpoint
+
+result = run_repair_checkpoint(
+    Path("/runs/source/checkpoints/before-integrator1"),
+    scratch=Path("/scratch/new-run"),
+    run_id="new-run",
+)
+```
+
+`ApptainerEnv.from_checkpoint(checkpoint, scratch=...)` is also public. It verifies all
+manifest hashes, restores a new rootfs and independent mount copies, checks the original
+base commit and recorded HEAD/status/stashes/patch, and cleans partial restores on error
+or cancellation. Rootfs permissions and valid system symlinks are retained; archive
+writes through links or outside the owned destination are rejected. Only `/cbshared`
+(writable) and `/coordination` (read-only) checkpoint mounts are supported. The source
+SIF is required for delta v2 restore (and may be relocated with `base_image=`). Old full
+v1 archives remain self-contained. Base expansion and temporary tar reconstruction stay on scratch.
+
+The first attempt runs unconditionally with the saved prompt. A second attempt uses the
+current tree and fresh evidence in a new conversation. It preserves the saved prompt
+wrapper, including the capture host's system information, and adds prompt prefixes only
+once. It never loads an old `before-integrator2`. The final binary-capable patch includes
+all worker and repair edits relative to the original task base; existing stripping and
+result writing remain applicable.
+
+Step/time limits are valid agent outcomes. Nonzero tool exits are normal observations.
+Restore/export failures, truncated control output, and failed agent execution invalidate
+replay instead of generating a zero score. Post-attempt health keeps the harness's existing
+semantics and is recorded separately from official scoring.
+
+## Legacy v1 import
+
+Legacy checkpoints without effective inputs require explicit evidence:
+
+```python
+from cooperagents.repair import import_legacy_repair_input
+
+sidecar = Path("/runs/new-run/data/repair-input.json")
+import_legacy_repair_input(
+    checkpoint,
+    journal=Path("/runs/source/trajectory.jsonl.gz"),
+    source=Path("/code/immutable-collection-source"),
+    variant=Path("/runs/source/variant.toml"),
+    launch_args=Path("/runs/source/training-args.txt"),
+    destination=sidecar,
+)
+result = run_repair_checkpoint(checkpoint, repair_input=sidecar, scratch=scratch, run_id="new-run", max_attempts=1)
+```
+
+The supported collection sources are commits `514ed98a59c611ee5a38027c8459d6fcbcec92b8`
+and `043fa798a8fcf667f14d32153a19dc0abff80c33` (the latter requires the saved
+`historical_a` collection identity). Both retain the same repair templates, agent defaults,
+tools and standard verification gate; committed source bytes and the actual first SDK
+request remain required evidence.
+Its required files must match committed contents. Import verifies the checkpoint receipt,
+journal ordering, startup task/budgets, exact initial SDK request, source templates and
+tools, variant and actual launch arguments, and the standard completion gate. Changed,
+missing or redacted evidence fails before inference. The sidecar records evidence hashes
+and selected event sequences. Legacy contract-first assignments are rejected because their
+effective assignment provenance was not saved. Imported files are written only to the new
+run. Supporting a new legacy source requires evidence-backed compatibility work.
+The exact initial two-message SDK request proves only integrator1's inbox was empty.
+Legacy imports therefore support one attempt; integrator2's pending inbox is unknown.
+Existing v1 effective-input checkpoints without inbox evidence fail before restore or
+inference and must be recaptured. Missing queue state is never treated as an empty queue.
+
+## Verification and current boundary
+
+The offline suite uses actual archive/Git state, public restore, and the real mini-SWE
+agent/action parser with fake completions and an in-process replacement for container
+execution. It does not call a paid model API or start Apptainer:
+
+```bash
+LITELLM_LOCAL_MODEL_COST_MAP=True uv run --extra mini --extra llm --extra dev pytest \
+  tests/test_checkpoint.py tests/test_harness.py tests/test_repair_replay.py \
+  tests/test_repair_completion.py tests/test_apptainer_env.py tests/test_worker_guard.py
+```
+
+Filesystem replay, effective-input preservation and full-response injection are implemented.
+Native training traces and rewards are supplied by the downstream Polar extension. Real
+container/model replay, reward learning signal and optimizer/weight acceptance require their
+separate live checks; offline fake completions do not prove task repair stability.
+
+## Optional integrator transport
+
+`cooperagents.completion.CompletionBinding` binds two full-response callbacks and
+validated `CompletionSettings`: `action` runs the current policy, while `summary`
+runs a fixed model and revision. Pass it as `completion=` to `run_repair_checkpoint`,
+or `repair_completion=` to `UnifiedHarness`. Ordinary workers never receive it.
+Callbacks receive `MiniSweCompletionRequest` with prepared SDK-typed messages/tools,
+actor and call identities, purpose, effective sampling and timeout. They return a
+complete LiteLLM `ModelResponse`; a native tool-only message may have `content=None`.
+The callback owns its bounded network call and recording before parsing. Injection
+has no hidden retries, background threads, old-profile override or fallback endpoint.
+The existing action parser, observations, submission gate and compaction stay in use.
+Endpoint/summary failures invalidate replay; model format errors still produce the
+existing correction observation. `trajectory=` optionally preserves the ordinary
+Cooperagents journal; it does not substitute for native training gateway records.
+
+The integrated implementation lives on `cooperagents-coordinator-training`; the
+`cy/repair-only-rollout` source branch is retired after its PR is merged. New team
+collections use the notebook/tool-call coordinator when enabled. Repair-only replay
+does not restart workers or the coordinator: it uses saved integrator inputs and
+preserves the repair execution chain. Enabling the new coordinator can change the
+worker deliveries in a new collection, and therefore the repair inputs.
+
+The full offline suite has two Linux process-inspection tests that fail on macOS;
+repair and coordinator-focused suites run without model or container services.

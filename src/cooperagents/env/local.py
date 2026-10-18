@@ -103,7 +103,8 @@ class LocalEnv(Environment):
             shutil.rmtree(os.path.dirname(self.repo_path), ignore_errors=True)
 
     def checkpoint(self, destination: Path) -> dict:
-        from cooperagents.checkpoint import archive_tree
+        from cooperagents.checkpoint import save_tree_delta
 
-        archive_tree(Path(self.repo_path), destination / "repo.tar.gz")
-        return dict(backend="local", scope="repository", archive="repo.tar.gz")
+        with tempfile.TemporaryDirectory() as empty:
+            record = save_tree_delta(Path(self.repo_path), Path(empty), destination, "repository")
+        return dict(backend="local", scope="repository", base="empty", **record)

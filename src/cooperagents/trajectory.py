@@ -34,7 +34,7 @@ class Trajectory:
             v for k, v in os.environ.items() if any(s in k.upper() for s in ("API_KEY", "TOKEN", "PASSWORD", "SECRET")) and len(v) >= 8
         ]
 
-    def emit(self, actor: str, event: str, **data) -> int:
+    def emit(self, actor: str, event: str, **data: object) -> int:
         with self._lock:
             try:
                 self._seq += 1

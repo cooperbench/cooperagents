@@ -7,6 +7,7 @@ import logging
 import re
 import traceback
 import typing
+from collections.abc import Callable
 from pathlib import Path
 
 from jinja2 import StrictUndefined, Template
@@ -196,16 +197,19 @@ class DefaultAgent:
             )
         )
 
-    def run(self, task: str = "", **kwargs) -> dict:
+    def run(self, task: str = "", *, initial_messages: list[dict] | None = None,
+            on_start: Callable[["DefaultAgent"], None] | None = None, **kwargs) -> dict:
         """Run step() until agent is finished. Returns dictionary with exit_status, submission keys."""
         self.extra_template_vars |= {"task": task, **kwargs}
         self.messages = []
         if self.trace is not None:
             self.trace("context", messages=[], reason="start")
-        self.add_messages(
+        self.add_messages(*(initial_messages if initial_messages is not None else [
             self.model.format_message(role="system", content=self._render_template(self.config.system_template)),
             self.model.format_message(role="user", content=self._render_template(self.config.instance_template)),
-        )
+        ]))
+        if on_start is not None:
+            on_start(self)
         while True:
             try:
                 self.step()
