@@ -28,6 +28,7 @@ from cooperagents.env.runtime import task_environment
 from cooperagents.eval.cooperbench import run_eval, write_run_outputs
 from cooperagents.eval.dataset import WorkItem, image_name, load_subset, read_feature
 from cooperagents.harness import UnifiedHarness
+from cooperagents.initial_plan import InitialPlan, initial_plan_path
 from cooperagents.types import Assignment, TeamSpec
 
 
@@ -211,7 +212,13 @@ def run_team(
     team_roles: bool = False,
     coordinator: bool = False,
     coordinator_notebook: bool = True,
-    coordination_variant: str = "current",
+    coordination_variant: str = "auto-prompt",
+    coordination_mode: str = "direct",
+    coordinator_implementation_enabled: bool = True,
+    initial_plan_dir: Path | None = None,
+    planning_step_limit: int = 200,
+    planning_time_limit: int = 600,
+    worker_reminder_interval: int = 10,
     focused_repair: bool = False,
     repair_time: int = 0,
     apply_merge: bool = False,
@@ -304,9 +311,23 @@ def run_team(
     )
     pair_dir = logs_dir / run_name / "team" / item.repo / str(item.task_id) / "_".join(f"f{f}" for f in sorted(feats))
     notebook_path = (pair_dir / "coordination" / run_id / "notebook.md").resolve() if coordinator and coordinator_notebook else None
-    harness = UnifiedHarness(bus=InMemoryBus(run_id), step_limit=step_limit, command_timeout=300,
-                             coordinator_notebook_path=notebook_path, coordination_variant=coordination_variant, langfuse=langfuse,
-                             checkpoint_dir=pair_dir / "checkpoints" if checkpoint_repair else None)
+    harness = UnifiedHarness(
+        bus=InMemoryBus(run_id),
+        step_limit=step_limit,
+        command_timeout=300,
+        coordinator_notebook_path=notebook_path,
+        coordination_variant=coordination_variant,
+        langfuse=langfuse,
+        coordination_mode=coordination_mode,
+        coordinator_implementation_enabled=coordinator_implementation_enabled,
+        initial_plan=(InitialPlan.load(initial_plan_path(initial_plan_dir, f"{item.repo}:{item.task_id}:{','.join(map(str, feats))}"),
+                                       expected_pair=f"{item.repo}:{item.task_id}:{','.join(map(str, feats))}")
+                      if initial_plan_dir is not None else None),
+        planning_step_limit=planning_step_limit,
+        planning_time_limit_s=planning_time_limit,
+        worker_reminder_interval=worker_reminder_interval,
+        checkpoint_dir=pair_dir / "checkpoints" if checkpoint_repair else None,
+    )
     img = image_name(item.repo, item.task_id)
     selector = None
     if best_of_n > 1:
@@ -321,9 +342,22 @@ def run_team(
             raise ValueError("Trajectory collection requires a single coop-tools team")
         trajectory = Trajectory(pair_dir / "trajectory.jsonl.gz")
         harness.trajectory = trajectory
-        trajectory.emit("harness", "pair_start", run_id=run_id, repo=item.repo, task_id=item.task_id, features=feats,
-                        coordinator=coordinator, coordinator_notebook=coordinator and coordinator_notebook,
-                        coordination_variant=coordination_variant)
+        trajectory.emit(
+            "harness",
+            "pair_start",
+            run_id=run_id,
+            repo=item.repo,
+            task_id=item.task_id,
+            features=feats,
+            coordinator=coordinator,
+            coordinator_notebook=coordinator and coordinator_notebook,
+            coordination_variant=coordination_variant,
+            coordination_mode=coordination_mode,
+            coordinator_implementation_enabled=coordinator_implementation_enabled,
+            planning_step_limit=planning_step_limit,
+            planning_time_limit_s=planning_time_limit,
+            worker_reminder_interval=worker_reminder_interval,
+        )
     try:
         worker_ids = {a.agent_id for a in assignments}
         res = harness.run(spec, env_factory=lambda _id: task_environment(
@@ -385,9 +419,16 @@ def main() -> None:
                          " lead merges member patches and its tree is the submission")
     ap.add_argument("--coordinator", action="store_true",
                     help="tool-call coordinator: initial and ongoing coordination, messages and a read-only shared notebook")
+    ap.add_argument("--initial-plan-dir", type=Path, help="Reviewed plan/history checkpoint; start directly in implementation")
+    ap.add_argument("--no-implementation-coordinator", action="store_true",
+                    help="skip coordinator model decisions during implementation; keep planning, group chat and notebook delivery")
     ap.add_argument("--no-coordinator-notebook", action="store_true",
                     help="keep the same coordinator policy and messages, with no notebook or mount")
-    ap.add_argument("--coordination-variant", choices=("current", "human_in_loop"), default="current")
+    ap.add_argument("--planning-step-limit", type=int, default=200)
+    ap.add_argument("--planning-time-limit", type=int, default=600)
+    ap.add_argument("--worker-reminder-interval", type=int, default=10, help="remind every N worker decisions; 0 disables")
+    ap.add_argument("--coordination-mode", choices=("direct", "group-chat", "group-chat-planning"), default="direct")
+    ap.add_argument("--coordination-variant", choices=("auto-prompt", "human-prompt"), default="auto-prompt")
     ap.add_argument("--focused-repair", action="store_true", help="R2: harness gathers merge-damage evidence into the repair brief")
     ap.add_argument("--repair-time", type=int, default=0, help="TK9f: wall-clock cap (s) for the repair agent; 0 = uncapped")
     ap.add_argument("--apply-merge", action="store_true", help="TK8: pure apply-chain merge (Q5 base) instead of 3-way-first")
@@ -437,9 +478,26 @@ def main() -> None:
     ap.add_argument("--checkpoint-repair", action="store_true", help="save worker and repair filesystems and full I/O for replay")
     ap.add_argument("--skip-eval", action="store_true", help="write generation artifacts without scoring")
     args = ap.parse_args()
-    if args.coordination_variant == "human_in_loop" and (not args.coordinator or args.no_coordinator_notebook):
-        ap.error("human_in_loop requires --coordinator with notebook enabled")
+    if args.no_implementation_coordinator and not args.coordinator:
+        ap.error("--no-implementation-coordinator requires --coordinator")
+    if args.worker_reminder_interval < 0:
+        ap.error("Worker reminder interval must be nonnegative")
+    if args.planning_step_limit < 1 or args.planning_time_limit < 1:
+        ap.error("Planning budgets must be positive")
+    if args.coordination_variant == "human-prompt" and (not args.coordinator or args.no_coordinator_notebook):
+        ap.error("human-prompt requires --coordinator with notebook enabled")
 
+    if args.coordination_mode != "direct" and (
+        not args.coordinator
+        or args.no_coordinator_notebook
+        or not args.coop_tools
+        or not args.no_seed
+        or args.wait_protocol
+        or args.max_agents != 2
+    ):
+        ap.error("group coordination requires two coop-tools no-seed workers, coordinator, notebook, and no wait-protocol")
+    if args.coordination_mode == "group-chat-planning" and (args.task_board or args.claim_mode or args.allow_spawn):
+        ap.error("opening planning does not support task-board, claim-mode, or helpers")
     if args.pairs:
         items = []
         for spec in args.pairs:
@@ -449,6 +507,19 @@ def main() -> None:
         items = load_subset(args.subset)
     if args.limit is not None:
         items = items[: args.limit]
+
+    if args.initial_plan_dir is not None:
+        if args.coordination_mode != "group-chat" or not args.team_only:
+            ap.error("Initial plan injection requires group-chat and --team-only")
+        if args.reverse_order or args.task_board or args.claim_mode or args.allow_spawn:
+            ap.error("Initial plan injection requires the original two-worker roster")
+        # Validate all selected bundles before any pair can call a model.
+        for item in items:
+            pair = f"{item.repo}:{item.task_id}:{','.join(map(str, sorted(item.features)))}"
+            plan = InitialPlan.load(initial_plan_path(args.initial_plan_dir, pair), expected_pair=pair)
+            roster = [Assignment(agent_id=f"agent{i+1}", role="member", feature_id=f, task=read_feature(item.repo, item.task_id, f))
+                      for i, f in enumerate(sorted(item.features))]
+            plan.validate_assignments(item.repo, item.task_id, roster)
 
     logs_dir = Path(args.log_dir).resolve()
 
@@ -472,55 +543,61 @@ def main() -> None:
                              agent_time_limit=args.agent_time_limit or None)
             if not args.solo_only and not team_skip:
                 t = run_team(
-                item,
-                run_name=args.team_name,
-                logs_dir=logs_dir,
-                step_limit=args.step_limit,
-                agent_time_limit=args.agent_time_limit or None,
-                max_agents=args.max_agents,
-                verify_fix=args.verify_fix,
-                spec_fidelity=args.spec_fidelity,
-                teammate_context=args.teammate_context,
-                guard_git=args.guard_git,
-                seed_prior=not args.no_seed,
-                reverse_order=args.reverse_order,
-                completeness_review=args.completeness_review,
-                tdd_preamble=args.tdd_preamble,
-                mine_conventions=args.mine_conventions,
-                best_of_n=args.best_of_n,
-                decompose=args.decompose,
-                preserve_invariants=args.preserve_invariants,
-                adaptive=args.adaptive,
-                do_no_harm=args.do_no_harm,
-                select=args.select,
-                diversity_temp=args.diversity_temp,
-                coop_tools=args.coop_tools,
-                repair_integrator=args.repair_integrator,
-                repair_steps=args.repair_steps,
-                contract_first=args.contract_first,
-                live_awareness=args.live_awareness,
-                behavioral_gate=args.behavioral_gate,
-                tool_protocol=args.tool_protocol,
-                task_board=args.task_board,
-                wait_protocol=args.wait_protocol,
-                git_share=args.git_share,
-                team_roles=args.team_roles,
-                langfuse=args.langfuse,
-                coordinator=args.coordinator,
-                coordinator_notebook=not args.no_coordinator_notebook,
-                coordination_variant=args.coordination_variant,
-                focused_repair=args.focused_repair,
-                repair_time=args.repair_time,
-                apply_merge=args.apply_merge,
-                claim_mode=args.claim_mode,
-                allow_spawn=args.allow_spawn,
-                n_agents=args.agents,
-                completion_gate=args.completion_gate,
-                presub_merge=args.presub_merge,
-                repair_attempts=args.repair_attempts,
-                record_trajectory=args.record_trajectory,
-                checkpoint_repair=args.checkpoint_repair,
-            )
+                    item,
+                    run_name=args.team_name,
+                    logs_dir=logs_dir,
+                    step_limit=args.step_limit,
+                    agent_time_limit=args.agent_time_limit or None,
+                    max_agents=args.max_agents,
+                    verify_fix=args.verify_fix,
+                    spec_fidelity=args.spec_fidelity,
+                    teammate_context=args.teammate_context,
+                    guard_git=args.guard_git,
+                    seed_prior=not args.no_seed,
+                    reverse_order=args.reverse_order,
+                    completeness_review=args.completeness_review,
+                    tdd_preamble=args.tdd_preamble,
+                    mine_conventions=args.mine_conventions,
+                    best_of_n=args.best_of_n,
+                    decompose=args.decompose,
+                    preserve_invariants=args.preserve_invariants,
+                    adaptive=args.adaptive,
+                    do_no_harm=args.do_no_harm,
+                    select=args.select,
+                    diversity_temp=args.diversity_temp,
+                    coop_tools=args.coop_tools,
+                    repair_integrator=args.repair_integrator,
+                    repair_steps=args.repair_steps,
+                    contract_first=args.contract_first,
+                    live_awareness=args.live_awareness,
+                    behavioral_gate=args.behavioral_gate,
+                    tool_protocol=args.tool_protocol,
+                    task_board=args.task_board,
+                    wait_protocol=args.wait_protocol,
+                    git_share=args.git_share,
+                    team_roles=args.team_roles,
+                    langfuse=args.langfuse,
+                    coordinator=args.coordinator,
+                    coordinator_notebook=not args.no_coordinator_notebook,
+                    coordination_variant=args.coordination_variant,
+                    coordination_mode=args.coordination_mode,
+                    coordinator_implementation_enabled=not args.no_implementation_coordinator,
+                    initial_plan_dir=args.initial_plan_dir,
+                    planning_step_limit=args.planning_step_limit,
+                    planning_time_limit=args.planning_time_limit,
+                    worker_reminder_interval=args.worker_reminder_interval,
+                    focused_repair=args.focused_repair,
+                    repair_time=args.repair_time,
+                    apply_merge=args.apply_merge,
+                    claim_mode=args.claim_mode,
+                    allow_spawn=args.allow_spawn,
+                    n_agents=args.agents,
+                    completion_gate=args.completion_gate,
+                    presub_merge=args.presub_merge,
+                    repair_attempts=args.repair_attempts,
+                    record_trajectory=args.record_trajectory,
+                    checkpoint_repair=args.checkpoint_repair,
+                )
         except Exception as e:  # noqa: BLE001 - one bad pair (e.g. missing/arch-incompatible image) must not abort the run
             print(f"  SKIP {tag}: {type(e).__name__}: {str(e)[:160]}", flush=True)
             return None

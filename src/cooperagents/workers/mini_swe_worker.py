@@ -242,20 +242,26 @@ class BusComm:
     ``send(recipient, content)`` / ``receive() -> [{"from", "content"}, ...]``.
     Bus receive() drains the inbox, which matches the agent's per-step drain."""
 
-    def __init__(self, bus, agent_id: str) -> None:
+    def __init__(self, bus, agent_id: str, *, group=None) -> None:
         self._bus = bus
         self._id = agent_id
+        self.group = group
 
     def send(self, recipient: str, content: str) -> None:
-        self._bus.send(sender=self._id, to=recipient, content=content)
+        if self.group is not None:
+            self.group.publish(self._id, recipient, content)
+        else:
+            self._bus.send(sender=self._id, to=recipient, content=content)
 
     def receive(self) -> list[dict]:
-        return self._bus.receive(self._id)
+        return [] if self.group is not None else self._bus.receive(self._id)
 
     def send_and_wait(self, recipient: str, content: str, timeout: int = 60) -> list[dict]:
         """TK5: blocking request — send, then poll the inbox for a reply."""
         import time as _time
 
+        if self.group is not None:
+            raise ValueError("wait is unavailable in group chat")
         self.send(recipient, content)
         deadline = _time.time() + timeout
         got: list[dict] = []
@@ -441,19 +447,22 @@ def run_mini_swe_agent(
         system_template = system_template + _GIT_SHARE_SYSTEM
     import time as _time
 
+    deadline = (_time.time() + time_limit_s) if time_limit_s else None
+    if monitor is not None and monitor.coordination_mode == "group-chat-planning" and time_limit_s:
+        deadline = monitor._planning_started + time_limit_s
     agent = DefaultAgent(
         model,
         MiniSweEnvAdapter(
             env,
             timeout=command_timeout,
             guard_git=guard_git,
-            deadline=(_time.time() + time_limit_s) if time_limit_s else None,
+            deadline=deadline,
             completion_gate=completion_gate,
             trace=trace,
         ),
         agent_id=agent_id,
         system_template=system_template,
-        wall_deadline=(_time.time() + time_limit_s) if time_limit_s else None,
+        wall_deadline=deadline,
         instance_template=cfg["instance_template"],
         step_limit=step_limit,
         cost_limit=cost_limit,
@@ -464,6 +473,23 @@ def run_mini_swe_agent(
         agent.config = agent.config.model_validate(repair_input.agent_config)
         agent.config.wall_deadline = (_time.time() + time_limit_s) if time_limit_s else None
     agent.trace = trace
+    agent.coordinator = monitor
+    if comm is not None and getattr(comm, "group", None) is not None:
+        model._tools = [
+            dict(
+                tool,
+                function={
+                    **tool["function"],
+                    "parameters": {
+                        **tool["function"]["parameters"],
+                        "properties": {key: value for key, value in tool["function"]["parameters"]["properties"].items() if key != "wait"},
+                    },
+                },
+            )
+            if tool["function"]["name"] == "send_message"
+            else tool
+            for tool in model._tools
+        ]
     if poller is not None:
         agent.team_poller = poller  # per-step pushed context (TK2/Q9 live awareness)
     if monitor is not None:
@@ -473,6 +499,12 @@ def run_mini_swe_agent(
         handlers.update(task_board.handlers())  # TK4 board tools, host-side
     if spawn_handler is not None:
         handlers["spawn_helper"] = spawn_handler  # TK7 recruit tool
+    if monitor is not None and monitor.coordination_mode == "group-chat-planning":
+        from cooperagents.vendor.mini_swe.models.utils.actions_toolcall import CONFIRM_PLAN_TOOL
+
+        model._tools.append(CONFIRM_PLAN_TOOL)
+        agent._planning_tools = list(model._tools)
+        handlers["confirm_plan"] = lambda action: monitor.confirm_plan(agent_id, action, sole=getattr(agent, "_sole_confirmation", False))
     if handlers:
         agent.tool_handlers = handlers
 

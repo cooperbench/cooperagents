@@ -33,6 +33,49 @@ def coordinator(*, complete=lambda _: NOOP, **kwargs):
     )
 
 
+def test_coordination_variant_names(tmp_path):
+    assert UnifiedHarness().coordination_variant == "auto-prompt"
+    assert coordinator().coordination_variant == "auto-prompt"
+    for variant in ("auto-prompt", "human-prompt"):
+        assert UnifiedHarness(coordination_variant=variant).coordination_variant == variant
+        c = coordinator(notebook_path=tmp_path / variant / "notebook.md", coordination_variant=variant)
+        assert c.coordination_variant == variant
+    for old_name in ("current", "human_in_loop"):
+        with pytest.raises(ValueError, match="Unknown coordination variant"):
+            UnifiedHarness(coordination_variant=old_name)
+        with pytest.raises(ValueError, match="Unknown coordination variant"):
+            coordinator(coordination_variant=old_name)
+
+
+@pytest.mark.parametrize("mode", ["direct", "group-chat", "group-chat-planning"])
+def test_unsupported_recipient_feedback_lists_supported_values(tmp_path, monkeypatch, mode):
+    monkeypatch.setattr(
+        "cooperagents.planner._default_planner_complete",
+        lambda *args, **kwargs: lambda _: [message("Please confirm the API.", "all")],
+    )
+    c = coordinator(
+        coordination_mode=mode, notebook_path=tmp_path / "notebook.md",
+        complete=None,
+    )
+    c.decide(initial=True)
+    supported = "agent1, agent2" if mode == "direct" else "group, agent1, agent2, coordinator"
+    expected = f"Unsupported recipient 'all'. Supported values: {supported}."
+    assert c._last_error == expected and not c._chat and not c.events()
+
+    def corrected(prompt):
+        observation = json.loads(prompt.split("OBSERVATION:\n", 1)[1])
+        assert observation["previous_error"] == expected
+        return [message("Corrected message", "agent2")]
+
+    c._complete = corrected
+    c.decide(initial=True)
+    assert c._last_error == ""
+    if mode == "direct":
+        assert "Corrected message" in "\n".join(c.drain("agent2"))
+    else:
+        assert len(c._chat) == 1 and c._chat[0]["addressed_to"] == "agent2"
+
+
 def test_invalid_batch_and_failed_write_have_no_effect(tmp_path, monkeypatch):
     path = tmp_path / "notebook.md"
     c = coordinator(notebook_path=path)
@@ -190,7 +233,8 @@ def test_observations_pair_actions_results_and_budget(monkeypatch):
     assert worker["modified_files"] == ["space name.py"]
     actions = worker["recent_actions"]
     assert actions[0]["action"] == native and actions[0]["result"]["returncode"] == 1
-    assert actions[1]["result"]["output"].endswith("[truncated]")
+    assert actions[1]["result"]["output"] == "x" * 300 + "\n[truncated]\n" + "x" * 700
+    assert actions[1]["result"]["output_chars"] == 2000
     assert actions[2]["result"] is None
     assert c.drain("agent1") == []  # no automatic budget reminders
     c.mark_finished("agent1", "limit")
@@ -216,8 +260,10 @@ def test_mechanical_warnings_are_observations_not_automatic_messages():
     c._envs["agent2"].execute = lambda *a, **k: ExecResult(" M shared.py\0", 0)
     c.decide()
     first, second = observations[0]["workers"]
-    assert [warning.split(":", 1)[0] for warning in first["warnings"]] == ["LOOP", "STALL", "COLLISION"]
-    assert second["warnings"] == ["COLLISION: modified files overlap with agent1: shared.py"]
+    assert [warning.split(":", 1)[0] for warning in first["warnings"]] == ["STALL", "POTENTIAL_CONFLICT"]
+    assert second["warnings"] == [
+        'POTENTIAL_CONFLICT: same file modified; regions unknown with agent1: "shared.py" (source=current path observation)'
+    ]
     assert c.events() == [] and c.drain("agent1") == [] and c.drain("agent2") == []
 
 
@@ -238,6 +284,7 @@ def test_initial_prompt_keeps_evidence_pending_and_supplies_feature_identity(tmp
     c.decide()
     initial, later = [json.loads(prompt.split("OBSERVATION:\n")[1]) for prompt in prompts]
     assert initial["initial"] and not later["initial"]
+    assert "collected_at" not in initial and "collected_at" not in later
     assert initial["task_id"] == later["task_id"] == 27
     assert [(w["id"], w["feature_id"]) for w in initial["workers"]] == [("agent1", 3), ("agent2", 4)]
     assert all(w["status"] == "not_started" and not w["recent_actions"] for w in initial["workers"])
@@ -250,11 +297,11 @@ def test_initial_prompt_keeps_evidence_pending_and_supplies_feature_identity(tmp
     assert all("Return ONLY a JSON object" not in prompt for prompt in prompts)
 
 
-def test_human_in_loop_initial_prompt_and_direct_message_wrapper(tmp_path):
+def test_human_prompt_initial_prompt_and_direct_message_wrapper(tmp_path):
     prompts = []
     c = coordinator(
         notebook_path=tmp_path / "notebook.md",
-        coordination_variant="human_in_loop",
+        coordination_variant="human-prompt",
         complete=lambda prompt: prompts.append(prompt) or NOOP,
     )
     c.decide(initial=True)
@@ -278,9 +325,8 @@ def test_human_in_loop_initial_prompt_and_direct_message_wrapper(tmp_path):
         'Keep implementation moving with minimal coordination overhead.\n'
         '\n'
         'Intervene when the observation shows a concrete shared dependency, contested ownership/interface, '
-        'implementation overlap, repeated failure, handoff need, or verification need. Same-file edits and '
-        'mechanical warnings such as LOOP, STALL, or COLLISION are hints only; inspect the underlying '
-        'observed evidence before acting.\n'
+        'implementation overlap, repeated failure, handoff need, or verification need. Same-file edits are '
+        'only potential overlap; inspect the underlying observed evidence before acting.\n'
         '\n'
         'After the initial decision, take no action when there is no useful new coordination advice.\n'
         '\n'
@@ -325,11 +371,14 @@ def test_human_in_loop_initial_prompt_and_direct_message_wrapper(tmp_path):
         '\n'
         'OBSERVATION:\n'
     )
+    from cooperagents.coordination_prompts import COORDINATOR_WARNING_RULES
+
+    expected_initial = expected_initial.replace("\nOBSERVATION:\n", "\n" + COORDINATOR_WARNING_RULES + "\nOBSERVATION:\n")
     assert prompts[0].startswith(expected_initial)
     assert json.loads(prompts[0][len(expected_initial):])["initial"] is True
     c.register("agent1", SimpleNamespace(n_calls=1, messages=[]))
     c.decide()
-    expected_later = expected_initial.split("## 5. Initial decision\n")[0] + "OBSERVATION:\n"
+    expected_later = expected_initial.split("## 5. Initial decision\n")[0] + COORDINATOR_WARNING_RULES + "\nOBSERVATION:\n"
     assert prompts[1].startswith(expected_later)
     assert json.loads(prompts[1][len(expected_later):])["initial"] is False
     c._apply_actions(c._parse_actions([message("propose scope")]))
@@ -339,11 +388,11 @@ def test_human_in_loop_initial_prompt_and_direct_message_wrapper(tmp_path):
         "[FROM COORDINATOR]\npropose scope\n[END COORDINATOR MESSAGE]"
     )
     with pytest.raises(ValueError, match="requires a notebook"):
-        coordinator(coordination_variant="human_in_loop")
+        coordinator(coordination_variant="human-prompt")
 
 
-def test_human_in_loop_notebook_update_and_message_combinations(tmp_path):
-    c = coordinator(notebook_path=tmp_path / "notebook.md", coordination_variant="human_in_loop")
+def test_human_prompt_notebook_update_and_message_combinations(tmp_path):
+    c = coordinator(notebook_path=tmp_path / "notebook.md", coordination_variant="human-prompt")
     assert len(c.drain("agent1")) == 1  # initial notebook notice
     assert c.drain("agent1") == []  # no update, no direct message
 
@@ -614,7 +663,7 @@ def test_worker_system_variant_keeps_reviewed_shared_prefix(monkeypatch, tmp_pat
         raise RuntimeError("captured")
 
     monkeypatch.setattr(DefaultAgent, "run", capture)
-    for variant in ("current", "human_in_loop"):
+    for variant in ("auto-prompt", "human-prompt"):
         c = coordinator(notebook_path=tmp_path / variant / "notebook.md", coordination_variant=variant)
         result = run_mini_swe_agent(
             SimpleNamespace(repo_path="/repo"), task="feature", agent_id="agent1", role="lead",
@@ -624,8 +673,167 @@ def test_worker_system_variant_keeps_reviewed_shared_prefix(monkeypatch, tmp_pat
         system = systems[-1]
         assert system.index("A shared git remote") < system.index("You also have a second tool")
         assert system.index("You also have a second tool") < system.index("The coordinator is also")
-        if variant == "current":
+        if variant == "auto-prompt":
             assert "COORDINATOR ACKNOWLEDGMENT" in system
         else:
             assert "COORDINATOR NOTICES" in system and "at most two focused inspections" not in system
             assert "A focused code inspection" in system
+
+
+@pytest.mark.parametrize("variant", ["auto-prompt", "human-prompt"])
+def test_group_canonical_pages_failed_decision_and_restore(tmp_path, variant):
+    c = coordinator(coordination_mode="group-chat", coordination_variant=variant, notebook_path=tmp_path / "notebook.md")
+    threads = [
+        threading.Thread(target=lambda aid=aid: [c.publish(aid, "group", "x" * 1201) for _ in range(10)]) for aid in ("agent1", "agent2")
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(2)
+    assert [row["message_id"] for row in c._chat] == list(range(1, 21))
+    received = {aid: [] for aid in ("agent1", "agent2")}
+    for aid in received:
+        while c._chat_positions[aid] < 20:
+            received[aid].extend(text for text in c.drain(aid) if text.startswith("[group"))
+    assert received["agent1"] == received["agent2"]
+
+    def fail(prompt):
+        c.publish("agent1", "coordinator", "arrived during call")
+        raise RuntimeError("offline failure")
+
+    c._complete = fail
+    with pytest.raises(RuntimeError):
+        c.decide()
+    assert c._chat_positions["coordinator"] == 0
+    seen = []
+    c._complete = lambda prompt: seen.append(json.loads(prompt.split("OBSERVATION:\n")[1])) or []
+    c.decide()
+    assert c._chat_positions["coordinator"] == 6  # canonical complete-message page
+    assert len(seen[0]["group_chat"]["unread"]) == 6
+    c._apply_actions(c._parse_actions([message("public point", "agent1")]))
+    assert any("public point" in line for line in c.drain("agent2"))
+    c.mark_finished("agent1", "submitted")
+    assert c.drain("agent1") == []
+    restored = []
+    agent = SimpleNamespace(add_messages=lambda m: restored.append(m), model=SimpleNamespace(format_message=lambda **kwargs: kwargs))
+    c.restore_context("agent2", agent)
+    assert "group #" in restored[0]["content"]
+
+
+def test_group_inflight_stop_drops_returned_messages(tmp_path):
+    c = coordinator(coordination_mode="group-chat", notebook_path=tmp_path / "notebook.md")
+    entered, release = threading.Event(), threading.Event()
+
+    def complete(_):
+        entered.set()
+        assert release.wait(2)
+        return [message("late public advice", "group")]
+
+    c._complete = complete
+    errors = []
+
+    def decide():
+        try:
+            c.decide(initial=True)
+        except Exception as exc:
+            errors.append(exc)
+
+    thread = threading.Thread(target=decide)
+    thread.start()
+    assert entered.wait(2)
+    c.mark_finished("agent1", "submitted")
+    c.mark_finished("agent2", "submitted")
+    release.set()
+    thread.join(2)
+    assert not errors and not c._chat
+
+
+@pytest.mark.parametrize("variant", ["auto-prompt", "human-prompt"])
+def test_real_group_loop_public_messages_in_actual_requests(tmp_path, monkeypatch, variant):
+    from concurrent.futures import ThreadPoolExecutor
+    from functools import partial
+
+    import litellm
+
+    from cooperagents.env.local import LocalEnv
+    from cooperagents.trajectory import Trajectory, replay
+    from cooperagents.workers.mini_swe_worker import BusComm, run_mini_swe_agent
+
+    c = coordinator(coordination_mode="group-chat", coordination_variant=variant, notebook_path=tmp_path / "notebook.md")
+    journal = Trajectory(tmp_path / "group-trajectory.jsonl")
+    c.trace = partial(journal.emit, "coordinator")
+    c._apply_actions(c._parse_actions([message("Public targeted advice", "agent1")]))
+    barrier = threading.Barrier(2)
+    requests = []
+
+    def completion(**kwargs):
+        messages = kwargs["messages"]
+        requests.append(json.loads(json.dumps(messages)))
+        aid = messages[1]["content"].split("TASK ID ")[1].split()[0]
+        if not any(m["role"] == "assistant" for m in messages):
+            actions = [
+                ("send_message", {"recipient": "group", "content": f"{aid} inspected its code"}),
+                ("bash", {"command": "sync offline workers"}),
+            ]
+        else:
+            assert all(f"{actor} inspected its code" in json.dumps(messages) for actor in ("agent1", "agent2"))
+            actions = [("bash", {"command": "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"})]
+        return litellm.ModelResponse(
+            choices=[
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "synthetic",
+                        "tool_calls": [
+                            {"id": f"{aid}-{i}", "type": "function", "function": {"name": name, "arguments": json.dumps(args)}}
+                            for i, (name, args) in enumerate(actions)
+                        ],
+                    }
+                }
+            ],
+            usage={"prompt_tokens": 10, "completion_tokens": 1},
+        )
+
+    monkeypatch.setattr(litellm, "completion", completion)
+    monkeypatch.setenv("OPENAI_API_KEY", "offline")
+
+    def worker(aid):
+        env = LocalEnv.fresh()
+        execute = env.execute
+
+        def command(command, **kwargs):
+            if command.endswith("sync offline workers"):
+                barrier.wait(timeout=2)
+                return ExecResult("synchronized", 0)
+            return execute(command, **kwargs)
+
+        env.execute = command
+        try:
+            return run_mini_swe_agent(
+                env,
+                task=f"TASK ID {aid}",
+                agent_id=aid,
+                role="member",
+                model_name="dummy",
+                step_limit=10,
+                cost_limit=5,
+                comm=BusComm(c._bus, aid, group=c),
+                monitor=c,
+                poller=SimpleNamespace(poll=lambda: "\n".join(c.drain(aid))),
+                trace=partial(journal.emit, aid),
+            )
+        finally:
+            env.cleanup()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        result = list(pool.map(worker, ("agent1", "agent2")))
+    assert all(r.status == "submitted" for r in result), [(r.status, r.error) for r in result]
+    assert all("Public targeted advice" in json.dumps(req) for req in requests)
+    assert len(c._chat) == 3
+    journal.close()
+    assert not replay(journal.path)["pending_calls"]
+    from test_coordination_experiment import script
+
+    rows = [json.loads(line) for line in journal.path.read_text().splitlines()]
+    receipt = script("audit_trajectories").audit_coordination(rows, {"metrics": c.planning_metrics()})
+    assert receipt["public_records_in_requests"] == {"agent1": 3, "agent2": 3}

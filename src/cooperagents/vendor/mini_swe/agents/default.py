@@ -407,6 +407,21 @@ class DefaultAgent:
                         and "context window" not in es):
                     raise
                 self._emergency_truncate()
+        coordinator = getattr(self, "coordinator", None)
+        if coordinator is not None and coordinator.coordination_mode != "direct":
+            if getattr(self, "_restored_compaction", 0) != self._compaction_count:
+                coordinator.restore_context(self.agent_id, self)
+                self._restored_compaction = self._compaction_count
+        if coordinator is not None and coordinator.coordination_mode != "direct":
+            snapshot = coordinator.before_query(self.agent_id, self)
+            if hasattr(self, "_planning_tools"):
+                self.model._tools = [
+                    tool for tool in self._planning_tools if snapshot["phase"] == "planning" or tool["function"]["name"] != "confirm_plan"
+                ]
+        reminder = coordinator.worker_reminder(self.agent_id, self.n_calls + 1) if coordinator is not None else None
+        reminder_message = self.model.format_message(role="user", content=reminder) if reminder is not None else None
+        if reminder_message is not None:
+            self.add_messages(reminder_message)
         self.n_calls += 1
         try:
             message = self.model.query(self.messages)
@@ -427,6 +442,11 @@ class DefaultAgent:
             for attempt in range(3):
                 self.config.compaction_keep_recent_turns = max(0, keep - attempt)
                 self._emergency_truncate()
+                if coordinator is not None:
+                    coordinator.restore_context(self.agent_id, self, request=True)
+                # Preserve the scheduled reminder if overflow truncation dropped it.
+                if reminder_message is not None and reminder_message not in self.messages:
+                    self.add_messages(reminder_message)
                 try:
                     message = self.model.query(self.messages)
                     break
@@ -461,6 +481,7 @@ class DefaultAgent:
 
         actions = message.get("extra", {}).get("actions", [])
         outputs = []
+        self._sole_confirmation = len(actions) == 1 and actions[0].get("tool_name") == "confirm_plan"
         for action in actions:
             tool_name = action.get("tool_name", "bash")
             handler = getattr(self, "tool_handlers", {}).get(tool_name)
@@ -484,17 +505,20 @@ class DefaultAgent:
                 sm_matches = _parse_send_messages(cmd)
                 if sm_matches:
                     sm_outputs = []
+                    sm_returncode = 0
                     for recipient, content, wait in sm_matches:
                         r = record_call(self.trace, self._handle_send_message,
                                         action={"recipient": recipient, "content": content, "wait": wait})
                         sm_outputs.append(r["output"])
+                        sm_returncode = sm_returncode or r["returncode"]
                     remaining = _strip_send_message(cmd)
                     combined = "\n".join(sm_outputs)
                     if not remaining.strip():
-                        outputs.append({"output": combined, "returncode": 0, "exception_info": ""})
+                        outputs.append({"output": combined, "returncode": sm_returncode, "exception_info": ""})
                         continue
                     env_out = self.env.execute({**action, "command": remaining})
                     env_out["output"] = combined + "\n" + env_out.get("output", "")
+                    env_out["returncode"] = env_out.get("returncode", 0) or sm_returncode
                     outputs.append(env_out)
                     continue
 
@@ -513,6 +537,8 @@ class DefaultAgent:
         recipient = action.get("recipient", "")
         content = action.get("content", "")
         wait = action.get("wait", False)
+        if wait and getattr(self.comm, "group", None) is not None:
+            return {"output": "wait is unavailable in group chat", "returncode": 1, "exception_info": ""}
 
         if wait and hasattr(self.comm, "send_and_wait"):
             replies = self.comm.send_and_wait(recipient, content, timeout=60)
@@ -523,7 +549,10 @@ class DefaultAgent:
                 output += f"\n\n[Reply from {r['from']}]: {r['content']}"
             return {"output": output, "returncode": 0, "exception_info": ""}
 
-        self.comm.send(recipient, content)
+        try:
+            self.comm.send(recipient, content)
+        except ValueError as exc:
+            return {"output": f"send_message failed: {exc}", "returncode": 1, "exception_info": ""}
         self.log(f"SENT to {recipient}: {content[:80]}...")
         self.sent_messages.append({"to": recipient, "content": content})
         return {"output": f"Message sent to {recipient}", "returncode": 0, "exception_info": ""}

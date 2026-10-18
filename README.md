@@ -112,12 +112,35 @@ workers start, then checks progress and replies every 20 seconds. Workers first
 inspect code and discuss proposed edit regions; agreement is a prompt convention,
 not an execution barrier. Budget advice is chosen by the model.
 
+Use `--coordination-variant auto-prompt` (the default, formerly `current`/B)
+or `--coordination-variant human-prompt` (formerly `human_in_loop`/C) to select
+the coordinator and worker prompt text and notice format. Both variants share
+the same runtime. `human-prompt` requires the coordinator and notebook to be
+enabled. The NLP submission CLI accepts the same values and records them in
+the run metadata and variant. The former parameter values are no longer accepted.
+
 The coordinator writes a run-specific Markdown artifact. Each worker mounts its
 directory read-only at `/coordination`, outside the code checkout. A short
 version/path notice prompts workers to read `/coordination/notebook.md` with their
 existing shell tool. Updates replace the file atomically; the poller never pushes
 its full text. After context compaction, the next poll repeats the read reminder.
 Reading consumes normal worker budget and is not guaranteed by the harness.
+
+Add `--no-implementation-coordinator` to skip coordinator model decisions once
+implementation begins. Opening planning and forced finalization still run; group
+chat, notebook delivery and worker reminders remain available. In `group-chat`
+without opening planning this also skips the initial decision. The default is
+unchanged. The benchmark and NLP submission CLIs accept this flag; direct
+`UnifiedHarness` callers use `coordinator_implementation_enabled=False`.
+This disables model intervention, not the coordinator host that delivers chat.
+
+Add `--initial-plan-dir <directory>` to start an `auto-prompt` or `human-prompt` / `group-chat`
+team from reviewed notebook, public discussion and per-worker memory bundles.
+Pair, feature text hashes and clean source HEAD must match the bundle. The host
+restores the checkpoint before the first worker request; both workers receive the
+final plan before either starts implementation. Provenance stays in audit records.
+Use `--no-implementation-coordinator` in both comparison arms to disable runtime
+model intervention; the no-plan arm omits `--initial-plan-dir`.
 
 Add `--no-coordinator-notebook` for the same coordinator with messages only.
 ProgramBench's `coopgitc2` arm accepts the same flag. The implementation and
@@ -216,3 +239,118 @@ exception paths. A hard process kill cannot guarantee delivery. Custom
 `coordinator_complete` callbacks retain ownership of their SDK recording; their
 observations and decisions are captured, but raw model usage requires recording
 inside that callback.
+
+### Worker identity reminder
+
+Coordinator workers receive a `[HARNESS REMINDER]` user message immediately before
+model decisions 10, 20, 30, ... by default. Each worker counts independently across
+planning and implementation. The reminder names the real worker ID, original feature,
+current phase, and latest notebook version/path. It adds no ownership summary and does
+not force a notebook read. Without a notebook, it states that no notebook is enabled.
+
+`--worker-reminder-interval 10` sets the fixed cadence; `0` disables it. This applies
+to both prompt strategies and all coordinator communication modes. Solo workers and
+runs without a coordinator receive no reminder. Phase changes, notebook updates, and
+compaction do not trigger additional reminders. A scheduled reminder is appended after
+compaction; overflow retries retain that same reminder without counting a new decision.
+The NLP launcher forwards the interval into metadata, variant, and actual arguments.
+
+### Public group chat and opening planning
+
+`--coordination-variant auto-prompt|human-prompt` selects the prompt strategy.
+`--coordination-mode direct|group-chat|group-chat-planning` independently selects
+communication and opening planning; `direct` remains the default.
+
+| Mode | Communication | Opening behavior |
+| --- | --- | --- |
+| `direct` | Existing worker inboxes and coordinator notices | Existing prompt strategy |
+| `group-chat` | Public conversation among both workers and coordinator | Existing prompt strategy |
+| `group-chat-planning` | Same public conversation | Inspect/discuss, confirm a notebook version, then receive the final notebook |
+
+Group modes require two mini-SWE workers, `--coop-tools --no-seed --coordinator`,
+the notebook, and no wait protocol. `recipient="group"` addresses everyone;
+a roster ID names a participant but the message remains public. Send each
+message once. Canonical IDs preserve ordering; ordinary delivery provides complete
+messages in pages of at most 8,000 characters. Compaction restores recent
+public conversation. The full journal remains available for audit.
+Coordinator group observations use `group_chat.unread/recent/backlog` instead of
+the direct-mode `replies` field. Forced decisions use the same top-level fields,
+with frozen tasks, notebook, budgets and chat. Recent frozen messages include each
+worker's latest public report once, even if it falls outside the recent window.
+The frozen recent window is bounded to 8,000 characters, with at most two reports
+added from outside it, so the finalization chat can be slightly larger.
+Later messages cannot change this input or advance the ordinary unread cursor.
+
+Opening planning retains the complete bash tool. `[PLANNING MODE]` instructs
+workers to inspect code and discuss it without editing project source, tests,
+or configuration. This is a prompt instruction, not a write-permission barrier.
+Early changes remain in the trace and raw patch; they are not rolled back or
+automatically excluded from scoring.
+
+Workers confirm the current delivered notebook with `confirm_plan(version)` as
+their sole action. A revised notebook invalidates confirmations. After both
+workers participate and confirm the same candidate, the coordinator calls
+`finish_planning(version)`. Each worker receives the same complete final notebook
+and `[IMPLEMENTATION MODE]` before either next implementation request starts.
+
+`--planning-step-limit 200 --planning-time-limit 600` limit discussion within the
+original worker step/time budget. Either limit causes one coordinator finalization
+call, using frozen evidence and only `update_notebook`; this records `forced` and
+continues implementation without requiring new worker agreement. Normal agreement
+records `agreed`. Technical failures record `error`/`planning_failed`, preserve
+actual raw patches, and bypass later generating/repair passes. Forced finalization,
+in-flight calls and waiting still consume the original time budget.
+
+The NLP launcher forwards the mode and both limits into run metadata, variant,
+environment and actual arguments. Run IDs include the complete prompt/mode arm;
+existing snapshot/run directories are refused. It records explicit request settings,
+model/service revision fields, pair manifests, image hashes and evaluator patch hashes.
+Set `COOPER_MODEL_REVISION` and `COOPER_SERVICE_REVISION` in the authorized runtime
+profile before freezing a campaign.
+
+Offline input review (no model or network calls):
+
+```bash
+LITELLM_LOCAL_MODEL_COST_MAP=True .venv/bin/python scripts/export_coordinator_inputs.py \
+  --output /path/to/ignored/artifacts/coordinator-inputs
+```
+
+This captures actual planner/client messages and tool schemas with an explicitly
+synthetic transport and observations. It covers both prompts and all three modes,
+including confirmation, forced decisions and the later implementation monitor.
+
+`scripts/summarize_coordination_experiment.py campaign.json --output reports`
+reads 18 explicit arm/round/run entries. The campaign supplies six arm definitions,
+three rounds, the pair file/hash and frozen source, runtime, image and evaluator
+settings. The summary validates canonical pair identities, verdict types and audit
+receipts, preserves `agreed`, `forced` and `error` samples, and reports paired changes
+and separate worker/coordinator costs. Missing scoring or infrastructure failures
+produce coverage information and withheld rates. Zero or missing cost/usage does
+not imply free service. The summarizer never calls an LLM judge or launches jobs.
+
+### Coordinator observation and warnings
+
+Coordinator observations retain the last six action/result records. Long `result.output`
+values show the first 300 and last 700 characters, with `output_truncated` and `output_chars`.
+No tool execution-state field is added. The environment's existing output limit still applies.
+
+`LOOP` requires four completed bash actions in that six-record window to have the same full
+command, return code, and available raw output digest. Missing, unexecuted, and environment-
+truncated results are excluded. Context compaction can reduce the available window. `STALL`
+keeps its existing behavior.
+
+With coordinator and Git sharing enabled, `POTENTIAL_CONFLICT` compares the existing periodically
+published snapshots against the common initial commit. Disjoint text regions do not warn;
+overlaps are advisory, not proof of a merge conflict. `git_snapshots` identifies the exact
+SHAs/times and unavailable evidence. Existing current path observations can report
+`regions unknown` for common paths outside the snapshot comparison. Stash snapshots omit
+untracked files and can lag behind edits; differing SHAs can also have identical trees.
+
+The coordinator receives do/no-do examples for verifying potential overlap before a repair.
+These are illustrative options, not a required checklist or sequence; similar evidence-based
+actions are allowed. Actual Git merge conflicts retain their existing meaning.
+
+These changes do not enable merge repair or alter worker messages, submission checks,
+scoring, or the default ten-decision identity reminder. Opening planning may publish a
+proposed candidate before workers confirm its exact version; forced finalization retains
+its existing confirmation override.

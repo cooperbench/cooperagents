@@ -27,11 +27,13 @@ it (the conventional lead-merges-the-team pattern).
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 import tempfile
 import threading
 import time
+from collections import Counter
 from collections.abc import Callable
 from contextlib import ExitStack, nullcontext
 from dataclasses import asdict, dataclass
@@ -43,11 +45,21 @@ from cooperagents.agent import Agent
 from cooperagents.bus.base import TeamBus
 from cooperagents.bus.memory import InMemoryBus
 from cooperagents.coordination_prompts import (
+    COORDINATOR_PLANNING,
+    COORDINATOR_WARNING_RULES,
+    FORCED_PLANNING,
+    GROUP_CHAT,
     HUMAN_COORDINATOR_BASE,
     HUMAN_COORDINATOR_INITIAL,
     HUMAN_WORKER_WORKFLOW,
+    IMPLEMENTATION_MODE,
+    PLANNING_MODE,
+    PLANNING_SYSTEM,
 )
 from cooperagents.env.base import Environment
+from cooperagents.git_snapshots import GitEvidence
+from cooperagents.git_snapshots import GitShareSync as _GitShareSync
+from cooperagents.initial_plan import InitialPlan
 from cooperagents.llm import LLMClient
 from cooperagents.metrics import coordination_metrics, spawn_metrics
 from cooperagents.patching import strip_test_sections
@@ -235,7 +247,6 @@ The harness executes your returned actions; workers inspect code and may report 
 Their patches will be merged. Help them agree on responsibilities, file regions and shared interfaces before
 contested edits, resolve concrete overlaps or repeated failures during implementation, and decide when remaining
 step/time budgets warrant a specific handoff or verification reminder. Same-file edits are only potential overlap.
-Worker warnings are mechanical hints (LOOP, STALL, COLLISION), not proof that an intervention is needed.
 Check the underlying actions and results before deciding whether to message anyone.
 Use the supplied observations and replies; do not invent inspected code, agreement, completed tests or token budgets.
 Use task_id and each worker's id/feature_id exactly as supplied; a feature is not a separate task ID.
@@ -284,6 +295,11 @@ _UPDATE_NOTEBOOK_TOOL = {
 
 
 @dataclass(frozen=True)
+class _FinishPlanning:
+    version: int
+
+
+@dataclass(frozen=True)
 class _NotebookUpdate:
     content: str
 
@@ -314,7 +330,13 @@ class _Coordinator:
         assignments: list[Assignment],
         bus: TeamBus,
         notebook_path: Path | None = None,
-        coordination_variant: str = "current",
+        coordination_variant: str = "auto-prompt",
+        coordination_mode: str = "direct",
+        coordinator_implementation_enabled: bool = True,
+        initial_plan: InitialPlan | None = None,
+        planning_step_limit: int = 200,
+        planning_time_limit_s: int = 600,
+        worker_reminder_interval: int = 10,
         repo: str = "",
         task_id: int = 0,
         step_limit: int = 0,
@@ -324,10 +346,25 @@ class _Coordinator:
     ) -> None:
         from cooperagents.planner import _default_planner_complete
 
-        if coordination_variant not in ("current", "human_in_loop"):
+        if coordination_variant not in ("auto-prompt", "human-prompt"):
             raise ValueError(f"Unknown coordination variant: {coordination_variant}")
-        if coordination_variant == "human_in_loop" and notebook_path is None:
-            raise ValueError("Human-in-loop coordination requires a notebook")
+        if coordination_variant == "human-prompt" and notebook_path is None:
+            raise ValueError("Human-prompt coordination requires a notebook")
+        if coordination_mode not in ("direct", "group-chat", "group-chat-planning"):
+            raise ValueError(f"Unknown coordination mode: {coordination_mode}")
+        if planning_step_limit < 1 or planning_time_limit_s < 1:
+            raise ValueError("Planning budgets must be positive")
+        if worker_reminder_interval < 0:
+            raise ValueError("Worker reminder interval must be nonnegative")
+        self.worker_reminder_interval = worker_reminder_interval
+        self.planning_step_limit = planning_step_limit
+        self.planning_time_limit_s = planning_time_limit_s
+        self.coordination_mode = coordination_mode
+        self.coordinator_implementation_enabled = coordinator_implementation_enabled
+        self.initial_plan = initial_plan
+        self._summary_delivered: set[str] = set()
+        if initial_plan is not None and coordination_mode != "group-chat":
+            raise ValueError("Initial plan injection requires group-chat")
         self.coordination_variant = coordination_variant
         self.trace = trace
         self.error: Exception | None = None
@@ -340,16 +377,70 @@ class _Coordinator:
         self._finished: dict[str, str] = {}
         self._queues: dict[str, list[str]] = {aid: [] for aid in self._assignments}
         self._notified: dict[str, tuple[int, int]] = {}
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
+        self._chat: list[dict] = []
+        self._chat_positions = {aid: 0 for aid in (*self._assignments, "coordinator")}
+        self._condition = threading.Condition(self._lock)
+        self._wake = threading.Event()
+        self._planning = coordination_mode == "group-chat-planning" or initial_plan is not None
+        self.phase = "planning" if self._planning else "implementation"
+        self._planning_started: float | None = None
+        self._planning_deadline: float | None = None
+        self._planning_steps = {aid: 0 for aid in self._assignments}
+        self._waiting_seconds = {aid: 0.0 for aid in self._assignments}
+        self._coordinator_calls = 0
+        self._participants: set[str] = set()
+        self._confirmations: dict[str, int] = {}
+        self._candidate_version: int | None = None
+        self._requests: dict[str, dict] = {}
+        self._plan_context: dict[str, tuple] = {}
+        self._delivered: set[str] = set()
+        self._final_plan: dict | None = None
+        self._planning_outcome: str | None = None
+        self._planning_reason: str | None = None
+        self._frozen: dict | None = None
+        self._finalizing_started: float | None = None
+        self._planning_duration = 0.0
+        self._finalizing_duration = 0.0
         self._stop = threading.Event()
         self._fired: list[dict] = []
         self._pending: list[dict] = []
         self._processed: tuple = ()
         self._last_error = ""
+        self._git_sync: _GitShareSync | None = None
         self._notebook_path = notebook_path
         self._notebook = ""
         self._version = -1
         self._injected = complete is not None
+        self._tools = [
+            dict(
+                _SEND_MESSAGE_TOOL,
+                function={
+                    **_SEND_MESSAGE_TOOL["function"],
+                    "description": "Publish to everyone; recipient=group or a roster ID addresses the public message.",
+                },
+            )
+            if coordination_mode != "direct"
+            else _SEND_MESSAGE_TOOL,
+            *([_UPDATE_NOTEBOOK_TOOL] if notebook_path is not None else []),
+        ]
+        if self._planning:
+            self._tools.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "finish_planning",
+                        "description": "Finish agreed opening planning; must be the only action.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"version": {"type": "integer"}},
+                            "required": ["version"],
+                            "additionalProperties": False,
+                        },
+                    },
+                }
+            )
+        self._normal_tools = list(self._tools)
         self._complete = (
             complete
             if complete is not None
@@ -360,7 +451,7 @@ class _Coordinator:
                 trace=trace,
                 timeout=60,
                 max_retries=0,
-                tools=[_SEND_MESSAGE_TOOL, *([_UPDATE_NOTEBOOK_TOOL] if notebook_path is not None else [])],
+                tools=self._tools,
             )
         )
         self._emit(
@@ -377,13 +468,16 @@ class _Coordinator:
                 )
             )
 
+        self._initial_notebook = self._notebook
+
     def _emit(self, event: str, **data) -> None:
         if self.trace is not None:
             self.trace(event, **data)
 
     def worker_instructions(self) -> str:
-        if self.coordination_variant == "human_in_loop":
-            return "\n\n" + HUMAN_WORKER_WORKFLOW
+        phase_protocol = PLANNING_SYSTEM if self.coordination_mode == "group-chat-planning" else ""
+        if self.coordination_variant == "human-prompt":
+            return "\n\n" + HUMAN_WORKER_WORKFLOW + (GROUP_CHAT if self.coordination_mode != "direct" else "") + phase_protocol
         note = ""
         if self._notebook_path is not None:
             note = (
@@ -392,7 +486,385 @@ class _Coordinator:
                 f"Use `cat {_COORDINATOR_PATH}`; the file is outside your code repository. "
                 "Read the version in the file header; proposals still require confirmation."
             )
-        return _COORDINATION_WORKFLOW + note
+        return _COORDINATION_WORKFLOW + note + (GROUP_CHAT if self.coordination_mode != "direct" else "") + phase_protocol
+
+    def publish(self, sender: str, recipient: str, content: str, *, synthetic: bool = False) -> None:
+        """Canonical public record; callers bind sender rather than trusting model arguments."""
+        with self._lock:
+            if sender not in self._chat_positions:
+                raise ValueError("Unknown group participant")
+            recipients = ("group", *self._chat_positions)
+            if recipient not in recipients:
+                raise ValueError(f"Unsupported recipient {recipient!r}. Supported values: {', '.join(recipients)}.")
+            if not isinstance(content, str) or not content.strip():
+                raise ValueError("Group message must be nonempty text")
+            if self._stop.is_set() or sender in self._finished:
+                raise ValueError("Group participant has finished")
+            if len(content) > 1200:
+                suffix = "\n[truncated: message exceeded 1200 characters]"
+                content = content[: 1200 - len(suffix)] + suffix
+            row = dict(message_id=len(self._chat) + 1, sender=sender, addressed_to=recipient, content=content)
+            self._chat.append(row)
+            if self._planning and self.phase == "planning" and sender in self._assignments and not synthetic:
+                self._participants.add(sender)
+                if sender in self._confirmations:
+                    del self._confirmations[sender]
+                    self._emit("plan_confirmation", target=sender, accepted=False, reason="new_discussion", version=self._version)
+                self._condition.notify_all()
+                self._wake.set()
+            provenance = {"synthetic": True} if synthetic else {}
+            self._emit("group_message", **row, phase=self.phase, **provenance)
+
+    @staticmethod
+    def _chat_text(row: dict) -> str:
+        return f"[group #{row['message_id']}; {row['sender']} -> {row['addressed_to']}] {row['content']}"
+
+    def _chat_page(self, position: int) -> list[dict]:
+        page, size = [], 0
+        for row in self._chat[position:]:
+            length = len(self._chat_text(row)) + 1
+            if size + length > 8000:
+                break
+            page.append(row)
+            size += length
+        return page
+
+    def _recent_chat(self, end: int | None = None) -> list[dict]:
+        page, size = [], 0
+        for row in reversed(self._chat[:end]):
+            length = len(self._chat_text(row)) + 1
+            if size + length > 8000:
+                break
+            page.append(row)
+            size += length
+        return list(reversed(page))
+
+    def restore_context(self, agent_id: str, agent, *, request: bool = False) -> None:
+        with self._lock:
+            # Overflow retries remain the same logical request, even after finalization.
+            text = self._requests.get(agent_id, {}).get("phase_text") if request else None
+            if text:
+                agent.add_messages(agent.model.format_message(role="user", content=text))
+        if self.coordination_mode == "direct":
+            return
+        with self._lock:
+            recent = self._recent_chat(self._chat_positions[agent_id])
+        if recent:
+            agent.add_messages(
+                agent.model.format_message(
+                    role="user", content="Recent public conversation (restored):\n" + "\n".join(self._chat_text(row) for row in recent)
+                )
+            )
+            self._emit("group_delivery", target=agent_id, message_ids=[r["message_id"] for r in recent], restored=True)
+
+    def inject_initial_plan(self) -> None:
+        """Skip model planning, retain honest provenance and the native delivery barrier."""
+        plan = self.initial_plan
+        if plan is None or self._agents or self._chat or self._final_plan is not None:
+            raise ValueError("Initial plan can only be injected once before workers start")
+        plan.validate_assignments(self._repo, self._task_id, list(self._assignments.values()))
+        for aid, env in self._envs.items():
+            result = env.execute("git rev-parse HEAD", timeout=10)
+            if result.exit_code or result.stdout.strip() != plan.source_base_commit:
+                raise ValueError(f"Initial plan base source mismatch for {aid}")
+            if env.execute("git diff --quiet HEAD", timeout=10).exit_code:
+                raise ValueError(f"Initial plan requires unchanged base code for {aid}")
+        with self._condition:
+            self._planning_started = time.time()
+            self._planning_deadline = self._planning_started  # Synthetic preparation has no rollout budget.
+            for message in plan.history:
+                self.publish(message.sender, message.addressed_to, message.content, synthetic=True)
+            self.update_notebook(plan.content)
+            self._emit(
+                "initial_plan_injected", pair=plan.pair, source_base_commit=plan.source_base_commit,
+                bundle_sha256=plan.bundle_sha256, synthetic=True, history_message_ids=list(range(1, len(plan.history) + 1)),
+                feature_sha256=dict(plan.feature_sha256),
+            )
+            self._set_final_plan_locked("injected")
+
+    def start_planning(self) -> None:
+        with self._condition:
+            if self._planning and self._planning_started is None:
+                self._planning_started = time.time()
+                self._planning_deadline = self._planning_started + self.planning_time_limit_s
+                self._emit("planning_start", phase=self.phase, step_limit=self.planning_step_limit, time_limit_s=self.planning_time_limit_s)
+
+    def _planning_snapshot_locked(self) -> dict:
+        return dict(
+            phase=self.phase,
+            planning_steps=dict(self._planning_steps),
+            step_limit=self.planning_step_limit,
+            seconds_remaining=max(0, self._planning_deadline - time.time())
+            if self._planning_deadline is not None
+            else self.planning_time_limit_s,
+            time_limit_s=self.planning_time_limit_s,
+            participants=sorted(self._participants),
+            confirmations=dict(self._confirmations),
+            candidate_version=self._candidate_version,
+            reason=self._planning_reason,
+            outcome=self._planning_outcome,
+            final_plan=copy.deepcopy(self._final_plan),
+        )
+
+    def _fail_planning_locked(self, reason: str) -> None:
+        if self.phase == "failed":
+            return
+        now = time.time()
+        if self.phase == "planning" and self._planning_started is not None:
+            self._planning_duration = now - self._planning_started
+        elif self.phase == "finalizing" and self._finalizing_started is not None:
+            self._finalizing_duration = now - self._finalizing_started
+        self.phase = "failed"
+        self._planning_outcome, self._planning_reason = "error", reason
+        self._emit("planning_failed", reason=reason, phase=self.phase, budget=self._planning_snapshot_locked())
+        self._condition.notify_all()
+        self._wake.set()
+
+    def _check_planning_limits_locked(self) -> None:
+        if not self._planning or self.phase not in ("planning", "finalizing", "implementation"):
+            return
+        if self.phase == "implementation" and len(self._delivered) == len(self._assignments):
+            return
+        if self._planning_started is None:
+            return
+        now = time.time()
+        for aid, agent in self._agents.items():
+            if (
+                agent.config.wall_deadline is not None
+                and now >= agent.config.wall_deadline
+                or 0 < agent.config.step_limit <= agent.n_calls
+                or 0 < agent.config.cost_limit <= agent.cost
+            ):
+                self._fail_planning_locked(f"total_budget:{aid}")
+                return
+        if self.phase != "planning":
+            return
+        reason = (
+            "time_limit"
+            if now >= self._planning_deadline
+            else "step_limit"
+            if any(n >= self.planning_step_limit for n in self._planning_steps.values())
+            else None
+        )
+        if reason:
+            cursor = self._chat_positions["coordinator"]
+            selected = {row["message_id"]: row for row in self._recent_chat()}
+            for aid in self._assignments:
+                report = next((row for row in reversed(self._chat) if row["sender"] == aid), None)
+                if report is not None:
+                    selected[report["message_id"]] = report
+            chat = [dict(selected[mid]) for mid in sorted(selected)]
+            self.phase = "finalizing"
+            self._planning_reason = reason
+            self._frozen = dict(
+                notebook={"version": self._version, "content": self._notebook},
+                group_chat={
+                    "unread": [row for row in chat if row["message_id"] > cursor],
+                    "recent": [row for row in chat if row["message_id"] <= cursor],
+                    "backlog": len(self._chat) - cursor,
+                },
+                workers=[dict(id=aid, feature_id=a.feature_id, task=self._clip(a.task, 6000)) for aid, a in self._assignments.items()],
+                planning=self._planning_snapshot_locked(),
+            )
+            self._finalizing_started = now
+            self._planning_duration = now - self._planning_started
+            self._emit("planning_finalizing", reason=reason, frozen=self._frozen)
+            self._condition.notify_all()
+            self._wake.set()
+
+    def _set_final_plan_locked(self, outcome: str) -> None:
+        import hashlib
+
+        now = time.time()
+        self._planning_duration = (self._finalizing_started or now) - self._planning_started
+        self._finalizing_duration = now - self._finalizing_started if self._finalizing_started is not None else 0
+        self._final_plan = dict(
+            version=self._version,
+            content=self._notebook,
+            outcome=outcome,
+            confirmations=dict(self._confirmations),
+            sha256=hashlib.sha256(self._notebook.encode()).hexdigest(),
+        )
+        self._planning_outcome = outcome
+        self.phase = "implementation"
+        self._tools[:] = [tool for tool in self._tools if tool["function"]["name"] != "finish_planning"]
+        self._emit("planning_end", **self._final_plan, reason=self._planning_reason, planning_steps=dict(self._planning_steps))
+        self._condition.notify_all()
+
+    def finish_planning(self, version: int) -> None:
+        with self._condition:
+            self._check_planning_limits_locked()
+            if (
+                self.phase != "planning"
+                or self._finished
+                or version != self._candidate_version
+                or version != self._version
+                or set(self._confirmations) != set(self._assignments)
+                or any(v != version for v in self._confirmations.values())
+                or getattr(self, "_observed_confirmations", {}) != self._confirmations
+            ):
+                raise ValueError("finish_planning requires current observed confirmations from both live workers")
+            self._set_final_plan_locked("agreed")
+
+    def confirm_plan(self, aid: str, action: dict, *, sole: bool) -> dict:
+        with self._condition:
+            version = action.get("version")
+            request = self._requests.get(aid, {})
+            reason = "accepted"
+            if not sole:
+                reason = "confirm_plan must be the only tool action"
+            elif self.phase != "planning" or request.get("phase") != "planning" or aid in self._finished:
+                reason = "expired planning request"
+            elif (
+                type(version) is not int
+                or version != self._version
+                or version != self._candidate_version
+                or request.get("notebook_version") != version
+                or not self._notebook.strip()
+            ):
+                reason = "version was not the current candidate delivered in this request"
+            accepted = reason == "accepted"
+            if accepted:
+                self._confirmations[aid] = version
+                self._wake.set()
+            self._emit("plan_confirmation", target=aid, version=version, accepted=accepted, reason=reason)
+            self._condition.notify_all()
+            return {"output": f"Plan confirmation: {reason}", "returncode": 0 if accepted else 1, "exception_info": ""}
+
+    def _implementation_text(self) -> str:
+        text = IMPLEMENTATION_MODE.format(**self._final_plan)
+        if self.initial_plan is not None:
+            text = text.replace("Planning outcome: injected\n", "")
+        return text
+
+    def _restore_plan_locked(self, aid: str, agent) -> None:
+        if not self._planning or self.phase in ("finalizing", "failed"):
+            return
+        marker = (self.phase, self._version if self.phase == "planning" else self._final_plan["version"], agent._compaction_count)
+        if self._plan_context.get(aid) != marker:
+            if self.phase == "planning":
+                text = (
+                    PLANNING_MODE
+                    + f"\nCurrent notebook version: {self._version}\n<planning_notebook>\n{self._notebook}\n</planning_notebook>"
+                )
+            else:
+                if self.initial_plan is not None and aid not in self._summary_delivered:
+                    summary = dict(self.initial_plan.worker_summaries).get(aid)
+                    if summary is not None:
+                        agent.add_messages(agent.model.format_message(
+                            role="assistant", content=summary, extra={"summary": True},
+                        ))
+                        self._summary_delivered.add(aid)
+                        self._emit("worker_summary_delivery", target=aid, content=summary, synthetic=True)
+                text = self._implementation_text()
+            agent.add_messages(agent.model.format_message(role="user", content=text))
+            self._plan_context[aid] = marker
+            if self.phase == "implementation" and aid not in self._delivered:
+                self._delivered.add(aid)
+                self._emit(
+                    "plan_delivery",
+                    target=aid,
+                    version=self._final_plan["version"],
+                    sha256=self._final_plan["sha256"],
+                    content=self._final_plan["content"],
+                )
+                self._condition.notify_all()
+
+    def worker_reminder(self, aid: str, decision: int) -> str | None:
+        """Fixed cadence over worker decisions, including both execution phases."""
+        if not self.worker_reminder_interval or decision % self.worker_reminder_interval:
+            return None
+        with self._lock:
+            assignment = self._assignments[aid]
+            task = (
+                f"Your assigned task is feature {assignment.feature_id}."
+                if assignment.feature_id is not None
+                else "Your assigned task is the original task provided at the start."
+            )
+            notebook = (
+                "Latest coordination notebook:\n"
+                f"- Version: {self._version}\n"
+                "- Path: /coordination/notebook.md\n\n"
+                f"Follow the notebook entries addressed to {aid}.\n"
+                "If you have not read this version, or no longer remember your\n"
+                "assignment, read the notebook before continuing.\n"
+                if self._notebook_path is not None
+                else "No coordination notebook is enabled.\n"
+            )
+            return (
+                f"[HARNESS REMINDER]\nYou are {aid}, a worker.\n{task}\n"
+                f"Current phase: {self.phase}.\n\n{notebook}"
+                "Your original feature requirements still define the task goal."
+            )
+
+    def before_query(self, aid: str, agent) -> dict:
+        with self._condition:
+            while self._planning:
+                self._check_planning_limits_locked()
+                if self.phase == "failed" or self._stop.is_set():
+                    raise RuntimeError(f"planning_failed: {self._planning_reason}")
+                self._restore_plan_locked(aid, agent)
+                if self.phase == "implementation" and self._delivered == set(self._assignments):
+                    break
+                if self.phase == "planning":
+                    previous_position = self._requests.get(aid, {}).get("chat_position", 0)
+                    unread = self._chat_page(self._chat_positions[aid])
+                    if unread and self._chat_positions[aid] == previous_position:
+                        for text in self.drain(aid):
+                            agent.add_messages(agent.model.format_message(role="user", content=text))
+                    if self._confirmations.get(aid) != self._version or self._chat_positions[aid] > previous_position:
+                        break
+                deadlines = [agent.config.wall_deadline, self._planning_deadline if self.phase == "planning" else None]
+                remaining = min([d - time.time() for d in deadlines if d is not None] or [1])
+                waited_at = time.time()
+                self._condition.wait(timeout=max(0.001, min(remaining, 1)))
+                self._waiting_seconds[aid] += max(0, time.time() - waited_at)
+            snapshot = dict(
+                phase=self.phase,
+                notebook_version=self._version,
+                planning_steps=dict(self._planning_steps),
+                steps_used=agent.n_calls,
+                seconds_remaining=max(0, agent.config.wall_deadline - time.time()) if agent.config.wall_deadline is not None else None,
+            )
+            snapshot["chat_position"] = self._chat_positions[aid]
+            if self._planning:
+                snapshot["phase_text"] = (
+                    PLANNING_MODE + f"\nCurrent notebook version: {self._version}\n"
+                    f"<planning_notebook>\n{self._notebook}\n</planning_notebook>"
+                    if self.phase == "planning"
+                    else self._implementation_text()
+                )
+            self._requests[aid] = snapshot
+            if self._planning and self.phase == "planning":
+                self._planning_steps[aid] += 1
+            self._emit("worker_request", target=aid, **{k: v for k, v in snapshot.items() if k != "phase_text"})
+            return snapshot
+
+    def planning_metrics(self) -> dict:
+        with self._lock:
+            return dict(
+                coordination_mode=self.coordination_mode,
+                coordinator_implementation_enabled=self.coordinator_implementation_enabled,
+                group_messages=len(self._chat),
+                coordinator_calls=self._coordinator_calls,
+                group_delivery_positions=dict(self._chat_positions),
+                **(
+                    {
+                        "planning": dict(
+                            outcome=self._planning_outcome,
+                            reason=self._planning_reason,
+                            final_plan=copy.deepcopy(self._final_plan),
+                            delivered=sorted(self._delivered),
+                            steps=dict(self._planning_steps),
+                            waiting_seconds=dict(self._waiting_seconds),
+                            discussion_seconds=self._planning_duration,
+                            finalizing_seconds=self._finalizing_duration,
+                        )
+                    }
+                    if self._planning
+                    else {}
+                ),
+            )
 
     def verify_mounts(self) -> None:
         if self._notebook_path is not None:
@@ -407,10 +879,13 @@ class _Coordinator:
             if agent_id not in self._assignments or agent_id in self._finished:
                 raise ValueError(f"Invalid coordinator worker registration: {agent_id}")
             self._agents[agent_id] = agent
+            self._condition.notify_all()
             self._emit("register", target=agent_id)
 
     def mark_finished(self, agent_id: str, status: str) -> None:
         with self._lock:
+            if self._planning and (self.phase != "implementation" or len(self._delivered) != len(self._assignments)):
+                self._fail_planning_locked(f"worker_exit:{agent_id}:{status}")
             self._finished[agent_id] = status
             dropped = self._queues[agent_id]
             self._queues[agent_id] = []
@@ -423,6 +898,12 @@ class _Coordinator:
             if agent_id in self._finished or self._stop.is_set():
                 return []
             out = self._queues[agent_id]
+            if self.coordination_mode != "direct":
+                page = self._chat_page(self._chat_positions[agent_id])
+                if page:
+                    self._chat_positions[agent_id] = page[-1]["message_id"]
+                    out = [*out, *[self._chat_text(row) for row in page]]
+                    self._emit("group_delivery", target=agent_id, message_ids=[r["message_id"] for r in page], restored=False)
             self._queues[agent_id] = []
             compactions = getattr(self._agents.get(agent_id), "_compaction_count", 0)
             marker = (self._version, compactions)
@@ -445,6 +926,10 @@ class _Coordinator:
     def stop(self) -> None:
         with self._lock:
             self._stop.set()
+            if self._planning and self.phase not in ("implementation", "failed"):
+                self._fail_planning_locked("stopped")
+            self._condition.notify_all()
+            self._wake.set()
 
     def update_notebook(self, content: str) -> None:
         path = self._notebook_path
@@ -466,14 +951,20 @@ class _Coordinator:
         with self._lock:
             previous = self._version
             self._version, self._notebook = version, content
+            if self._planning and self.phase == "planning":
+                for aid in self._confirmations:
+                    self._emit("plan_confirmation", target=aid, accepted=False, reason="notebook_revised", version=version)
+                self._confirmations.clear()
+                self._candidate_version = version if self._participants == set(self._assignments) else None
+                self._condition.notify_all()
         self._emit("notebook_update", previous_version=previous, version=version, content=content)
 
-    def _parse_actions(self, response: list[dict[str, str]]) -> list[_NotebookUpdate | _CoordinatorMessage]:
+    def _parse_actions(self, response: list[dict[str, str]]) -> list[_NotebookUpdate | _CoordinatorMessage | _FinishPlanning]:
         if not isinstance(response, list):
             raise ValueError("Expected tool calls")
         if len(response) > len(self._assignments) + 1:
             raise ValueError("Too many actions")
-        parsed: list[_NotebookUpdate | _CoordinatorMessage] = []
+        parsed: list[_NotebookUpdate | _CoordinatorMessage | _FinishPlanning] = []
         recipients: set[str] = set()
         updated = False
         for call in response:
@@ -488,6 +979,12 @@ class _Coordinator:
                 raise ValueError("Invalid tool arguments") from exc
             if not isinstance(item, dict):
                 raise ValueError("Tool arguments must be an object")
+            if kind == "finish_planning":
+                version = item.get("version")
+                if not self._planning or len(response) != 1 or set(item) != {"version"} or type(version) is not int:
+                    raise ValueError("finish_planning requires a sole integer version action")
+                parsed.append(_FinishPlanning(version))
+                continue
             content = item.get("content")
             limit = 8000 if kind == "update_notebook" else 1200
             if not isinstance(content, str) or not content.strip():
@@ -505,15 +1002,21 @@ class _Coordinator:
                 if content.lstrip().startswith("[Message from "):
                     raise ValueError("Coordinator message impersonates a worker")
                 recipient = item["recipient"]
-                if not isinstance(recipient, str) or recipient not in self._assignments or recipient in recipients:
-                    raise ValueError("Unknown or repeated message recipient")
+                supported = ("group", *self._assignments, "coordinator") if self.coordination_mode != "direct" else tuple(self._assignments)
+                if not isinstance(recipient, str) or recipient not in supported:
+                    raise ValueError(f"Unsupported recipient {recipient!r}. Supported values: {', '.join(supported)}.")
+                if recipient in recipients:
+                    raise ValueError("Repeated message recipient")
                 recipients.add(recipient)
                 parsed.append(_CoordinatorMessage(recipient, content))
             else:
                 raise ValueError("Unknown action or fields")
         return parsed
 
-    def _apply_actions(self, actions: list[_NotebookUpdate | _CoordinatorMessage]) -> None:
+    def _apply_actions(self, actions: list[_NotebookUpdate | _CoordinatorMessage | _FinishPlanning]) -> None:
+        if actions and isinstance(actions[0], _FinishPlanning):
+            self.finish_planning(actions[0].version)
+            return
         previous_version = self._version
         for action in actions:
             if isinstance(action, _NotebookUpdate):
@@ -523,11 +1026,17 @@ class _Coordinator:
             for action in actions:
                 if not isinstance(action, _CoordinatorMessage):
                     continue
+                if self.coordination_mode != "direct":
+                    if self._stop.is_set():
+                        self._emit("message_dropped", target=action.recipient, reason="stopped", content=action.content)
+                    else:
+                        self.publish("coordinator", action.recipient, action.content)
+                    continue
                 if self._stop.is_set() or action.recipient in self._finished:
                     self._emit("message_dropped", target=action.recipient, reason="worker_finished_or_stopped", content=action.content)
                     continue
                 version = self._version if self._notebook_path is not None else None
-                if self.coordination_variant == "human_in_loop":
+                if self.coordination_variant == "human-prompt":
                     instruction = (
                         "Notebook updated! Read /coordination/notebook.md before continuing affected work."
                         if notebook_updated else "Read /coordination/notebook.md if needed."
@@ -579,16 +1088,36 @@ class _Coordinator:
                     if call_id
                     else (outputs[index] if index < len(outputs) and not outputs[index].get("tool_call_id") else None)
                 )
-                record = {"action": {k: cls._clip(v) if isinstance(v, str) else v for k, v in action.items()}, "result": None}
+                record: dict[str, Any] = {
+                    "action": {k: cls._clip(v) if isinstance(v, str) and k != "tool_call_id" else v for k, v in action.items()},
+                    "result": None,
+                }
                 if output is not None:
                     extra = output["extra"]
+                    raw = str(extra.get("raw_output", ""))
                     record["result"] = {
                         "returncode": extra.get("returncode"),
-                        "output": cls._clip(str(extra.get("raw_output", ""))),
+                        "output": raw if len(raw) <= 1000 else raw[:300] + "\n[truncated]\n" + raw[-700:],
+                        "output_truncated": len(raw) > 1000,
+                        "output_chars": len(raw),
                         "exception_info": cls._clip(str(extra.get("exception_info") or "")),
                     }
+                    command = action.get("command")
+                    code = extra.get("returncode")
+                    if (
+                        action.get("tool_name") == "bash" and isinstance(command, str) and command.strip()
+                        and isinstance(code, int) and not isinstance(code, bool)
+                        and extra.get("exception_info") != "action was not executed"
+                        and "[output truncated after " not in raw
+                    ):
+                        record["_loop_signature"] = (command, code, raw)
                 records.append(record)
-        return records[-6:]
+        recent = records[-6:]
+        for record in recent:
+            signature = record.get("_loop_signature")
+            if signature is not None:
+                record["_loop_signature"] = (signature[0], signature[1], hashlib.sha256(signature[2].encode()).hexdigest())
+        return recent
 
     def _dirty_files(self, aid: str) -> list[str] | None:
         from cooperagents.trajectory import record_call
@@ -608,16 +1137,14 @@ class _Coordinator:
         )
 
     @staticmethod
-    def _add_warnings(workers: list[dict]) -> None:
+    def _add_warnings(workers: list[dict], git_evidence: GitEvidence | None = None) -> None:
         for worker in workers:
             warnings = worker["warnings"] = []
             actions = worker["recent_actions"]
-            commands = [record["action"].get("command", "") for record in actions]
-            commands = [command for command in commands if isinstance(command, str) and command.strip()]
-            if len(commands) >= 6:
-                heads = [" ".join(command.split()[:2]) for command in commands[-6:]]
-                if max(heads.count(head) for head in set(heads)) >= 4:
-                    warnings.append("LOOP: at least 4 of the last 6 commands share their first two words")
+            signatures = [record.pop("_loop_signature", None) for record in actions]
+            counts = Counter(signature for signature in signatures if signature is not None)
+            if counts and max(counts.values()) >= 4:
+                warnings.append("LOOP: repeated action with unchanged result")
             results = [record["result"] for record in actions if record["result"] is not None]
             if len(results) >= 4:
                 recent = results[-4:]
@@ -630,11 +1157,30 @@ class _Coordinator:
             for peer in workers:
                 if peer is worker:
                     continue
-                overlap = sorted(files.intersection(peer["modified_files"] or []))
-                if overlap:
-                    warnings.append(f"COLLISION: modified files overlap with {peer['id']}: {', '.join(overlap[:3])}")
+                current_common = files.intersection(peer["modified_files"] or [])
+                pair = tuple(sorted((worker["id"], peer["id"])))
+                comparison = git_evidence.comparisons.get(pair) if git_evidence else None
+                overlaps = comparison.overlaps if comparison and comparison.error is None else {}
+                unknown_snapshot = set(comparison.unknown) if comparison else set()
+                covered = comparison.covered if comparison and comparison.error is None else frozenset()
+                unknown_current = current_common.difference(covered)
+                for path in sorted(set(overlaps) | unknown_snapshot | unknown_current)[:3]:
+                    quoted = json.dumps(path, ensure_ascii=False)
+                    if path in overlaps:
+                        warnings.append(
+                            f"POTENTIAL_CONFLICT: possible overlapping edits with {peer['id']}: {quoted} "
+                            f"({pair[0]}/{pair[1]}: {overlaps[path]}; source=snapshot)"
+                        )
+                    else:
+                        source = "snapshot" if path in unknown_snapshot else "current path observation"
+                        warnings.append(
+                            f"POTENTIAL_CONFLICT: same file modified; regions unknown with {peer['id']}: {quoted} (source={source})"
+                        )
 
     def decide(self, *, initial: bool = False) -> None:
+        with self._lock:
+            if self.phase == "implementation" and not self.coordinator_implementation_enabled:
+                return
         replies = self._bus.receive("coordinator")
         self._pending.extend(replies)
         if replies:
@@ -642,8 +1188,24 @@ class _Coordinator:
         with self._lock:
             if self._stop.is_set():
                 return
+            self._check_planning_limits_locked()
+            if self.phase == "failed":
+                return
+            forced = self._planning and self.phase == "finalizing"
+            decision_phase = self.phase
+            decision_version = self._version
+            planning = self._planning_snapshot_locked() if self._planning else None
+            if self.initial_plan is not None:
+                planning = {
+                    "phase": self.phase,
+                    "final_plan": {key: self._final_plan[key] for key in ("version", "content", "sha256")},
+                }
+            self._observed_confirmations = dict(self._confirmations)
             agents, finished = dict(self._agents), dict(self._finished)
             version, notebook = self._version, self._notebook
+            chat_page = self._chat_page(self._chat_positions["coordinator"]) if self.coordination_mode != "direct" else []
+            recent_chat = self._recent_chat(self._chat_positions["coordinator"])
+            chat_backlog = len(self._chat) - self._chat_positions["coordinator"]
         progress = tuple(
             (
                 aid,
@@ -654,7 +1216,15 @@ class _Coordinator:
             )
             for aid in self._assignments
         )
-        if not initial and not self._pending and progress == self._processed:
+        planning_marker = (decision_phase, decision_version, tuple(sorted(self._confirmations.items())))
+        if (
+            not initial
+            and not forced
+            and not self._pending
+            and not chat_page
+            and progress == self._processed
+            and (not self._planning or planning_marker == getattr(self, "_processed_planning", None))
+        ):
             return
         workers = []
         for aid, assignment in self._assignments.items():
@@ -683,16 +1253,20 @@ class _Coordinator:
                     "recent_actions": self._recent_actions(list(getattr(agent, "messages", []))),
                 }
             )
-        self._add_warnings(workers)
+        git_evidence = self._git_sync.evidence() if self._git_sync is not None else GitEvidence()
+        self._add_warnings(workers, git_evidence)
         observation = {
             "repo": self._repo,
             "task_id": self._task_id,
             "initial": initial,
             "workers": workers,
-            "replies": list(self._pending),
-            "previous_error": self._last_error,
         }
-        if self.coordination_variant == "human_in_loop":
+        if not forced:
+            observation["git_snapshots"] = git_evidence.metadata()
+        if self.coordination_mode == "direct":
+            observation["replies"] = list(self._pending)
+        observation["previous_error"] = self._last_error
+        if self.coordination_variant == "human-prompt":
             protocol = HUMAN_COORDINATOR_BASE + "\n"
             if initial:
                 protocol += "\n" + HUMAN_COORDINATOR_INITIAL + "\n"
@@ -706,9 +1280,10 @@ class _Coordinator:
                     "but leave concrete edit boundaries and ownership pending worker evidence and confirmation. "
                     "Do not guess filenames, existing symbols or new shared APIs, or declare coordination complete.\n"
                 )
+        protocol += "\n" + COORDINATOR_WARNING_RULES
         if self._notebook_path is not None:
             observation["notebook"] = {"version": version, "content": notebook}
-            if self.coordination_variant == "current":
+            if self.coordination_variant == "auto-prompt":
                 protocol += (
                     "Call update_notebook at most once, with the complete Markdown (at most 8000 characters).\n"
                     "Prefer a short notebook (about 1000-2000 characters) of current responsibilities/regions, "
@@ -718,39 +1293,113 @@ class _Coordinator:
                 )
         else:
             protocol += "Notebook is disabled; only send_message is available.\n"
+        if self.coordination_mode != "direct":
+            protocol += GROUP_CHAT
+            observation["group_chat"] = {
+                "unread": chat_page,
+                "recent": recent_chat,
+                "backlog": chat_backlog,
+            }
+        if self._planning:
+            observation["planning"] = planning
+            if forced:
+                observation.update(copy.deepcopy(self._frozen))
+                observation["initial"] = False
+                protocol += FORCED_PLANNING
+            elif self.phase == "planning":
+                protocol += COORDINATOR_PLANNING
         prompt = protocol + "\nOBSERVATION:\n" + json.dumps(observation, ensure_ascii=False)
         count = len(self._pending)
         self._emit("observation", **observation)
         try:
             if self._complete is None:
                 raise ConnectionError("Coordinator completion client unavailable")
-            response = self._complete(prompt)
+            if forced:
+                self._tools[:] = [_UPDATE_NOTEBOOK_TOOL]
+            self._coordinator_calls += 1
+            if forced and not self._injected:
+                deadlines = [agent.config.wall_deadline for agent in agents.values() if agent.config.wall_deadline is not None]
+                remaining = min([d - time.time() for d in deadlines] or [60])
+                response = self._complete(prompt, timeout=max(0.001, min(60, remaining)))
+            else:
+                response = self._complete(prompt)
         except Exception as exc:
             self._last_error = f"Completion failed: {type(exc).__name__}"
             self._emit("decision", initial=initial, valid=False, outcome="transport_error", error=str(exc))
-            if self._injected:
+            if forced:
+                with self._condition:
+                    self._fail_planning_locked(self._last_error)
+                return
+            if self._injected and not self._planning:
                 raise
             return
         try:
+            if forced and (not isinstance(response, list) or len(response) != 1 or response[0].get("name") != "update_notebook"):
+                raise ValueError("Finalization requires exactly one notebook update")
             actions = self._parse_actions(response)
+            if forced and (
+                len(actions[0].content) > 8000 or "[truncated:" in actions[0].content or actions[0].content == self._initial_notebook
+            ):
+                raise ValueError("Finalization requires a complete final notebook")
         except (ValueError, TypeError, RecursionError) as exc:
             self._last_error = str(exc)
             self._emit("decision", initial=initial, valid=False, outcome="invalid_response", response=response, error=str(exc))
-            if self._injected:
+            if forced:
+                with self._condition:
+                    self._fail_planning_locked(self._last_error)
+                return
+            if self._injected and not self._planning:
                 raise
             return
         self._emit("decision", initial=initial, valid=True, outcome="actions" if actions else "no_op", response=response)
-        self._apply_actions(actions)
+        with self._condition:
+            self._check_planning_limits_locked()
+            if self._planning and (self.phase != decision_phase or self._version != decision_version):
+                self._emit("decision_expired", phase=decision_phase, current_phase=self.phase)
+                return
+            try:
+                self._apply_actions(actions)
+                if forced:
+                    self._set_final_plan_locked("forced")
+                    self._tools[:] = [tool for tool in self._normal_tools if tool["function"]["name"] != "finish_planning"]
+            except Exception as exc:
+                if self._planning and self.phase in ("planning", "finalizing", "failed"):
+                    if isinstance(exc, ValueError) and not forced:
+                        self._last_error = str(exc)
+                        self._emit("decision", initial=initial, valid=False, outcome="invalid_action", error=str(exc))
+                    else:
+                        self._fail_planning_locked(f"plan_action_failed:{exc}")
+                    return
+                raise
+        if chat_page and not forced:
+            with self._lock:
+                self._chat_positions["coordinator"] = chat_page[-1]["message_id"]
+            self._emit("group_delivery", target="coordinator", message_ids=[r["message_id"] for r in chat_page], restored=False)
         del self._pending[:count]
         self._processed = progress
+        self._processed_planning = (self.phase, self._version, tuple(sorted((planning or {}).get("confirmations", {}).items())))
         self._last_error = ""
 
     def run(self) -> None:
+        next_decision = time.monotonic() + 20
         try:
-            while not self._stop.wait(20):
-                self.decide()
+            while not self._stop.is_set():
+                if self._planning and self.phase in ("planning", "finalizing"):
+                    triggered = self._wake.wait(0.1)
+                    self._wake.clear()
+                    with self._condition:
+                        self._check_planning_limits_locked()
+                    if triggered or self.phase == "finalizing" or time.monotonic() >= next_decision:
+                        self.decide()
+                        next_decision = time.monotonic() + 20
+                elif not self._stop.wait(20):
+                    self.decide()
         except Exception as exc:
-            self.error = exc
+            if self._planning and self.phase != "implementation":
+                with self._condition:
+                    self._fail_planning_locked(f"coordinator_error:{exc}")
+            else:
+                self.error = exc
 
     def finish(self, thread: threading.Thread) -> None:
         """Always join the started monitor before its environments are torn down."""
@@ -763,34 +1412,6 @@ class _Coordinator:
 
 
 _GITSHARE = "/cbshared/repo.git"
-
-
-class _GitShareSync:
-    """TK-git: harness-side push of each agent's working tree to a per-agent
-    branch on the shared bare repository. `git stash create` produces a commit
-    object from the dirty tree while leaving the agent's HEAD, index, and
-    working tree unchanged; a clean tree pushes HEAD."""
-
-    def __init__(self, envs: dict[str, Environment]) -> None:
-        self._envs = envs
-        self._stop = threading.Event()
-        self._locks = {aid: threading.Lock() for aid in envs}
-
-    def stop(self) -> None:
-        self._stop.set()
-
-    def run(self) -> None:
-        while not self._stop.wait(45):
-            for aid, env in list(self._envs.items()):
-                try:
-                    with self._locks[aid]:
-                        env.execute(
-                            "C=$(git stash create 2>/dev/null); "
-                            f"git push -q -f shared ${{C:-HEAD}}:refs/heads/{aid} 2>/dev/null || true",
-                            timeout=60,
-                        )
-                except Exception:  # noqa: BLE001 - sync must never disturb the run
-                    pass
 
 
 class _TeammatePoller:
@@ -1124,7 +1745,13 @@ class UnifiedHarness:
         langfuse: bool = False,
         coordinator_complete: Callable[[str], list[dict[str, str]]] | None = None,
         coordinator_notebook_path: Path | None = None,
-        coordination_variant: str = "current",
+        coordination_variant: str = "auto-prompt",
+        coordination_mode: str = "direct",
+        coordinator_implementation_enabled: bool = True,
+        initial_plan: InitialPlan | None = None,
+        planning_step_limit: int = 200,
+        planning_time_limit_s: int = 600,
+        worker_reminder_interval: int = 10,
         checkpoint_dir: Path | None = None,
         repair_completion: CompletionBinding | None = None,
     ) -> None:
@@ -1132,8 +1759,22 @@ class UnifiedHarness:
             raise TypeError("coordinator_complete must be callable")
         self.repair_completion = repair_completion
         self.coordinator_complete = coordinator_complete
-        if coordination_variant not in ("current", "human_in_loop"):
+        if coordination_variant not in ("auto-prompt", "human-prompt"):
             raise ValueError(f"Unknown coordination variant: {coordination_variant}")
+        if coordination_mode not in ("direct", "group-chat", "group-chat-planning"):
+            raise ValueError(f"Unknown coordination mode: {coordination_mode}")
+        if planning_step_limit < 1 or planning_time_limit_s < 1:
+            raise ValueError("Planning budgets must be positive")
+        if worker_reminder_interval < 0:
+            raise ValueError("Worker reminder interval must be nonnegative")
+        self.worker_reminder_interval = worker_reminder_interval
+        self.planning_step_limit = planning_step_limit
+        self.planning_time_limit_s = planning_time_limit_s
+        self.coordination_mode = coordination_mode
+        self.coordinator_implementation_enabled = coordinator_implementation_enabled
+        self.initial_plan = initial_plan
+        if initial_plan is not None and coordination_mode != "group-chat":
+            raise ValueError("Initial plan injection requires group-chat")
         self.coordination_variant = coordination_variant
         self.coordinator_notebook_path = Path(coordinator_notebook_path).resolve() if coordinator_notebook_path is not None else None
         self.trajectory = trajectory
@@ -1232,7 +1873,9 @@ class UnifiedHarness:
                     command_timeout=self.command_timeout,
                     guard_git=spec.guard_git,
                     temperature=spec.temperature,
-                    comm=BusComm(bus, agent_id) if spec.coop_tools else None,
+                    comm=BusComm(bus, agent_id, group=monitor if monitor is not None and monitor.coordination_mode != "direct" else None)
+                    if spec.coop_tools
+                    else None,
                     poller=poller,
                     tool_protocol=spec.tool_protocol,
                     task_board=TaskBoard(bus, agent_id) if spec.task_board else None,
@@ -1283,6 +1926,7 @@ class UnifiedHarness:
         coordinator = None  # set in the coop branch when spec.coordinator
         start = time.time()
         integrated_patch = ""  # cumulative diff across the team so far (seed mode)
+        raw_worker_patches: dict[str, str] = {}
         member_patches: list[str] = []  # each agent's own diff (no-seed mode)
         team_lead_patch: str | None = None  # team_roles: lead's merged tree is the submission
         prior: list[str] = []
@@ -1352,13 +1996,27 @@ class UnifiedHarness:
                 coop_envs: dict[str, Environment] = {}
                 coordinator = (
                     _Coordinator(
-                        coop_envs, spec.model, assignments=assignments, bus=bus,
+                        coop_envs,
+                        spec.model,
+                        assignments=assignments,
+                        bus=bus,
                         notebook_path=self.coordinator_notebook_path if spec.coordinator_notebook else None,
                         coordination_variant=self.coordination_variant,
-                        repo=spec.repo, task_id=spec.task_id, step_limit=self.step_limit, time_limit_s=spec.agent_time_limit,
+                        coordination_mode=self.coordination_mode,
+                        coordinator_implementation_enabled=self.coordinator_implementation_enabled,
+                        initial_plan=self.initial_plan,
+                        planning_step_limit=self.planning_step_limit,
+                        planning_time_limit_s=self.planning_time_limit_s,
+                        worker_reminder_interval=self.worker_reminder_interval,
+                        repo=spec.repo,
+                        task_id=spec.task_id,
+                        step_limit=self.step_limit,
+                        time_limit_s=spec.agent_time_limit,
                         complete=self.coordinator_complete,
                         trace=partial(self.trajectory.emit, "coordinator") if self.trajectory else None,
-                    ) if spec.coordinator else None
+                    )
+                    if spec.coordinator
+                    else None
                 )
                 for assignment in assignments:
                     env = env_factory(assignment.agent_id)
@@ -1367,22 +2025,39 @@ class UnifiedHarness:
                 gitsync = None
                 if spec.git_share:
                     first = True
+                    initial_heads, published = {}, set()
                     for _aid, _e in coop_envs.items():
+                        if coordinator is not None:
+                            try:
+                                head = _e.execute("git rev-parse HEAD", timeout=5)
+                                initial_heads[_aid] = head.stdout.strip() if head.exit_code == 0 else ""
+                            except Exception:
+                                initial_heads[_aid] = ""
                         if first:
                             _e.execute(f"git init -q --bare {_GITSHARE} 2>/dev/null || true")
                             first = False
                         _e.execute(f"git remote add shared {_GITSHARE} 2>/dev/null || true")
-                        _e.execute(f"git push -q shared HEAD:refs/heads/{_aid} 2>/dev/null || true")
-                    gitsync = _GitShareSync(coop_envs)
-                    cleanup.callback(gitsync.stop)
-                    threading.Thread(target=gitsync.run, daemon=True).start()
+                        push = _e.execute(f"git push -q shared HEAD:refs/heads/{_aid} 2>/dev/null")
+                        if push.exit_code == 0:
+                            published.add(_aid)
+                    gitsync = _GitShareSync(coop_envs, observe=coordinator is not None)
+                    if coordinator is not None:
+                        gitsync.initialize(initial_heads, published)
+                        coordinator._git_sync = gitsync
+                    gitsync_thread = threading.Thread(target=gitsync.run, daemon=True)
+                    cleanup.callback(gitsync.finish, gitsync_thread)
+                    gitsync_thread.start()
                 coordinator_thread = None
                 if coordinator is not None:
                     coordinator.verify_mounts()
-                    try:
-                        coordinator.decide(initial=True)
-                    except Exception as exc:
-                        raise RuntimeError("Coordinator failed during initial decision") from exc
+                    if self.initial_plan is not None:
+                        coordinator.inject_initial_plan()
+                    else:
+                        try:
+                            coordinator.decide(initial=True)
+                        except Exception as exc:
+                            raise RuntimeError("Coordinator failed during initial decision") from exc
+                    coordinator.start_planning()
                     coordinator_thread = threading.Thread(target=coordinator.run, daemon=True)
                     coordinator_thread.start()
                     cleanup.callback(coordinator.finish, coordinator_thread)
@@ -1420,15 +2095,28 @@ class UnifiedHarness:
 
                 def collect_diff(env, aid: str, result: AgentResult) -> str:
                     if self.checkpoint_dir is None:
-                        return strip_test_sections(collect_raw_diff(env, aid)[0])
+                        raw = collect_raw_diff(env, aid)[0]
+                        if coordinator is not None and coordinator._planning:
+                            raw_worker_patches[aid] = raw
+                            result.patch = raw
+                        return strip_test_sections(raw)
                     from cooperagents.checkpoint import save_checkpoint
 
                     # Block sync only during capture; teammates still receive later final pushes.
                     with gitsync._locks[aid] if gitsync is not None else nullcontext():
+
+                        def capture_raw():
+                            raw, source = collect_raw_diff(env, aid)
+                            if coordinator is not None and coordinator._planning:
+                                raw_worker_patches[aid] = raw
+                                result.patch = raw
+                            return raw, source
+
                         return save_checkpoint(
-                            env, self.checkpoint_dir / f"worker-{aid}",
+                            env,
+                            self.checkpoint_dir / f"worker-{aid}",
                             metadata=dict(boundary="worker_end_before_collect_diff", actor=aid, result=asdict(result)),
-                            collect_patch=lambda: collect_raw_diff(env, aid),
+                            collect_patch=capture_raw,
                             trace=partial(self.trajectory.emit, aid) if self.trajectory else None,
                         )
 
@@ -1597,6 +2285,19 @@ class UnifiedHarness:
             if a.feature_id is not None:
                 prior_fids.append(a.feature_id)
 
+        if coordinator is not None and coordinator.phase == "failed":
+            # Preserve every worker's actual patch and bypass all generating tails.
+            return RunResult(
+                run_id=spec.run_id,
+                repo=spec.repo,
+                task_id=spec.task_id,
+                features=sorted(spec.features),
+                seeds=seeds,
+                duration_seconds=time.time() - start,
+                integrated=AgentResult(agent_id="team", role="team", status="planning_failed", patch="\n".join(member_patches)),
+                metrics={**coordinator.planning_metrics(), "planning_failed": True, "raw_worker_patches": raw_worker_patches},
+            )
+
         # Integration. Seed mode already has the cumulative diff; no-seed must merge
         # the independent member patches in a fresh integrator container.
         if not spec.seed_prior:
@@ -1742,7 +2443,11 @@ class UnifiedHarness:
             metrics={
                 **coordination_metrics(bus.task_events(), final_tasks=bus.list_tasks()),
                 **({"do_no_harm_discards": gate_discards} if spec.do_no_harm else {}),
-                **({"coordinator_events": coordinator.events()} if spec.coordinator and coordinator is not None else {}),
+                **(
+                    {"coordinator_events": coordinator.events(), **coordinator.planning_metrics()}
+                    if spec.coordinator and coordinator is not None
+                    else {}
+                ),
             },
         )
 
@@ -2200,8 +2905,10 @@ class UnifiedHarness:
                 return result
             finally:
                 sink.close(failed=failed)
-        if self.coordination_variant == "human_in_loop" and not (spec.coordinator and spec.coordinator_notebook):
-            raise ValueError("Human-in-loop coordination requires coordinator and notebook")
+        if not self.coordinator_implementation_enabled and not spec.coordinator:
+            raise ValueError("Disabling implementation decisions requires coordinator enabled")
+        if self.coordination_variant == "human-prompt" and not (spec.coordinator and spec.coordinator_notebook):
+            raise ValueError("Human-prompt coordination requires coordinator and notebook")
         if (spec.coordinator or self.coordinator_complete is not None) and (
             not spec.coordinator or not spec.shared_workspace or not spec.coop_tools
             or spec.worker != "mini_swe" or spec.team_roles
@@ -2226,6 +2933,7 @@ class UnifiedHarness:
                 spec=config, assignments=[asdict(a) for a in assignments], step_limit=self.step_limit,
                 cost_limit=self.cost_limit, command_timeout=self.command_timeout,
                 coordination_variant=self.coordination_variant,
+                coordinator_implementation_enabled=self.coordinator_implementation_enabled,
             ), indent=2))
         if spec.coordinator:
             ids = [a.agent_id for a in assignments]
@@ -2235,6 +2943,18 @@ class UnifiedHarness:
                 path = self.coordinator_notebook_path
                 if path is None or path.name != "notebook.md" or path.exists():
                     raise ValueError("Coordinator notebook requires a new run-specific coordinator_notebook_path named notebook.md")
+        if self.coordination_mode != "direct" and (
+            not spec.coordinator or not spec.coordinator_notebook or len(assignments) != 2 or spec.wait_protocol
+        ):
+            raise ValueError("Group coordination requires two workers, coordinator, notebook, and no wait-protocol")
+        if self.coordination_mode == "group-chat-planning" and (spec.task_board or spec.claim_mode or spec.allow_spawn_tool):
+            raise ValueError("Opening planning does not support task-board, claim-mode, or helpers")
+        if self.initial_plan is not None:
+            if (not spec.shared_workspace or spec.worker != "mini_swe" or not spec.coop_tools or spec.seed_prior
+                    or spec.best_of_n != 1 or spec.adaptive or spec.decompose or spec.contract_first
+                    or spec.task_board or spec.claim_mode or spec.allow_spawn_tool):
+                raise ValueError("Initial plan requires the standard two-worker no-seed coop-tools implementation path")
+            self.initial_plan.validate_assignments(spec.repo, spec.task_id, assignments)
         if spec.adaptive:
             return self._run_adaptive(spec, assignments, bus, env_factory, llm, llm_factory)
         if spec.decompose:

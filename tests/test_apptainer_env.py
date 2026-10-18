@@ -102,7 +102,11 @@ def test_notebook_mounts_reuse_existing_runtime_options(monkeypatch, tmp_path):
     monkeypatch.setenv("COOPER_RUNTIME", "apptainer")
     monkeypatch.setenv("COOPER_IMAGE_MANIFEST", str(manifest))
     monkeypatch.setenv("COOPER_SCRATCH", str(tmp_path / "scratch"))
-    monkeypatch.setattr("cooperagents.env.apptainer.subprocess.run", lambda *a, **k: SimpleNamespace(returncode=0))
+    def build(*args, **kwargs):
+        assert kwargs["timeout"] == 1800
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr("cooperagents.env.apptainer.subprocess.run", build)
     monkeypatch.setattr(ApptainerEnv, "execute", lambda *a, **k: ExecResult("commit\n", 0))
     env = task_environment("image", volumes=["shared:/cbshared"], coordinator_dir=directory)
     try:

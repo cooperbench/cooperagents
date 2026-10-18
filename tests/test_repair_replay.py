@@ -164,7 +164,7 @@ def completion(command, *, content=None):
     )
 
 
-@pytest.mark.parametrize("variant", ["current", "human_in_loop"])
+@pytest.mark.parametrize("variant", ["auto-prompt", "human-prompt"])
 def test_notebook_team_checkpoint_replays_saved_integrator_inputs(monkeypatch, tmp_path, variant):
     import shlex
 

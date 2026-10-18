@@ -196,7 +196,7 @@ def test_git_sync_waits_for_capture_and_resumes_afterwards():
     entered, executed = threading.Event(), threading.Event()
     sync = _GitShareSync({"agent1": SimpleNamespace(execute=lambda *a, **k: executed.set())})
     waits = iter([False, True])
-    sync._stop = SimpleNamespace(wait=lambda _: (entered.set(), next(waits))[1])
+    sync._stop = SimpleNamespace(wait=lambda _: (entered.set(), next(waits))[1], is_set=lambda: False)
     with sync._locks["agent1"]:
         thread = threading.Thread(target=sync.run)
         thread.start()

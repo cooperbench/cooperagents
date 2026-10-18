@@ -49,14 +49,41 @@ else
   set +a
   : "${OPENAI_API_KEY:?}"
   export ENV_FILE="$COOPER_CREDENTIAL_FILE"
+  python - <<'PYCONFIG'
+import json, os
+from pathlib import Path
+from cooperagents.sampling import sampling_kwargs
+from cooperagents.workers.mini_swe_worker import build_model
+model_name = os.getenv('AZURE_OPENAI_DEPLOYMENT', 'gpt-5.5-hao')
+worker_kwargs = build_model(model_name).config.model_kwargs
+worker_kwargs = {key: value for key, value in worker_kwargs.items() if key not in ('api_key', 'api_base', 'extra_headers')}
+coordinator_kwargs = sampling_kwargs()
+if 'max_tokens' not in coordinator_kwargs:
+    coordinator_kwargs['max_completion_tokens'] = 2000
+config = dict(model=os.getenv('AZURE_OPENAI_DEPLOYMENT', 'gpt-5.5-hao'),
+              model_revision=os.getenv('COOPER_MODEL_REVISION'),
+              service_revision=os.getenv('COOPER_SERVICE_REVISION'),
+              worker_request_parameters=worker_kwargs,
+              coordinator_request_parameters=coordinator_kwargs,
+              coordinator_transport_defaults=dict(timeout=60, max_retries=0))
+(Path(os.environ['COOPER_RUN']) / 'rendered-config/runtime-config.json').write_text(json.dumps(config, indent=2))
+PYCONFIG
   read -ra pairs <<< "${COOPER_PAIRS:?}"
+  printf '%s\n' "${pairs[@]}" > "$COOPER_RUN/data/pairs.txt"
+  sha256sum "$COOPER_RUN/data/pairs.txt" > "$COOPER_RUN/data/pairs.sha256"
   args=(--pairs "${pairs[@]}" --team-only --max-agents 2 --no-seed --coop-tools --git-share
         --completion-gate --step-limit "${COOPER_STEP_LIMIT:-1000}" --agent-time-limit "${COOPER_AGENT_TIME_LIMIT:-3600}"
         --concurrency "${COOPER_CONCURRENCY:-1}" --eval-concurrency "${COOPER_EVAL_CONCURRENCY:-1}" --resume
         --team-name real --log-dir "$COOPER_RUN/logs")
   if [[ "${COOPER_COORDINATOR:-1}" == 1 ]]; then args+=(--coordinator); fi
   if [[ "${COOPER_COORDINATOR_NOTEBOOK:-1}" == 0 ]]; then args+=(--no-coordinator-notebook); fi
-  args+=(--coordination-variant "${COOPER_COORDINATION_VARIANT:-current}")
+  if [[ "${COOPER_COORDINATOR_IMPLEMENTATION_ENABLED:-1}" == 0 ]]; then args+=(--no-implementation-coordinator); fi
+  if [[ -n "${COOPER_INITIAL_PLAN_DIR:-}" ]]; then args+=(--initial-plan-dir "$COOPER_INITIAL_PLAN_DIR"); fi
+  args+=(--coordination-variant "${COOPER_COORDINATION_VARIANT:-auto-prompt}"
+         --coordination-mode "${COOPER_COORDINATION_MODE:-direct}"
+         --planning-step-limit "${COOPER_PLANNING_STEP_LIMIT:-200}"
+         --planning-time-limit "${COOPER_PLANNING_TIME_LIMIT:-600}"
+         --worker-reminder-interval "${COOPER_WORKER_REMINDER_INTERVAL:-10}")
   if [[ "${COOPER_REPAIR:-0}" == 1 ]]; then
     args+=(--repair-integrator --repair-attempts "${COOPER_REPAIR_ATTEMPTS:-1}")
   fi
