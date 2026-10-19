@@ -790,26 +790,60 @@ def test_coop_preserve_invariants_publishes_check_instruction():
     assert ".cb_checks/f1.py" in a1
 
 
-def test_teammate_poller_emits_only_on_change():
+def test_teammate_poller_ignores_dirty_files():
     from cooperagents.harness import _TeammatePoller
 
     e1, e2 = LocalEnv.fresh(), LocalEnv.fresh()
     try:
         poller = _TeammatePoller("agent1", {"agent1": e1, "agent2": e2})
-        assert poller.poll() == ""  # clean teammate tree -> silence
+        assert poller.poll() == ""
         e2.write_file("widget.py", "W = 1\n")
-        note = poller.poll()
-        assert "agent2" in note and "widget.py" in note
-        assert poller.poll() == ""  # unchanged -> silence again
+        e2.write_file("patch.txt", "submission artifact\n")
+        assert poller.poll() == ""
         e2.write_file("other.py", "O = 2\n")
-        assert "other.py" in poller.poll()
+        assert poller.poll() == ""
     finally:
         e1.cleanup()
         e2.cleanup()
 
 
+def test_teammate_poller_preserves_board_updates():
+    from cooperagents.harness import _TeammatePoller
+
+    bus = InMemoryBus("poller-board")
+    poller = _TeammatePoller("agent1", {})
+    poller.watch_board(bus)
+    bus.create_task(title="own task", created_by="agent1", owner="agent1")
+    assert poller.poll() == ""
+    task = bus.create_task(title="implement widget", created_by="agent2", owner="agent2")
+    assert poller.poll() == "[board] teammate tasks: agent2:open:implement widget"
+    assert poller.poll() == ""
+    bus.update_task(task, by="agent2", status="done")
+    assert poller.poll() == "[board] teammate tasks: agent2:done:implement widget"
+
+
+def test_teammate_poller_preserves_git_updates():
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from cooperagents.env.base import ExecResult
+    from cooperagents.harness import _TeammatePoller
+
+    own = SimpleNamespace(execute=Mock(return_value=ExecResult("widget.py\n", 0)))
+    peer = SimpleNamespace(execute=Mock())
+    poller = _TeammatePoller("agent1", {"agent1": own, "agent2": peer})
+    poller.watch_gitshare()
+    note = poller.poll()
+    assert note.startswith("[git] agent2's in-progress branch is fetched locally as shared/agent2")
+    assert "changed files: widget.py" in note
+    assert "[team]" not in note
+    assert poller.poll() == ""
+    peer.execute.assert_not_called()
+    assert own.execute.call_count == 4
+
+
 def test_coop_toolkit_flags_offline_safe():
-    # contract_first without creds silently no-ops; live_awareness wires without error.
+    # contract_first without creds silently no-ops; legacy live_awareness is accepted.
     spec = TeamSpec(
         run_id="rtk",
         repo="demo_task",

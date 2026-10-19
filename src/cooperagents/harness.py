@@ -1415,16 +1415,11 @@ _GITSHARE = "/cbshared/repo.git"
 
 
 class _TeammatePoller:
-    """TK2/Q9: pushed teammate awareness for parallel agents.
-
-    poll() (called by the agent loop each step via the ``team_poller`` hook)
-    reports which files each TEAMMATE is currently editing — but only when
-    that set CHANGES, so the token cost stays near zero."""
+    """Deliver coordinator notices, Git branch updates, and task-board changes."""
 
     def __init__(self, self_id: str, envs: dict[str, Environment]) -> None:
         self._self = self_id
         self._envs = envs
-        self._last: dict[str, str] = {}
         self._board_bus = None
         self._board_last = ""
         self._coordinator = None
@@ -1442,21 +1437,6 @@ class _TeammatePoller:
 
     def poll(self) -> str:
         notes: list[str] = []
-        for aid, env in self._envs.items():
-            if aid == self._self:
-                continue
-            try:
-                out = env.execute("git status --porcelain 2>/dev/null | awk '{print $2}' | head -20").stdout
-            except Exception:  # noqa: BLE001 - a dead teammate env must not kill this agent
-                continue
-            files = sorted(x for x in out.split() if x and not x.startswith(".cb_"))
-            cur = ", ".join(files)
-            if cur and cur != self._last.get(aid):
-                self._last[aid] = cur
-                notes.append(
-                    f"[team] {aid} is currently editing: {cur}. Avoid colliding edits to these "
-                    "files; if you must touch them, reuse that teammate's public names."
-                )
         if self._gitshare:
             own_env = self._envs.get(self._self)
             for aid in self._envs:
@@ -1990,8 +1970,7 @@ class UnifiedHarness:
             # TK1/Q6: shared-interface contract, one planner call, pushed into
             # every brief. Empty (feature off) when offline or on any error.
             contract = _build_contract(assignments, spec.model) if spec.contract_first else ""
-            # Envs are created up front (not per-thread) so the TK2 poller can
-            # observe teammates' trees across containers.
+            # Create all environments before starting coordinator observations and Git sync.
             with ExitStack() as cleanup:
                 coop_envs: dict[str, Environment] = {}
                 coordinator = (

@@ -254,7 +254,7 @@ class TeamSpec:
     task_board: bool = False
     """TK4: shared task-board tools (task_create/update/list on the TeamBus)
     exposed to mini-swe with fair system-prompt billing + a status protocol;
-    board deltas are pushed via the live-awareness poller."""
+    board deltas are pushed via the teammate poller."""
     wait_protocol: bool = False
     """TK5: blocking request/response — send_message gains wait:true (reply
     returned in the same tool output, 60s timeout), billed in the system
@@ -273,11 +273,7 @@ class TeamSpec:
     every agent's brief as a constraint. Harness-PUSHED coordination — the 9B
     lesson is that offered tools go unused (Q4: 0 send_message calls)."""
     live_awareness: bool = False
-    """TK2/Q9 (toolkit program): a harness-side poller injects a one-line
-    '[team] agentX is currently editing: ...' note into each agent's context
-    whenever a TEAMMATE's changed-file set changes (via the vendored agent's
-    team_poller hook). Passive fs_mirror-style awareness: no tool calls, no
-    agent initiative, near-zero token cost (emits only on change)."""
+    """Legacy compatibility flag; dirty-file [team] hints have been removed."""
     coop_tools: bool = False
     """Q4 (qwen program): run the feature agents CONCURRENTLY (own containers,
     no seeding) with a bus-backed `send_message` tool — the CooperBench
