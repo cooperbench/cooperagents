@@ -509,6 +509,11 @@ class _Coordinator:
                 self._participants.add(sender)
                 if sender in self._confirmations:
                     del self._confirmations[sender]
+                    self._queues[sender].append(
+                        f"[harness] Your confirmation of notebook v{self._version} was cleared because you sent a new discussion message. "
+                        "If still in planning, continue discussing as needed, then call confirm_plan "
+                        "for the current version when you agree."
+                    )
                     self._emit("plan_confirmation", target=sender, accepted=False, reason="new_discussion", version=self._version)
                 self._condition.notify_all()
                 self._wake.set()
@@ -694,16 +699,21 @@ class _Coordinator:
     def finish_planning(self, version: int) -> None:
         with self._condition:
             self._check_planning_limits_locked()
-            if (
-                self.phase != "planning"
-                or self._finished
-                or version != self._candidate_version
-                or version != self._version
-                or set(self._confirmations) != set(self._assignments)
-                or any(v != version for v in self._confirmations.values())
-                or getattr(self, "_observed_confirmations", {}) != self._confirmations
-            ):
+            if self.phase != "planning" or self._finished:
                 raise ValueError("finish_planning requires current observed confirmations from both live workers")
+            if version != self._candidate_version or version != self._version:
+                raise ValueError(
+                    f"finish_planning version mismatch: requested={version}; "
+                    f"current notebook={self._version}; candidate={self._candidate_version}"
+                )
+            if set(self._confirmations) != set(self._assignments) or any(v != version for v in self._confirmations.values()):
+                missing = sorted(aid for aid in self._assignments if self._confirmations.get(aid) != version)
+                raise ValueError(
+                    f"finish_planning requires valid notebook v{version} confirmations: "
+                    f"missing or wrong-version workers={missing}; current confirmations={self._confirmations}"
+                )
+            if getattr(self, "_observed_confirmations", {}) != self._confirmations:
+                raise ValueError("finish_planning rejected: confirmations changed during this decision.")
             self._set_final_plan_locked("agreed")
 
     def confirm_plan(self, aid: str, action: dict, *, sole: bool) -> dict:
@@ -913,6 +923,11 @@ class _Coordinator:
                     f"[coordinator] Notebook v{self._version} is available. Read the latest file at "
                     f"{_COORDINATOR_PATH} (`cat {_COORDINATOR_PATH}`) before continuing affected work."
                 )
+                if self._planning and self.phase == "planning":
+                    notice += (
+                        " Any confirmation of an earlier version is invalid. Discuss the current plan, "
+                        "then use confirm_plan for its candidate version when you agree."
+                    )
                 self._emit("notebook_delivery", target=agent_id, version=self._version, text=notice, compactions=compactions)
                 out = [notice, *out]
             if out:

@@ -61,6 +61,117 @@ def test_confirmation_revision_and_mixed_batch(tmp_path):
     assert c.phase == "planning"
 
 
+def test_discussion_revocation_notice_is_private_and_once(tmp_path):
+    c = planning(tmp_path)
+    publish_plan(c)
+    for aid in c._assignments:
+        c.drain(aid)
+        c.confirm_plan(aid, {"version": c._version}, sole=True)
+    messages_before = len(c._chat)
+    c.publish("agent1", "group", "New API question")
+    assert c._confirmations == {"agent2": c._version}
+    assert len(c._chat) == messages_before + 1
+    c.before_query("agent1", c._agents["agent1"])
+    notices = [m["content"] for m in c._agents["agent1"].messages if m["content"].startswith("[harness]")]
+    assert len(notices) == 1
+    assert f"confirmation of notebook v{c._version} was cleared" in notices[0]
+    assert "new discussion message" in notices[0] and "confirm_plan" in notices[0]
+    assert "[harness]" not in "\n".join(c.drain("agent2"))
+    c.publish("agent1", "group", "More details while still discussing")
+    c.before_query("agent1", c._agents["agent1"])
+    assert sum(m["content"].startswith("[harness]") for m in c._agents["agent1"].messages) == 1
+    assert c.confirm_plan("agent1", {"version": c._version}, sole=True)["returncode"] == 0
+    c._complete = lambda _: [tool("finish_planning", version=c._version)]
+    c.decide()
+    assert c.phase == "implementation"
+
+
+def test_notebook_revision_notice_explains_reconfirmation(tmp_path):
+    c = planning(tmp_path)
+    publish_plan(c)
+    for aid in c._assignments:
+        c.drain(aid)
+        c.confirm_plan(aid, {"version": c._version}, sole=True)
+    c.update_notebook(c._notebook)
+    assert len(c._confirmations) == 2
+    assert all(not c.drain(aid) for aid in c._assignments)
+    c.update_notebook(c._notebook + " Revised shared API.")
+    assert not c._confirmations
+    for aid in c._assignments:
+        delivered = c.drain(aid)
+        assert len(delivered) == 1
+        assert f"Notebook v{c._version}" in delivered[0]
+        assert "confirmation of an earlier version is invalid" in delivered[0]
+        assert "confirm_plan" in delivered[0]
+        assert not c.drain(aid)
+        c.before_query(aid, c._agents[aid])
+        assert c.confirm_plan(aid, {"version": c._version}, sole=True)["returncode"] == 0
+
+
+@pytest.mark.parametrize("state", ["failed", "finished"])
+def test_finish_planning_rejects_unavailable_state(tmp_path, state):
+    c = planning(tmp_path)
+    publish_plan(c)
+    if state == "failed":
+        c.stop()
+    else:
+        c._finished["agent1"] = "submitted"
+    with pytest.raises(ValueError, match="requires current observed confirmations from both live workers"):
+        c.finish_planning(c._version)
+    assert c._final_plan is None
+
+
+@pytest.mark.parametrize("stale", ["request", "candidate"])
+def test_finish_planning_reports_version_mismatch(tmp_path, stale):
+    c = planning(tmp_path)
+    publish_plan(c)
+    version = c._version - 1 if stale == "request" else c._version
+    if stale == "candidate":
+        c._candidate_version = None
+    with pytest.raises(ValueError, match="version mismatch") as error:
+        c.finish_planning(version)
+    assert f"requested={version}" in str(error.value)
+    assert f"current notebook={c._version}" in str(error.value)
+    assert f"candidate={c._candidate_version}" in str(error.value)
+    assert "missing" not in str(error.value)
+    assert c.phase == "planning"
+
+
+@pytest.mark.parametrize("invalid", ["missing", "wrong-version", "unexpected-worker"])
+def test_finish_planning_reports_invalid_confirmations(tmp_path, invalid):
+    c = planning(tmp_path)
+    publish_plan(c)
+    for aid in c._assignments:
+        c.confirm_plan(aid, {"version": c._version}, sole=True)
+    if invalid == "missing":
+        del c._confirmations["agent2"]
+    elif invalid == "wrong-version":
+        c._confirmations["agent2"] -= 1
+    else:
+        c._confirmations["unexpected"] = c._version
+    expected_missing = [] if invalid == "unexpected-worker" else ["agent2"]
+    with pytest.raises(ValueError, match="requires valid notebook") as error:
+        c.finish_planning(c._version)
+    assert f"missing or wrong-version workers={expected_missing}" in str(error.value)
+    assert f"current confirmations={c._confirmations}" in str(error.value)
+    assert c.phase == "planning"
+
+
+def test_missing_confirmation_error_reaches_next_coordinator_observation(tmp_path):
+    c = planning(tmp_path)
+    publish_plan(c)
+    c.confirm_plan("agent1", {"version": c._version}, sole=True)
+    c._complete = lambda _: [tool("finish_planning", version=c._version)]
+    c.decide(initial=True)
+    assert "missing or wrong-version workers=['agent2']" in c._last_error
+    assert c.phase == "planning"
+    seen = []
+    c._complete = lambda prompt: seen.append(json.loads(prompt.split("OBSERVATION:\n")[1])) or []
+    c.decide(initial=True)
+    assert "missing or wrong-version workers=['agent2']" in seen[0]["previous_error"]
+    assert seen[0]["planning"]["confirmations"] == {"agent1": c._version}
+
+
 @pytest.mark.parametrize("reason", ["step_limit", "time_limit"])
 def test_forced_finalization_exact_limit(tmp_path, monkeypatch, reason):
     c = planning(tmp_path)
@@ -320,6 +431,9 @@ def test_inflight_decision_cannot_use_new_confirmations(tmp_path):
     release.set()
     thread.join(2)
     assert c.phase == "planning" and c._planning_outcome is None
+    assert c._last_error == "finish_planning rejected: confirmations changed during this decision."
+    assert "missing" not in c._last_error
+    assert c._confirmations == {aid: c._version for aid in c._assignments}
     c._complete = lambda _: [tool("finish_planning", version=c._version)]
     c.decide()
     assert c._planning_outcome == "agreed"
