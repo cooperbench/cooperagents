@@ -75,6 +75,28 @@ def test_export_failure_does_not_repeat_model_call():
     assert result == "result" and calls == [1]
 
 
+@pytest.mark.parametrize("completed", [False, True])
+def test_abandonment_is_linked_without_changing_provider_outcome(completed):
+    sink, exporter = memory_trace()
+    call_id = sink.emit("agent1", "request", request={"model": "dummy", "messages": []})
+    if completed:
+        sink.emit("agent1", "response", call_id=call_id, response={"reply": "ok"})
+    sink.emit("agent1", "call_abandoned", call_id=call_id, reason="hard_timeout", wait_s=240)
+    sink.close()
+    spans = {span.name: span for span in exporter.get_finished_spans()}
+    generation = spans["completion"]
+    abandoned = spans["call_abandoned"]
+    assert generation.attributes["langfuse.observation.metadata.call_id"] == call_id
+    assert json.loads(abandoned.attributes["langfuse.observation.input"])["call_id"] == call_id
+    assert abandoned.parent == generation.parent
+    if completed:
+        assert json.loads(generation.attributes["langfuse.observation.output"]) == {"reply": "ok"}
+        assert generation.attributes.get("langfuse.observation.level") != "ERROR"
+    else:
+        assert generation.attributes["langfuse.observation.level"] == "ERROR"
+        assert generation.attributes["langfuse.observation.status_message"] == "Run interrupted or call incomplete"
+
+
 def test_default_off_and_opt_in_validation(monkeypatch):
     assert UnifiedHarness().langfuse is False
     with pytest.raises(ValueError, match="single mini_swe"):
