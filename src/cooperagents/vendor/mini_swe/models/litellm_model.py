@@ -157,10 +157,19 @@ class LitellmModel:
         import threading as _t
 
         box: _q.Queue = _q.Queue(maxsize=1)
+        trace = self.trace
+        call_id = None
+
+        def _trace(event, **data):
+            nonlocal call_id
+            seq = trace(event, **data)
+            if event == "request":
+                call_id = seq
+            return seq
 
         def _run():
             try:
-                box.put(("ok", self._query_inner(messages, **kwargs)))
+                box.put(("ok", self._query_inner(messages, _trace=_trace if trace else None, **kwargs)))
             except BaseException as e:  # noqa: BLE001
                 box.put(("err", e))
 
@@ -168,6 +177,9 @@ class LitellmModel:
         try:
             kind, val = box.get(timeout=self._HARD_TIMEOUT_S)
         except _q.Empty:
+            if trace is not None:
+                # A blocked recorder may not have assigned a request ID yet.
+                trace("call_abandoned", call_id=call_id, reason="hard_timeout", wait_s=self._HARD_TIMEOUT_S)
             raise litellm.Timeout(
                 f"completion exceeded hard cap {self._HARD_TIMEOUT_S}s (read-timeout bug workaround)",
                 model=self.config.model_name, llm_provider="openai",
@@ -178,14 +190,14 @@ class LitellmModel:
 
     trace = None
 
-    def _query_inner(self, messages: list[dict[str, str]], **kwargs):
+    def _query_inner(self, messages: list[dict[str, str]], *, _trace=None, **kwargs):
         from cooperagents.trajectory import record_call
 
         merged = self.config.model_kwargs | kwargs
         tools = merged.pop("_tools", self._tools)  # _tools=None: plain call (summarizer)
         try:
             return record_call(
-                self.trace, litellm.completion,
+                self.trace if _trace is None else _trace, litellm.completion,
                 model=self.config.model_name,
                 messages=messages,
                 tools=tools,

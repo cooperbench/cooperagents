@@ -93,6 +93,7 @@ class LangfuseTrace:
             self._calls[seq] = root.start_observation(
                 name="completion" if generation else "execute",
                 as_type="generation" if generation else "tool",
+                metadata={"call_id": seq},
                 input={k: request[k] for k in ("messages", "tools", "command", "timeout") if k in request},
                 **(
                     {

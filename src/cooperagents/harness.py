@@ -509,6 +509,11 @@ class _Coordinator:
                 self._participants.add(sender)
                 if sender in self._confirmations:
                     del self._confirmations[sender]
+                    self._queues[sender].append(
+                        f"[harness] Your confirmation of notebook v{self._version} was cleared because you sent a new discussion message. "
+                        "If still in planning, continue discussing as needed, then call confirm_plan "
+                        "for the current version when you agree."
+                    )
                     self._emit("plan_confirmation", target=sender, accepted=False, reason="new_discussion", version=self._version)
                 self._condition.notify_all()
                 self._wake.set()
@@ -694,16 +699,21 @@ class _Coordinator:
     def finish_planning(self, version: int) -> None:
         with self._condition:
             self._check_planning_limits_locked()
-            if (
-                self.phase != "planning"
-                or self._finished
-                or version != self._candidate_version
-                or version != self._version
-                or set(self._confirmations) != set(self._assignments)
-                or any(v != version for v in self._confirmations.values())
-                or getattr(self, "_observed_confirmations", {}) != self._confirmations
-            ):
+            if self.phase != "planning" or self._finished:
                 raise ValueError("finish_planning requires current observed confirmations from both live workers")
+            if version != self._candidate_version or version != self._version:
+                raise ValueError(
+                    f"finish_planning version mismatch: requested={version}; "
+                    f"current notebook={self._version}; candidate={self._candidate_version}"
+                )
+            if set(self._confirmations) != set(self._assignments) or any(v != version for v in self._confirmations.values()):
+                missing = sorted(aid for aid in self._assignments if self._confirmations.get(aid) != version)
+                raise ValueError(
+                    f"finish_planning requires valid notebook v{version} confirmations: "
+                    f"missing or wrong-version workers={missing}; current confirmations={self._confirmations}"
+                )
+            if getattr(self, "_observed_confirmations", {}) != self._confirmations:
+                raise ValueError("finish_planning rejected: confirmations changed during this decision.")
             self._set_final_plan_locked("agreed")
 
     def confirm_plan(self, aid: str, action: dict, *, sole: bool) -> dict:
@@ -913,6 +923,11 @@ class _Coordinator:
                     f"[coordinator] Notebook v{self._version} is available. Read the latest file at "
                     f"{_COORDINATOR_PATH} (`cat {_COORDINATOR_PATH}`) before continuing affected work."
                 )
+                if self._planning and self.phase == "planning":
+                    notice += (
+                        " Any confirmation of an earlier version is invalid. Discuss the current plan, "
+                        "then use confirm_plan for its candidate version when you agree."
+                    )
                 self._emit("notebook_delivery", target=agent_id, version=self._version, text=notice, compactions=compactions)
                 out = [notice, *out]
             if out:
@@ -1415,16 +1430,11 @@ _GITSHARE = "/cbshared/repo.git"
 
 
 class _TeammatePoller:
-    """TK2/Q9: pushed teammate awareness for parallel agents.
-
-    poll() (called by the agent loop each step via the ``team_poller`` hook)
-    reports which files each TEAMMATE is currently editing — but only when
-    that set CHANGES, so the token cost stays near zero."""
+    """Deliver coordinator notices, Git branch updates, and task-board changes."""
 
     def __init__(self, self_id: str, envs: dict[str, Environment]) -> None:
         self._self = self_id
         self._envs = envs
-        self._last: dict[str, str] = {}
         self._board_bus = None
         self._board_last = ""
         self._coordinator = None
@@ -1442,21 +1452,6 @@ class _TeammatePoller:
 
     def poll(self) -> str:
         notes: list[str] = []
-        for aid, env in self._envs.items():
-            if aid == self._self:
-                continue
-            try:
-                out = env.execute("git status --porcelain 2>/dev/null | awk '{print $2}' | head -20").stdout
-            except Exception:  # noqa: BLE001 - a dead teammate env must not kill this agent
-                continue
-            files = sorted(x for x in out.split() if x and not x.startswith(".cb_"))
-            cur = ", ".join(files)
-            if cur and cur != self._last.get(aid):
-                self._last[aid] = cur
-                notes.append(
-                    f"[team] {aid} is currently editing: {cur}. Avoid colliding edits to these "
-                    "files; if you must touch them, reuse that teammate's public names."
-                )
         if self._gitshare:
             own_env = self._envs.get(self._self)
             for aid in self._envs:
@@ -1990,8 +1985,7 @@ class UnifiedHarness:
             # TK1/Q6: shared-interface contract, one planner call, pushed into
             # every brief. Empty (feature off) when offline or on any error.
             contract = _build_contract(assignments, spec.model) if spec.contract_first else ""
-            # Envs are created up front (not per-thread) so the TK2 poller can
-            # observe teammates' trees across containers.
+            # Create all environments before starting coordinator observations and Git sync.
             with ExitStack() as cleanup:
                 coop_envs: dict[str, Environment] = {}
                 coordinator = (

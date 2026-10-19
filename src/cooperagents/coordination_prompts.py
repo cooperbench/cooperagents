@@ -156,6 +156,9 @@ Instructions:
 - This overrides earlier permission to make independent edits while waiting.
 - When you agree with the current notebook, call confirm_plan(version)
   as the only tool action in that response. Ordinary text ACK is not confirmation.
+- Sending another discussion message clears your own confirmation. A notebook revision
+  invalidates confirmations of earlier versions. Continue discussing any new questions;
+  when you agree again, use confirm_plan for the current candidate version without an extra chat ACK.
 
 Exit condition:
 Remain in PLANNING MODE until the system provides the final planning
@@ -221,6 +224,10 @@ During opening planning, publishing explicitly proposed ownership or APIs in a c
 allowed after both workers report inspection evidence; this overrides the requirement to confirm changes
 before updating the notebook. Workers then confirm the exact candidate version.
 Workers confirm an exact notebook version with confirm_plan. Ordinary ACK is not confirmation.
+A worker's new discussion message clears that worker's confirmation; a notebook revision
+clears earlier-version confirmations. Use the current planning.confirmations table, not
+historical accepted results or chat ACKs. Do not request redundant ACKs from confirmed workers.
+If new questions arise, continue discussion and obtain tool confirmations again when resolved.
 Only call finish_planning(version) as the sole action when the current observation contains
 both valid confirmations of the current candidate. You cannot switch worker phases in chat.
 A notebook-only candidate update is allowed during planning; this overrides earlier wording.

@@ -491,7 +491,7 @@ def run_mini_swe_agent(
             for tool in model._tools
         ]
     if poller is not None:
-        agent.team_poller = poller  # per-step pushed context (TK2/Q9 live awareness)
+        agent.team_poller = poller  # per-step coordination updates
     if monitor is not None:
         monitor.register(agent_id, agent)  # C2 coordinator watches live trajectory
     handlers = {}

@@ -444,7 +444,7 @@ def main() -> None:
     ap.add_argument("--behavioral-gate", action="store_true", help="Q10: repair-trigger = syntax + published checks + fail-fast repo tests")
     ap.add_argument("--contract-first", action="store_true",
                     help="TK1/Q6: planner writes the shared interface contract; injected into all briefs")
-    ap.add_argument("--live-awareness", action="store_true", help="TK2/Q9: push '[team] X is editing ...' notes into each agent's context")
+    ap.add_argument("--live-awareness", action="store_true", help="Legacy compatibility flag; dirty-file [team] hints have been removed")
     ap.add_argument("--repair-steps", type=int, default=25, help="step cap for the Q5 merge-repair agent")
     ap.add_argument("--repair-integrator", action="store_true",
                     help="Q5: health-gate the no-seed merge; run one repair agent only when broken")
