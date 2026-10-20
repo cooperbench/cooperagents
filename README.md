@@ -354,3 +354,44 @@ These changes do not enable merge repair or alter worker messages, submission ch
 scoring, or the default ten-decision identity reminder. Opening planning may publish a
 proposed candidate before workers confirm its exact version; forced finalization retains
 its existing confirmation override.
+
+
+### Planning-only completion bindings
+
+`UnifiedHarness(coordination_mode="group-chat-planning", planning_only=True,
+coordinator_completion=coordinator_binding, worker_completion=fixed_worker_binding,
+coordinator_notebook_path=run_directory / "notebook.md")` runs the usual two-worker
+`mini_swe` coop-tools/no-seed specification through agreed or forced finalization,
+then stops and joins workers and the coordinator before cleaning their environments.
+It does not collect implementation diffs or run merge/repair tails. Planning permissions
+remain a prompt contract: workers can inspect base code, and an early edit is not made
+into implementation supervision.
+
+Both bindings use public `cooperagents.completion.CompletionBinding` and
+`MiniSweCompletionRequest`: full messages, the actual tools active for each request,
+settings, actor ID, call ID, and action/summary purpose. Coordinator requests use actor
+`coordinator`; forced finalization exposes only `update_notebook`. Keep the worker's
+action and summary policies fixed. Completion transports are responsible for enforcing request timeouts and own
+raw completion/token receipts. The existing `coordinator_complete(prompt)` callback and
+repair binding remain supported; the two coordinator interfaces are mutually exclusive.
+
+`cooperagents.completion.parse_completion_tool_calls(response, tools)` validates SDK or
+Qwen XML calls against active schemas. Integer arguments remain integers; malformed,
+duplicate, unavailable and incomplete tool calls raise `ValueError` instead of becoming
+empty actions. The first coordinator request precedes workers and the planning clock,
+so equal task inputs produce equal initial prompts without rewriting elapsed budgets.
+The initial planning-only Git observation exposes actual snapshot SHAs and errors;
+publication wall-clock timestamps appear only in later observations.
+
+The returned `result.metrics["planning"]` contains `outcome`, `reason`, `failure_kind`,
+initial `worker_base_commits`, and frozen `final_plan` (`content`, `version`, `sha256`,
+`outcome`, `confirmations`). Terminal model/protocol failure has outcome `error` and no
+final plan; it does not imply reward zero. `cooperagents.planning.PlanningProtocolError`
+(or an explicit completion exception with `category="model_protocol"`) preserves that
+classification. Service and unexpected host failures raise
+`cooperagents.planning.PlanningInfrastructureError` after cleanup. Neither category
+supplies a semantic notebook reward. Failed planning-only environment or monitor cleanup
+raises `cooperagents.planning.PlanningCleanupError` (`category="cleanup"`); callers must
+stop training rather than discard that episode and continue. All registered cleanup
+callbacks still run. This API provides lifecycle/transport plumbing,
+not evidence of rubric calibration or downstream implementation correctness.

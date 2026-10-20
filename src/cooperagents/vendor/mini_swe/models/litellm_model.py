@@ -208,7 +208,7 @@ class LitellmModel:
             raise e
 
     def _prepare_messages_for_api(self, messages: list[dict]) -> list[dict]:
-        prepared = [{k: v for k, v in msg.items() if k != "extra"} for msg in messages]
+        prepared = [{k: v for k, v in msg.items() if k != "extra" and (v is not None or k == "content")} for msg in messages]
         prepared = _reorder_anthropic_thinking_blocks(prepared)
         return set_cache_control(prepared, mode=self.config.set_cache_control)
 
@@ -341,12 +341,21 @@ class LitellmModel:
         }
 
     def _parse_actions(self, response) -> list[dict]:
-        """Parse tool calls from the response. Raises FormatError if unknown tool."""
+        """Parse tool calls; injected responses use the active tool schemas for both transports."""
         tool_calls = response.choices[0].message.tool_calls or []
-        if not tool_calls:
-            # Some OpenAI-compatible servers (e.g. Tinker's shim) return the
-            # model's raw <tool_call> XML in content instead of parsing it
-            # into tool_calls the way vLLM's hermes parser does.
+        if self.completion is not None:
+            from types import SimpleNamespace
+
+            from cooperagents.completion import parse_completion_tool_calls
+            from cooperagents.vendor.mini_swe.exceptions import FormatError
+
+            try:
+                rows = parse_completion_tool_calls(response, self._tools)
+            except (ValueError, TypeError) as exc:
+                raise FormatError({"role": "user", "content": str(exc), "extra": {"interrupt_type": "FormatError"}}) from exc
+            if not tool_calls:
+                tool_calls = [SimpleNamespace(id=f"xmlcall-{i}", function=SimpleNamespace(**row)) for i, row in enumerate(rows)]
+        elif not tool_calls:
             tool_calls = _toolcalls_from_xml(response.choices[0].message.content or "")
         return parse_toolcall_actions(tool_calls, format_error_template=self.config.format_error_template)
 

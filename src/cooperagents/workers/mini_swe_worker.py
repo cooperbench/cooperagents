@@ -380,7 +380,7 @@ def run_mini_swe_agent(
     The patch is intentionally left empty — the harness computes the integrated
     diff from the shared tree after all agents run.
     """
-    if completion is not None and role != "integrator":
+    if completion is not None and role != "integrator" and not (monitor is not None and monitor.coordination_mode == "group-chat-planning"):
         raise ValueError("completion injection is restricted to integrators")
     cfg = repair_input.agent_config if repair_input is not None else _solo_config()["agent"]
     if repair_input is not None:
@@ -541,12 +541,27 @@ def run_mini_swe_agent(
             initial_messages=repair_input.messages_for(task) if repair_input is not None else None,
             on_start=started,
         )
-        status = "submitted" if exit_extra.get("exit_status") == "Submitted" else "limit"
+        status = (
+            "planned" if exit_extra.get("exit_status") == "PlanningComplete"
+            else "submitted" if exit_extra.get("exit_status") == "Submitted" else "limit"
+        )
     except Exception as e:  # noqa: BLE001 - surface any failure as an error result
         from cooperagents.repair import RepairInfrastructureError
 
         error = str(e)
-        if capture_failed or (completion is not None and isinstance(e, RepairInfrastructureError)):
+        if completion is not None and isinstance(e, RepairInfrastructureError) and monitor is not None:
+            from cooperagents.planning import PlanningInfrastructureError
+            from cooperagents.vendor.mini_swe.exceptions import PlanningComplete
+
+            with monitor._condition:
+                try:
+                    monitor.before_action()
+                except PlanningComplete:
+                    status = "planned"
+                else:
+                    monitor._failure_kind = "infrastructure"
+                    raise PlanningInfrastructureError("Worker completion transport failed") from e
+        elif capture_failed or (completion is not None and isinstance(e, RepairInfrastructureError)):
             raise
     finally:
         if monitor is not None:

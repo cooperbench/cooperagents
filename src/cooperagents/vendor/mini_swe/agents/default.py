@@ -227,6 +227,9 @@ class DefaultAgent:
     def step(self) -> list[dict]:
         """Query the LM, execute actions. Polls for inter-agent messages
         and (in team mode) the shared task list before querying."""
+        coordinator = getattr(self, "coordinator", None)
+        if coordinator is not None:
+            coordinator.before_action()
         # Check for inter-agent messages before querying LLM
         if self.comm:
             messages = self.comm.receive()
@@ -380,6 +383,9 @@ class DefaultAgent:
     def query(self) -> dict:
         """Query the model and return model messages. Override to add hooks."""
         import time as _time
+        coordinator = getattr(self, "coordinator", None)
+        if coordinator is not None:
+            coordinator.before_action()
         if self.config.wall_deadline is not None and _time.time() > self.config.wall_deadline:
             raise LimitsExceeded(
                 {"role": "exit", "content": "LimitsExceeded",
@@ -479,10 +485,15 @@ class DefaultAgent:
         """
         from cooperagents.trajectory import record_call
 
+        coordinator = getattr(self, "coordinator", None)
+        if coordinator is not None:
+            coordinator.before_action()
         actions = message.get("extra", {}).get("actions", [])
         outputs = []
         self._sole_confirmation = len(actions) == 1 and actions[0].get("tool_name") == "confirm_plan"
         for action in actions:
+            if coordinator is not None:
+                coordinator.before_action()
             tool_name = action.get("tool_name", "bash")
             handler = getattr(self, "tool_handlers", {}).get(tool_name)
             if handler is not None:

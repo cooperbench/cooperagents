@@ -456,6 +456,15 @@ def test_finish_joins_inflight_even_if_already_stopped():
     assert deadlines == [600]
 
 
+def test_finish_preserves_legacy_error_wrapper():
+    c = coordinator()
+    failure = ValueError("synthetic coordinator failure")
+    c.error = failure
+    with pytest.raises(RuntimeError, match="Coordinator failed; episode is incomplete") as caught:
+        c.finish(SimpleNamespace(join=lambda timeout: None, is_alive=lambda: False))
+    assert caught.value.__cause__ is failure
+
+
 @pytest.mark.parametrize("remote", [False, True])
 @pytest.mark.parametrize("notebook", [False, True])
 def test_real_worker_loop_startup_replies_and_path_notices(monkeypatch, tmp_path, notebook, remote):

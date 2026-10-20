@@ -343,6 +343,8 @@ class _Coordinator:
         time_limit_s: int | None = None,
         trace=None,
         complete: Callable[[str], list[dict[str, str]]] | None = None,
+        completion: CompletionBinding | None = None,
+        planning_only: bool = False,
     ) -> None:
         from cooperagents.planner import _default_planner_complete
 
@@ -356,6 +358,10 @@ class _Coordinator:
             raise ValueError("Planning budgets must be positive")
         if worker_reminder_interval < 0:
             raise ValueError("Worker reminder interval must be nonnegative")
+        self.planning_only = planning_only
+        self.completion = completion
+        self._failure_kind: str | None = None
+        self.worker_base_commits: dict[str, str] = {}
         self.worker_reminder_interval = worker_reminder_interval
         self.planning_step_limit = planning_step_limit
         self.planning_time_limit_s = planning_time_limit_s
@@ -411,7 +417,7 @@ class _Coordinator:
         self._notebook_path = notebook_path
         self._notebook = ""
         self._version = -1
-        self._injected = complete is not None
+        self._injected = complete is not None or completion is not None
         self._tools = [
             dict(
                 _SEND_MESSAGE_TOOL,
@@ -444,7 +450,7 @@ class _Coordinator:
         self._complete = (
             complete
             if complete is not None
-            else _default_planner_complete(
+            else None if completion is not None else _default_planner_complete(
                 model,
                 None,
                 None,
@@ -621,6 +627,7 @@ class _Coordinator:
             self._finalizing_duration = now - self._finalizing_started
         self.phase = "failed"
         self._planning_outcome, self._planning_reason = "error", reason
+        self._failure_kind = self._failure_kind or "model_protocol"
         self._emit("planning_failed", reason=reason, phase=self.phase, budget=self._planning_snapshot_locked())
         self._condition.notify_all()
         self._wake.set()
@@ -691,7 +698,7 @@ class _Coordinator:
             sha256=hashlib.sha256(self._notebook.encode()).hexdigest(),
         )
         self._planning_outcome = outcome
-        self.phase = "implementation"
+        self.phase = "complete" if self.planning_only else "implementation"
         self._tools[:] = [tool for tool in self._tools if tool["function"]["name"] != "finish_planning"]
         self._emit("planning_end", **self._final_plan, reason=self._planning_reason, planning_steps=dict(self._planning_steps))
         self._condition.notify_all()
@@ -811,6 +818,7 @@ class _Coordinator:
         with self._condition:
             while self._planning:
                 self._check_planning_limits_locked()
+                self.before_action()
                 if self.phase == "failed" or self._stop.is_set():
                     raise RuntimeError(f"planning_failed: {self._planning_reason}")
                 self._restore_plan_locked(aid, agent)
@@ -850,6 +858,16 @@ class _Coordinator:
             self._emit("worker_request", target=aid, **{k: v for k, v in snapshot.items() if k != "phase_text"})
             return snapshot
 
+    def before_action(self) -> None:
+        """Discard in-flight worker output after the planning-only notebook is frozen."""
+        if self.planning_only and self._final_plan is not None:
+            from cooperagents.vendor.mini_swe.exceptions import PlanningComplete
+
+            raise PlanningComplete({
+                "role": "exit", "content": "Planning complete",
+                "extra": {"exit_status": "PlanningComplete", "submission": ""},
+            })
+
     def planning_metrics(self) -> dict:
         with self._lock:
             return dict(
@@ -862,6 +880,8 @@ class _Coordinator:
                     {
                         "planning": dict(
                             outcome=self._planning_outcome,
+                            failure_kind=self._failure_kind,
+                            worker_base_commits=dict(self.worker_base_commits),
                             reason=self._planning_reason,
                             final_plan=copy.deepcopy(self._final_plan),
                             delivered=sorted(self._delivered),
@@ -894,7 +914,9 @@ class _Coordinator:
 
     def mark_finished(self, agent_id: str, status: str) -> None:
         with self._lock:
-            if self._planning and (self.phase != "implementation" or len(self._delivered) != len(self._assignments)):
+            if self._planning and self.phase != "complete" and (
+                self.phase != "implementation" or len(self._delivered) != len(self._assignments)
+            ):
                 self._fail_planning_locked(f"worker_exit:{agent_id}:{status}")
             self._finished[agent_id] = status
             dropped = self._queues[agent_id]
@@ -941,7 +963,7 @@ class _Coordinator:
     def stop(self) -> None:
         with self._lock:
             self._stop.set()
-            if self._planning and self.phase not in ("implementation", "failed"):
+            if self._planning and self.phase not in ("implementation", "complete", "failed"):
                 self._fail_planning_locked("stopped")
             self._condition.notify_all()
             self._wake.set()
@@ -1194,7 +1216,7 @@ class _Coordinator:
 
     def decide(self, *, initial: bool = False) -> None:
         with self._lock:
-            if self.phase == "implementation" and not self.coordinator_implementation_enabled:
+            if self.phase == "complete" or self.phase == "implementation" and not self.coordinator_implementation_enabled:
                 return
         replies = self._bus.receive("coordinator")
         self._pending.extend(replies)
@@ -1278,6 +1300,11 @@ class _Coordinator:
         }
         if not forced:
             observation["git_snapshots"] = git_evidence.metadata()
+            if initial and self.planning_only:
+                # Initial source identity is stable; publication wall clocks add no task evidence.
+                observation["git_snapshots"]["workers"] = {
+                    aid: {"sha": snapshot.sha} for aid, snapshot in git_evidence.workers.items()
+                }
         if self.coordination_mode == "direct":
             observation["replies"] = list(self._pending)
         observation["previous_error"] = self._last_error
@@ -1327,12 +1354,17 @@ class _Coordinator:
         count = len(self._pending)
         self._emit("observation", **observation)
         try:
-            if self._complete is None:
+            if self._complete is None and self.completion is None:
                 raise ConnectionError("Coordinator completion client unavailable")
             if forced:
                 self._tools[:] = [_UPDATE_NOTEBOOK_TOOL]
             self._coordinator_calls += 1
-            if forced and not self._injected:
+            if self.completion is not None:
+                response = self.completion.complete(
+                    messages=[{"role": "user", "content": prompt}], tools=self._tools,
+                    actor_id="coordinator", call_id=self._coordinator_calls,
+                )
+            elif forced and not self._injected:
                 deadlines = [agent.config.wall_deadline for agent in agents.values() if agent.config.wall_deadline is not None]
                 remaining = min([d - time.time() for d in deadlines] or [60])
                 response = self._complete(prompt, timeout=max(0.001, min(60, remaining)))
@@ -1341,6 +1373,20 @@ class _Coordinator:
         except Exception as exc:
             self._last_error = f"Completion failed: {type(exc).__name__}"
             self._emit("decision", initial=initial, valid=False, outcome="transport_error", error=str(exc))
+            if self.completion is not None and getattr(exc, "category", None) == "model_protocol":
+                self._failure_kind = "model_protocol"
+                with self._condition:
+                    self._fail_planning_locked(f"completion_protocol:{type(exc).__name__}")
+                return
+            if self.completion is not None:
+                from cooperagents.planning import PlanningInfrastructureError
+
+                self._failure_kind = "infrastructure"
+                self.error = PlanningInfrastructureError("Coordinator completion transport failed")
+                self.error.__cause__ = exc
+                with self._condition:
+                    self._fail_planning_locked(self._last_error)
+                return
             if forced:
                 with self._condition:
                     self._fail_planning_locked(self._last_error)
@@ -1349,6 +1395,10 @@ class _Coordinator:
                 raise
             return
         try:
+            if self.completion is not None:
+                from cooperagents.completion import parse_completion_tool_calls
+
+                response = parse_completion_tool_calls(response, self._tools)
             if forced and (not isinstance(response, list) or len(response) != 1 or response[0].get("name") != "update_notebook"):
                 raise ValueError("Finalization requires exactly one notebook update")
             actions = self._parse_actions(response)
@@ -1383,6 +1433,12 @@ class _Coordinator:
                         self._last_error = str(exc)
                         self._emit("decision", initial=initial, valid=False, outcome="invalid_action", error=str(exc))
                     else:
+                        if not isinstance(exc, ValueError) and (self.planning_only or self.completion is not None):
+                            from cooperagents.planning import PlanningInfrastructureError
+
+                            self._failure_kind = "infrastructure"
+                            self.error = PlanningInfrastructureError("Planning action execution failed")
+                            self.error.__cause__ = exc
                         self._fail_planning_locked(f"plan_action_failed:{exc}")
                     return
                 raise
@@ -1398,7 +1454,7 @@ class _Coordinator:
     def run(self) -> None:
         next_decision = time.monotonic() + 20
         try:
-            while not self._stop.is_set():
+            while not self._stop.is_set() and self.phase != "complete":
                 if self._planning and self.phase in ("planning", "finalizing"):
                     triggered = self._wake.wait(0.1)
                     self._wake.clear()
@@ -1410,7 +1466,13 @@ class _Coordinator:
                 elif not self._stop.wait(20):
                     self.decide()
         except Exception as exc:
-            if self._planning and self.phase != "implementation":
+            if self._planning and self.phase not in ("implementation", "complete"):
+                if self.planning_only or self.completion is not None:
+                    from cooperagents.planning import PlanningInfrastructureError
+
+                    self._failure_kind = "infrastructure"
+                    self.error = PlanningInfrastructureError("Planning coordinator failed")
+                    self.error.__cause__ = exc
                 with self._condition:
                     self._fail_planning_locked(f"coordinator_error:{exc}")
             else:
@@ -1422,7 +1484,7 @@ class _Coordinator:
         thread.join(timeout=600)
         if thread.is_alive():
             raise RuntimeError("Coordinator still running; episode is incomplete")
-        if self.error is not None:
+        if self.error is not None and not self.planning_only:
             raise RuntimeError("Coordinator failed; episode is incomplete") from self.error
 
 
@@ -1749,9 +1811,21 @@ class UnifiedHarness:
         worker_reminder_interval: int = 10,
         checkpoint_dir: Path | None = None,
         repair_completion: CompletionBinding | None = None,
+        coordinator_completion: CompletionBinding | None = None,
+        worker_completion: CompletionBinding | None = None,
+        planning_only: bool = False,
     ) -> None:
         if coordinator_complete is not None and not callable(coordinator_complete):
             raise TypeError("coordinator_complete must be callable")
+        if coordinator_completion is not None and coordinator_complete is not None:
+            raise ValueError("Choose one coordinator completion interface")
+        if (
+            coordinator_completion is not None or worker_completion is not None or planning_only
+        ) and coordination_mode != "group-chat-planning":
+            raise ValueError("Planning bindings require group-chat-planning")
+        self.coordinator_completion = coordinator_completion
+        self.worker_completion = worker_completion
+        self.planning_only = planning_only
         self.repair_completion = repair_completion
         self.coordinator_complete = coordinator_complete
         if coordination_variant not in ("auto-prompt", "human-prompt"):
@@ -1880,7 +1954,7 @@ class UnifiedHarness:
                     monitor=monitor,
                     git_share=spec.git_share,
                     on_start=on_start,
-                    completion=self.repair_completion if role == "integrator" else None,
+                    completion=self.repair_completion if role == "integrator" else self.worker_completion,
                     completion_gate=spec.completion_gate,
                     trace=partial(self.trajectory.emit, agent_id) if self.trajectory else None,
                 )
@@ -1987,6 +2061,21 @@ class UnifiedHarness:
             contract = _build_contract(assignments, spec.model) if spec.contract_first else ""
             # Create all environments before starting coordinator observations and Git sync.
             with ExitStack() as cleanup:
+                def register_cleanup(callback, *args) -> None:
+                    if not self.planning_only:
+                        cleanup.callback(callback, *args)
+                        return
+
+                    def close() -> None:
+                        try:
+                            callback(*args)
+                        except Exception as exc:
+                            from cooperagents.planning import PlanningCleanupError
+
+                            raise PlanningCleanupError("Planning resource cleanup failed") from exc
+
+                    cleanup.callback(close)
+
                 coop_envs: dict[str, Environment] = {}
                 coordinator = (
                     _Coordinator(
@@ -2007,6 +2096,8 @@ class UnifiedHarness:
                         step_limit=self.step_limit,
                         time_limit_s=spec.agent_time_limit,
                         complete=self.coordinator_complete,
+                        completion=self.coordinator_completion,
+                        planning_only=self.planning_only,
                         trace=partial(self.trajectory.emit, "coordinator") if self.trajectory else None,
                     )
                     if spec.coordinator
@@ -2014,7 +2105,7 @@ class UnifiedHarness:
                 )
                 for assignment in assignments:
                     env = env_factory(assignment.agent_id)
-                    cleanup.callback(env.cleanup)
+                    register_cleanup(env.cleanup)
                     coop_envs[assignment.agent_id] = env
                 gitsync = None
                 if spec.git_share:
@@ -2039,8 +2130,16 @@ class UnifiedHarness:
                         gitsync.initialize(initial_heads, published)
                         coordinator._git_sync = gitsync
                     gitsync_thread = threading.Thread(target=gitsync.run, daemon=True)
-                    cleanup.callback(gitsync.finish, gitsync_thread)
+                    register_cleanup(gitsync.finish, gitsync_thread)
                     gitsync_thread.start()
+                if coordinator is not None and self.planning_only:
+                    for aid, env in coop_envs.items():
+                        head = env.execute("git rev-parse HEAD", timeout=10)
+                        if head.exit_code or not head.stdout.strip():
+                            from cooperagents.planning import PlanningInfrastructureError
+
+                            raise PlanningInfrastructureError(f"Cannot identify planning base for {aid}")
+                        coordinator.worker_base_commits[aid] = head.stdout.strip()
                 coordinator_thread = None
                 if coordinator is not None:
                     coordinator.verify_mounts()
@@ -2054,7 +2153,7 @@ class UnifiedHarness:
                     coordinator.start_planning()
                     coordinator_thread = threading.Thread(target=coordinator.run, daemon=True)
                     coordinator_thread.start()
-                    cleanup.callback(coordinator.finish, coordinator_thread)
+                    register_cleanup(coordinator.finish, coordinator_thread)
 
 
                 def collect_raw_diff(env, aid: str) -> tuple[str, str]:
@@ -2203,7 +2302,7 @@ class UnifiedHarness:
                         r = run_on_shared(env, a.agent_id, a.role, task, a.feature_id,
                                           poller=poller, monitor=coordinator, time_limit_s=spec.agent_time_limit)
 
-                        return a.agent_id, r, collect_diff(env, a.agent_id, r)
+                        return a.agent_id, r, "" if self.planning_only else collect_diff(env, a.agent_id, r)
                     return None  # unreachable
 
                 with ThreadPoolExecutor(max_workers=len(roster)) as ex:
@@ -2213,6 +2312,18 @@ class UnifiedHarness:
                         if spec.team_roles and aid == assignments[0].agent_id:
                             team_lead_patch = diff
                         prior.append(f"feature {roster[aid].feature_id}" if roster[aid].feature_id is not None else roster[aid].role)
+            if self.planning_only:
+                if coordinator.error is not None:
+                    raise coordinator.error
+                return RunResult(
+                    run_id=spec.run_id, repo=spec.repo, task_id=spec.task_id,
+                    features=sorted(spec.features), seeds=seeds,
+                    duration_seconds=time.time() - start,
+                    integrated=AgentResult(
+                        agent_id="team", role="team", status="planned" if coordinator._final_plan is not None else "planning_failed"
+                    ),
+                    metrics=coordinator.planning_metrics(),
+                )
             for th in spawn_threads:
                 th.join(timeout=1200)
             member_patches.extend(p for p in helper_patches if p.strip())
@@ -2903,7 +3014,10 @@ class UnifiedHarness:
             raise ValueError("Disabling implementation decisions requires coordinator enabled")
         if self.coordination_variant == "human-prompt" and not (spec.coordinator and spec.coordinator_notebook):
             raise ValueError("Human-prompt coordination requires coordinator and notebook")
-        if (spec.coordinator or self.coordinator_complete is not None) and (
+        if (
+            spec.coordinator or self.coordinator_complete is not None or self.coordinator_completion is not None
+            or self.worker_completion is not None or self.planning_only
+        ) and (
             not spec.coordinator or not spec.shared_workspace or not spec.coop_tools
             or spec.worker != "mini_swe" or spec.team_roles
             or spec.adaptive or spec.decompose or spec.best_of_n != 1
