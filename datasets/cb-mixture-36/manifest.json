@@ -1,0 +1,282 @@
+{
+  "name": "cb-mixture-36",
+  "description": "Deduplicated union of qwen-14, dev-set-2 and flash-10; all pairs assigned to training.",
+  "split": "train",
+  "deduplication_key": [
+    "repo",
+    "task_id",
+    "sorted feature pair"
+  ],
+  "cooperbench_revision": "63b9d44d9f39a02fccf5bf0052db48a917a011fd",
+  "sources": {
+    "qwen-14": {
+      "path": "scripts/measure_qwen.sh",
+      "sha256": "163ff17515ebf60ae47da4585224ba6162f9ce7ab38b5e5e35023b30fe599f2f",
+      "pairs": 14
+    },
+    "dev-set-2": {
+      "path": "scripts/measure_dev2.sh",
+      "sha256": "f1adeed72b8de60ebb48b4a473eb6baf1948f2b94e7b1e0f2cb9c24a78e5e73b",
+      "pairs": 14
+    },
+    "flash-10": {
+      "path": "scripts/measure.sh",
+      "sha256": "fecadf3a495f3dddf134b9fb16b6802ffc85334cd76fcad249ad9e9a2bc67759",
+      "pairs": 10
+    }
+  },
+  "stats": {
+    "input_pairs": 38,
+    "pairs": 36,
+    "tasks": 17,
+    "repos": 10
+  },
+  "tasks": [
+    {
+      "repo": "dottxt_ai_outlines_task",
+      "task_id": 1655,
+      "pairs": [
+        [
+          6,
+          7
+        ],
+        [
+          7,
+          10
+        ]
+      ]
+    },
+    {
+      "repo": "dottxt_ai_outlines_task",
+      "task_id": 1706,
+      "pairs": [
+        [
+          4,
+          6
+        ],
+        [
+          5,
+          6
+        ],
+        [
+          5,
+          8
+        ]
+      ]
+    },
+    {
+      "repo": "dspy_task",
+      "task_id": 8394,
+      "pairs": [
+        [
+          3,
+          4
+        ],
+        [
+          3,
+          5
+        ],
+        [
+          4,
+          5
+        ]
+      ]
+    },
+    {
+      "repo": "dspy_task",
+      "task_id": 8635,
+      "pairs": [
+        [
+          4,
+          6
+        ]
+      ]
+    },
+    {
+      "repo": "go_chi_task",
+      "task_id": 26,
+      "pairs": [
+        [
+          1,
+          2
+        ]
+      ]
+    },
+    {
+      "repo": "go_chi_task",
+      "task_id": 56,
+      "pairs": [
+        [
+          1,
+          5
+        ]
+      ]
+    },
+    {
+      "repo": "huggingface_datasets_task",
+      "task_id": 3997,
+      "pairs": [
+        [
+          2,
+          4
+        ]
+      ]
+    },
+    {
+      "repo": "huggingface_datasets_task",
+      "task_id": 6252,
+      "pairs": [
+        [
+          4,
+          6
+        ]
+      ]
+    },
+    {
+      "repo": "llama_index_task",
+      "task_id": 18813,
+      "pairs": [
+        [
+          1,
+          5
+        ]
+      ]
+    },
+    {
+      "repo": "openai_tiktoken_task",
+      "task_id": 0,
+      "pairs": [
+        [
+          1,
+          5
+        ],
+        [
+          3,
+          6
+        ],
+        [
+          6,
+          8
+        ]
+      ]
+    },
+    {
+      "repo": "pallets_click_task",
+      "task_id": 2068,
+      "pairs": [
+        [
+          1,
+          6
+        ],
+        [
+          2,
+          10
+        ],
+        [
+          3,
+          12
+        ],
+        [
+          7,
+          9
+        ],
+        [
+          9,
+          11
+        ]
+      ]
+    },
+    {
+      "repo": "pallets_click_task",
+      "task_id": 2800,
+      "pairs": [
+        [
+          1,
+          3
+        ]
+      ]
+    },
+    {
+      "repo": "pallets_jinja_task",
+      "task_id": 1465,
+      "pairs": [
+        [
+          1,
+          7
+        ],
+        [
+          2,
+          3
+        ]
+      ]
+    },
+    {
+      "repo": "pallets_jinja_task",
+      "task_id": 1559,
+      "pairs": [
+        [
+          4,
+          6
+        ],
+        [
+          4,
+          7
+        ],
+        [
+          5,
+          8
+        ],
+        [
+          7,
+          9
+        ]
+      ]
+    },
+    {
+      "repo": "pallets_jinja_task",
+      "task_id": 1621,
+      "pairs": [
+        [
+          2,
+          9
+        ],
+        [
+          4,
+          6
+        ]
+      ]
+    },
+    {
+      "repo": "pillow_task",
+      "task_id": 290,
+      "pairs": [
+        [
+          2,
+          3
+        ],
+        [
+          4,
+          5
+        ]
+      ]
+    },
+    {
+      "repo": "samuelcolvin_dirty_equals_task",
+      "task_id": 43,
+      "pairs": [
+        [
+          2,
+          3
+        ],
+        [
+          3,
+          7
+        ],
+        [
+          7,
+          9
+        ]
+      ]
+    }
+  ]
+}

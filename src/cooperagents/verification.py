@@ -36,7 +36,7 @@ import re
 
 _DISCOVER = (
     'if [ -f ./compile.sh ]; then echo "bash ./compile.sh"; '
-    'elif [ -f Makefile ] || [ -f makefile ]; then echo "make"; '
+    'elif { [ -f Makefile ] || [ -f makefile ]; } && command -v make >/dev/null 2>&1; then echo "make"; '
     'elif [ -f Cargo.toml ]; then echo "cargo build --release --offline"; '
     'elif [ -f go.mod ] || ls ./*.go >/dev/null 2>&1; then echo "go build ./..."; '
     'elif [ -f pyproject.toml ] || [ -f setup.py ]; then echo "python3 -m compileall -q ."; '

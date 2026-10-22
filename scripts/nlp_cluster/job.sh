@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+set -euo pipefail
+: "${COOPER_CODE:?}" "${COOPER_RUN:?}" "${COOPERBENCH_DIR:?}" "${COOPER_IMAGE_MANIFEST:?}"
+mkdir -p "$COOPER_RUN"/{logs,data,rendered-config}
+trap 'code=$?; if [ "$code" = 0 ]; then echo completed; else echo failed:$code; fi > "$COOPER_RUN/status.txt"' EXIT
+echo running > "$COOPER_RUN/status.txt"
+export COOPER_RUNTIME=apptainer
+export COOPER_SCRATCH="${SLURM_TMPDIR:-/scr/$USER}/cooperagents/${SLURM_JOB_ID:?}"
+export APPTAINER_CACHEDIR="$COOPER_SCRATCH/cache"
+export APPTAINER_TMPDIR="$COOPER_SCRATCH/build"
+mkdir -p "$COOPER_SCRATCH" "$APPTAINER_TMPDIR"
+cd "$COOPER_CODE"
+python3 -m venv "$COOPER_SCRATCH/venv"
+"$COOPER_SCRATCH/venv/bin/pip" install -q 'litellm==1.99.0' 'openai==2.54.0' rich tenacity jinja2 pydantic pyyaml modal redis python-dotenv platformdirs docker
+if [[ "${COOPER_LANGFUSE:-0}" == 1 ]]; then
+  "$COOPER_SCRATCH/venv/bin/pip" install -q 'langfuse==4.15.6'
+fi
+export PATH="$COOPER_SCRATCH/venv/bin:$PATH"
+export PYTHONPATH="$COOPER_CODE/src:$COOPERBENCH_DIR/src"
+export LITELLM_LOCAL_MODEL_COST_MAP=True
+python -c "import cooperbench.eval"
+python -m pip freeze > "$COOPER_RUN/data/dependencies.txt"
+python scripts/nlp_cluster/prepare.py --check-only --images unused --manifest unused
+cp "$COOPER_IMAGE_MANIFEST" "$COOPER_RUN/data/images.json"
+python - <<'PYHASH'
+import hashlib, json, os
+from pathlib import Path
+images = json.loads(Path(os.environ['COOPER_IMAGE_MANIFEST']).read_text())
+checksums = {}
+for image, path in images.items():
+    with open(path, 'rb') as handle:
+        checksums[image] = hashlib.file_digest(handle, 'sha256').hexdigest()
+(Path(os.environ['COOPER_RUN']) / 'data/images.sha256.json').write_text(json.dumps(checksums, indent=2))
+expected_path = Path(os.environ['COOPER_RUN']) / 'images.sha256.json'
+if expected_path.exists() and checksums != json.loads(expected_path.read_text()):
+    raise RuntimeError('Task images no longer match their qualification reports')
+PYHASH
+cp scripts/nlp_cluster/patches/cooperbench-backend.patch "$COOPER_RUN/data/"
+sha256sum scripts/nlp_cluster/patches/cooperbench-backend.patch > "$COOPER_RUN/data/evaluator-patch.sha256"
+cp scripts/nlp_cluster/patches/cooperbench-transport.patch "$COOPER_RUN/data/"
+sha256sum scripts/nlp_cluster/patches/cooperbench-transport.patch >> "$COOPER_RUN/data/evaluator-patch.sha256"
+if [ "${COOPER_MODE:-dummy}" = dummy ]; then
+  python scripts/nlp_cluster/dummy_smoke.py "$COOPER_RUN"
+else
+  : "${COOPER_CREDENTIAL_FILE:?}"
+  # Credential file remains outside the immutable snapshot and run record.
+  set -a
+  source "$COOPER_CREDENTIAL_FILE"
+  set +a
+  : "${OPENAI_API_KEY:?}"
+  export ENV_FILE="$COOPER_CREDENTIAL_FILE"
+  python - <<'PYCONFIG'
+import json, os
+from pathlib import Path
+from cooperagents.sampling import sampling_kwargs
+from cooperagents.workers.mini_swe_worker import build_model
+model_name = os.getenv('AZURE_OPENAI_DEPLOYMENT', 'gpt-5.5-hao')
+worker_kwargs = build_model(model_name).config.model_kwargs
+worker_kwargs = {key: value for key, value in worker_kwargs.items() if key not in ('api_key', 'api_base', 'extra_headers')}
+coordinator_kwargs = sampling_kwargs()
+if 'max_tokens' not in coordinator_kwargs:
+    coordinator_kwargs['max_completion_tokens'] = 2000
+config = dict(model=os.getenv('AZURE_OPENAI_DEPLOYMENT', 'gpt-5.5-hao'),
+              model_revision=os.getenv('COOPER_MODEL_REVISION'),
+              service_revision=os.getenv('COOPER_SERVICE_REVISION'),
+              worker_request_parameters=worker_kwargs,
+              coordinator_request_parameters=coordinator_kwargs,
+              coordinator_transport_defaults=dict(timeout=60, max_retries=0))
+(Path(os.environ['COOPER_RUN']) / 'rendered-config/runtime-config.json').write_text(json.dumps(config, indent=2))
+PYCONFIG
+  read -ra pairs <<< "${COOPER_PAIRS:?}"
+  printf '%s\n' "${pairs[@]}" > "$COOPER_RUN/data/pairs.txt"
+  sha256sum "$COOPER_RUN/data/pairs.txt" > "$COOPER_RUN/data/pairs.sha256"
+  args=(--pairs "${pairs[@]}" --team-only --max-agents 2 --no-seed --coop-tools --git-share
+        --completion-gate --step-limit "${COOPER_STEP_LIMIT:-1000}" --agent-time-limit "${COOPER_AGENT_TIME_LIMIT:-3600}"
+        --concurrency "${COOPER_CONCURRENCY:-1}" --eval-concurrency "${COOPER_EVAL_CONCURRENCY:-1}" --resume
+        --team-name real --log-dir "$COOPER_RUN/logs")
+  if [[ "${COOPER_COORDINATOR:-1}" == 1 ]]; then args+=(--coordinator); fi
+  if [[ "${COOPER_COORDINATOR_NOTEBOOK:-1}" == 0 ]]; then args+=(--no-coordinator-notebook); fi
+  if [[ "${COOPER_COORDINATOR_IMPLEMENTATION_ENABLED:-1}" == 0 ]]; then args+=(--no-implementation-coordinator); fi
+  if [[ -n "${COOPER_INITIAL_PLAN_DIR:-}" ]]; then args+=(--initial-plan-dir "$COOPER_INITIAL_PLAN_DIR"); fi
+  args+=(--coordination-variant "${COOPER_COORDINATION_VARIANT:-auto-prompt}"
+         --coordination-mode "${COOPER_COORDINATION_MODE:-direct}"
+         --planning-step-limit "${COOPER_PLANNING_STEP_LIMIT:-200}"
+         --planning-time-limit "${COOPER_PLANNING_TIME_LIMIT:-600}"
+         --worker-reminder-interval "${COOPER_WORKER_REMINDER_INTERVAL:-10}")
+  if [[ "${COOPER_REPAIR:-0}" == 1 ]]; then
+    args+=(--repair-integrator --repair-attempts "${COOPER_REPAIR_ATTEMPTS:-1}")
+  fi
+  if [[ "${COOPER_CHECKPOINT_REPAIR:-0}" == 1 ]]; then args+=(--checkpoint-repair); fi
+  if [[ "${COOPER_RECORD_TRAJECTORIES:-0}" == 1 || "${COOPER_COLLECT_TRAJECTORIES:-0}" == 1 ]]; then
+    args+=(--record-trajectory)
+  fi
+  if [[ "${COOPER_COLLECT_TRAJECTORIES:-0}" == 1 ]]; then args+=(--skip-eval); fi
+  if [[ "${COOPER_LANGFUSE:-0}" == 1 ]]; then args+=(--langfuse); fi
+  printf '%s\n' "${args[@]}" > "$COOPER_RUN/training-args.txt"
+  python scripts/bench_compare.py "${args[@]}"
+  if [[ "${COOPER_RECORD_TRAJECTORIES:-0}" == 1 || "${COOPER_COLLECT_TRAJECTORIES:-0}" == 1 ]]; then
+    python scripts/audit_trajectories.py "$COOPER_RUN"
+  fi
+fi

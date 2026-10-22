@@ -9,6 +9,7 @@ from typing import Any, Literal
 import litellm
 from pydantic import BaseModel
 
+from cooperagents.completion import CompletionBinding
 from cooperagents.vendor.mini_swe.models import GLOBAL_MODEL_STATS
 from cooperagents.vendor.mini_swe.models.utils.actions_toolcall import (
     BASH_TOOL,
@@ -77,7 +78,10 @@ class LitellmModelConfig(BaseModel):
     model_kwargs: dict[str, Any] = {}
     """Additional arguments passed to the API."""
     litellm_model_registry: Path | str | None = os.getenv("LITELLM_MODEL_REGISTRY_PATH")
-    """Model registry for cost tracking and model metadata. See the local model guide (https://mini-swe-agent.com/latest/models/local_models/) for more details."""
+    """Model registry for cost tracking and metadata.
+
+    See https://mini-swe-agent.com/latest/models/local_models/ for details.
+    """
     set_cache_control: Literal["default_end"] | None = None
     """Set explicit cache control markers, for example for Anthropic models"""
     cost_tracking: Literal["default", "ignore_errors"] = os.getenv("MSWEA_COST_TRACKING", "default")
@@ -108,7 +112,12 @@ class LitellmModel:
         KeyboardInterrupt,
     ]
 
-    def __init__(self, *, config_class: Callable = LitellmModelConfig, extra_tools: list[dict] | None = None, **kwargs):
+    def __init__(self, *, config_class: Callable = LitellmModelConfig,
+                 extra_tools: list[dict] | None = None,
+                 completion: CompletionBinding | None = None, actor_id: str = "", **kwargs):
+        self.completion = completion
+        self.actor_id = actor_id
+        self.completion_calls = 0
         self.config = config_class(**kwargs)
         self._tools = [BASH_TOOL] + (extra_tools or [])
         if self.config.litellm_model_registry and Path(self.config.litellm_model_registry).is_file():
@@ -132,14 +141,35 @@ class LitellmModel:
         # and every later call times out against dead workers (observed:
         # 3/4 agents idle in retry loops). A fresh daemon thread per call
         # leaks at most one thread per genuine hang and never blocks others.
+        if self.completion is not None:
+            self.completion_calls += 1
+            try:
+                return self.completion.complete(
+                    messages=messages, tools=kwargs.pop("_tools", self._tools),
+                    actor_id=self.actor_id, call_id=self.completion_calls,
+                )
+            except Exception as exc:
+                # Do not let DefaultAgent's legacy context-error retries truncate
+                # or reissue an injected endpoint failure.
+                from cooperagents.repair import RepairInfrastructureError
+                raise RepairInfrastructureError("Injected completion transport failed") from exc
         import queue as _q
         import threading as _t
 
         box: _q.Queue = _q.Queue(maxsize=1)
+        trace = self.trace
+        call_id = None
+
+        def _trace(event, **data):
+            nonlocal call_id
+            seq = trace(event, **data)
+            if event == "request":
+                call_id = seq
+            return seq
 
         def _run():
             try:
-                box.put(("ok", self._query_inner(messages, **kwargs)))
+                box.put(("ok", self._query_inner(messages, _trace=_trace if trace else None, **kwargs)))
             except BaseException as e:  # noqa: BLE001
                 box.put(("err", e))
 
@@ -147,6 +177,9 @@ class LitellmModel:
         try:
             kind, val = box.get(timeout=self._HARD_TIMEOUT_S)
         except _q.Empty:
+            if trace is not None:
+                # A blocked recorder may not have assigned a request ID yet.
+                trace("call_abandoned", call_id=call_id, reason="hard_timeout", wait_s=self._HARD_TIMEOUT_S)
             raise litellm.Timeout(
                 f"completion exceeded hard cap {self._HARD_TIMEOUT_S}s (read-timeout bug workaround)",
                 model=self.config.model_name, llm_provider="openai",
@@ -155,11 +188,16 @@ class LitellmModel:
             raise val
         return val
 
-    def _query_inner(self, messages: list[dict[str, str]], **kwargs):
+    trace = None
+
+    def _query_inner(self, messages: list[dict[str, str]], *, _trace=None, **kwargs):
+        from cooperagents.trajectory import record_call
+
         merged = self.config.model_kwargs | kwargs
         tools = merged.pop("_tools", self._tools)  # _tools=None: plain call (summarizer)
         try:
-            return litellm.completion(
+            return record_call(
+                self.trace if _trace is None else _trace, litellm.completion,
                 model=self.config.model_name,
                 messages=messages,
                 tools=tools,
@@ -170,7 +208,7 @@ class LitellmModel:
             raise e
 
     def _prepare_messages_for_api(self, messages: list[dict]) -> list[dict]:
-        prepared = [{k: v for k, v in msg.items() if k != "extra"} for msg in messages]
+        prepared = [{k: v for k, v in msg.items() if k != "extra" and (v is not None or k == "content")} for msg in messages]
         prepared = _reorder_anthropic_thinking_blocks(prepared)
         return set_cache_control(prepared, mode=self.config.set_cache_control)
 
@@ -191,9 +229,12 @@ class LitellmModel:
 
     def query(self, messages: list[dict[str, str]], **kwargs) -> dict:
         _t0 = time.time()
-        for attempt in retry(logger=logger, abort_exceptions=self.abort_exceptions):
-            with attempt:
-                response = self._query(self._prepare_messages_for_api(messages), **kwargs)
+        if self.completion is not None:
+            response = self._query(self._prepare_messages_for_api(messages), **kwargs)
+        else:
+            for attempt in retry(logger=logger, abort_exceptions=self.abort_exceptions):
+                with attempt:
+                    response = self._query(self._prepare_messages_for_api(messages), **kwargs)
         self._heartbeat(time.time() - _t0)
         cost_output = self._calculate_cost(response)
         GLOBAL_MODEL_STATS.add(cost_output["cost"])
@@ -206,9 +247,10 @@ class LitellmModel:
         }
         return message
 
-    def _calculate_cost(self, response) -> dict[str, float]:
+    def _calculate_cost(self, response, *, model: str | None = None) -> dict[str, float]:
+        model = model or self.config.model_name
         try:
-            cost = litellm.cost_calculator.completion_cost(response, model=self.config.model_name)
+            cost = litellm.cost_calculator.completion_cost(response, model=model)
             if cost <= 0.0:
                 raise ValueError(f"Cost must be > 0.0, got {cost}")
         except Exception as e:
@@ -277,10 +319,15 @@ class LitellmModel:
         # litellm.completion here can hang FOREVER on a dead pooled socket
         # (the httpx read timeout does not arm — observed as agents wedged
         # >50min inside compaction with no retry and no timeout).
-        for attempt in retry(logger=logger, abort_exceptions=self.abort_exceptions):
-            with attempt:
-                response = self._query(summary_messages, _tools=None)
-        cost_output = self._calculate_cost(response)
+        if self.completion is not None:
+            response = self._query(summary_messages, _tools=None)
+        else:
+            for attempt in retry(logger=logger, abort_exceptions=self.abort_exceptions):
+                with attempt:
+                    response = self._query(summary_messages, _tools=None)
+        cost_output = self._calculate_cost(
+            response, model=self.completion.summary_settings.model if self.completion else None
+        )
         GLOBAL_MODEL_STATS.add(cost_output["cost"])
         return {
             "role": "assistant",
@@ -294,12 +341,21 @@ class LitellmModel:
         }
 
     def _parse_actions(self, response) -> list[dict]:
-        """Parse tool calls from the response. Raises FormatError if unknown tool."""
+        """Parse tool calls; injected responses use the active tool schemas for both transports."""
         tool_calls = response.choices[0].message.tool_calls or []
-        if not tool_calls:
-            # Some OpenAI-compatible servers (e.g. Tinker's shim) return the
-            # model's raw <tool_call> XML in content instead of parsing it
-            # into tool_calls the way vLLM's hermes parser does.
+        if self.completion is not None:
+            from types import SimpleNamespace
+
+            from cooperagents.completion import parse_completion_tool_calls
+            from cooperagents.vendor.mini_swe.exceptions import FormatError
+
+            try:
+                rows = parse_completion_tool_calls(response, self._tools)
+            except (ValueError, TypeError) as exc:
+                raise FormatError({"role": "user", "content": str(exc), "extra": {"interrupt_type": "FormatError"}}) from exc
+            if not tool_calls:
+                tool_calls = [SimpleNamespace(id=f"xmlcall-{i}", function=SimpleNamespace(**row)) for i, row in enumerate(rows)]
+        elif not tool_calls:
             tool_calls = _toolcalls_from_xml(response.choices[0].message.content or "")
         return parse_toolcall_actions(tool_calls, format_error_template=self.config.format_error_template)
 

@@ -20,3 +20,7 @@ class UserInterruption(InterruptAgentFlow):
 
 class FormatError(InterruptAgentFlow):
     """Raised when the LM's output is not in the expected format."""
+
+
+class PlanningComplete(InterruptAgentFlow):
+    """The host froze the notebook; no further worker calls or actions are allowed."""

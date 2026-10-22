@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import abc
 from dataclasses import dataclass
+from pathlib import Path
 
 
 @dataclass
@@ -43,3 +44,7 @@ class Environment(abc.ABC):
 
     def cleanup(self) -> None:  # noqa: B027 - optional hook, not abstract
         """Tear the environment down."""
+
+    def checkpoint(self, destination: Path) -> dict:
+        """Save filesystem state; unsupported runtimes must fail explicitly."""
+        raise NotImplementedError(f"Checkpoint unsupported for {type(self).__name__}")

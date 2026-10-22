@@ -174,6 +174,11 @@ class TeamSpec:
     repair_step_limit: int = 25
     """Step cap for the Q5 merge-repair agent — repair is a focused job and must
     not wander (observed: one uncapped repair pass ran 44 minutes)."""
+    repair_attempts: int = 1
+    """Maximum number of sequential repair agent passes on the merged tree.
+    Each pass runs only when the tree is still unhealthy; stops early as soon
+    as _gate passes. Equivalent to ProgramBench's up-to-2-repair-agents loop.
+    Default 1 matches the original Q5 single-pass behaviour."""
     repair_integrator: bool = False
     """Q5 (qwen program): in the no-seed mechanical-merge tail, health-check the
     merged tree (AST/build); if the merge demonstrably broke it (conflict
@@ -189,10 +194,11 @@ class TeamSpec:
     agent's repo and reports changed files with the exact commands to view or
     take teammate code. System-prompt billing included (TK3 result)."""
     coordinator: bool = False
-    """C2: a live monitor thread over the parallel agents — mechanical
-    triggers (loop / stall / collision) decide WHEN to intervene, an LLM
-    composes the nudge text, injection rides the pushed team_poller channel.
-    Max 3 nudges/agent; offline-safe static fallbacks."""
+    """Coordinate a static mini-swe team with JSON decisions, worker replies
+    and budget observations, starting synchronously before the workers."""
+    coordinator_notebook: bool = True
+    """When coordinator is enabled, maintain a Markdown notebook mounted
+    read-only in each worker. False selects the same messages-only policy."""
     focused_repair: bool = False
     """R2: the harness gathers the merge-damage EVIDENCE (reject hunks,
     conflict-marker locations, failing check output, failing test tail) and
@@ -248,7 +254,7 @@ class TeamSpec:
     task_board: bool = False
     """TK4: shared task-board tools (task_create/update/list on the TeamBus)
     exposed to mini-swe with fair system-prompt billing + a status protocol;
-    board deltas are pushed via the live-awareness poller."""
+    board deltas are pushed via the teammate poller."""
     wait_protocol: bool = False
     """TK5: blocking request/response — send_message gains wait:true (reply
     returned in the same tool output, 60s timeout), billed in the system
@@ -267,11 +273,7 @@ class TeamSpec:
     every agent's brief as a constraint. Harness-PUSHED coordination — the 9B
     lesson is that offered tools go unused (Q4: 0 send_message calls)."""
     live_awareness: bool = False
-    """TK2/Q9 (toolkit program): a harness-side poller injects a one-line
-    '[team] agentX is currently editing: ...' note into each agent's context
-    whenever a TEAMMATE's changed-file set changes (via the vendored agent's
-    team_poller hook). Passive fs_mirror-style awareness: no tool calls, no
-    agent initiative, near-zero token cost (emits only on change)."""
+    """Legacy compatibility flag; dirty-file [team] hints have been removed."""
     coop_tools: bool = False
     """Q4 (qwen program): run the feature agents CONCURRENTLY (own containers,
     no seeding) with a bus-backed `send_message` tool — the CooperBench

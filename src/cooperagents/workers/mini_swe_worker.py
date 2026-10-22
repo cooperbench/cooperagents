@@ -17,17 +17,23 @@ from __future__ import annotations
 import os
 import platform
 import re
+from collections.abc import Callable
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import yaml
 
+from cooperagents.completion import CompletionBinding
 from cooperagents.env.base import Environment
+from cooperagents.sampling import sampling_kwargs
 from cooperagents.types import AgentResult
 from cooperagents.vendor.mini_swe.agents.default import DefaultAgent
 from cooperagents.vendor.mini_swe.exceptions import LimitsExceeded, Submitted
 from cooperagents.vendor.mini_swe.models.litellm_model import LitellmModel
+
+if TYPE_CHECKING:
+    from cooperagents.repair import RepairInput
 
 _CONFIG = Path(__file__).resolve().parents[1] / "vendor" / "mini_swe" / "config" / "solo.yaml"
 # Exports mini-swe normally injects via `docker run -e` (kill pagers/progress
@@ -59,7 +65,9 @@ class MiniSweEnvAdapter:
         deadline: float | None = None,
         completion_gate=None,
         gate_max_rejections: int = 3,
+        trace=None,
     ) -> None:
+        self.trace = trace
         self._env = env
         self._timeout = timeout
         self._guard_git = guard_git
@@ -96,8 +104,12 @@ class MiniSweEnvAdapter:
                 "returncode": 1,
                 "exception_info": "",
             }
-        res = self._env.execute(_ENV_PREFIX + command, timeout=timeout or self._timeout)
+        from cooperagents.trajectory import record_call
+
+        res = record_call(self.trace, self._env.execute, command=_ENV_PREFIX + command, timeout=timeout or self._timeout)
         output = {"output": res.stdout, "returncode": res.exit_code, "exception_info": ""}
+        if self.trace is not None:
+            self.trace("environment_output", action=action, command=_ENV_PREFIX + command, output=output)
         self._check_finished(output)
         return output
 
@@ -230,20 +242,26 @@ class BusComm:
     ``send(recipient, content)`` / ``receive() -> [{"from", "content"}, ...]``.
     Bus receive() drains the inbox, which matches the agent's per-step drain."""
 
-    def __init__(self, bus, agent_id: str) -> None:
+    def __init__(self, bus, agent_id: str, *, group=None) -> None:
         self._bus = bus
         self._id = agent_id
+        self.group = group
 
     def send(self, recipient: str, content: str) -> None:
-        self._bus.send(sender=self._id, to=recipient, content=content)
+        if self.group is not None:
+            self.group.publish(self._id, recipient, content)
+        else:
+            self._bus.send(sender=self._id, to=recipient, content=content)
 
     def receive(self) -> list[dict]:
-        return self._bus.receive(self._id)
+        return [] if self.group is not None else self._bus.receive(self._id)
 
     def send_and_wait(self, recipient: str, content: str, timeout: int = 60) -> list[dict]:
         """TK5: blocking request — send, then poll the inbox for a reply."""
         import time as _time
 
+        if self.group is not None:
+            raise ValueError("wait is unavailable in group chat")
         self.send(recipient, content)
         deadline = _time.time() + timeout
         got: list[dict] = []
@@ -272,22 +290,7 @@ def build_model(
         model_kwargs["api_base"] = base_url
     if api_key:
         model_kwargs["api_key"] = api_key
-    # Pin sampling for measurement runs (unset = provider default). Without
-    # this, small-model runs vary wildly between identical configs (observed:
-    # team 6/26 vs 11/28 features on the same set), drowning seam deltas.
-    if os.getenv("COOPER_TEMPERATURE"):
-        model_kwargs["temperature"] = float(os.environ["COOPER_TEMPERATURE"])
-    if temperature is not None:  # explicit per-call override (e.g. Q3 diversity)
-        model_kwargs["temperature"] = temperature
-    # Per-model sampling profile via env (e.g. Qwen3.8-27B thinking mode wants
-    # temperature=1.0 top_p=0.95 per model card; 9B stays pinned at 0.0).
-    # COOPER_TEMPERATURE_FORCE outranks the per-call pin above.
-    if os.getenv("COOPER_TEMPERATURE_FORCE"):
-        model_kwargs["temperature"] = float(os.environ["COOPER_TEMPERATURE_FORCE"])
-    if os.getenv("COOPER_TOP_P"):
-        model_kwargs["top_p"] = float(os.environ["COOPER_TOP_P"])
-    if os.getenv("COOPER_MAX_TOKENS"):
-        model_kwargs["max_tokens"] = int(os.environ["COOPER_MAX_TOKENS"])
+    model_kwargs.update(sampling_kwargs(temperature, worker=True))
     # Short request timeout: the litellm/httpx default (~600s) makes an agent
     # hang 10 minutes on a dead pooled connection (socket to a scaled-down
     # serving container that vanished without RST) before retrying onto a
@@ -367,21 +370,51 @@ def run_mini_swe_agent(
     monitor=None,
     git_share: bool = False,
     completion_gate=None,
+    trace=None,
+    repair_input: RepairInput | None = None,
+    completion: CompletionBinding | None = None,
+    on_start: Callable[[DefaultAgent], None] | None = None,
 ) -> AgentResult:
     """Run one mini-swe DefaultAgent on the shared ``env``; return an AgentResult.
 
     The patch is intentionally left empty — the harness computes the integrated
     diff from the shared tree after all agents run.
     """
-    cfg = _solo_config()["agent"]
-    model = build_model(
-        model_name,
-        temperature=temperature,
-        with_send_message=comm is not None,
-        with_task_board=task_board is not None,
-        with_spawn=spawn_handler is not None,
-    )
+    if completion is not None and role != "integrator" and not (monitor is not None and monitor.coordination_mode == "group-chat-planning"):
+        raise ValueError("completion injection is restricted to integrators")
+    cfg = repair_input.agent_config if repair_input is not None else _solo_config()["agent"]
+    if repair_input is not None:
+        model_config = dict(repair_input.model_config_data)
+        model_kwargs = dict(model_config["model_kwargs"])
+        for field, value in (
+            ("api_base", os.getenv("AZURE_OPENAI_BASE_URL") or os.getenv("OPENAI_BASE_URL")),
+            ("api_key", os.getenv("AZURE_OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")),
+        ):
+            if value:
+                model_kwargs[field] = value
+        model_config["model_kwargs"] = model_kwargs
+        model = LitellmModel(**model_config, extra_tools=repair_input.tools[1:])
+    else:
+        model = build_model(
+            model_name,
+            temperature=temperature,
+            with_send_message=comm is not None,
+            with_task_board=task_board is not None,
+            with_spawn=spawn_handler is not None,
+        )
+    if completion is not None:
+        model.completion = completion
+        model.actor_id = agent_id
+        model.config.model_name = completion.action_settings.model
+        model.config.model_kwargs = dict(completion.action_settings.generation)
+        model.config.cost_tracking = "ignore_errors"
+    model.trace = trace
+    if trace is not None:
+        trace(
+            "agent_start", role=role, feature_id=feature_id, task=task, model=model_name, step_limit=step_limit, time_limit_s=time_limit_s
+        )
     import time as _time  # noqa: E402 - also imported below; needed before first use
+
     hb_dir = os.getenv("COOPER_HEARTBEAT_DIR")
     if hb_dir:
         # one file per (harness process, agent): live starvation checker
@@ -389,41 +422,76 @@ def run_mini_swe_agent(
         os.makedirs(hb_dir, exist_ok=True)
         # process start time in the name prevents pid-recycling collisions
         # from appending new lines onto a dead run's file
-        model.heartbeat_path = os.path.join(
-            hb_dir, f"{os.getpid()}_{int(_time.time())}_{agent_id}.hb")
+        model.heartbeat_path = os.path.join(hb_dir, f"{os.getpid()}_{int(_time.time())}_{agent_id}.hb")
     system_template = cfg["system_template"]
-    if tool_protocol and comm is not None:
+    if not isinstance(system_template, str):
+        raise ValueError("Agent system_template must be a string")
+    if monitor is not None and git_share:
+        # Keep both coordinator arms' shared prefix in the human-reviewed order.
+        system_template = system_template.rstrip("\n") + _GIT_SHARE_SYSTEM
+    if (tool_protocol or monitor is not None) and comm is not None:
         system_template = system_template + _SEND_MESSAGE_SYSTEM
+    if monitor is not None:
+        system_template += monitor.worker_instructions()
+        system_template += (
+            '\nThe coordinator is also a valid send_message recipient: {"recipient":"coordinator","content":"..."}. '
+            "Report proposed edit regions, interface agreements, blockers and verification results without waiting for a reply."
+        )
     if wait_protocol and comm is not None:
         system_template = system_template + _WAIT_SYSTEM
     if task_board is not None:
         system_template = system_template + _TASK_BOARD_SYSTEM
     if spawn_handler is not None:
         system_template = system_template + _SPAWN_SYSTEM
-    if git_share:
+    if git_share and monitor is None:
         system_template = system_template + _GIT_SHARE_SYSTEM
     import time as _time
 
+    deadline = (_time.time() + time_limit_s) if time_limit_s else None
+    if monitor is not None and monitor.coordination_mode == "group-chat-planning" and time_limit_s:
+        deadline = monitor._planning_started + time_limit_s
     agent = DefaultAgent(
         model,
         MiniSweEnvAdapter(
             env,
             timeout=command_timeout,
             guard_git=guard_git,
-            deadline=(_time.time() + time_limit_s) if time_limit_s else None,
+            deadline=deadline,
             completion_gate=completion_gate,
+            trace=trace,
         ),
         agent_id=agent_id,
         system_template=system_template,
-        wall_deadline=(_time.time() + time_limit_s) if time_limit_s else None,
+        wall_deadline=deadline,
         instance_template=cfg["instance_template"],
         step_limit=step_limit,
         cost_limit=cost_limit,
         compaction_token_trigger=cfg.get("compaction_token_trigger", 28000),
         comm=comm,
     )
+    if repair_input is not None:
+        agent.config = agent.config.model_validate(repair_input.agent_config)
+        agent.config.wall_deadline = (_time.time() + time_limit_s) if time_limit_s else None
+    agent.trace = trace
+    agent.coordinator = monitor
+    if comm is not None and getattr(comm, "group", None) is not None:
+        model._tools = [
+            dict(
+                tool,
+                function={
+                    **tool["function"],
+                    "parameters": {
+                        **tool["function"]["parameters"],
+                        "properties": {key: value for key, value in tool["function"]["parameters"]["properties"].items() if key != "wait"},
+                    },
+                },
+            )
+            if tool["function"]["name"] == "send_message"
+            else tool
+            for tool in model._tools
+        ]
     if poller is not None:
-        agent.team_poller = poller  # per-step pushed context (TK2/Q9 live awareness)
+        agent.team_poller = poller  # per-step coordination updates
     if monitor is not None:
         monitor.register(agent_id, agent)  # C2 coordinator watches live trajectory
     handlers = {}
@@ -431,8 +499,15 @@ def run_mini_swe_agent(
         handlers.update(task_board.handlers())  # TK4 board tools, host-side
     if spawn_handler is not None:
         handlers["spawn_helper"] = spawn_handler  # TK7 recruit tool
+    if monitor is not None and monitor.coordination_mode == "group-chat-planning":
+        from cooperagents.vendor.mini_swe.models.utils.actions_toolcall import CONFIRM_PLAN_TOOL
+
+        model._tools.append(CONFIRM_PLAN_TOOL)
+        agent._planning_tools = list(model._tools)
+        handlers["confirm_plan"] = lambda action: monitor.confirm_plan(agent_id, action, sole=getattr(agent, "_sole_confirmation", False))
     if handlers:
         agent.tool_handlers = handlers
+
     def _hb_end(final: str) -> None:
         # terminal marker so the live starvation checker can tell a finished
         # or crashed agent apart from a stalled one (both stop heartbeating)
@@ -443,24 +518,57 @@ def run_mini_swe_agent(
             except Exception:  # noqa: BLE001
                 pass
 
+    capture_failed = False
+    status = "error"
+    error = None
     try:
-        exit_extra = agent.run(task=task)
-        status = "submitted" if exit_extra.get("exit_status") == "Submitted" else "limit"
-        _hb_end(status)
-    except Exception as e:  # noqa: BLE001 - surface any failure as an error result
-        status = "error"
-        _hb_end("error")
-        return AgentResult(
-            agent_id=agent_id,
-            role=role,
-            status=status,
-            cost=agent.cost,
-            steps=agent.n_calls,
-            feature_id=feature_id,
-            messages=agent.messages,
-            error=str(e),
-            segments=(agent._segments or None),
+
+        def started(current: DefaultAgent) -> None:
+            nonlocal capture_failed
+            if on_start is not None:
+                try:
+                    on_start(current)
+                except Exception:
+                    capture_failed = True
+                    raise
+            # Filesystem capture is outside the model's repair time budget.
+            if time_limit_s and on_start is not None:
+                current.config.wall_deadline = _time.time() + time_limit_s
+                current.env._deadline = current.config.wall_deadline
+
+        exit_extra = agent.run(
+            task=task,
+            initial_messages=repair_input.messages_for(task) if repair_input is not None else None,
+            on_start=started,
         )
+        status = (
+            "planned" if exit_extra.get("exit_status") == "PlanningComplete"
+            else "submitted" if exit_extra.get("exit_status") == "Submitted" else "limit"
+        )
+    except Exception as e:  # noqa: BLE001 - surface any failure as an error result
+        from cooperagents.repair import RepairInfrastructureError
+
+        error = str(e)
+        if completion is not None and isinstance(e, RepairInfrastructureError) and monitor is not None:
+            from cooperagents.planning import PlanningInfrastructureError
+            from cooperagents.vendor.mini_swe.exceptions import PlanningComplete
+
+            with monitor._condition:
+                try:
+                    monitor.before_action()
+                except PlanningComplete:
+                    status = "planned"
+                else:
+                    monitor._failure_kind = "infrastructure"
+                    raise PlanningInfrastructureError("Worker completion transport failed") from e
+        elif capture_failed or (completion is not None and isinstance(e, RepairInfrastructureError)):
+            raise
+    finally:
+        if monitor is not None:
+            monitor.mark_finished(agent_id, status)
+        _hb_end(status)
+        if trace is not None:
+            trace("agent_end", status=status, steps=agent.n_calls, **({"error": error} if error is not None else {}))
     return AgentResult(
         agent_id=agent_id,
         role=role,
@@ -469,6 +577,7 @@ def run_mini_swe_agent(
         steps=agent.n_calls,
         feature_id=feature_id,
         messages=agent.messages,
+        error=error,
         segments=(agent._segments or None),
     )
 

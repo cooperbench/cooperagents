@@ -584,6 +584,8 @@ auto-dispatched across the EC2 fleet as machines free up):
   changed-file set changed, inject one `[team] agentX is editing: ...` line.
   The pushed form of fs_mirror/wait_for_message; zero agent initiative, near-
   zero tokens (emits only on deltas).
+  This describes the historical experiment; dirty-file `[team]` hints have
+  since been removed. The flag remains accepted for configuration compatibility.
 - Not ported (low prior at N=2, revisit for bigger teams/shared-objective):
   task-list CLI (board is degenerate with fixed 1:1 assignments), spawn tool
   (more 9B agents likely negative), blocking waits (no dependency topology).

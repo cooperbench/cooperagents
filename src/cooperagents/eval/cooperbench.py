@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -102,6 +103,10 @@ def write_run_outputs(
                         default=str,
                     )
                 )
+
+    # Preserve raw evidence independently of the official submission filter.
+    for actor, patch in result.metrics.get("raw_worker_patches", {}).items():
+        (log_dir / f"{actor}.raw.patch").write_text(patch)
 
     # Helper patches are auxiliary artifacts (not scored directly).
     for helper_id, r in result.helpers.items():
@@ -192,7 +197,7 @@ def run_eval(
     force: bool = False,
     use_uv: bool = True,
     dry_run: bool = False,
-) -> subprocess.CompletedProcess | list[str]:
+) -> subprocess.CompletedProcess[str] | list[str]:
     """Invoke CooperBench's evaluator on previously-written outputs.
 
     Runs ``cooperbench eval`` inside the CooperBench checkout (via ``uv run``
@@ -200,6 +205,13 @@ def run_eval(
     the argv without executing — used by tests that have no Docker.
     """
     cb = find_cooperbench(str(cooperbench_dir) if cooperbench_dir else None)
+    if backend == "apptainer":
+        cmd = [sys.executable, "-m", "cooperagents.eval.apptainer", "--run", run_name,
+               "--logs", str(Path(logs_dir).resolve()), "--dataset", str(cb / "dataset"),
+               "--concurrency", str(concurrency)]
+        if dry_run:
+            return cmd
+        return subprocess.run(cmd, capture_output=True, text=True)
     cmd = build_eval_command(run_name, logs_dir=logs_dir, cooperbench_dir=cb, backend=backend, concurrency=concurrency, force=force)
     if use_uv:
         cmd = ["uv", "run", *cmd]

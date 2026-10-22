@@ -9,7 +9,7 @@ Retired arms and pre-adapter history: git log before commit 0e73bdf.
 Arms
   solo       1 mini-swe agent + the mechanical tail.
   coopgit    N agents (default 2), same task, shared git remote.
-  coopgitc2  coopgit + the coordinator (loop/stall/collision nudges).
+  coopgitc2  coopgit + tool-call coordinator messages and a read-only notebook.
 
 Mechanism flags (each measured; record in docs/SEAM_BACKLOG.md)
   --repair            gate the integrated tree; on failure run up to 2
@@ -119,7 +119,8 @@ def build_gate_and_repair(instance: str, patch: str, *, model: str, step_limit: 
 
 def run_team_once(arm: str, instance: str, *, step_limit: int, agent_time_limit: int | None,
                   gate: bool = False, brief: str = "", presub_merge: bool = False,
-                  team_size: int = 2, dry_run: bool = False):
+                  team_size: int = 2, dry_run: bool = False, coordinator_notebook: bool = True,
+                  artifact_dir: Path | None = None, langfuse: bool = False):
     """One full run for `arm`; returns (integrated_patch, RunResult).
 
     Own run_id -> own bus and git-share volume, so concurrent calls are safe.
@@ -146,6 +147,7 @@ def run_team_once(arm: str, instance: str, *, step_limit: int, agent_time_limit:
         agent_time_limit=agent_time_limit,
         git_share=arm != "solo",
         coordinator=arm == "coopgitc2",
+        coordinator_notebook=coordinator_notebook,
         temperature=0.0,
         completion_gate=(lambda env, _m=presub_merge: verification.validate(
                             env, merged=_m, build_artifact=ADAPTER.build_artifact))
@@ -156,9 +158,17 @@ def run_team_once(arm: str, instance: str, *, step_limit: int, agent_time_limit:
                             key=lambda i: _score(instance, patches[i]))) if presub_merge else None,
     )
     vols = [f"cbs{run_id}:/cbshared"] if spec.git_share else []
+    notebook_path = (
+        (Path(artifact_dir or "runs") / "coordination" / run_id / "notebook.md").resolve()
+        if spec.coordinator and coordinator_notebook else None
+    )
+    worker_ids = {a.agent_id for a in assignments}
 
     def make_env(_id: str, _v=vols or None) -> DockerEnv:
-        env = DockerEnv(ADAPTER.image(instance), volumes=_v, **ADAPTER.env_kwargs())
+        mounts = list(_v or [])
+        if notebook_path is not None and _id in worker_ids:
+            mounts.append(f"{notebook_path.parent}:/coordination:ro")
+        env = DockerEnv(ADAPTER.image(instance), volumes=mounts or None, **ADAPTER.env_kwargs())
         ADAPTER.setup_env(env, _id)
         return env
 
@@ -176,6 +186,8 @@ def run_team_once(arm: str, instance: str, *, step_limit: int, agent_time_limit:
                 "temperature": spec.temperature,
                 "coop_tools": spec.coop_tools, "git_share": spec.git_share,
                 "coordinator": spec.coordinator,
+                "coordinator_notebook": spec.coordinator and spec.coordinator_notebook,
+                "langfuse": langfuse,
                 "agent_time_limit": spec.agent_time_limit,
                 "completion_gate": getattr(spec.completion_gate, "__name__",
                                            None) if spec.completion_gate else None,
@@ -184,7 +196,8 @@ def run_team_once(arm: str, instance: str, *, step_limit: int, agent_time_limit:
             "step_limit": step_limit,
             "src_path": __import__("cooperagents").__file__,
         }, None
-    harness = UnifiedHarness(bus=InMemoryBus(run_id), step_limit=step_limit, command_timeout=300)
+    harness = UnifiedHarness(bus=InMemoryBus(run_id), step_limit=step_limit, command_timeout=300,
+                             coordinator_notebook_path=notebook_path, langfuse=langfuse)
     res = harness.run(spec, env_factory=make_env)
     return (res.integrated.patch or ""), res
 
@@ -203,12 +216,14 @@ def main() -> None:
     ap.add_argument("--completion-gate", action="store_true")
     ap.add_argument("--env-brief", action="store_true")
     ap.add_argument("--presub-merge", action="store_true")
+    ap.add_argument("--no-coordinator-notebook", action="store_true", help="messages-only coordinator; no notebook or mount")
     ap.add_argument("--dry-run", action="store_true",
                     help="print the fully-resolved run configuration as JSON and exit (no containers)")
     ap.add_argument("--basic-verify", action="store_true",
                     help="E_CB purity: build-only verification — disable the ProgramBench-evolved "
                          "reference-behavior probes in score/repair (CooperBench-era form)")
     ap.add_argument("--runs-dir", default="runs")
+    ap.add_argument("--langfuse", action="store_true", help="export worker and coordinator traces to Langfuse (default: off)")
     args = ap.parse_args()
 
     if args.basic_verify:
@@ -220,7 +235,8 @@ def main() -> None:
                                agent_time_limit=args.agent_time_limit or None,
                                gate=args.completion_gate, brief="",
                                presub_merge=args.presub_merge,
-                               team_size=args.team_size, dry_run=True)
+                               team_size=args.team_size, dry_run=True, langfuse=args.langfuse,
+                               coordinator_notebook=not args.no_coordinator_notebook)
         cfg["flags"] = {"repair": args.repair, "env_brief": args.env_brief,
                         "basic_verify": args.basic_verify}
         print(_json.dumps(cfg, sort_keys=True))
@@ -235,7 +251,8 @@ def main() -> None:
                                agent_time_limit=args.agent_time_limit or None,
                                gate=args.completion_gate, brief=brief,
                                presub_merge=args.presub_merge,
-                               team_size=args.team_size)
+                               team_size=args.team_size, langfuse=args.langfuse,
+                               coordinator_notebook=not args.no_coordinator_notebook, artifact_dir=out_root)
 
     repair_meta = {}
     if args.repair:

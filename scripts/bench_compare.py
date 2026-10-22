@@ -22,16 +22,18 @@ import time
 import uuid
 from pathlib import Path
 
+from cooperagents import verification as _verification
 from cooperagents.bus.memory import InMemoryBus
-from cooperagents.env.docker import DockerEnv
+from cooperagents.env.runtime import task_environment
 from cooperagents.eval.cooperbench import run_eval, write_run_outputs
 from cooperagents.eval.dataset import WorkItem, image_name, load_subset, read_feature
 from cooperagents.harness import UnifiedHarness
+from cooperagents.initial_plan import InitialPlan, initial_plan_path
 from cooperagents.types import Assignment, TeamSpec
 
 
-def _load_env(path: str = ".env") -> None:
-    p = Path(path)
+def _load_env(path: str | None = None) -> None:
+    p = Path(path or os.getenv("ENV_FILE", ".env"))
     if not p.is_file():
         return
     for line in p.read_text().splitlines():
@@ -44,7 +46,7 @@ def _load_env(path: str = ".env") -> None:
 MODEL = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-5.5-hao")
 
 
-def run_solo(item: WorkItem, *, run_name: str, logs_dir: Path, step_limit: int) -> dict:
+def run_solo(item: WorkItem, *, run_name: str, logs_dir: Path, step_limit: int, agent_time_limit: int | None = None) -> dict:
     feats = sorted(item.features)
     objective = "\n\n---\n\n".join(f"## Feature {f}\n\n{read_feature(item.repo, item.task_id, f)}" for f in feats)
     run_id = uuid.uuid4().hex[:8]
@@ -55,6 +57,7 @@ def run_solo(item: WorkItem, *, run_name: str, logs_dir: Path, step_limit: int) 
         features=feats,
         objective=objective,
         team_size=1,
+        agent_time_limit=agent_time_limit,
         max_agents=1,
         allow_spawn=False,
         shared_workspace=True,
@@ -63,7 +66,7 @@ def run_solo(item: WorkItem, *, run_name: str, logs_dir: Path, step_limit: int) 
     )
     harness = UnifiedHarness(bus=InMemoryBus(run_id), step_limit=step_limit, command_timeout=300)
     img = image_name(item.repo, item.task_id)
-    res = harness.run(spec, env_factory=lambda _id, _i=img: DockerEnv(_i))
+    res = harness.run(spec, env_factory=lambda _id, _i=img: task_environment(_i))
     write_run_outputs(res, run_name=run_name, logs_dir=logs_dir, setting="solo", model=MODEL)
     return {"duration": res.duration_seconds, "steps": res.total_steps, "tokens": 0}
 
@@ -125,7 +128,7 @@ def _mechanical_selector(img: str):
                 if not patch.strip():
                     envs.append(None)
                     continue
-                env = DockerEnv(img)
+                env = task_environment(img)
                 envs.append(env)
                 _seed_patch(env, patch)
                 names = env.execute("ls .cb_checks/*.py 2>/dev/null").stdout.split()
@@ -179,6 +182,7 @@ def run_team(
     logs_dir: Path,
     step_limit: int,
     max_agents: int,
+    agent_time_limit: int | None = None,
     verify_fix: bool = False,
     spec_fidelity: bool = False,
     teammate_context: bool = False,
@@ -207,12 +211,26 @@ def run_team(
     git_share: bool = False,
     team_roles: bool = False,
     coordinator: bool = False,
+    coordinator_notebook: bool = True,
+    coordination_variant: str = "auto-prompt",
+    coordination_mode: str = "direct",
+    coordinator_implementation_enabled: bool = True,
+    initial_plan_dir: Path | None = None,
+    planning_step_limit: int = 200,
+    planning_time_limit: int = 600,
+    worker_reminder_interval: int = 10,
     focused_repair: bool = False,
     repair_time: int = 0,
     apply_merge: bool = False,
     claim_mode: bool = False,
     allow_spawn: bool = False,
     n_agents: int = 2,
+    completion_gate: bool = False,
+    presub_merge: bool = False,
+    repair_attempts: int = 1,
+    langfuse: bool = False,
+    record_trajectory: bool = False,
+    checkpoint_repair: bool = False,
 ) -> dict:
     feats = sorted(item.features)
     if reverse_order:
@@ -247,6 +265,7 @@ def run_team(
         features=feats,
         assignments=assignments,
         max_agents=max_agents,
+        agent_time_limit=agent_time_limit,
         shared_workspace=True,
         worker="mini_swe",
         model=MODEL,
@@ -276,20 +295,79 @@ def run_team(
         git_share=git_share,
         team_roles=team_roles,
         coordinator=coordinator,
+        coordinator_notebook=coordinator_notebook,
         focused_repair=focused_repair,
         repair_time_limit=repair_time or None,
         apply_chain_merge=apply_merge,
         claim_mode=claim_mode,
         allow_spawn_tool=allow_spawn,
+        repair_attempts=repair_attempts,
+        completion_gate=(
+            lambda env, _m=presub_merge: _verification.validate(env, merged=_m)
+        ) if (completion_gate or presub_merge) else None,
+        select_integration=(
+            lambda patches: max(range(len(patches)), key=lambda i: len(patches[i]))
+        ) if presub_merge else None,
     )
-    harness = UnifiedHarness(bus=InMemoryBus(run_id), step_limit=step_limit, command_timeout=300)
+    pair_dir = logs_dir / run_name / "team" / item.repo / str(item.task_id) / "_".join(f"f{f}" for f in sorted(feats))
+    notebook_path = (pair_dir / "coordination" / run_id / "notebook.md").resolve() if coordinator and coordinator_notebook else None
+    harness = UnifiedHarness(
+        bus=InMemoryBus(run_id),
+        step_limit=step_limit,
+        command_timeout=300,
+        coordinator_notebook_path=notebook_path,
+        coordination_variant=coordination_variant,
+        langfuse=langfuse,
+        coordination_mode=coordination_mode,
+        coordinator_implementation_enabled=coordinator_implementation_enabled,
+        initial_plan=(InitialPlan.load(initial_plan_path(initial_plan_dir, f"{item.repo}:{item.task_id}:{','.join(map(str, feats))}"),
+                                       expected_pair=f"{item.repo}:{item.task_id}:{','.join(map(str, feats))}")
+                      if initial_plan_dir is not None else None),
+        planning_step_limit=planning_step_limit,
+        planning_time_limit_s=planning_time_limit,
+        worker_reminder_interval=worker_reminder_interval,
+        checkpoint_dir=pair_dir / "checkpoints" if checkpoint_repair else None,
+    )
     img = image_name(item.repo, item.task_id)
     selector = None
     if best_of_n > 1:
         selector = _mechanical_selector(image_name(item.repo, item.task_id)) if select == "mechanical" else _judge_selector(spec_bundle)
     vols = ([f"cbs{run_id}:/cbshared"] if git_share else []) + ([f"cbt{run_id}:/workspace/shared"] if team_roles else [])
     vols = vols or None
-    res = harness.run(spec, env_factory=lambda _id, _i=img, _v=vols: DockerEnv(_i, volumes=_v), selector=selector)
+    from cooperagents.trajectory import Trajectory
+
+    trajectory = None
+    if record_trajectory or checkpoint_repair:
+        if best_of_n != 1 or decompose or adaptive or not coop_tools:
+            raise ValueError("Trajectory collection requires a single coop-tools team")
+        trajectory = Trajectory(pair_dir / "trajectory.jsonl.gz")
+        harness.trajectory = trajectory
+        trajectory.emit(
+            "harness",
+            "pair_start",
+            run_id=run_id,
+            repo=item.repo,
+            task_id=item.task_id,
+            features=feats,
+            coordinator=coordinator,
+            coordinator_notebook=coordinator and coordinator_notebook,
+            coordination_variant=coordination_variant,
+            coordination_mode=coordination_mode,
+            coordinator_implementation_enabled=coordinator_implementation_enabled,
+            planning_step_limit=planning_step_limit,
+            planning_time_limit_s=planning_time_limit,
+            worker_reminder_interval=worker_reminder_interval,
+        )
+    try:
+        worker_ids = {a.agent_id for a in assignments}
+        res = harness.run(spec, env_factory=lambda _id: task_environment(
+            img, volumes=vols, coordinator_dir=notebook_path.parent if notebook_path is not None and _id in worker_ids else None,
+        ), selector=selector)
+        if trajectory:
+            trajectory.emit("harness", "pair_end", agents={k: {"status": v.status, "steps": v.steps} for k, v in res.seeds.items()})
+    finally:
+        if trajectory:
+            trajectory.close()
     write_run_outputs(res, run_name=run_name, logs_dir=logs_dir, setting="team", model=MODEL)
     return {"duration": res.duration_seconds, "steps": res.total_steps, "tokens": 0, "helpers": len(res.helpers)}
 
@@ -311,11 +389,16 @@ def read_eval(logs_dir: Path, run_name: str, setting: str, item: WorkItem) -> tu
 
 def main() -> None:
     _load_env()
+    global MODEL
+    MODEL = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-5.5-hao")
     ap = argparse.ArgumentParser()
-    ap.add_argument("--limit", type=int, default=2)
+    ap.add_argument("--limit", type=int, default=None, help="cap number of pairs (default: no limit)")
+    ap.add_argument("--subset", default="flash",
+                    help="CooperBench subset to load when --pairs is not given (default: flash; use 'all' for all 652 pairs)")
     ap.add_argument("--pairs", nargs="*", default=None, help="repo:task:f1,f2 ...")
     ap.add_argument("--max-agents", type=int, default=3)
     ap.add_argument("--step-limit", type=int, default=30)
+    ap.add_argument("--agent-time-limit", type=int, default=0, help="per-worker wall-clock seconds; 0 disables")
     ap.add_argument("--concurrency", type=int, default=1, help="pairs to run in parallel")
     ap.add_argument("--eval-concurrency", type=int, default=4, help="parallel evals (lower under emulation)")
     ap.add_argument("--verify-fix", action="store_true", help="S5: team verify-and-fix integrator pass")
@@ -335,7 +418,17 @@ def main() -> None:
                     help="Complete-Team cell: lead/member roles + shared scratchpad volume;"
                          " lead merges member patches and its tree is the submission")
     ap.add_argument("--coordinator", action="store_true",
-                    help="C2: live monitor — mechanical loop/stall/collision triggers, LLM-composed nudges via poller")
+                    help="tool-call coordinator: initial and ongoing coordination, messages and a read-only shared notebook")
+    ap.add_argument("--initial-plan-dir", type=Path, help="Reviewed plan/history checkpoint; start directly in implementation")
+    ap.add_argument("--no-implementation-coordinator", action="store_true",
+                    help="skip coordinator model decisions during implementation; keep planning, group chat and notebook delivery")
+    ap.add_argument("--no-coordinator-notebook", action="store_true",
+                    help="keep the same coordinator policy and messages, with no notebook or mount")
+    ap.add_argument("--planning-step-limit", type=int, default=200)
+    ap.add_argument("--planning-time-limit", type=int, default=600)
+    ap.add_argument("--worker-reminder-interval", type=int, default=10, help="remind every N worker decisions; 0 disables")
+    ap.add_argument("--coordination-mode", choices=("direct", "group-chat", "group-chat-planning"), default="direct")
+    ap.add_argument("--coordination-variant", choices=("auto-prompt", "human-prompt"), default="auto-prompt")
     ap.add_argument("--focused-repair", action="store_true", help="R2: harness gathers merge-damage evidence into the repair brief")
     ap.add_argument("--repair-time", type=int, default=0, help="TK9f: wall-clock cap (s) for the repair agent; 0 = uncapped")
     ap.add_argument("--apply-merge", action="store_true", help="TK8: pure apply-chain merge (Q5 base) instead of 3-way-first")
@@ -351,10 +444,20 @@ def main() -> None:
     ap.add_argument("--behavioral-gate", action="store_true", help="Q10: repair-trigger = syntax + published checks + fail-fast repo tests")
     ap.add_argument("--contract-first", action="store_true",
                     help="TK1/Q6: planner writes the shared interface contract; injected into all briefs")
-    ap.add_argument("--live-awareness", action="store_true", help="TK2/Q9: push '[team] X is editing ...' notes into each agent's context")
+    ap.add_argument("--live-awareness", action="store_true", help="Legacy compatibility flag; dirty-file [team] hints have been removed")
     ap.add_argument("--repair-steps", type=int, default=25, help="step cap for the Q5 merge-repair agent")
     ap.add_argument("--repair-integrator", action="store_true",
                     help="Q5: health-gate the no-seed merge; run one repair agent only when broken")
+    ap.add_argument("--completion-gate", action="store_true",
+                    help="Reject each agent's finish until verification.validate() passes in the agent's own container "
+                         "(equivalent to ProgramBench --completion-gate; up to 3 rejections per agent)")
+    ap.add_argument("--presub-merge", action="store_true",
+                    help="Before finishing, each agent merges all teammate branches and the completion gate checks the "
+                         "merged tree; integration then selects the best member patch instead of re-merging "
+                         "(equivalent to ProgramBench --presub-merge; requires --git-share)")
+    ap.add_argument("--repair-attempts", type=int, default=1,
+                    help="Maximum sequential repair passes on the merged tree (stops early once healthy); "
+                         "equivalent to ProgramBench's up-to-2-repair-agents loop (default 1)")
     ap.add_argument("--coop-tools", action="store_true",
                     help="Q4: concurrent agents + bus send_message tool (CooperBench team-harness shape); use with --no-seed")
     ap.add_argument("--diversity-temp", type=float, default=None,
@@ -369,68 +472,132 @@ def main() -> None:
     ap.add_argument("--solo-name", default="cmp-solo")
     ap.add_argument("--team-name", default="cmp-team")
     ap.add_argument("--solo-only", action="store_true", help="skip the team arm (e.g. solo calibration sweeps)")
+    ap.add_argument("--resume", action="store_true", help="skip pairs that already have a result.json on disk")
+    ap.add_argument("--langfuse", action="store_true", help="export worker and coordinator traces to Langfuse (default: off)")
+    ap.add_argument("--record-trajectory", action="store_true", help="append complete agent/coordinator I/O for replay")
+    ap.add_argument("--checkpoint-repair", action="store_true", help="save worker and repair filesystems and full I/O for replay")
+    ap.add_argument("--skip-eval", action="store_true", help="write generation artifacts without scoring")
     args = ap.parse_args()
+    if args.no_implementation_coordinator and not args.coordinator:
+        ap.error("--no-implementation-coordinator requires --coordinator")
+    if args.worker_reminder_interval < 0:
+        ap.error("Worker reminder interval must be nonnegative")
+    if args.planning_step_limit < 1 or args.planning_time_limit < 1:
+        ap.error("Planning budgets must be positive")
+    if args.coordination_variant == "human-prompt" and (not args.coordinator or args.no_coordinator_notebook):
+        ap.error("human-prompt requires --coordinator with notebook enabled")
 
+    if args.coordination_mode != "direct" and (
+        not args.coordinator
+        or args.no_coordinator_notebook
+        or not args.coop_tools
+        or not args.no_seed
+        or args.wait_protocol
+        or args.max_agents != 2
+    ):
+        ap.error("group coordination requires two coop-tools no-seed workers, coordinator, notebook, and no wait-protocol")
+    if args.coordination_mode == "group-chat-planning" and (args.task_board or args.claim_mode or args.allow_spawn):
+        ap.error("opening planning does not support task-board, claim-mode, or helpers")
     if args.pairs:
         items = []
         for spec in args.pairs:
             repo, task, feats = spec.split(":")
             items.append(WorkItem(repo=repo, task_id=int(task), features=[int(x) for x in feats.split(",")]))
     else:
-        items = load_subset("flash")[: args.limit]
+        items = load_subset(args.subset)
+    if args.limit is not None:
+        items = items[: args.limit]
+
+    if args.initial_plan_dir is not None:
+        if args.coordination_mode != "group-chat" or not args.team_only:
+            ap.error("Initial plan injection requires group-chat and --team-only")
+        if args.reverse_order or args.task_board or args.claim_mode or args.allow_spawn:
+            ap.error("Initial plan injection requires the original two-worker roster")
+        # Validate all selected bundles before any pair can call a model.
+        for item in items:
+            pair = f"{item.repo}:{item.task_id}:{','.join(map(str, sorted(item.features)))}"
+            plan = InitialPlan.load(initial_plan_path(args.initial_plan_dir, pair), expected_pair=pair)
+            roster = [Assignment(agent_id=f"agent{i+1}", role="member", feature_id=f, task=read_feature(item.repo, item.task_id, f))
+                      for i, f in enumerate(sorted(item.features))]
+            plan.validate_assignments(item.repo, item.task_id, roster)
 
     logs_dir = Path(args.log_dir).resolve()
+
+    def _result_exists(run_name: str, setting: str, item: WorkItem) -> bool:
+        feature_str = "_".join(f"f{f}" for f in sorted(item.features))
+        return (logs_dir / run_name / setting / item.repo / str(item.task_id) / feature_str / "result.json").is_file()
 
     def do_pair(item):
         tag = f"{item.repo}/{item.task_id} {sorted(item.features)}"
         t0 = time.time()
         s = {"duration": 0.0, "steps": 0, "tokens": 0}
+        t = {"duration": 0.0, "steps": 0, "tokens": 0}
+        solo_skip = args.resume and not args.team_only and _result_exists(args.solo_name, "solo", item)
+        team_skip = args.resume and not args.solo_only and _result_exists(args.team_name, "team", item)
+        if solo_skip and (args.solo_only or team_skip):
+            print(f"  skip (done) {tag}", flush=True)
+            return (item, s, t, 0.0)
         try:
-            if not args.team_only:
-                s = run_solo(item, run_name=args.solo_name, logs_dir=logs_dir, step_limit=args.step_limit)
-            t = {"duration": 0.0, "steps": 0, "tokens": 0}
-            if not args.solo_only:
+            if not args.team_only and not solo_skip:
+                s = run_solo(item, run_name=args.solo_name, logs_dir=logs_dir, step_limit=args.step_limit,
+                             agent_time_limit=args.agent_time_limit or None)
+            if not args.solo_only and not team_skip:
                 t = run_team(
-                item,
-                run_name=args.team_name,
-                logs_dir=logs_dir,
-                step_limit=args.step_limit,
-                max_agents=args.max_agents,
-                verify_fix=args.verify_fix,
-                spec_fidelity=args.spec_fidelity,
-                teammate_context=args.teammate_context,
-                guard_git=args.guard_git,
-                seed_prior=not args.no_seed,
-                reverse_order=args.reverse_order,
-                completeness_review=args.completeness_review,
-                tdd_preamble=args.tdd_preamble,
-                mine_conventions=args.mine_conventions,
-                best_of_n=args.best_of_n,
-                decompose=args.decompose,
-                preserve_invariants=args.preserve_invariants,
-                adaptive=args.adaptive,
-                do_no_harm=args.do_no_harm,
-                select=args.select,
-                diversity_temp=args.diversity_temp,
-                coop_tools=args.coop_tools,
-                repair_integrator=args.repair_integrator,
-                repair_steps=args.repair_steps,
-                contract_first=args.contract_first,
-                live_awareness=args.live_awareness,
-                behavioral_gate=args.behavioral_gate,
-                tool_protocol=args.tool_protocol,
-                task_board=args.task_board,
-                wait_protocol=args.wait_protocol,
-                git_share=args.git_share,
-                team_roles=args.team_roles,
-                coordinator=args.coordinator,
-                focused_repair=args.focused_repair,
-                repair_time=args.repair_time,
-                apply_merge=args.apply_merge,
-                claim_mode=args.claim_mode,
-                allow_spawn=args.allow_spawn,
-                n_agents=args.agents,
-            )
+                    item,
+                    run_name=args.team_name,
+                    logs_dir=logs_dir,
+                    step_limit=args.step_limit,
+                    agent_time_limit=args.agent_time_limit or None,
+                    max_agents=args.max_agents,
+                    verify_fix=args.verify_fix,
+                    spec_fidelity=args.spec_fidelity,
+                    teammate_context=args.teammate_context,
+                    guard_git=args.guard_git,
+                    seed_prior=not args.no_seed,
+                    reverse_order=args.reverse_order,
+                    completeness_review=args.completeness_review,
+                    tdd_preamble=args.tdd_preamble,
+                    mine_conventions=args.mine_conventions,
+                    best_of_n=args.best_of_n,
+                    decompose=args.decompose,
+                    preserve_invariants=args.preserve_invariants,
+                    adaptive=args.adaptive,
+                    do_no_harm=args.do_no_harm,
+                    select=args.select,
+                    diversity_temp=args.diversity_temp,
+                    coop_tools=args.coop_tools,
+                    repair_integrator=args.repair_integrator,
+                    repair_steps=args.repair_steps,
+                    contract_first=args.contract_first,
+                    live_awareness=args.live_awareness,
+                    behavioral_gate=args.behavioral_gate,
+                    tool_protocol=args.tool_protocol,
+                    task_board=args.task_board,
+                    wait_protocol=args.wait_protocol,
+                    git_share=args.git_share,
+                    team_roles=args.team_roles,
+                    langfuse=args.langfuse,
+                    coordinator=args.coordinator,
+                    coordinator_notebook=not args.no_coordinator_notebook,
+                    coordination_variant=args.coordination_variant,
+                    coordination_mode=args.coordination_mode,
+                    coordinator_implementation_enabled=not args.no_implementation_coordinator,
+                    initial_plan_dir=args.initial_plan_dir,
+                    planning_step_limit=args.planning_step_limit,
+                    planning_time_limit=args.planning_time_limit,
+                    worker_reminder_interval=args.worker_reminder_interval,
+                    focused_repair=args.focused_repair,
+                    repair_time=args.repair_time,
+                    apply_merge=args.apply_merge,
+                    claim_mode=args.claim_mode,
+                    allow_spawn=args.allow_spawn,
+                    n_agents=args.agents,
+                    completion_gate=args.completion_gate,
+                    presub_merge=args.presub_merge,
+                    repair_attempts=args.repair_attempts,
+                    record_trajectory=args.record_trajectory,
+                    checkpoint_repair=args.checkpoint_repair,
+                )
         except Exception as e:  # noqa: BLE001 - one bad pair (e.g. missing/arch-incompatible image) must not abort the run
             print(f"  SKIP {tag}: {type(e).__name__}: {str(e)[:160]}", flush=True)
             return None
@@ -447,15 +614,20 @@ def main() -> None:
         rows = [do_pair(item) for item in items]
 
     rows = [r for r in rows if r is not None]  # drop skipped pairs (bad/incompatible images)
-    if not rows:
-        print("no pairs completed.")
+    if not rows or len(rows) != len(items):
+        raise RuntimeError(f"Incomplete generation: {len(rows)}/{len(items)} pairs completed")
+    if args.skip_eval:
+        print("generation complete; official evaluation not run")
         return
 
     print("\nscoring with CooperBench (this builds/pulls images + runs tests)...")
-    if not args.team_only:
-        run_eval(args.solo_name, logs_dir=logs_dir, backend="docker", force=True, concurrency=args.eval_concurrency)
-    if not args.solo_only:
-        run_eval(args.team_name, logs_dir=logs_dir, backend="docker", force=True, concurrency=args.eval_concurrency)
+    for enabled, name in ((not args.team_only, args.solo_name), (not args.solo_only, args.team_name)):
+        if enabled:
+            evaluation = run_eval(name, logs_dir=logs_dir, backend=os.getenv("COOPER_RUNTIME", "docker"),
+                                  force=True, concurrency=args.eval_concurrency)
+            print(evaluation.stdout or "", flush=True)
+            print(evaluation.stderr or "", flush=True)
+            evaluation.check_returncode()
 
     print("\n================ RESULTS ================")
     solo_pass = team_pass = solo_feats = team_feats = 0

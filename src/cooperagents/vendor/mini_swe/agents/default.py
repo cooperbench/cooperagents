@@ -7,6 +7,7 @@ import logging
 import re
 import traceback
 import typing
+from collections.abc import Callable
 from pathlib import Path
 
 from jinja2 import StrictUndefined, Template
@@ -141,6 +142,7 @@ class DefaultAgent:
     ):
         """See the `AgentConfig` class for permitted keyword arguments."""
         self.config = config_class(**kwargs)
+        self.trace = None
         self.messages: list[dict] = []
         self.model = model
         self.env = env
@@ -176,6 +178,8 @@ class DefaultAgent:
 
     def add_messages(self, *messages: dict) -> list[dict]:
         self.logger.debug(messages)  # set log level to debug to see
+        if self.trace is not None:
+            self.trace("messages", messages=messages)
         self.messages.extend(messages)
         return list(messages)
 
@@ -193,14 +197,19 @@ class DefaultAgent:
             )
         )
 
-    def run(self, task: str = "", **kwargs) -> dict:
+    def run(self, task: str = "", *, initial_messages: list[dict] | None = None,
+            on_start: Callable[["DefaultAgent"], None] | None = None, **kwargs) -> dict:
         """Run step() until agent is finished. Returns dictionary with exit_status, submission keys."""
         self.extra_template_vars |= {"task": task, **kwargs}
         self.messages = []
-        self.add_messages(
+        if self.trace is not None:
+            self.trace("context", messages=[], reason="start")
+        self.add_messages(*(initial_messages if initial_messages is not None else [
             self.model.format_message(role="system", content=self._render_template(self.config.system_template)),
             self.model.format_message(role="user", content=self._render_template(self.config.instance_template)),
-        )
+        ]))
+        if on_start is not None:
+            on_start(self)
         while True:
             try:
                 self.step()
@@ -218,6 +227,9 @@ class DefaultAgent:
     def step(self) -> list[dict]:
         """Query the LM, execute actions. Polls for inter-agent messages
         and (in team mode) the shared task list before querying."""
+        coordinator = getattr(self, "coordinator", None)
+        if coordinator is not None:
+            coordinator.before_action()
         # Check for inter-agent messages before querying LLM
         if self.comm:
             messages = self.comm.receive()
@@ -318,6 +330,8 @@ class DefaultAgent:
         }
         self._close_current_segment("solver")
         self.messages = prefix + [stub] + [clip(m) for m in recent]
+        if self.trace is not None:
+            self.trace("context", messages=self.messages, reason="compaction")
         self._compaction_count += 1
         self.log(
             f"Emergency truncation #{self._compaction_count}: kept system+task+{len(recent)} recent messages"
@@ -358,6 +372,8 @@ class DefaultAgent:
         )
 
         self.messages = prefix + [summary_msg] + recent_turns
+        if self.trace is not None:
+            self.trace("context", messages=self.messages, reason="compaction")
         self._compaction_count += 1
         self.log(
             f"Compaction #{self._compaction_count}: {self._last_prompt_tokens} prompt tokens -> compacted "
@@ -367,6 +383,9 @@ class DefaultAgent:
     def query(self) -> dict:
         """Query the model and return model messages. Override to add hooks."""
         import time as _time
+        coordinator = getattr(self, "coordinator", None)
+        if coordinator is not None:
+            coordinator.before_action()
         if self.config.wall_deadline is not None and _time.time() > self.config.wall_deadline:
             raise LimitsExceeded(
                 {"role": "exit", "content": "LimitsExceeded",
@@ -394,6 +413,21 @@ class DefaultAgent:
                         and "context window" not in es):
                     raise
                 self._emergency_truncate()
+        coordinator = getattr(self, "coordinator", None)
+        if coordinator is not None and coordinator.coordination_mode != "direct":
+            if getattr(self, "_restored_compaction", 0) != self._compaction_count:
+                coordinator.restore_context(self.agent_id, self)
+                self._restored_compaction = self._compaction_count
+        if coordinator is not None and coordinator.coordination_mode != "direct":
+            snapshot = coordinator.before_query(self.agent_id, self)
+            if hasattr(self, "_planning_tools"):
+                self.model._tools = [
+                    tool for tool in self._planning_tools if snapshot["phase"] == "planning" or tool["function"]["name"] != "confirm_plan"
+                ]
+        reminder = coordinator.worker_reminder(self.agent_id, self.n_calls + 1) if coordinator is not None else None
+        reminder_message = self.model.format_message(role="user", content=reminder) if reminder is not None else None
+        if reminder_message is not None:
+            self.add_messages(reminder_message)
         self.n_calls += 1
         try:
             message = self.model.query(self.messages)
@@ -414,6 +448,11 @@ class DefaultAgent:
             for attempt in range(3):
                 self.config.compaction_keep_recent_turns = max(0, keep - attempt)
                 self._emergency_truncate()
+                if coordinator is not None:
+                    coordinator.restore_context(self.agent_id, self, request=True)
+                # Preserve the scheduled reminder if overflow truncation dropped it.
+                if reminder_message is not None and reminder_message not in self.messages:
+                    self.add_messages(reminder_message)
                 try:
                     message = self.model.query(self.messages)
                     break
@@ -444,9 +483,17 @@ class DefaultAgent:
         any) against the docker env.  Single-tool registration is much
         more reliable for smaller models than exposing two tools.
         """
+        from cooperagents.trajectory import record_call
+
+        coordinator = getattr(self, "coordinator", None)
+        if coordinator is not None:
+            coordinator.before_action()
         actions = message.get("extra", {}).get("actions", [])
         outputs = []
+        self._sole_confirmation = len(actions) == 1 and actions[0].get("tool_name") == "confirm_plan"
         for action in actions:
+            if coordinator is not None:
+                coordinator.before_action()
             tool_name = action.get("tool_name", "bash")
             handler = getattr(self, "tool_handlers", {}).get(tool_name)
             if handler is not None:
@@ -454,14 +501,14 @@ class DefaultAgent:
                 # harness wires host-side handlers; output goes back as a
                 # normal observation.
                 try:
-                    outputs.append(handler(action))
+                    outputs.append(record_call(self.trace, handler, action=action))
                 except Exception as e:  # noqa: BLE001 - a tool bug must not kill the agent
                     outputs.append({"output": f"tool {tool_name} failed: {e}", "returncode": 1, "exception_info": ""})
                 continue
             if tool_name == "send_message" and self.comm:
                 # Defensive: supported for legacy callers that still
                 # register send_message as a tool.
-                outputs.append(self._handle_send_message(action))
+                outputs.append(record_call(self.trace, self._handle_send_message, action=action))
                 continue
 
             cmd = action.get("command", "")
@@ -469,20 +516,26 @@ class DefaultAgent:
                 sm_matches = _parse_send_messages(cmd)
                 if sm_matches:
                     sm_outputs = []
+                    sm_returncode = 0
                     for recipient, content, wait in sm_matches:
-                        r = self._handle_send_message({"recipient": recipient, "content": content, "wait": wait})
+                        r = record_call(self.trace, self._handle_send_message,
+                                        action={"recipient": recipient, "content": content, "wait": wait})
                         sm_outputs.append(r["output"])
+                        sm_returncode = sm_returncode or r["returncode"]
                     remaining = _strip_send_message(cmd)
                     combined = "\n".join(sm_outputs)
                     if not remaining.strip():
-                        outputs.append({"output": combined, "returncode": 0, "exception_info": ""})
+                        outputs.append({"output": combined, "returncode": sm_returncode, "exception_info": ""})
                         continue
                     env_out = self.env.execute({**action, "command": remaining})
                     env_out["output"] = combined + "\n" + env_out.get("output", "")
+                    env_out["returncode"] = env_out.get("returncode", 0) or sm_returncode
                     outputs.append(env_out)
                     continue
 
             outputs.append(self.env.execute(action))
+        if self.trace is not None:
+            self.trace("tool_results", actions=actions, outputs=outputs)
         return self.add_messages(*self.model.format_observation_messages(message, outputs, self.get_template_vars()))
 
     def _handle_send_message(self, action: dict) -> dict:
@@ -495,6 +548,8 @@ class DefaultAgent:
         recipient = action.get("recipient", "")
         content = action.get("content", "")
         wait = action.get("wait", False)
+        if wait and getattr(self.comm, "group", None) is not None:
+            return {"output": "wait is unavailable in group chat", "returncode": 1, "exception_info": ""}
 
         if wait and hasattr(self.comm, "send_and_wait"):
             replies = self.comm.send_and_wait(recipient, content, timeout=60)
@@ -505,7 +560,10 @@ class DefaultAgent:
                 output += f"\n\n[Reply from {r['from']}]: {r['content']}"
             return {"output": output, "returncode": 0, "exception_info": ""}
 
-        self.comm.send(recipient, content)
+        try:
+            self.comm.send(recipient, content)
+        except ValueError as exc:
+            return {"output": f"send_message failed: {exc}", "returncode": 1, "exception_info": ""}
         self.log(f"SENT to {recipient}: {content[:80]}...")
         self.sent_messages.append({"to": recipient, "content": content})
         return {"output": f"Message sent to {recipient}", "returncode": 0, "exception_info": ""}

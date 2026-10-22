@@ -11,10 +11,16 @@ exercised in live runs; the test suite uses :class:`LocalEnv`.
 
 from __future__ import annotations
 
+import json
+import os
 import subprocess
+import tempfile
+import time
 import uuid
+from pathlib import Path
 
 from cooperagents.env.base import Environment, ExecResult
+from cooperagents.env.limited_process import run_limited
 
 CONTAINER_REPO = "/workspace/repo"
 
@@ -76,6 +82,24 @@ class DockerEnv(Environment):
         return res.stdout.strip() if res.exit_code == 0 else ""
 
     def execute(self, command: str, *, timeout: int = 60) -> ExecResult:
+        # Diagnostic runs retain the exact command before an OOM can kill the
+        # process. Each call has its own file because the two agents run in threads.
+        diag_dir = os.getenv("COOPER_DIAG_DIR")
+        trace = None
+        if diag_dir:
+            trace = Path(diag_dir) / f"exec-{uuid.uuid4().hex}.json"
+            trace.parent.mkdir(parents=True, exist_ok=True)
+            trace.write_text(
+                json.dumps(
+                    {
+                        "pid": os.getpid(),
+                        "container": self.name,
+                        "started_at": time.time(),
+                        "timeout": timeout,
+                        "command": command,
+                    }
+                )
+            )
         try:
             # Non-login shell: a login shell (-l) sources /etc/profile which
             # RESETS PATH, hiding image-provided toolchains from the agent
@@ -88,17 +112,30 @@ class DockerEnv(Environment):
                 # giant commands (e.g. an agent writing a whole file via one
                 # heredoc) must be streamed over stdin instead.
                 argv, stdin = ["docker", "exec", "-i", "-w", self.repo_path, self.name, "bash", "-s"], command
-            proc = subprocess.run(
+            result, truncated = run_limited(
                 argv,
-                input=stdin,
-                capture_output=True,
-                text=True,
-                errors="replace",  # agents probing binaries emit non-UTF8 bytes
+                input_text=stdin,
                 timeout=timeout,
             )
-            return ExecResult(stdout=(proc.stdout or "") + (proc.stderr or ""), exit_code=proc.returncode)
-        except subprocess.TimeoutExpired:
-            return ExecResult(stdout=f"[timed out after {timeout}s]", exit_code=124)
+            if trace is not None:
+                with trace.open("a") as handle:
+                    handle.write(
+                        "\n"
+                        + json.dumps(
+                            {
+                                "finished_at": time.time(),
+                                "returncode": result.exit_code,
+                                "stdout_chars": len(result.stdout),
+                                "truncated": truncated,
+                            }
+                        )
+                    )
+            return result
+        except BaseException as error:
+            if trace is not None:
+                with trace.open("a") as handle:
+                    handle.write("\n" + json.dumps({"finished_at": time.time(), "error": type(error).__name__}))
+            raise
 
     def read_file(self, path: str) -> str:
         res = self.execute(f"cat {path}")
@@ -114,7 +151,7 @@ class DockerEnv(Environment):
     def git_diff(self) -> str:
         self.execute("git add -A")
         base = self._base_commit or "HEAD"
-        res = self.execute(f"git diff --cached {base}")
+        res = self.execute(f"git diff --cached --binary {base}")
         if not res.stdout.strip():
             # Agents sometimes stash their work to "verify a clean patch"
             # right before finishing (observed: tree back at base, 1000+
@@ -123,8 +160,71 @@ class DockerEnv(Environment):
             if has_stash:
                 self.execute("git stash pop -q 2>/dev/null || git checkout stash@{0} -- . 2>/dev/null")
                 self.execute("git add -A")
-                res = self.execute(f"git diff --cached {base}")
+                res = self.execute(f"git diff --cached --binary {base}")
         return res.stdout
 
     def cleanup(self) -> None:
         subprocess.run(["docker", "rm", "-f", self.name], check=False, capture_output=True)
+
+    def checkpoint(self, destination: Path) -> dict:
+        from cooperagents.checkpoint import extract_tree, save_tree_delta
+        from cooperagents.checkpoint_delta import cached_base, pack_stream
+
+        info = json.loads(subprocess.check_output(["docker", "inspect", self.name]))[0]
+        image_id = info["Image"]
+        image = json.loads(subprocess.check_output(["docker", "image", "inspect", image_id]))[0]
+
+        def build(path):
+            name = f"ca-checkpoint-base-{uuid.uuid4().hex}"
+            subprocess.run(["docker", "create", "--name", name, image_id], check=True, capture_output=True)
+            try:
+                archive = path.parent / "base.tar"
+                subprocess.run(["docker", "export", "--output", str(archive), name], check=True, capture_output=True)
+                extract_tree(archive, path)
+                archive.unlink()
+            finally:
+                subprocess.run(["docker", "rm", "-fv", name], check=True, capture_output=True)
+
+        base = cached_base(Path(tempfile.gettempdir()) / "cooperagents-checkpoint-bases", image_id.removeprefix("sha256:"), build)
+        paused = info["State"]["Paused"]
+        if not paused:
+            subprocess.run(["docker", "pause", self.name], check=True, capture_output=True)
+        try:
+            with (
+                tempfile.TemporaryFile() as errors,
+                subprocess.Popen(["docker", "export", self.name], stdout=subprocess.PIPE, stderr=errors) as export,
+            ):
+                try:
+                    pack_stream(export.stdout, base, destination / "rootfs", canonicalize=True)
+                except BaseException:
+                    export.kill()
+                    raise
+                if export.wait():
+                    errors.seek(0)
+                    raise RuntimeError(f"Docker checkpoint export failed: {errors.read(4096).decode(errors='replace')}")
+            mounts = []
+            for i, mount in enumerate(info["Mounts"]):
+                if mount["Type"] not in {"bind", "volume"}:
+                    raise ValueError(f"Unsupported checkpoint mount: {mount['Type']}")
+                with tempfile.TemporaryDirectory(prefix="ca-mount-") as temporary:
+                    copied = Path(temporary) / "data"
+                    subprocess.run(["docker", "cp", f"{self.name}:{mount['Destination']}", str(copied)], check=True, capture_output=True)
+                    empty = Path(temporary) / "empty"
+                    empty.mkdir()
+                    record = save_tree_delta(copied, empty, destination, f"mount-{i}")
+                mounts.append(dict(target=mount["Destination"], readonly=not mount["RW"], base="empty", **record))
+            return dict(
+                backend="docker",
+                format="checkpoint-tar-delta-v1",
+                archive="rootfs/filesystem.json.gz",
+                payload="rootfs/payload.tar.gz",
+                image=self.image,
+                image_id=image_id,
+                registry_digests=image.get("RepoDigests", []),
+                config=info["Config"],
+                network_mode=info["HostConfig"]["NetworkMode"],
+                mounts=mounts,
+            )
+        finally:
+            if not paused:
+                subprocess.run(["docker", "unpause", self.name], check=True, capture_output=True)
