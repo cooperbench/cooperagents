@@ -375,6 +375,13 @@ action and summary policies fixed. Completion transports are responsible for enf
 raw completion/token receipts. The existing `coordinator_complete(prompt)` callback and
 repair binding remain supported; the two coordinator interfaces are mutually exclusive.
 
+Planning-enabled coordinator requests contain one phase-specific system message followed by the
+existing user protocol and observation. Opening planning and forced finalization use the planning
+system; subsequent implementation decisions use the implementation system. The ordinary SDK path
+and public completion binding use the same text. The legacy string callback receives the phase
+text prepended to its prompt. Direct/group-chat runs without a planning phase keep their existing
+message shape. Integrators should forward the supplied messages without adding another task system.
+
 `cooperagents.completion.parse_completion_tool_calls(response, tools)` validates SDK or
 Qwen XML calls against active schemas. Integer arguments remain integers; malformed,
 duplicate, unavailable and incomplete tool calls raise `ValueError` instead of becoming

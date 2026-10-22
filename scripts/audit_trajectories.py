@@ -48,7 +48,7 @@ def audit_coordination(rows: list[dict], result: dict) -> dict:
             coordinator_public = {record["message_id"]: record for record in data.get("group_chat", {}).get("unread", [])}
             coordinator_observation_inputs += 1
         elif event == "request" and row["actor"] == "coordinator" and "messages" in data.get("request", {}):
-            prompt = data["request"]["messages"][0]["content"]
+            prompt = next(message["content"] for message in data["request"]["messages"] if message["role"] == "user")
             observation = json.loads(prompt.split("OBSERVATION:\n", 1)[1])
             records = observation.get("group_chat", {}).get("unread", [])
             coordinator_public = {record["message_id"]: record for record in records}

@@ -140,7 +140,7 @@ def _default_planner_complete(model, base_url, api_key, *, trace=None, timeout=N
             options["max_retries"] = max_retries
         client = OpenAI(base_url=b, api_key=k, **options)
 
-        def complete(prompt: str, **request_options) -> str | list[dict[str, str]]:
+        def complete(prompt: str, *, system_prompt: str | None = None, **request_options) -> str | list[dict[str, str]]:
             kwargs = sampling_kwargs()
             if "max_tokens" not in kwargs:
                 kwargs["max_completion_tokens"] = 2000
@@ -150,7 +150,9 @@ def _default_planner_complete(model, base_url, api_key, *, trace=None, timeout=N
             from cooperagents.trajectory import record_call
 
             resp = record_call(
-                trace, client.chat.completions.create, model=m, messages=[{"role": "user", "content": prompt}], **(kwargs | request_options)
+                trace, client.chat.completions.create, model=m,
+                messages=[*([{"role": "system", "content": system_prompt}] if system_prompt else []), {"role": "user", "content": prompt}],
+                **(kwargs | request_options)
             )
             if tools is not None:
                 calls = resp.choices[0].message.tool_calls or []

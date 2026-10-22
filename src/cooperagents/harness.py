@@ -45,7 +45,9 @@ from cooperagents.agent import Agent
 from cooperagents.bus.base import TeamBus
 from cooperagents.bus.memory import InMemoryBus
 from cooperagents.coordination_prompts import (
+    COORDINATOR_IMPLEMENTATION_SYSTEM,
     COORDINATOR_PLANNING,
+    COORDINATOR_PLANNING_SYSTEM,
     COORDINATOR_WARNING_RULES,
     FORCED_PLANNING,
     GROUP_CHAT,
@@ -242,7 +244,7 @@ _COORDINATION_WORKFLOW = (
     "verification results. A proposal is not an agreement; silence is not confirmation."
 )
 _COORDINATOR_PROMPT = """You coordinate software workers implementing features in separate copies of one repository.
-You make one decision from the current OBSERVATION. You cannot inspect code, execute tools or wait for replies.
+You make one decision from the current OBSERVATION. You cannot inspect code, run shell commands or wait for replies.
 The harness executes your returned actions; workers inspect code and may report back in a later observation.
 Their patches will be merged. Help them agree on responsibilities, file regions and shared interfaces before
 contested edits, resolve concrete overlaps or repeated failures during implementation, and decide when remaining
@@ -1350,6 +1352,9 @@ class _Coordinator:
                 protocol += FORCED_PLANNING
             elif self.phase == "planning":
                 protocol += COORDINATOR_PLANNING
+        system = None
+        if self._planning:
+            system = COORDINATOR_IMPLEMENTATION_SYSTEM if decision_phase == "implementation" else COORDINATOR_PLANNING_SYSTEM
         prompt = protocol + "\nOBSERVATION:\n" + json.dumps(observation, ensure_ascii=False)
         count = len(self._pending)
         self._emit("observation", **observation)
@@ -1361,15 +1366,18 @@ class _Coordinator:
             self._coordinator_calls += 1
             if self.completion is not None:
                 response = self.completion.complete(
-                    messages=[{"role": "user", "content": prompt}], tools=self._tools,
+                    messages=[*([{"role": "system", "content": system}] if system else []), {"role": "user", "content": prompt}],
+                    tools=self._tools,
                     actor_id="coordinator", call_id=self._coordinator_calls,
                 )
-            elif forced and not self._injected:
+            elif self._injected:
+                response = self._complete(system + "\n" + prompt if system else prompt)
+            elif forced:
                 deadlines = [agent.config.wall_deadline for agent in agents.values() if agent.config.wall_deadline is not None]
                 remaining = min([d - time.time() for d in deadlines] or [60])
-                response = self._complete(prompt, timeout=max(0.001, min(60, remaining)))
+                response = self._complete(prompt, system_prompt=system, timeout=max(0.001, min(60, remaining)))
             else:
-                response = self._complete(prompt)
+                response = self._complete(prompt, **({"system_prompt": system} if system else {}))
         except Exception as exc:
             self._last_error = f"Completion failed: {type(exc).__name__}"
             self._emit("decision", initial=initial, valid=False, outcome="transport_error", error=str(exc))

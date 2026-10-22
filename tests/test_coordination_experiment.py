@@ -205,10 +205,10 @@ def test_coordinator_export_uses_actual_client_messages_and_schemas(tmp_path):
     assert len(package["coordinator_requests"]) == 24 and package["synthetic"]
     for capture in package["coordinator_requests"]:
         request = capture["request"]
-        # The real client currently sends one user message and no system wrapper.
-        assert [message["role"] for message in request["messages"]] == ["user"]
+        expected_roles = ["system", "user"] if capture["mode"] == "group-chat-planning" else ["user"]
+        assert [message["role"] for message in request["messages"]] == expected_roles
         assert request["tool_choice"] == "auto"
-        observation = json.loads(request["messages"][0]["content"].split("OBSERVATION:\n")[1])
+        observation = json.loads(request["messages"][-1]["content"].split("OBSERVATION:\n")[1])
         assert ("replies" in observation) == (capture["mode"] == "direct")
         assert "frozen_evidence" not in observation
         if capture["mode"] != "direct":

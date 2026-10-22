@@ -10,6 +10,7 @@ import litellm
 import pytest
 
 from cooperagents.completion import CompletionBinding, CompletionSettings, parse_completion_tool_calls
+from cooperagents.coordination_prompts import COORDINATOR_IMPLEMENTATION_SYSTEM, COORDINATOR_PLANNING_SYSTEM
 from cooperagents.env.base import ExecResult
 from cooperagents.env.local import LocalEnv
 from cooperagents.harness import UnifiedHarness
@@ -108,7 +109,9 @@ def test_planning_only_real_lifecycle(tmp_path, monkeypatch, outcome):
 
     def coordinator(request):
         assert request.actor_id == "coordinator" and request.purpose == "action"
-        observation = json.loads(request.messages[0]["content"].split("OBSERVATION:\n")[1])
+        observation = json.loads(request.messages[1]["content"].split("OBSERVATION:\n")[1])
+        assert request.messages[0] == {"role": "system", "content": COORDINATOR_PLANNING_SYSTEM}
+        assert len(request.messages) == 2
         requests.append(request)
         if outcome == "coordinator_service":
             raise TimeoutError("synthetic service failure")
@@ -263,7 +266,7 @@ def test_planning_only_real_lifecycle(tmp_path, monkeypatch, outcome):
         assert requests[offset].tools == first_tools
     assert all(not Path(env.repo_path).exists() for env in environments)
     assert requests
-    initial = json.loads(requests[0].messages[0]["content"].split("OBSERVATION:\n")[1])
+    initial = json.loads(requests[0].messages[1]["content"].split("OBSERVATION:\n")[1])
     assert initial["planning"]["seconds_remaining"] == harness.planning_time_limit_s
     assert set(initial["git_snapshots"]["workers"]) == {"agent1", "agent2"}
     assert all(set(snapshot) == {"sha"} for snapshot in initial["git_snapshots"]["workers"].values())
@@ -317,3 +320,53 @@ def test_worker_discards_inflight_action_after_frozen_plan(tmp_path):
     for operation in operations:
         with pytest.raises(PlanningComplete):
             operation()
+
+
+@pytest.mark.parametrize("transport", ["binding", "sdk"])
+@pytest.mark.parametrize("variant", ["auto-prompt", "human-prompt"])
+def test_coordinator_system_switches_after_finalization(tmp_path, monkeypatch, transport, variant):
+    from types import SimpleNamespace
+
+    import openai
+
+    from test_planning import planning, publish_plan
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Network is forbidden")
+
+    monkeypatch.setattr(socket, "create_connection", forbidden)
+    monkeypatch.setattr(litellm, "completion", forbidden)
+    requests = []
+
+    def create(**kwargs):
+        requests.append(kwargs["messages"])
+        return litellm.ModelResponse(choices=[{"message": {"role": "assistant", "content": "", "tool_calls": []}}])
+
+    if transport == "sdk":
+        monkeypatch.setattr(
+            openai, "OpenAI", lambda **kwargs: SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+        )
+        c = planning(tmp_path, coordination_variant=variant, complete=None)
+    else:
+        c = planning(
+            tmp_path, coordination_variant=variant, complete=None,
+            completion=binding(lambda request: create(messages=request.messages)),
+        )
+    c.decide(initial=True)
+    publish_plan(c)
+    for aid in c._assignments:
+        assert c.confirm_plan(aid, {"version": c._version}, sole=True)["returncode"] == 0
+    c._observed_confirmations = dict(c._confirmations)
+    c.finish_planning(c._version)
+    c.decide(initial=True)
+    assert len(requests) == 2
+    for messages, system in zip(requests, (COORDINATOR_PLANNING_SYSTEM, COORDINATOR_IMPLEMENTATION_SYSTEM), strict=True):
+        assert len(messages) == 2 and messages[0] == {"role": "system", "content": system}
+        user = messages[1]["content"]
+        assert messages[1]["role"] == "user"
+        assert "run shell commands or wait for replies" in user and "execute tools" not in user
+        assert "This task ends after planning" not in system + user
+    assert "If no further planning change is needed" in requests[0][1]["content"]
+    assert "finish_planning(version) as the sole action" in requests[0][1]["content"]
+    assert "OPENING PLANNING" not in requests[1][1]["content"]
+    assert "finish_planning(version)" not in requests[1][1]["content"]

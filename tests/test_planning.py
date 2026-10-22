@@ -784,7 +784,10 @@ def test_forced_backlog_never_claims_unseen_coordinator_delivery(tmp_path, monke
     c.decide()
     journal.close()
     assert c._chat_positions["coordinator"] == 2
-    observation = json.loads(captures[0]["messages"][0]["content"].split("OBSERVATION:\n")[1])
+    from cooperagents.coordination_prompts import COORDINATOR_PLANNING_SYSTEM
+
+    assert captures[0]["messages"][0] == {"role": "system", "content": COORDINATOR_PLANNING_SYSTEM}
+    observation = json.loads(captures[0]["messages"][1]["content"].split("OBSERVATION:\n")[1])
     assert "frozen_evidence" not in observation and "replies" not in observation
     assert set(observation["group_chat"]) == {"unread", "recent", "backlog"}
     ids = [row["message_id"] for row in observation["group_chat"]["unread"]]
@@ -808,7 +811,7 @@ def test_forced_backlog_never_claims_unseen_coordinator_delivery(tmp_path, monke
         if row["event"] == "request" and row["actor"] == "coordinator" and "messages" in row["data"].get("request", {}):
             legacy = dict(observation)
             legacy["frozen_evidence"] = {"group_chat": legacy.pop("group_chat")["unread"]}
-            row["data"]["request"]["messages"][0]["content"] = "OBSERVATION:\n" + json.dumps(legacy)
+            row["data"]["request"]["messages"] = [{"role": "user", "content": "OBSERVATION:\n" + json.dumps(legacy)}]
     assert script("audit_trajectories").audit_coordination(
         legacy_rows, {"metrics": {"coordination_mode": "group-chat"}}
     )["coordinator_input_evidence"] == "sdk_requests"
