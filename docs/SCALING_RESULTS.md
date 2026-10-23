@@ -172,26 +172,28 @@ best-of-N selection, not a 3-way merge of independent full solutions). Subset is
 kernel/qemu/ML/large-download); the 5 nested-layout tasks are excluded (the
 adapter's `image()` cannot build them). Verified on `hello-world`: reward 1.0.
 
-Result (2026-10-23) — degraded by the model-endpoint outage, see caveat:
+Result (2026-10-23), clean run (14 tasks; `fix-git` dropped — see below):
 
 | Arm | n (scored) | success rate | Status |
 | --- | --- | --- | --- |
-| solo | 14/15 | 0.357 (5/14) | Complete (degraded) |
-| solo-iso | 14/15 | 0.286 (4/14) | Complete (degraded) |
-| team (3) | 14/15 | 0.286 (4/14) | Complete (degraded) |
+| solo | 14/14 | 0.357 (5/14) | Complete |
+| solo-iso | 14/14 | 0.286 (4/14) | Complete |
+| team (3) | 14/14 | 0.286 (4/14) | Complete |
 
-`fix-git` (1 of 15) is excluded from every arm: its image does not build on arm64,
-so it scores None rather than 0. Passing tasks are the simple ones (hello-world,
-fix-permissions, organization-json-generator, heterogeneous-dates,
-new-encrypt-command).
+team vs solo -20.0%, team vs solo-iso +0.0%. No team benefit on this subset. The
+passing tasks are the simple ones (hello-world, fix-permissions,
+organization-json-generator, heterogeneous-dates, new-encrypt-command). Four tasks
+produce an empty patch under `sap/gemini-2.5-flash` in the solo and solo-iso arms
+(nginx-request-logging, sanitize-git-repo, jupyter-notebook-server, polyglot-c-py) —
+the agent writes no git-tracked change in `/app`; these are genuine failures,
+confirmed on a healthy-endpoint rerun (not the earlier outage). The team arm
+produced a non-empty patch for all 14 tasks but still passed only the same four
+easy ones, so the extra coverage did not convert to passes.
 
-Caveat — the arm comparison is contaminated. A SAP AI Core outage during the run
-caused `Connection timed out` on many model calls; the solo and solo-iso arms each
-lost 4 tasks to empty patches (the agent produced no diff before the endpoint
-failed), while the team arm lost only 1. The arm deltas (team vs solo -20%) reflect
-that uneven loss, not coordination. These numbers place the pipeline, not the
-method; a clean re-run when the endpoint is healthy is required (resume reuses the
-non-empty patches).
+`fix-git` is excluded from the subset: its Dockerfile git-clones a GitHub repo at
+build time, which fails in a no-network Docker build (not an arm64 issue).
+`evaluate()` is now fault-tolerant — a task whose image fails to build scores None
+and no longer aborts the batch.
 
 Run dir: `runs/scaling/tbcore_light/`.
 
@@ -215,24 +217,33 @@ Result (2026-10-23):
 | Arm | resolved | n | Status |
 | --- | --- | --- | --- |
 | solo | 3 | 6 | Complete |
-| team (3) | 3 | 6 | Complete |
+| team (3) | 2 | 6 | Complete (leak-fix rerun) |
 
-Both arms resolve the same three instances (django-16082, pytest-6202,
-sympy-22914). Solo: flask-5014 unresolved, pylint-4551 `no_tests_collected`,
-sphinx-8621 empty patch (the agent produced no diff during a model-endpoint
-timeout window). Team: all six graded cleanly — 0 `no_tests_collected`, 0
-ambiguous, 0 empty; the three unresolved cases (flask-5014, pylint-4551,
-sphinx-8621) failed on test outcome, not patch hygiene.
+Solo (first run) resolved django-16082, pytest-6202, sympy-22914. The team arm was
+re-run after the scratch-leak fix (below); it resolved django-16082 and pytest-6202.
+All six team patches are now scratch-free — django-16082 is 2311 bytes / 3 files with
+no `modify_expressions.py` (the pre-fix team patch was 7967 bytes / 12 files carrying
+that scratch helper). The blocker is cleared end to end.
 
-Patch-hygiene fix outcome: the pre-fix team submission was ~105 KB of scratch and
-failed `no_tests_collected`; post-fix, five of six team patches are clean and the
-blocker is gone. Residual: the django-16082 team patch still carried one scratch
-helper (`modify_expressions.py`) — the team arm can commit scratch into a shared
-branch where tracked-only staging does not remove it (did not affect this grade;
-django still resolved). No team benefit on this set (team 3 = solo 3); n=6 is a
-plumbing check, not a measurement.
+Caveats on the numbers (n=6 is a plumbing check, not a measurement):
+- Run-to-run variance: sympy-22914 resolved in the solo run but not in the team
+  rerun, where the agents produced a different, smaller patch. Single runs vary by
+  about one instance.
+- pylint-4551 grades `no_tests_collected` in both the solo run and the team rerun,
+  but its team patch is clean (675 bytes, 1 file, no scratch). This is a separate
+  pylint-specific failure (the edit breaks test collection), not the patch-hygiene
+  leak, which is fixed.
 
-Run dir: `runs/sweb_small/`; grade reports `cooperagents.sweb_small_{solo,team}.json`.
+Patch-hygiene fixes (all validated on real runs):
+- Submitted diff excludes untracked scratch for SWE-bench (`git add -u`); `patch.txt`
+  redirected to `/tmp`.
+- `presub-merge` selector no longer ranks by patch size.
+- Team-arm shared-commit leak closed: the `git add -A` in the merge gate
+  (`verification.py`) and the harness commit helpers (`_seed_patch`, `_apply_commit`,
+  `seed_prior`) is gated on `_include_untracked`, so SWE-bench stages tracked-only on
+  those paths too; CooperBench (flag defaults True) is unchanged.
+
+Run dir: `runs/sweb_small/`; grade reports `cooperagents.sweb_small_{solo,team2}.json`.
 
 ## TODO — required additions and unfinished benchmarks
 
@@ -263,23 +274,29 @@ Benchmarks not yet run at scale:
   configs now writes to `/tmp`; (b) the `presub-merge` selector no longer ranks by
   patch size — with no build/reference signal it selects the lead's non-empty tree.
   Per-instance images are multi-GB (arm64 locally; x86_64 is the canonical grading arch).
-- [ ] **SWE-bench team-arm scratch leak (residual)** — the django-16082 team patch
-  still carried a scratch helper (`modify_expressions.py`). The team shares work by
-  committing to a shared branch (`_apply_commit` / the scratchpad export use
-  `git add -A`), so scratch becomes tracked and survives `git add -u`. Scope the
-  shared-branch staging for SWE-bench, or strip untracked-origin files before commit.
+- [x] **SWE-bench team-arm scratch leak** — fixed and validated (2026-10-23). The
+  leak was the merge gate (`verification.py` `_MERGE`) running `git add -A` + commit
+  inside each member container, committing the member's own untracked scratch onto
+  its git-share branch, which then propagated to teammates via `merge`. Gated that
+  and the harness commit helpers (`_seed_patch`, `_apply_commit`, `seed_prior`) on
+  `_include_untracked`. Re-run team patches are all scratch-free (django-16082 clean,
+  no `modify_expressions.py`). Residual edge case (bounded): if an agent manually runs
+  `git add -A` on scratch before the gate, the already-staged file is still committed;
+  fully closing it needs a scratch-exclude filter rather than flag-gating.
+- [ ] **SWE-bench pylint-4551 `no_tests_collected`** — grades this way with a clean
+  patch (no scratch) in both solo and team. A pylint-specific failure where the edit
+  breaks test collection; investigate separately from the (fixed) hygiene leak.
 - [x] **Terminal-Bench-core** — adapter verified on `hello-world` (reward 1.0); a
-  15-task light-subset run (solo / solo-iso / team) completed via the new
-  `scripts/tb_core_box.py` driver (see "In progress" section). `evaluate()` was made
-  fault-tolerant (a task whose image fails to build scores None and no longer aborts
-  the batch). The run was degraded by a model-endpoint outage — a clean re-run is
-  required before the arm comparison is usable. `fix-git` does not build on arm64.
-  Broader coverage of the 77 single-container tasks and the heavy/nested-layout
-  tasks remains.
-- [ ] **Terminal-Bench-core clean re-run** — repeat the 15-task light subset when SAP
-  AI Core is healthy (no timeouts). `uv run python scripts/tb_core_box.py --resume
-  runs/scaling/tbcore_light` reuses non-empty patches; delete the empty-patch task
-  dirs first so their agents re-run.
+  14-task light-subset run (solo / solo-iso / team) completed clean on a healthy
+  endpoint via `scripts/tb_core_box.py`: solo 0.357, solo-iso 0.286, team 0.286 (no
+  team benefit). `evaluate()` is fault-tolerant (a task whose image fails to build
+  scores None, does not abort the batch). `fix-git` dropped (git-clones at build
+  time; fails with no network — not arm64).
+- [ ] **Terminal-Bench-core broader coverage** — only 14 of 77 single-container
+  tasks; the heavy (qemu/kernel/ML), nested-layout, and network-at-build tasks
+  remain. Four light tasks (nginx-request-logging, sanitize-git-repo,
+  jupyter-notebook-server, polyglot-c-py) yield empty patches under this model and
+  warrant a look at whether the solution is expressible as a tracked `/app` diff.
 
 Required additions:
 

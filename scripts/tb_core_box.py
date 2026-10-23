@@ -49,7 +49,9 @@ if _DOTENV.exists():
 
 # Curated light subset: flat Dockerfiles on shared multi-arch base images, short
 # timeouts, no x86 pins, no kernel/qemu/ML/large-download. Excludes the 5
-# nested-layout tasks that ADAPTER.image() cannot build.
+# nested-layout tasks that ADAPTER.image() cannot build, and fix-git (its
+# Dockerfile git-clones a GitHub repo at build time, which fails in a no-network
+# Docker build).
 LIGHT_TASKS = [
     "hello-world",
     "fix-permissions",
@@ -58,7 +60,6 @@ LIGHT_TASKS = [
     "openssl-selfsigned-cert",
     "organization-json-generator",
     "heterogeneous-dates",
-    "fix-git",
     "grid-pattern-transform",
     "sanitize-git-repo",
     "new-encrypt-command",

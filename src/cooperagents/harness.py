@@ -155,8 +155,9 @@ def _seed_patch(env: Environment, patch: str) -> None:
         "|| git apply --3way .cb_prior.patch 2>/dev/null "
         "|| git apply --reject .cb_prior.patch 2>/dev/null || true"
     )
+    add = "git add -A" if getattr(env, "_include_untracked", True) else "git add -u"
     env.execute(
-        "rm -f .cb_prior.patch && git add -A && "
+        f"rm -f .cb_prior.patch && {add} && "
         "git -c user.email=team@cooperagents.local -c user.name=cooperagents commit -q -m 'seed' || true"
     )
 
@@ -204,7 +205,8 @@ def _apply_commit(env: Environment, patch: str, msg: str) -> None:
         "git apply --whitespace=nowarn .cb_d.patch 2>/dev/null "
         "|| git apply --3way .cb_d.patch 2>/dev/null || true; rm -f .cb_d.patch"
     )
-    env.execute(f"git add -A && git {_GIT_ID} commit -q -m '{msg}' || true")
+    add = "git add -A" if getattr(env, "_include_untracked", True) else "git add -u"
+    env.execute(f"{add} && git {_GIT_ID} commit -q -m '{msg}' || true")
 
 
 def _threeway_merge(env: Environment, deltas: list[str]) -> tuple[bool, str]:
@@ -837,8 +839,9 @@ class UnifiedHarness:
                 "|| git apply --3way .cb_prior.patch 2>/dev/null "
                 "|| git apply --reject .cb_prior.patch 2>/dev/null || true"
             )
+            add = "git add -A" if getattr(env, "_include_untracked", True) else "git add -u"
             env.execute(
-                "rm -f .cb_prior.patch && git add -A && "
+                f"rm -f .cb_prior.patch && {add} && "
                 "git -c user.email=team@cooperagents.local -c user.name=cooperagents commit -q -m 'teammate work' || true"
             )
 

@@ -72,11 +72,24 @@ def _build(env, artifact: str | None) -> str | None:
 
 # -- generic team merge (git substrate) -------------------------------------
 
-_MERGE = (
+def _merge_cmd(include_untracked: bool = True) -> str:
+    """Build the teammate-merge gate command.
+
+    The staging step is gated on the env's ``_include_untracked`` flag: with it
+    False (SWE-bench) we stage tracked modifications only (``git add -u``) so the
+    member's own untracked scratch is never committed onto its branch — and so
+    never propagates to teammates through the merge below. With it True
+    (CooperBench default) we keep ``git add -A`` because newly-created files are
+    the deliverable that must be shared/committed."""
+    add = "git add -A" if include_untracked else "git add -u"
+    return _MERGE_TMPL.format(add=add)
+
+
+_MERGE_TMPL = (
     "if git remote get-url shared >/dev/null 2>&1; then "
     "git fetch shared 2>/dev/null; "
     "AID=$(cat /tmp/.agent_id 2>/dev/null); "
-    "git add -A 2>/dev/null; "
+    "{add} 2>/dev/null; "
     "if grep -rl '^<<<<<<< ' --exclude-dir=.git . >/dev/null 2>&1; then "
     "echo 'UNRESOLVED_CONFLICT_MARKERS in:'; grep -rl '^<<<<<<< ' --exclude-dir=.git . | head -10; "
     "else "
@@ -132,7 +145,9 @@ def validate(env, *, merged: bool = False, build_artifact: str | None = None) ->
     remote (conflicts go back to the agent); then the discovered build must
     succeed (and refresh build_artifact when declared)."""
     if merged:
-        out = env.execute(_MERGE, timeout=300).stdout
+        out = env.execute(
+            _merge_cmd(getattr(env, "_include_untracked", True)), timeout=300
+        ).stdout
         if "MERGED_OK" not in out:
             return (
                 "Before finishing you must MERGE your teammates' work into "

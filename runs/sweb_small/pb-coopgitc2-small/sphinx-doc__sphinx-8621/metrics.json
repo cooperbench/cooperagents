@@ -7,12 +7,16 @@
  "updates_per_agent": {},
  "coordinator_events": [
   {
-   "agent": "agent3",
+   "agent": "agent2",
    "kind": "LOOP"
   },
   {
    "agent": "agent3",
-   "kind": "LOOP"
+   "kind": "COLLISION"
+  },
+  {
+   "agent": "agent2",
+   "kind": "COLLISION"
   },
   {
    "agent": "agent3",
@@ -23,19 +27,15 @@
    "kind": "COLLISION"
   },
   {
-   "agent": "agent2",
-   "kind": "COLLISION"
-  },
-  {
-   "agent": "agent2",
+   "agent": "agent3",
    "kind": "COLLISION"
   }
  ],
  "repair": "ran",
  "attempts": [
   {
-   "steps": 18,
-   "status": "submitted",
+   "steps": 150,
+   "status": "limit",
    "gate_after": 0
   }
  ],
@@ -48,7 +48,7 @@
   ],
   [
    1,
-   4058,
+   6952,
    0,
    0
   ]
