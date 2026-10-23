@@ -156,6 +156,9 @@ class LitellmModel:
         return val
 
     def _query_inner(self, messages: list[dict[str, str]], **kwargs):
+        from cooperagents._litellm_patches import apply_sap_reasoning_patch
+
+        apply_sap_reasoning_patch()
         merged = self.config.model_kwargs | kwargs
         tools = merged.pop("_tools", self._tools)  # _tools=None: plain call (summarizer)
         try:

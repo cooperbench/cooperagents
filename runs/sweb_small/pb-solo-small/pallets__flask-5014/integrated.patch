@@ -1,0 +1,13 @@
+diff --git a/src/flask/blueprints.py b/src/flask/blueprints.py
+index eb50585d..2a7f99d6 100644
+--- a/src/flask/blueprints.py
++++ b/src/flask/blueprints.py
+@@ -170,6 +170,8 @@ class Blueprint(Scaffold):
+     _got_registered_once = False
+ 
+     def __init__(
++        if not name:
++            raise ValueError("Blueprint name cannot be empty")
+         self,
+         name: str,
+         import_name: str,

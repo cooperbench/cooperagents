@@ -1,0 +1,235 @@
+diff --git a/insert_attr_type_hints.py b/insert_attr_type_hints.py
+new file mode 100644
+index 000000000..485867c4a
+--- /dev/null
++++ b/insert_attr_type_hints.py
+@@ -0,0 +1,15 @@
++with open("/testbed/pylint/pyreverse/diagrams.py", "r") as f:
++    lines = f.readlines()
++
++insert_lines = [
++    "            elif associated_nodes and hasattr(associated_nodes[0], \"name\"):\n",
++    "                node_name = \"{}: {}\".format(node_name, associated_nodes[0].name)\n",
++    "            elif associated_nodes and hasattr(associated_nodes[0], \"as_string\"):\n",
++    "                node_name = \"{}: {}\".format(node_name, associated_nodes[0].as_string())\n"
++]
++
++# Insert after line 96 (index 95 in a 0-indexed list)
++lines[96:96] = insert_lines
++
++with open("/testbed/pylint/pyreverse/diagrams.py", "w") as f:
++    f.writelines(lines)
+diff --git a/insert_method_type_hints.py b/insert_method_type_hints.py
+new file mode 100644
+index 000000000..c79d42189
+--- /dev/null
++++ b/insert_method_type_hints.py
+@@ -0,0 +1,32 @@
++with open("/testbed/pylint/pyreverse/diagrams.py", "r") as f:
++    lines = f.readlines()
++
++insert_lines = [
++    "        # Add type hints for arguments and return values\n",
++    "        for method in methods:\n",
++    "            args = []\n",
++    "            if method.args.args:\n",
++    "                for arg in method.args.args:\n",
++    "                    if arg.name == \"self\":\n",
++    "                        continue\n",
++    "                    arg_name = arg.name\n",
++    "                    if arg.type_annotation:\n",
++    "                        arg_name += f\": {arg.type_annotation.as_string()}\"\n",
++    "                    args.append(arg_name)\n",
++    "            method.args_repr = \", \".join(args)\n",
++    "\n",
++    "            if method.returns:\n",
++    "                method.returns_repr = method.returns.as_string()\n",
++    "            else:\n",
++    "                method.returns_repr = None\n"
++]
++
++# Find the line number for 'return sorted(methods, key=lambda n: n.name)'
++# and insert the new lines before it.
++for i, line in enumerate(lines):
++    if "return sorted(methods, key=lambda n: n.name)" in line:
++        lines[i:i] = insert_lines
++        break
++
++with open("/testbed/pylint/pyreverse/diagrams.py", "w") as f:
++    f.writelines(lines)
+diff --git a/modify_diagrams.py b/modify_diagrams.py
+new file mode 100644
+index 000000000..5682706b7
+--- /dev/null
++++ b/modify_diagrams.py
+@@ -0,0 +1,18 @@
++import re
++
++with open("/testbed/pylint/pyreverse/diagrams.py", "r") as f:
++    content = f.read()
++
++# Pattern to find the get_attrs method and the line to modify
++pattern = r"(def get_attrs\\(self, node\\):.*?)(            if names:\\n                node_name = \"{}\s:\s{}\".format\\(node_name, \", \".join\\(names\\)\\))"
++
++replacement = r'''\\1\\2
++            elif associated_nodes and hasattr(associated_nodes[0], "name"):
++                node_name = "{}: {}".format(node_name, associated_nodes[0].name)
++            elif associated_nodes and hasattr(associated_nodes[0], "as_string"):
++                node_name = "{}: {}".format(node_name, associated_nodes[0].as_string())'''
++
++modified_content = re.sub(pattern, replacement, content, flags=re.DOTALL)
++
++with open("/testbed/pylint/pyreverse/diagrams.py", "w") as f:
++    f.write(modified_content)
+diff --git a/modify_diagrams_attrs.py b/modify_diagrams_attrs.py
+new file mode 100644
+index 000000000..628d60e74
+--- /dev/null
++++ b/modify_diagrams_attrs.py
+@@ -0,0 +1,19 @@
++import re
++
++with open("/testbed/pylint/pyreverse/diagrams.py", "r") as f:
++    content = f.read()
++
++# Pattern to find the line to modify within get_attrs
++pattern = r"(            if names:\\n                node_name = \"{}\s:\s{}\".format\\(node_name, \", \".join\\(names\\)\\))"
++
++replacement = r'''            if names:
++                node_name = "{} : {}".format(node_name, ", ".join(names))
++            elif associated_nodes and hasattr(associated_nodes[0], "name"):
++                node_name = "{}: {}".format(node_name, associated_nodes[0].name)
++            elif associated_nodes and hasattr(associated_nodes[0], "as_string"):
++                node_name = "{}: {}".format(node_name, associated_nodes[0].as_string())'''
++
++modified_content = re.sub(pattern, replacement, content, flags=re.DOTALL)
++
++with open("/testbed/pylint/pyreverse/diagrams.py", "w") as f:
++    f.write(modified_content)
+diff --git a/modify_diagrams_methods.py b/modify_diagrams_methods.py
+new file mode 100644
+index 000000000..5026538cb
+--- /dev/null
++++ b/modify_diagrams_methods.py
+@@ -0,0 +1,33 @@
++import re
++
++with open("/testbed/pylint/pyreverse/diagrams.py", "r") as f:
++    content = f.read()
++
++# Pattern to find the get_methods method
++pattern = r"(    def get_methods\\(self, node\\):.*?)(        return sorted\\(methods, key=lambda n: n.name\\))"
++
++# Replacement for the get_methods method
++replacement = r'''\\1        # Add type hints for arguments and return values
++        for method in methods:
++            args = []
++            if method.args.args:
++                for arg in method.args.args:
++                    if arg.name == "self":
++                        continue
++                    arg_name = arg.name
++                    if arg.type_annotation:
++                        arg_name += f": {arg.type_annotation.as_string()}"
++                    args.append(arg_name)
++            method.args_repr = ", ".join(args)
++
++            if method.returns:
++                method.returns_repr = method.returns.as_string()
++            else:
++                method.returns_repr = None
++
++        \\2'''
++
++modified_content = re.sub(pattern, replacement, content, flags=re.DOTALL)
++
++with open("/testbed/pylint/pyreverse/diagrams.py", "w") as f:
++    f.write(modified_content)
+diff --git a/modify_writer.py b/modify_writer.py
+new file mode 100644
+index 000000000..0d58feeec
+--- /dev/null
++++ b/modify_writer.py
+@@ -0,0 +1,23 @@
++import re
++
++with open("/testbed/pylint/pyreverse/writer.py", "r") as f:
++    content = f.read()
++
++# Pattern to find the get_values method in DotWriter and the method formatting loop
++pattern = r"(            for func in obj.methods:\\n                if func.args.args:\\n                    args = \[arg.name for arg in func.args.args if arg.name != \"self\"]\\n                else:\\n                    args = \[].*?)(                label = r\"{}{}\\({\\})\\\\l\".format\\(label, func.name, \", \".join\\(args\\)\\))"
++
++# Replacement for the method formatting loop
++replacement = r'''            for func in obj.methods:
++                method_label = func.name
++                if func.args_repr:
++                    method_label += f"({func.args_repr})"
++                else:
++                    method_label += "()"
++                if func.returns_repr:
++                    method_label += f": {func.returns_repr}"
++                label = r"{} \\l {}".format(label, method_label)'''
++
++modified_content = re.sub(pattern, replacement, content, flags=re.DOTALL)
++
++with open("/testbed/pylint/pyreverse/writer.py", "w") as f:
++    f.write(modified_content)
+diff --git a/patch.txt b/patch.txt
+new file mode 100644
+index 000000000..1b3f0fe34
+--- /dev/null
++++ b/patch.txt
+@@ -0,0 +1,9 @@
++diff --git a/pylint/pyreverse/diagrams.py b/pylint/pyreverse/diagrams.py
++index bf9f67af6..ee37304fc 100644
++--- a/pylint/pyreverse/diagrams.py
+++++ b/pylint/pyreverse/diagrams.py
++@@ -253,3 +253,4 @@ class PackageDiagram(ClassDiagram):
++                 except KeyError:
++                     continue
++                 self.add_relationship(obj, dep, "depends")
+++
+diff --git a/pylint/pyreverse/diagrams.py b/pylint/pyreverse/diagrams.py
+index bf9f67af6..5446fc9d9 100644
+--- a/pylint/pyreverse/diagrams.py
++++ b/pylint/pyreverse/diagrams.py
+@@ -94,6 +94,10 @@ class ClassDiagram(Figure, FilterMixIn):
+             names = self.class_names(associated_nodes)
+             if names:
+                 node_name = "{} : {}".format(node_name, ", ".join(names))
++            elif associated_nodes and hasattr(associated_nodes[0], "name"):
++                node_name = "{}: {}".format(node_name, associated_nodes[0].name)
++            elif associated_nodes and hasattr(associated_nodes[0], "as_string"):
++                node_name = "{}: {}".format(node_name, associated_nodes[0].as_string())
+             attrs.append(node_name)
+         return sorted(attrs)
+ 
+@@ -106,6 +110,23 @@ class ClassDiagram(Figure, FilterMixIn):
+             and not decorated_with_property(m)
+             and self.show_attr(m.name)
+         ]
++        # Add type hints for arguments and return values
++        for method in methods:
++            args = []
++            if method.args.args:
++                for arg in method.args.args:
++                    if arg.name == "self":
++                        continue
++                    arg_name = arg.name
++                    if arg.type_annotation:
++                        arg_name += f": {arg.type_annotation.as_string()}"
++                    args.append(arg_name)
++            method.args_repr = ", ".join(args)
++
++            if method.returns:
++                method.returns_repr = method.returns.as_string()
++            else:
++                method.returns_repr = None
+         return sorted(methods, key=lambda n: n.name)
+ 
+     def add_object(self, title, node):
+@@ -253,3 +274,4 @@ class PackageDiagram(ClassDiagram):
+                 except KeyError:
+                     continue
+                 self.add_relationship(obj, dep, "depends")
++

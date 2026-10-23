@@ -144,14 +144,73 @@ class LiteLLMClient:
     def _complete(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> tuple[str, float]:
         import litellm
 
+        from cooperagents._litellm_patches import apply_sap_reasoning_patch
+
+        apply_sap_reasoning_patch()
+
         chat = [{"role": "system", "content": self._system_prompt(tools)}, *messages]
-        resp = litellm.completion(model=self.model, messages=chat, temperature=self.temperature, max_tokens=self.max_tokens)
+        resp = self._completion_with_retry(
+            litellm, model=self.model, messages=chat, temperature=self.temperature, max_tokens=self.max_tokens
+        )
         text = resp["choices"][0]["message"]["content"] or ""
         try:
             cost = float(litellm.completion_cost(completion_response=resp) or 0.0)
         except Exception:  # noqa: BLE001 - cost is best-effort
             cost = 0.0
         return text, cost
+
+    @staticmethod
+    def _completion_with_retry(litellm: Any, **kwargs: Any) -> Any:
+        """Retry transient provider errors, and hard-cap each call to survive hangs.
+
+        A single SAP AI Core blip (``ServiceUnavailableError`` / connection reset,
+        ``RateLimitError``, ``Timeout``) must not abort a multi-hour sweep or a
+        reducer call. Worse, litellm/httpx's own read timeout does NOT reliably arm
+        on a dead pooled socket (observed: a sweep wedged ~2h inside one call with
+        no error), so exception-retry alone is insufficient. Each attempt therefore
+        runs in a daemon thread with a hard wall-clock cap; on expiry the call is
+        abandoned and a ``Timeout`` is raised into the retry, which reissues on a
+        fresh connection. Mirrors the mini-swe worker's guard. Only transient
+        classes retry; 4xx/auth errors raise immediately.
+        """
+        import queue as _q
+        import threading as _t
+        import time
+
+        hard_cap_s = float(kwargs.pop("_hard_cap_s", 240.0))
+        names = ("ServiceUnavailableError", "RateLimitError", "APIConnectionError", "Timeout", "InternalServerError")
+        retryable = tuple(
+            c for c in (getattr(litellm.exceptions, n, None) for n in names)
+            if isinstance(c, type) and issubclass(c, BaseException)
+        )
+        transient: tuple[type[BaseException], ...] = (*retryable, TimeoutError)
+
+        def _call_once() -> Any:
+            box: _q.Queue = _q.Queue(maxsize=1)
+
+            def _run() -> None:
+                try:
+                    box.put(("ok", litellm.completion(**kwargs)))
+                except BaseException as e:  # noqa: BLE001 - ferried to the caller thread
+                    box.put(("err", e))
+
+            _t.Thread(target=_run, daemon=True).start()
+            try:
+                kind, val = box.get(timeout=hard_cap_s)
+            except _q.Empty:
+                raise TimeoutError(f"completion exceeded hard cap {hard_cap_s}s (dead-socket guard)") from None
+            if kind == "err":
+                raise val
+            return val
+
+        for attempt in range(6):
+            try:
+                return _call_once()
+            except transient:
+                if attempt == 5:
+                    raise
+                time.sleep(min(2 ** attempt * 2, 60))  # 2,4,8,16,32s
+        raise RuntimeError("unreachable")  # pragma: no cover
 
     def decide(self, *, agent_id: str, role: str, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> Action:
         text, cost = self._complete(messages, tools)

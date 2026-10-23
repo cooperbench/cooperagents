@@ -1,0 +1,48 @@
+diff --git a/patch.txt b/patch.txt
+new file mode 100644
+index 000000000..45580c4bb
+--- /dev/null
++++ b/patch.txt
+@@ -0,0 +1,21 @@
++diff --git a/pylint/checkers/base.py b/pylint/checkers/base.py
++index cd753a4c8..c3f859e70 100644
++--- a/pylint/checkers/base.py
+++++ b/pylint/checkers/base.py
++@@ -2289,6 +2289,16 @@ def _infer_dunder_doc_attribute(node):
++     try:
++         docstring = node["__doc__"]
++     except KeyError:
+++        # If no __doc__, check for __version__ or __revision__ in __init__.py
+++        if node.name == "__init__":
+++            for name in ("__version__", "__revision__"):
+++                try:
+++                    value = node[name]
+++                    inferred = utils.safe_infer(value)
+++                    if inferred and isinstance(inferred, astroid.Const):
+++                        return inferred.value
+++                except KeyError:
+++                    pass
++         return None
++ 
++     docstring = utils.safe_infer(docstring)
+diff --git a/pylint/checkers/base.py b/pylint/checkers/base.py
+index cd753a4c8..c3f859e70 100644
+--- a/pylint/checkers/base.py
++++ b/pylint/checkers/base.py
+@@ -2289,6 +2289,16 @@ def _infer_dunder_doc_attribute(node):
+     try:
+         docstring = node["__doc__"]
+     except KeyError:
++        # If no __doc__, check for __version__ or __revision__ in __init__.py
++        if node.name == "__init__":
++            for name in ("__version__", "__revision__"):
++                try:
++                    value = node[name]
++                    inferred = utils.safe_infer(value)
++                    if inferred and isinstance(inferred, astroid.Const):
++                        return inferred.value
++                except KeyError:
++                    pass
+         return None
+ 
+     docstring = utils.safe_infer(docstring)

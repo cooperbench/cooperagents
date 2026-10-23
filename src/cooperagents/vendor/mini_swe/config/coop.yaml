@@ -162,20 +162,21 @@ agent:
 
     ## Submission
 
-    `patch.txt` is the artifact we evaluate — write whatever unified diff
-    you want to submit to that file, however it makes sense given how you
-    worked:
+    Your in-place edits to tracked source files ARE the submission — the
+    harness collects them as a git diff. You may keep a copy of the diff for
+    your own review, but write it OUTSIDE the repo:
 
-    Write the patch (one common way — `git diff` of your in-place edits):
+    Write the patch (one common way — `git diff` of your in-place edits).
+    Write it OUTSIDE the repo so it is never captured as a repo change:
 
     ```bash
-    git diff -- path/to/file1 path/to/file2 > patch.txt
+    git diff -- path/to/file1 path/to/file2 > /tmp/patch.txt
     ```
 
     Verify it contains what you intend:
 
     ```bash
-    cat patch.txt
+    cat /tmp/patch.txt
     ```
 
     Submit (EXACT command required)

@@ -38,6 +38,13 @@ class BenchmarkAdapter(ABC):
     build_artifact: str | None = None
     reference_binary: str | None = None
 
+    # Whether the submitted git diff should include untracked (new) files.
+    # Default True: benchmarks whose deliverable is new files (CooperBench,
+    # Terminal-Bench) need ``git add -A``. SWE-bench sets this False so agent
+    # scratch files (patch.txt, helper .py) never leak into the diff; its fixes
+    # edit existing tracked files. The env reads this via ``_include_untracked``.
+    include_untracked_in_diff: bool = True
+
     @abstractmethod
     def image(self, instance: Any) -> str: ...
 

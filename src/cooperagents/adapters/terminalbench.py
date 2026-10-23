@@ -21,10 +21,10 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import shutil
 import subprocess
 import tomllib
-import os
 from pathlib import Path
 
 from cooperagents.adapters.base import BenchmarkAdapter
@@ -108,6 +108,14 @@ class TerminalBenchAdapter(BenchmarkAdapter):
 
     def env_kwargs(self) -> dict:
         return {"repo_path": WORKSPACE, "keepalive": "8h"}
+
+    def brief(self, instance: str) -> str:
+        return (
+            f"ENVIRONMENT: you are in the task's working directory ({WORKSPACE}) inside its "
+            "container, git-initialized at the base state. Make the required changes there and "
+            "leave every created/modified file in place — your final working tree is the "
+            "submission (do not stash, reset, or package it into a patch)."
+        )
 
     def setup_env(self, env, agent_id: str) -> None:
         # TB images carry no git repo; the team substrate (share/merge/diff)

@@ -1,6 +1,6 @@
 """SWE-bench Verified adapter (git substrate).
 
-Instance = a SWE-bench Verified task (dataset ``princeton-nlp/SWE-bench_Verified``).
+Instance = a SWE-bench Verified task (dataset ``SWE-bench/SWE-bench_Verified``).
 Each task ships a per-instance Docker image with the target repository checked
 out at ``base_commit`` under ``/testbed``; the agent edits the repository and the
 submission is its git diff. Scoring is the official SWE-bench harness
@@ -31,8 +31,19 @@ from typing import Any
 from cooperagents.adapters.base import BenchmarkAdapter
 
 WORKSPACE = "/testbed"
-_DEFAULT_DATASET = "princeton-nlp/SWE-bench_Verified"
-_DEFAULT_IMAGE_TEMPLATE = "swebench/sweb.eval.x86_64.{id}:latest"
+# swebench >=4 grades against a dataset whose instances carry an ``image`` field
+# (and ``eval_script``/``log_parser``); the classic ``princeton-nlp/SWE-bench_Verified``
+# predates that and makes ``make_test_spec`` raise ``KeyError('image')``. The
+# renamed ``SWE-bench/SWE-bench_Verified`` mirror carries those fields.
+_DEFAULT_DATASET = "SWE-bench/SWE-bench_Verified"
+# SWE-bench's published Docker Hub tags replace the ``__`` in an instance id with
+# ``_1776_`` (Docker tags disallow consecutive-underscore-free repo segments the
+# way the id is written), e.g. ``pylint-dev__pylint-4551`` ->
+# ``pylint-dev_1776_pylint-4551``. The template exposes both ``{key}`` (the
+# normalized, publish-ready form) and ``{id}`` (the raw id) so either convention
+# works. Arch is ``x86_64`` by default (the canonical grading arch); override
+# with ``SWEBENCH_IMAGE_TEMPLATE`` for arm64 convenience builds or other registries.
+_DEFAULT_IMAGE_TEMPLATE = "swebench/sweb.eval.x86_64.{key}:latest"
 
 
 def _dataset() -> str:
@@ -74,6 +85,12 @@ class SWEBenchAdapter(BenchmarkAdapter):
     name = "swebench"
     build_artifact = None
     reference_binary = None
+    # Fixes edit existing tracked files; exclude untracked scratch from the diff.
+    include_untracked_in_diff = False
+
+    # id -> SWEBenchInstance, built lazily so a bare-id ``task_for`` (how the
+    # git-substrate runner calls it) still recovers the issue text.
+    _index: dict[str, SWEBenchInstance] | None = None
 
     def instances(self, split: str = "test") -> list[SWEBenchInstance]:
         """Load SWE-bench Verified tasks. Uses a local JSONL at ``SWEBENCH_DATA``
@@ -90,20 +107,41 @@ class SWEBenchAdapter(BenchmarkAdapter):
             for r in rows
         ]
 
+    def _resolve(self, instance: Any) -> SWEBenchInstance:
+        """Return a full instance. ``bench_programbench.py`` passes a bare id
+        string; look it up in the dataset so ``task_for`` carries the issue
+        text instead of silently degrading to the id."""
+        if isinstance(instance, SWEBenchInstance):
+            return instance
+        iid = str(instance)
+        if self._index is None:
+            try:
+                self.__class__._index = {i.instance_id: i for i in self.instances()}
+            except Exception:  # noqa: BLE001 - no dataset available; degrade to a bare instance
+                self.__class__._index = {}
+        return (self._index or {}).get(iid, SWEBenchInstance(iid, "", "", ""))
+
     def image(self, instance: Any) -> str:
         iid = instance.instance_id if isinstance(instance, SWEBenchInstance) else str(instance)
-        return _image_template().format(id=iid)
+        return _image_template().format(id=iid, key=iid.replace("__", "_1776_"))
 
     def env_kwargs(self) -> dict:
         # SWE-bench images check the repo out at /testbed with deps pre-installed.
         return {"repo_path": WORKSPACE, "keepalive": "4h"}
 
     def task_for(self, instance: Any, agent_index: int = 0, team_size: int = 1) -> str:
-        ps = instance.problem_statement if isinstance(instance, SWEBenchInstance) else str(instance)
+        ps = self._resolve(instance).problem_statement
         return (
             f"## Task\n\nResolve the following GitHub issue in the repository at {WORKSPACE}. "
             "Make the source changes needed to fix the issue and keep the project's tests passing. "
             "Do NOT edit the test files.\n\n## Issue\n\n" + ps
+        )
+
+    def brief(self, instance: Any) -> str:
+        return (
+            f"ENVIRONMENT: the target repository is checked out at {WORKSPACE} at the issue's base "
+            "commit, with dependencies pre-installed and git available. Edit the source there; your "
+            "git diff is the submission. Do NOT create or edit test files — the grader supplies its own."
         )
 
     def submit(self, instance: Any, patch: str, out_dir: Path) -> None:

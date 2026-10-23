@@ -264,13 +264,19 @@ def build_model(
     with_spawn: bool = False,
 ) -> LitellmModel:
     """Build a mini-swe LitellmModel against the configured OpenAI-compatible endpoint."""
+    # Native litellm providers (sap/ = SAP AI Core, gemini/, vertex_ai/, bedrock/)
+    # carry their own auth (e.g. AICORE_*) and must NOT be given the OpenAI-
+    # compatible api_base/api_key or an openai/ prefix, or litellm misroutes.
+    _NATIVE = ("sap/", "gemini/", "vertex_ai/", "bedrock/")
+    _OPENAI_COMPAT = ("openai/", "azure/", "anthropic/", "hosted_vllm/")
+    is_native = model_name.startswith(_NATIVE)
     base_url = os.getenv("AZURE_OPENAI_BASE_URL") or os.getenv("OPENAI_BASE_URL")
     api_key = os.getenv("AZURE_OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
     model_cfg = _solo_config()["model"]
     model_kwargs = dict(model_cfg.get("model_kwargs", {}))
-    if base_url:
+    if base_url and not is_native:
         model_kwargs["api_base"] = base_url
-    if api_key:
+    if api_key and not is_native:
         model_kwargs["api_key"] = api_key
     # Pin sampling for measurement runs (unset = provider default). Without
     # this, small-model runs vary wildly between identical configs (observed:
@@ -307,11 +313,10 @@ def build_model(
     # hangs on minutes-long completions.
     if os.getenv("COOPER_CONN_CLOSE"):
         model_kwargs.setdefault("extra_headers", {})["Connection"] = "close"
-    # litellm needs the openai/ provider prefix to treat it as OpenAI-compatible.
-    # HF-style names ("Qwen/Qwen3.5-9B") contain a slash but are not provider
-    # prefixes, so only skip the prefix for explicit litellm providers.
-    _providers = ("openai/", "azure/", "anthropic/", "hosted_vllm/")
-    name = model_name if model_name.startswith(_providers) else f"openai/{model_name}"
+    # litellm needs the openai/ prefix to treat a non-prefixed HF-style name
+    # ("Qwen/Qwen3.5-9B") as OpenAI-compatible. Explicit litellm providers —
+    # OpenAI-compatible AND native (sap/ etc.) — pass through unchanged.
+    name = model_name if model_name.startswith(_OPENAI_COMPAT + _NATIVE) else f"openai/{model_name}"
     extra_tools = []
     if with_send_message:
         from cooperagents.vendor.mini_swe.models.utils.actions_toolcall import SEND_MESSAGE_TOOL

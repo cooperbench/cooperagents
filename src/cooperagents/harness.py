@@ -64,6 +64,85 @@ def _state_team_block(self_id: str, assignments: list[Assignment]) -> str:
     )
 
 
+def _state_task_board_block() -> str:
+    """Task-board protocol for a state team (the non-code analogue of the git
+    ``task_board`` block). Agents already hold the task_create/claim/update/list
+    bus tools; this tells them to use them to divide and track the work."""
+    return (
+        "\n\nTASK BOARD: a shared task list is available via task_create / task_claim / "
+        "task_update / task_list. Before diving in, post 2-4 short sub-tasks describing your "
+        "plan (task_create), claim one (task_claim), and mark it done (task_update) when "
+        "finished. Check the board (task_list) to avoid duplicating a teammate's work; pick "
+        "unclaimed sub-tasks. Keep titles short — spend your effort on the task itself."
+    )
+
+
+class _StateCoordinator:
+    """Live monitor for a STATE team (non-code analogue of :class:`_Coordinator`).
+
+    Detects two benchmark-agnostic failure patterns from each agent's own message
+    history and nudges via the bus (no git): STALL (the last few observations are
+    identical) and LOOP (the last few assistant thoughts are near-identical). The
+    git COLLISION signal is dropped — state agents are isolated, nothing to collide
+    on. Max 3 nudges per agent; delivered with ``bus.send`` so the agent surfaces
+    them through ``_drain_inbox`` on its next turn.
+    """
+
+    def __init__(self, bus: TeamBus) -> None:
+        self._bus = bus
+        self._agents: dict[str, Any] = {}
+        self._sent: dict[str, int] = {}
+        self._fired: list[dict] = []
+        self._stop = threading.Event()
+
+    def register(self, agent_id: str, agent: Any) -> None:
+        self._agents[agent_id] = agent
+        self._sent.setdefault(agent_id, 0)
+
+    def events(self) -> list[dict]:
+        return list(self._fired)
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    @staticmethod
+    def _tail(agent: Any, role: str, n: int) -> list[str]:
+        msgs = getattr(agent, "messages", []) or []
+        out = [str(m.get("content", "")).strip()[:160] for m in msgs if m.get("role") == role]
+        # skip coordinator-injected notes so we don't react to our own nudges
+        out = [c for c in out if not c.startswith("[message from coordinator]") and not c.startswith("[coordinator]")]
+        return out[-n:]
+
+    def _detect(self, agent: Any) -> str | None:
+        obs = self._tail(agent, "user", 4)
+        if len(obs) >= 3 and len(set(obs[-3:])) == 1:
+            return "STALL"
+        thoughts = self._tail(agent, "assistant", 6)
+        if len(thoughts) >= 4:
+            heads = [" ".join(t.split()[:8]) for t in thoughts[-4:]]
+            if max(heads.count(h) for h in set(heads)) >= 3:
+                return "LOOP"
+        return None
+
+    _NUDGE = {
+        "STALL": "You have seen the same result several times in a row. Stop repeating it — "
+        "read the observation carefully and try a DIFFERENT action, or ask a teammate via broadcast.",
+        "LOOP": "You appear to be repeating the same approach without progress. Step back, state "
+        "your goal in one line, and take a different approach; share what you've ruled out via broadcast.",
+    }
+
+    def run(self) -> None:
+        while not self._stop.wait(15):
+            for aid, agent in list(self._agents.items()):
+                if self._sent.get(aid, 0) >= 3:
+                    continue
+                kind = self._detect(agent)
+                if kind:
+                    self._bus.send(sender="coordinator", to=aid, content=f"[coordinator] {self._NUDGE[kind]}")
+                    self._sent[aid] += 1
+                    self._fired.append({"agent": aid, "kind": kind})
+
+
 
 def _seed_patch(env: Environment, patch: str) -> None:
     """Apply a teammate/ancestor delta into a fresh container and commit it, so
@@ -1626,6 +1705,7 @@ class UnifiedHarness:
         live = 0
         total_agents = n_seed
         toolset = spec.toolset_factory() if spec.toolset_factory is not None else None
+        state_coord: _StateCoordinator | None = None
 
         def worker(agent_id: str, role: str, task: str, feature_id: int | None, *, is_helper: bool) -> None:
             nonlocal live
@@ -1647,6 +1727,8 @@ class UnifiedHarness:
                     command_timeout=self.command_timeout,
                     toolset=toolset,
                 )
+                if state_coord is not None:
+                    state_coord.register(agent_id, agent)
                 result = agent.run()
             except Exception as e:  # noqa: BLE001 - never let a worker kill the run
                 result = AgentResult(agent_id=agent_id, role=role, status="error", feature_id=feature_id, error=str(e))
@@ -1692,9 +1774,16 @@ class UnifiedHarness:
         # agent about its teammates so it actually uses the shared bus (the state
         # path otherwise leaves the bus unused). Solo runs are untouched.
         coordinate = spec.artifact_backend == "state" and len(assignments) > 1
+        if coordinate and spec.coordinator:
+            state_coord = _StateCoordinator(bus)
+            threading.Thread(target=state_coord.run, daemon=True).start()
         try:
             for a in assignments:
-                task = a.task + _state_team_block(a.agent_id, assignments) if coordinate else a.task
+                task = a.task
+                if coordinate:
+                    task += _state_team_block(a.agent_id, assignments)
+                    if spec.task_board:
+                        task += _state_task_board_block()
                 start(a.agent_id, a.role, task, a.feature_id, is_helper=False)
             if spawning:
                 supervisor = threading.Thread(target=supervise, daemon=True)
@@ -1703,6 +1792,8 @@ class UnifiedHarness:
             for t in list(threads):
                 t.join()
         finally:
+            if state_coord is not None:
+                state_coord.stop()
             for env in envs:
                 env.cleanup()
 
@@ -1738,6 +1829,7 @@ class UnifiedHarness:
                 **coordination_metrics(bus.task_events(), final_tasks=bus.list_tasks()),
                 "messages_total": len(msg_log),
                 "messages_by_sender": by_sender,
+                **({"coordinator_events": state_coord.events()} if state_coord is not None else {}),
             },
             spawn_metrics=spawn_metrics(bus.spawn_events()) if spawning else {},
         )

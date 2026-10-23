@@ -84,9 +84,11 @@ class LocalEnv(Environment):
             f.write(content)
 
     def git_diff(self) -> str:
-        # Stage everything (including new files) so the diff is complete,
-        # then diff the index against the base commit.
-        subprocess.run(["git", "add", "-A"], cwd=self.repo_path, check=False)
+        # Stage changes so the diff is complete, then diff the index against the
+        # base commit. ``_include_untracked`` (default True) adds new files too;
+        # set False (SWE-bench) to stage only tracked edits and drop scratch.
+        add_args = ["git", "add", "-A"] if getattr(self, "_include_untracked", True) else ["git", "add", "-u"]
+        subprocess.run(add_args, cwd=self.repo_path, check=False)
         base = self._base_commit or "HEAD"
         proc = subprocess.run(
             ["git", "diff", "--cached", base] if self._base_commit else ["git", "diff", "--cached"],

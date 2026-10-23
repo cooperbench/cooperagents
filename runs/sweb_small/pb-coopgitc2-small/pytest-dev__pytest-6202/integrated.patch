@@ -1,0 +1,46 @@
+diff --git a/doc/en/example/py2py3/test_py2.py b/doc/en/example/py2py3/test_py2.py
+index 1f665086e..d95702a53 100644
+--- a/doc/en/example/py2py3/test_py2.py
++++ b/doc/en/example/py2py3/test_py2.py
+@@ -1,5 +1,5 @@
+ def test_exception_syntax():
+     try:
+         0 / 0
+-    except ZeroDivisionError, e:
++    except ZeroDivisionError as e:
+         assert e
+diff --git a/src/_pytest/python.py b/src/_pytest/python.py
+index b8b365ad3..5f2af31e2 100644
+--- a/src/_pytest/python.py
++++ b/src/_pytest/python.py
+@@ -286,7 +286,7 @@ class PyobjMixin(PyobjContext):
+             parts.append(name)
+         parts.reverse()
+         s = ".".join(parts)
+-        return s.replace(".[", "[")
++        return s
+ 
+     def reportinfo(self):
+         # XXX caching?
+diff --git a/tox.ini b/tox.ini
+index b03941657..e5437bd9f 100644
+--- a/tox.ini
++++ b/tox.ini
+@@ -21,7 +21,7 @@ commands =
+     {env:_PYTEST_TOX_COVERAGE_RUN:} pytest {posargs:{env:_PYTEST_TOX_DEFAULT_POSARGS:}}
+     coverage: coverage combine
+     coverage: coverage report -m
+-passenv = USER USERNAME COVERAGE_* TRAVIS PYTEST_ADDOPTS
++passenv = USER,USERNAME,COVERAGE_*,TRAVIS,PYTEST_ADDOPTS
+ setenv =
+     _PYTEST_TOX_DEFAULT_POSARGS={env:_PYTEST_TOX_POSARGS_LSOF:} {env:_PYTEST_TOX_POSARGS_XDIST:}
+ 
+@@ -130,7 +130,7 @@ commands = python scripts/publish_gh_release_notes.py
+ [pytest]
+ minversion = 2.0
+ addopts = -ra -p pytester --strict-markers
+-rsyncdirs = tox.ini doc src testing
++#rsyncdirs = tox.ini doc src testing
+ python_files = test_*.py *_test.py testing/*/*.py
+ python_classes = Test Acceptance
+ python_functions = test

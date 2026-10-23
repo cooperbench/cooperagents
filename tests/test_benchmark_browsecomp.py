@@ -127,3 +127,21 @@ def test_from_env_unconfigured_returns_shells(monkeypatch):
     bench = browsecomp_from_env()
     with pytest.raises(NotImplementedError):
         bench.instances()
+
+
+def test_bm25s_retriever_ranks_relevant_doc():
+    import pytest
+
+    pytest.importorskip("bm25s")
+    from cooperagents.benchmarks.browsecomp import BM25sRetriever
+
+    r = BM25sRetriever(
+        {
+            "d1": "the capital of france is paris",
+            "d2": "berlin is the capital of germany",
+            "d3": "the louvre museum is located in paris",
+        }
+    )
+    ids = [d for d, _ in r.search("where is the louvre museum", 2)]
+    assert "d3" in ids
+    assert r.open("d1").startswith("the capital")

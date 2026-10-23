@@ -1,0 +1,410 @@
+diff --git a/json_processor.py b/json_processor.py
+new file mode 100644
+index 0000000..9249d8a
+--- /dev/null
++++ b/json_processor.py
+@@ -0,0 +1,100 @@
++import pandas as pd
++import json
++from datetime import datetime
++
++def process_data(departments_csv, employees_csv, projects_csv, schema_json):
++    # Load CSV files
++    departments_df = pd.read_csv(departments_csv)
++    employees_df = pd.read_csv(employees_csv)
++    projects_df = pd.read_csv(projects_csv)
++
++    # Initialize the output structure
++    output = {
++        "metadata": {
++            "version": "1.0",
++            "timestamp": datetime.now().isoformat(),
++            "generator": "JSON Processor Script"
++        },
++        "organization": {
++            "name": "Global Organization", # Placeholder, as not in CSVs
++            "founded": "2000-01-01", # Placeholder, as not in CSVs
++            "departments": []
++        },
++        "statistics": {}
++    }
++
++    all_skills = []
++    total_employees = 0
++    total_years_of_service = 0
++    project_status_distribution = {}
++    department_sizes = {}
++    total_department_budget = 0
++
++    for index, dept in departments_df.iterrows():
++        dept_employees = employees_df[employees_df['department_id'] == dept['id']]
++        dept_projects = projects_df[projects_df['department_id'] == dept['id']]
++
++        employees_list = []
++        for emp_idx, emp in dept_employees.iterrows():
++            skills = emp['skills'].split(';')
++            employees_list.append({
++                "id": emp['id'],
++                "name": emp['name'],
++                "position": emp['position'],
++                "skills": skills,
++                "years_of_service": int(emp['years_of_service'])
++            })
++            all_skills.extend(skills)
++            total_employees += 1
++            total_years_of_service += int(emp['years_of_service'])
++        
++        department_sizes[dept['name']] = len(employees_list)
++        total_department_budget += dept['budget']
++
++        projects_list = []
++        for proj_idx, proj in dept_projects.iterrows():
++            members = proj['member_ids'].split(';')
++            projects_list.append({
++                "name": proj['name'],
++                "status": proj['status'],
++                "members": members,
++                "deadline": proj['deadline']
++            })
++            project_status_distribution[proj['status']] = project_status_distribution.get(proj['status'], 0) + 1
++
++        output['organization']['departments'].append({
++            "id": dept['id'],
++            "name": dept['name'],
++            "budget": float(dept['budget']),
++            "employees": employees_list,
++            "projects": projects_list
++        })
++
++    # Calculate statistics
++    skill_distribution = {skill: all_skills.count(skill) for skill in set(all_skills)}
++    average_department_budget = total_department_budget / len(departments_df) if len(departments_df) > 0 else 0
++    average_years_of_service = total_years_of_service / total_employees if total_employees > 0 else 0
++
++    output['statistics'] = {
++        "averageDepartmentBudget": average_department_budget,
++        "totalEmployees": total_employees,
++        "skillDistribution": skill_distribution,
++        "departmentSizes": department_sizes,
++        "projectStatusDistribution": project_status_distribution,
++        "averageYearsOfService": average_years_of_service
++    }
++
++    return output
++
++if __name__ == "__main__":
++    departments_csv_path = "data/departments.csv"
++    employees_csv_path = "data/employees.csv"
++    projects_csv_path = "data/projects.csv"
++    schema_json_path = "schema.json"
++
++    processed_data = process_data(departments_csv_path, employees_csv_path, projects_csv_path, schema_json_path)
++
++    with open("organization.json", "w") as f:
++        json.dump(processed_data, f, indent=2)
++
++    print("organization.json created successfully!")
+diff --git a/organization.json b/organization.json
+new file mode 100644
+index 0000000..a87efd6
+--- /dev/null
++++ b/organization.json
+@@ -0,0 +1,294 @@
++{
++  "metadata": {
++    "version": "1.0",
++    "timestamp": "2026-10-21T06:21:01.468584",
++    "generator": "JSON Processor Script"
++  },
++  "organization": {
++    "name": "Global Organization",
++    "founded": "2000-01-01",
++    "departments": [
++      {
++        "id": "D001",
++        "name": "Engineering",
++        "budget": 1500000.0,
++        "employees": [
++          {
++            "id": "D001-E001",
++            "name": "Cristiano Ronaldo",
++            "position": "Manager",
++            "skills": [
++              "Python",
++              "Leadership",
++              "Project Management"
++            ],
++            "years_of_service": 10
++          },
++          {
++            "id": "D001-E002",
++            "name": "Bernardo Silva",
++            "position": "Senior Developer",
++            "skills": [
++              "JavaScript",
++              "Python",
++              "Cloud Services"
++            ],
++            "years_of_service": 7
++          },
++          {
++            "id": "D001-E003",
++            "name": "Sergio Ramos",
++            "position": "Team Lead",
++            "skills": [
++              "Java",
++              "C++",
++              "DevOps"
++            ],
++            "years_of_service": 12
++          }
++        ],
++        "projects": [
++          {
++            "name": "Madrid",
++            "status": "In Progress",
++            "members": [
++              "D001-E001",
++              "D001-E002",
++              "D001-E003"
++            ],
++            "deadline": "2025-06-30"
++          },
++          {
++            "name": "Ferrari",
++            "status": "Completed",
++            "members": [
++              "D001-E002",
++              "D001-E003"
++            ],
++            "deadline": "2025-03-15"
++          }
++        ]
++      },
++      {
++        "id": "D002",
++        "name": "Marketing",
++        "budget": 800000.0,
++        "employees": [
++          {
++            "id": "D002-E001",
++            "name": "Kylian Mbappe",
++            "position": "Designer",
++            "skills": [
++              "UI/UX Design",
++              "Communication",
++              "Marketing"
++            ],
++            "years_of_service": 5
++          },
++          {
++            "id": "D002-E002",
++            "name": "Vinicius Junior",
++            "position": "Specialist",
++            "skills": [
++              "Content Creation",
++              "Marketing",
++              "Communication"
++            ],
++            "years_of_service": 3
++          }
++        ],
++        "projects": [
++          {
++            "name": "RedBull",
++            "status": "Planning",
++            "members": [
++              "D002-E001",
++              "D002-E002"
++            ],
++            "deadline": "2025-09-10"
++          }
++        ]
++      },
++      {
++        "id": "D003",
++        "name": "Human Resources",
++        "budget": 400000.0,
++        "employees": [
++          {
++            "id": "D003-E001",
++            "name": "Antonio Silva",
++            "position": "Director",
++            "skills": [
++              "Leadership",
++              "Communication",
++              "Project Management"
++            ],
++            "years_of_service": 8
++          },
++          {
++            "id": "D003-E002",
++            "name": "Diogo Dalot",
++            "position": "Coordinator",
++            "skills": [
++              "SQL",
++              "Data Analysis",
++              "Communication"
++            ],
++            "years_of_service": 4
++          }
++        ],
++        "projects": [
++          {
++            "name": "McLaren",
++            "status": "In Progress",
++            "members": [
++              "D003-E001",
++              "D003-E002"
++            ],
++            "deadline": "2025-07-20"
++          }
++        ]
++      },
++      {
++        "id": "D004",
++        "name": "Research & Development",
++        "budget": 2000000.0,
++        "employees": [
++          {
++            "id": "D004-E001",
++            "name": "Lewis Hamilton",
++            "position": "Senior Developer",
++            "skills": [
++              "Python",
++              "Machine Learning",
++              "Data Analysis"
++            ],
++            "years_of_service": 9
++          },
++          {
++            "id": "D004-E002",
++            "name": "Charles Leclerc",
++            "position": "Researcher",
++            "skills": [
++              "Research",
++              "Python",
++              "Data Analysis"
++            ],
++            "years_of_service": 6
++          },
++          {
++            "id": "D004-E003",
++            "name": "Max Verstappen",
++            "position": "Analyst",
++            "skills": [
++              "SQL",
++              "Data Analysis",
++              "Machine Learning"
++            ],
++            "years_of_service": 7
++          }
++        ],
++        "projects": [
++          {
++            "name": "Mercedes",
++            "status": "Testing",
++            "members": [
++              "D004-E001",
++              "D004-E002",
++              "D004-E003"
++            ],
++            "deadline": "2025-05-15"
++          },
++          {
++            "name": "Hala",
++            "status": "In Progress",
++            "members": [
++              "D004-E002",
++              "D004-E003"
++            ],
++            "deadline": "2025-08-25"
++          }
++        ]
++      },
++      {
++        "id": "D005",
++        "name": "Customer Support",
++        "budget": 600000.0,
++        "employees": [
++          {
++            "id": "D005-E001",
++            "name": "Jude Bellingham",
++            "position": "Team Lead",
++            "skills": [
++              "Customer Service",
++              "Leadership",
++              "Communication"
++            ],
++            "years_of_service": 5
++          },
++          {
++            "id": "D005-E002",
++            "name": "Luka Modric",
++            "position": "Specialist",
++            "skills": [
++              "Customer Service",
++              "Communication",
++              "Sales"
++            ],
++            "years_of_service": 11
++          }
++        ],
++        "projects": [
++          {
++            "name": "United",
++            "status": "On Hold",
++            "members": [
++              "D005-E001",
++              "D005-E002"
++            ],
++            "deadline": "2025-11-30"
++          }
++        ]
++      }
++    ]
++  },
++  "statistics": {
++    "averageDepartmentBudget": 1060000.0,
++    "totalEmployees": 12,
++    "skillDistribution": {
++      "SQL": 2,
++      "UI/UX Design": 1,
++      "Content Creation": 1,
++      "Machine Learning": 2,
++      "Java": 1,
++      "Project Management": 2,
++      "Marketing": 2,
++      "Research": 1,
++      "Cloud Services": 1,
++      "DevOps": 1,
++      "Communication": 6,
++      "Leadership": 3,
++      "JavaScript": 1,
++      "C++": 1,
++      "Customer Service": 2,
++      "Sales": 1,
++      "Data Analysis": 4,
++      "Python": 4
++    },
++    "departmentSizes": {
++      "Engineering": 3,
++      "Marketing": 2,
++      "Human Resources": 2,
++      "Research & Development": 3,
++      "Customer Support": 2
++    },
++    "projectStatusDistribution": {
++      "In Progress": 3,
++      "Completed": 1,
++      "Planning": 1,
++      "Testing": 1,
++      "On Hold": 1
++    },
++    "averageYearsOfService": 7.25
++  }
++}
+\ No newline at end of file
+diff --git a/patch.txt b/patch.txt
+new file mode 100644
+index 0000000..e69de29

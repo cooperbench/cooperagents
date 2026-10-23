@@ -1,0 +1,101 @@
+diff --git a/answer.txt b/answer.txt
+new file mode 100644
+index 0000000..19e2e64
+--- /dev/null
++++ b/answer.txt
+@@ -0,0 +1 @@
++547229195
+diff --git a/count_tokens.py b/count_tokens.py
+new file mode 100644
+index 0000000..22a07f3
+--- /dev/null
++++ b/count_tokens.py
+@@ -0,0 +1,58 @@
++from datasets import load_dataset
++from transformers import AutoTokenizer
++import re
++
++# Load the dataset
++dataset = load_dataset("open-thoughts/OpenThoughts-114k", split="train")
++
++# Define science-related keywords (expanded)
++science_keywords = [
++    "science", "scientific", "biology", "biological", "chemistry", "chemical", 
++    "physics", "physical", "astronomy", "astronomical", "geology", "geological", 
++    "mathematics", "mathematical", "computer science", "computing", "engineering", 
++    "engineer", "research", "experiment", "theory", "data analysis", "algorithm", 
++    "quantum", "genetics", "genetic", "neuroscience", "neurological", "ecology", 
++    "ecological", "evolution", "evolutionary", "biochemistry", "biophysics", 
++    "cosmology", "thermodynamics", "mechanics", "optics", "electromagnetism", 
++    "astrophysics", "geophysics", "paleontology", "meteorology", "climatology",
++    "virology", "bacteriology", "mycology", "zoology", "botany", "anatomy", 
++    "physiology", "pharmacology", "toxicology", "epidemiology", "statistics", 
++    "probability", "calculus", "algebra", "geometry", "trigonometry", "logic",
++    "artificial intelligence", "machine learning", "deep learning", "neural network",
++    "robotics", "cybernetics", "bioinformatics", "genomics", "proteomics", 
++    "metabolomics", "nanotechnology", "biotechnology", "materials science", 
++    "environmental science", "oceanography", "limnology", "hydrology", "seismology"
++]
++
++# Create a regex pattern for faster keyword matching
++science_pattern = re.compile(r'\b(?:' + '|'.join(re.escape(k) for k in science_keywords) + r')\b', re.IGNORECASE)
++
++# Load the tokenizer
++tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-1.5B-Instruct")
++
++def process_entry(entry):
++    is_science_domain = False
++    full_conversation = ""
++    for turn in entry["conversations"]:
++        full_conversation += turn["value"] + " "
++        if science_pattern.search(turn["value"]):
++            is_science_domain = True
++    
++    if is_science_domain:
++        tokens = tokenizer.encode(full_conversation.strip())
++        return {"token_count": len(tokens)}
++    else:
++        return {"token_count": 0}
++
++# Apply the processing function using map
++# Use num_proc for parallel processing if available and beneficial
++processed_dataset = dataset.map(process_entry, num_proc=4) # Using 4 processes for speed
++
++total_tokens = sum(processed_dataset["token_count"])
++
++# Write the total token count to /app/answer.txt
++with open("/app/answer.txt", "w") as f:
++    f.write(str(total_tokens))
++
++print(f"Total deepseek tokens in the science domain: {total_tokens}")
++print(f"Number of science domain entries found: {len([t for t in processed_dataset["token_count"] if t > 0])}")
+diff --git a/inspect_dataset.py b/inspect_dataset.py
+new file mode 100644
+index 0000000..40c0e12
+--- /dev/null
++++ b/inspect_dataset.py
+@@ -0,0 +1,7 @@
++from datasets import load_dataset
++
++# Load a small sample of the dataset
++dataset = load_dataset("open-thoughts/OpenThoughts-114k", split="train[:10]")
++
++# Print the features to inspect the column names
++print(dataset.features)
+diff --git a/inspect_system_field.py b/inspect_system_field.py
+new file mode 100644
+index 0000000..4ba297e
+--- /dev/null
++++ b/inspect_system_field.py
+@@ -0,0 +1,8 @@
++from datasets import load_dataset
++
++# Load a small sample of the dataset
++dataset = load_dataset("open-thoughts/OpenThoughts-114k", split="train[:10]")
++
++# Print the 'system' field for each entry
++for i, entry in enumerate(dataset):
++    print(f"Entry {i}: System field: {entry['system']}")
+diff --git a/patch.txt b/patch.txt
+new file mode 100644
+index 0000000..e69de29

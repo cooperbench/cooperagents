@@ -95,16 +95,33 @@ git-substrate runner (`scripts/bench_programbench.py`, selected by the
 `COOPER_BENCHMARK` environment variable) with the mini-swe worker, and are scored
 by each benchmark's official evaluator.
 
-Terminal-Bench uses the existing adapter at
-`src/cooperagents/adapters/terminalbench.py` (Terminal-Bench 3.0 / Harbor tasks;
-dataset root via `TB3_ROOT`).
+Terminal-Bench has two adapters for two dataset formats:
+
+- `src/cooperagents/adapters/terminalbench.py` — Terminal-Bench 3.0 / Harbor tasks
+  (`task.toml` + `environment/Dockerfile` + `instruction.md`, artifact/reward grading);
+  dataset root via `TB3_ROOT`, benchmark name `terminalbench`.
+- `src/cooperagents/adapters/terminalbench_core.py` — the classic
+  `terminal-bench-core-0.1.1` flat format (`task.yaml` + root `Dockerfile` +
+  `docker-compose.yaml` + `run-tests.sh` + pytest `tests/`), benchmark name
+  `terminalbench-core`. Dataset root defaults to
+  `data/terminal-bench-core-0.1.1` (override with `TBC_ROOT`). The agent works in
+  `/app`; the submission is the git diff, and `evaluate()` applies it to a fresh
+  task container and runs the task's own pytest suite (resolved iff all tests
+  pass). Scope: single-container tasks only (one compose service — 77/80 of the
+  core set); multi-container tasks are excluded by `instances()`. Verified
+  end-to-end on `hello-world` (agent creates the file, `evaluate()` scores
+  reward 1.0). Run it through the same git-substrate runner:
+
+```
+COOPER_BENCHMARK=terminalbench-core AZURE_OPENAI_DEPLOYMENT=sap/gemini-2.5-flash uv run python scripts/bench_programbench.py --instance hello-world --arm solo --rep r1 --step-limit 20 --env-brief
+```
 
 SWE-bench Verified uses `src/cooperagents/adapters/swebench.py`, configured by
 environment variables:
 
-- `SWEBENCH_DATASET` — HuggingFace dataset id (default `princeton-nlp/SWE-bench_Verified`).
+- `SWEBENCH_DATASET` — HuggingFace dataset id (default `SWE-bench/SWE-bench_Verified`). swebench >=4 grades against instances that carry an `image` field; the classic `princeton-nlp/SWE-bench_Verified` lacks it and makes the grader raise `KeyError('image')`. For an arm64 grade, build a one-instance local JSONL from this dataset with `image` rewritten to the `sweb.eval.arm64.*` tag and pass that path as `--dataset_name`.
 - `SWEBENCH_DATA` — path to a local JSONL to load instances offline instead of HuggingFace.
-- `SWEBENCH_IMAGE_TEMPLATE` — per-instance image name (default `swebench/sweb.eval.x86_64.{id}:latest`); set to the Epoch `ghcr.io/epoch-research/...` or a locally built name as needed.
+- `SWEBENCH_IMAGE_TEMPLATE` — per-instance image name. Default `swebench/sweb.eval.x86_64.{key}:latest`, where `{key}` is the instance id with `__` rewritten to `_1776_` (the published Docker Hub tag convention, e.g. `pylint-dev__pylint-4551` → `swebench/sweb.eval.x86_64.pylint-dev_1776_pylint-4551:latest`). `{id}` (raw id) is also available. On Apple Silicon, point it at the native arm64 convenience builds — `SWEBENCH_IMAGE_TEMPLATE='swebench/sweb.eval.arm64.{key}:latest'` — to avoid x86_64 emulation; set a `ghcr.io/epoch-research/...` or locally built name as needed.
 - `SWEBENCH_MODEL_NAME` — the `model_name_or_path` written into predictions (default `cooperagents`).
 - `SWEBENCH_MAX_WORKERS` — evaluator worker count (default `4`).
 
@@ -116,6 +133,111 @@ tests. A real run requires the `swebench` package and the per-instance Docker
 images; the adapter wiring (image name, task text, predictions format, instance
 loading) is unit-tested offline, and the live scoring path requires that
 infrastructure.
+
+### Team arms (FACTORY23-style) for the code benchmarks
+
+SWE-bench and Terminal-Bench run the same team arm config as the FACTORY23 series
+(`docs/FACTORY23_REPRODUCTION.md`), via `bench_programbench.py`. Example (3-agent
+team on SAP AI Core Gemini):
+
+```
+set -a; source .env; set +a
+AZURE_OPENAI_DEPLOYMENT=sap/gemini-2.5-flash COOPER_BENCHMARK=swebench SWEBENCH_DATA=data/swebench_verified.jsonl uv run python scripts/bench_programbench.py --instance <id> --arm coopgitc2 --rep r1 --team-size 3 --repair --completion-gate --env-brief --presub-merge --step-limit 1000 --agent-time-limit 14400
+```
+
+- The worker model is set by `AZURE_OPENAI_DEPLOYMENT` (despite the name). Use a
+  native litellm provider id — `sap/<deployment>` for AI Core (auth via `AICORE_*`
+  from `.env`), or an `openai/`-compatible endpoint via `OPENAI_BASE_URL`/`OPENAI_API_KEY`.
+  `sap/`/`gemini/`/`vertex_ai/`/`bedrock/` are passed through to litellm as-is; a
+  bare HF-style name (`Qwen/Qwen3.5-9B`) is treated as `openai/`-compatible.
+- `--arm coopgitc2` = `coop_tools` + `git_share` + the coordinator (loop/stall/collision nudges).
+- `--repair` / `--completion-gate` / `--presub-merge` / `--env-brief` / `--team-size` as in FACTORY23.
+
+Honest degradations (SWE-bench/Terminal-Bench declare no `build_artifact` /
+`reference_binary`, so `verification` falls back):
+
+| Flag | Behavior here |
+| --- | --- |
+| `coopgitc2`, `--team-size` | full — git substrate; SWE-bench `/testbed` is a git repo, TB git-inits the workdir in `setup_env` |
+| `--env-brief` | now faithful — adapters implement `brief()` (env orientation text) |
+| `--completion-gate` | gate = "teammate merge clean AND repo compiles (`compileall`/make)", NOT FAIL_TO_PASS / the TB verifier |
+| `--presub-merge` | merge is real; integration SELECTS by patch size (the `score` fallback), not pass-rate |
+| `--repair` | repairs compile breakage only, never test failures |
+
+The honest success signal is the separate `evaluate()` pass (the SWE-bench harness
+/ the TB verifier), which `bench_programbench.py` does not invoke inline. Infra
+prerequisites: a running Docker daemon; SWE-bench per-instance images (or
+`SWEBENCH_DATA` for offline instance loading) plus the `swebench` package for
+scoring; Terminal-Bench `TB3_ROOT` task tree (single-container tasks only).
+
+#### Verified live smoke (2026-10-19)
+
+A single-instance live run confirmed the SWE-bench path end-to-end on SAP AI
+Core: pull the per-instance image, run the agent in the container, authenticate
+via `AICORE_*`, and emit a git-diff submission.
+
+```
+AZURE_OPENAI_DEPLOYMENT=sap/gemini-2.5-flash COOPER_BENCHMARK=swebench SWEBENCH_DATA=data/swebench_verified.jsonl SWEBENCH_IMAGE_TEMPLATE='swebench/sweb.eval.arm64.{key}:latest' uv run python scripts/bench_programbench.py --instance pylint-dev__pylint-4551 --arm solo --rep smoke --step-limit 40 --agent-time-limit 1800 --env-brief --runs-dir runs/swebench_smoke
+```
+
+Result: 33 steps, a 1809-byte patch editing `pylint/checkers/base.py`, submission
+written. Four real defects were fixed in the process:
+
+- **Image name.** The published Docker Hub tags rewrite `__` to `_1776_`; the old
+  default template used the raw id and never resolved. Fixed via the `{key}`
+  placeholder (see `SWEBENCH_IMAGE_TEMPLATE` above).
+- **litellm SAP + Gemini thinking.** With thinking enabled, `sap/gemini-2.5-flash`
+  returns `reasoning_content` as a *list* of thinking blocks, but litellm 1.102.1's
+  `GenAIHubOrchestrationConfig.transform_response` validates it as a string and
+  raises `ValidationError` on nearly every call, wedging the agent in a retry
+  loop. `cooperagents/_litellm_patches.py` installs an idempotent patch that
+  flattens list `reasoning_content` to a string before validation; it is applied
+  on both the state path (`LiteLLMClient`) and the git path (vendored
+  `litellm_model`). No behaviour is lost — the answer lives in `message.content`.
+- **Grading dataset.** swebench >=4 grades against instances carrying an `image`
+  field; the classic `princeton-nlp/SWE-bench_Verified` lacks it (`KeyError('image')`).
+  Default dataset is now `SWE-bench/SWE-bench_Verified` (see `SWEBENCH_DATASET`).
+- **Issue text never reached the agent (the big one).** `bench_programbench.py`
+  passes a bare instance-id *string* to `task_for`, but the adapter only read
+  `problem_statement` from a `SWEBenchInstance` object — so the `## Issue` section
+  silently degraded to just the id. Agents were solving an issue they could not see
+  and guessed the wrong module. `SWEBenchAdapter._resolve()` now looks the id up in
+  the dataset so the full issue text is delivered. Verified: with the fix, the solo
+  agent edits `pylint/pyreverse/diagrams.py` (the correct module) instead of the
+  unrelated `checkers/base.py` it guessed before.
+
+#### Team arm (coopgitc2) — pipeline verified, 2026-10-20
+
+A 3-agent `coopgitc2` run (`--repair --completion-gate --env-brief --presub-merge
+--team-size 3`, 1398 s) confirmed every FACTORY23 component fires on the git
+substrate: the **coordinator** delivered 9 nudges (7 LOOP, 2 COLLISION) that
+measurably changed agent behaviour; **git_share** fetched teammate branches;
+**presub-merge** integrated 3 candidates; the **completion-gate** rejected
+submissions (compile failures, teammate merge conflicts) with the rejection
+countdown + forced-accept; **repair** flipped a gate-fail attempt into a gate-pass
+one; **env-brief** was present in every prompt. The task board stayed unused
+(`tasks_total=0`) — agents never spontaneously post subtasks, consistent with the
+state benchmarks.
+
+Honest outcome: both solo and team graded **unresolved** (`no_tests_collected`).
+Remaining (agent-behaviour, not plumbing) blockers, in priority order: (1) agents
+write scratch files (`patch.txt`, `base_content.py`, helper `*.py`) into the repo
+root that the git-diff submission captures — a stray top-level module breaks pytest
+collection and the 105 KB team patch was 97% one such dump; (2) `presub-merge`
+select-by-size favours the *most* bloated candidate when verification scores are
+degenerate — it should prefer the minimal valid diff; (3) the compile gate
+(`compileall .`) false-positives on pre-existing Python-2/3 files under
+`tests/functional`. These are documented in `runs/swebench_smoke_team/` and are the
+next things to fix for a solve, separate from the now-verified harness.
+
+
+The **state** benchmarks (PlanCraft/WorkBench/BrowseComp/Finance) take the
+*portable* half of this config via `scaling_box.py`: the `team` arm defaults to the
+coordinator (loop/stall nudges over the bus) + a task-board protocol + any
+benchmark `brief()`; the git-only reconciliation (`git_share`, `--presub-merge`,
+the repair integrator) has no analogue because state benchmarks reconcile via a
+reducer, not a merge. Disable with `--no-coordinator` / `--no-task-board`.
+
 
 ## Setup
 

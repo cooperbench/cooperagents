@@ -58,6 +58,8 @@ def main() -> None:
     ap.add_argument("--out", default=None, help="summary JSON path (default <out-dir>/summary.json)")
     ap.add_argument("--no-save-trajectories", action="store_true", help="skip writing per-task trajectory files")
     ap.add_argument("--resume", default=None, help="resume an existing capture directory: reuse its finished tasks, run only the rest")
+    ap.add_argument("--no-coordinator", action="store_true", help="disable the team coordinator (loop/stall nudges)")
+    ap.add_argument("--no-task-board", action="store_true", help="disable the team task-board protocol")
     args = ap.parse_args()
 
     models = [m.strip() for m in args.models.split(",") if m.strip()]
@@ -174,6 +176,8 @@ def main() -> None:
             step_limit=args.step_limit,
             record_fn=sink,
             completed=completed,
+            coordinator=not args.no_coordinator,
+            task_board=not args.no_task_board,
         )
     finally:
         tasks_fp.close()

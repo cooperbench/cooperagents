@@ -1,0 +1,65 @@
+diff --git a/pylint/checkers/utils.py b/pylint/checkers/utils.py
+index af255abc1..89473f316 100644
+--- a/pylint/checkers/utils.py
++++ b/pylint/checkers/utils.py
+@@ -881,10 +881,10 @@ def unimplemented_abstract_methods(
+ 
+ def find_try_except_wrapper_node(
+     node: astroid.node_classes.NodeNG,
+-) -> Optional[Union[astroid.ExceptHandler, astroid.TryExcept]]:
++) -> Optional[Union[astroid.ExceptHandler, astroid.nodes.TryExcept]]:
+     """Return the ExceptHandler or the TryExcept node in which the node is."""
+     current = node
+-    ignores = (astroid.ExceptHandler, astroid.TryExcept)
++    ignores = (astroid.ExceptHandler, astroid.nodes.TryExcept)
+     while current and not isinstance(current.parent, ignores):
+         current = current.parent
+ 
+@@ -895,7 +895,7 @@ def find_try_except_wrapper_node(
+ 
+ def find_except_wrapper_node_in_scope(
+     node: astroid.node_classes.NodeNG,
+-) -> Optional[Union[astroid.ExceptHandler, astroid.TryExcept]]:
++) -> Optional[Union[astroid.ExceptHandler, astroid.nodes.TryExcept]]:
+     """Return the ExceptHandler in which the node is, without going out of scope."""
+     current = node
+     while current.parent is not None:
+@@ -955,7 +955,7 @@ def get_exception_handlers(
+ 
+     """
+     context = find_try_except_wrapper_node(node)
+-    if isinstance(context, astroid.TryExcept):
++    if isinstance(context, astroid.nodes.TryExcept):
+         return [
+             handler for handler in context.handlers if error_of_type(handler, exception)
+         ]
+@@ -973,7 +973,7 @@ def is_node_inside_try_except(node: astroid.Raise) -> bool:
+         bool: True if the node is inside a try/except statement, False otherwise.
+     """
+     context = find_try_except_wrapper_node(node)
+-    return isinstance(context, astroid.TryExcept)
++    return isinstance(context, astroid.nodes.TryExcept)
+ 
+ 
+ def node_ignores_exception(
+diff --git a/pylint/pyreverse/writer.py b/pylint/pyreverse/writer.py
+index 0d80bb9ca..12bd8d8c5 100644
+--- a/pylint/pyreverse/writer.py
++++ b/pylint/pyreverse/writer.py
+@@ -136,9 +136,14 @@ class DotWriter(DiagramWriter):
+             for func in obj.methods:
+                 if func.args.args:
+                     args = [arg.name for arg in func.args.args if arg.name != "self"]
+-                else:
+                     args = []
+-                label = r"{}{}({})\l".format(label, func.name, ", ".join(args))
++                    for arg, annotation in zip(func.args.args, func.args.annotations):
++                        if arg.name == "self":
++                            continue
++                        arg_str = arg.name
++                        if annotation:
++                            arg_str += f": {annotation.as_string()}"
++                        args.append(arg_str)
+             label = "{%s}" % label
+         if is_exception(obj.node):
+             return dict(fontcolor="red", label=label, shape="record")

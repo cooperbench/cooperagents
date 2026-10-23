@@ -291,6 +291,53 @@ class BM25Retriever:
         return cls(corpus)
 
 
+class BM25sRetriever:
+    """Vectorized BM25 over an in-memory corpus using the ``bm25s`` package.
+
+    Same Retriever protocol as :class:`BM25Retriever` but indexed, so queries over
+    a large corpus (e.g. BrowseComp-Plus's ~100k docs) return in milliseconds
+    rather than the pure-Python scan's seconds-per-query. Use for real runs;
+    :class:`BM25Retriever` stays the dependency-free offline fallback.
+    """
+
+    def __init__(self, corpus: dict[str, str]) -> None:
+        import bm25s
+
+        self._texts = corpus
+        self.ids = list(corpus)
+        tokens = bm25s.tokenize([corpus[i] for i in self.ids], show_progress=False)
+        self._bm = bm25s.BM25()
+        self._bm.index(tokens, show_progress=False)
+
+    def search(self, query: str, k: int = 5) -> list[tuple[str, str]]:
+        import bm25s
+
+        if not self.ids:
+            return []
+        qt = bm25s.tokenize(query, show_progress=False)
+        res, _scores = self._bm.retrieve(qt, k=min(k, len(self.ids)), show_progress=False)
+        out: list[tuple[str, str]] = []
+        for j in range(res.shape[1]):
+            did = self.ids[int(res[0, j])]
+            out.append((did, self._texts[did][:160]))
+        return out
+
+    def open(self, doc_id: str) -> str:
+        return self._texts.get(doc_id, "")
+
+    @classmethod
+    def from_jsonl(cls, path: str | Path, *, id_field: str = "docid", text_field: str = "text") -> BM25sRetriever:
+        corpus: dict[str, str] = {}
+        with Path(path).open() as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                row = json.loads(line)
+                corpus[str(row[id_field])] = str(row.get(text_field, ""))
+        return cls(corpus)
+
+
 class LLMJudge:
     """LLM judge (answer vs gold). Uses litellm by default; a ``complete`` seam
     (prompt -> reply) is injectable for offline tests."""
@@ -343,7 +390,16 @@ def browsecomp_from_env() -> BrowseCompBenchmark:
     corpus = os.getenv("BROWSECOMP_CORPUS")
     queries = os.getenv("BROWSECOMP_QUERIES")
     judge_model = os.getenv("BROWSECOMP_JUDGE_MODEL")
-    retriever = BM25Retriever.from_jsonl(corpus) if corpus else None
+    retriever: Retriever | None = None
+    if corpus:
+        # Prefer the vectorized bm25s index for real-scale corpora (ms queries);
+        # fall back to the pure-Python BM25 if bm25s is not installed.
+        try:
+            import bm25s  # noqa: F401
+
+            retriever = BM25sRetriever.from_jsonl(corpus)
+        except ImportError:
+            retriever = BM25Retriever.from_jsonl(corpus)
     judge = LLMJudge(judge_model) if judge_model else None
     data = load_browsecomp(queries) if queries else None
     return BrowseCompBenchmark(retriever=retriever, judge=judge, instances_data=data)
@@ -359,6 +415,7 @@ __all__ = [
     "InMemoryRetriever",
     "SubstringJudge",
     "BM25Retriever",
+    "BM25sRetriever",
     "LLMJudge",
     "load_browsecomp",
     "browsecomp_from_env",

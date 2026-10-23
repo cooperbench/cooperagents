@@ -112,7 +112,8 @@ class DockerEnv(Environment):
         self.execute(f'mkdir -p "$(dirname {path})" && echo {encoded} | base64 -d > {path}')
 
     def git_diff(self) -> str:
-        self.execute("git add -A")
+        add_cmd = "git add -A" if getattr(self, "_include_untracked", True) else "git add -u"
+        self.execute(add_cmd)
         base = self._base_commit or "HEAD"
         res = self.execute(f"git diff --cached {base}")
         if not res.stdout.strip():
@@ -122,7 +123,7 @@ class DockerEnv(Environment):
             has_stash = self.execute("git stash list | head -1").stdout.strip()
             if has_stash:
                 self.execute("git stash pop -q 2>/dev/null || git checkout stash@{0} -- . 2>/dev/null")
-                self.execute("git add -A")
+                self.execute(add_cmd)
                 res = self.execute(f"git diff --cached {base}")
         return res.stdout
 

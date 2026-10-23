@@ -124,6 +124,8 @@ def run_config(
     record_fn: Callable[[dict], None] | None = None,
     records_out: list[dict] | None = None,
     completed: dict[str, dict] | None = None,
+    coordinator: bool = False,
+    task_board: bool = False,
 ) -> list[TaskScore]:
     """Run one configuration over ``instances`` and return per-instance scores.
 
@@ -164,7 +166,7 @@ def run_config(
             Assignment(
                 agent_id=f"agent{i + 1}",
                 role="lead" if i == 0 else "member",
-                task=benchmark.task_prompt(inst),
+                task=benchmark.brief(inst) + benchmark.task_prompt(inst),
             )
             for i in range(max(team_size, 1))
         ]
@@ -178,6 +180,8 @@ def run_config(
             toolset_factory=toolset_factory,
             reducer=reducer,
             max_agents=max_agents,
+            coordinator=coordinator,
+            task_board=task_board,
         )
         harness = UnifiedHarness(step_limit=step_limit)
 
@@ -249,6 +253,8 @@ def box_sweep(
     iso_compute: bool = True,
     record_fn: Callable[[dict], None] | None = None,
     completed: dict[str, dict] | None = None,
+    coordinator: bool = True,
+    task_board: bool = True,
 ) -> list[ConfigResult]:
     """Run solo + team (+ optional iso-compute solo) for each model over one split.
 
@@ -308,7 +314,11 @@ def box_sweep(
         reducer = benchmark.team_reducer(make_llm(model)) if team_size > 1 else None
         _log(f"\n=== {model} | team ({len(instances)} instances, {team_size} agents, {step_limit} steps) ===")
         results.append(
-            _arm("team", model, factory, instances, team_size=team_size, reducer=reducer, step_limit=step_limit, max_agents=team_size)
+            _arm(
+                "team", model, factory, instances,
+                team_size=team_size, reducer=reducer, step_limit=step_limit, max_agents=team_size,
+                coordinator=coordinator, task_board=task_board,
+            )
         )
     return results
 

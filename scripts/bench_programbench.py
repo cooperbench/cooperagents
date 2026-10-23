@@ -132,6 +132,19 @@ def run_team_once(arm: str, instance: str, *, step_limit: int, agent_time_limit:
                    task=brief + ADAPTER.task_for(instance, i, n))
         for i in range(n)
     ]
+    def _select(patches: list[str]) -> int:
+        """Pick the integrated tree among both-merged member trees.
+
+        With a build/reference signal, rank by ``verification.score`` (the
+        intended behavior, e.g. ProgramBench). Without one (SWE-bench, where
+        ``score`` degenerates to preferring the LARGEST patch and so selects the
+        most scratch-polluted candidate), fall back to the lead agent's first
+        non-empty tree — neutral, no size bias.
+        """
+        if ADAPTER.build_artifact is None and ADAPTER.reference_binary is None:
+            return next((i for i in range(len(patches)) if patches[i].strip()), 0)
+        return max(range(len(patches)), key=lambda i: _score(instance, patches[i]))
+
     spec = TeamSpec(
         run_id=run_id,
         repo=ADAPTER.name,
@@ -152,13 +165,13 @@ def run_team_once(arm: str, instance: str, *, step_limit: int, agent_time_limit:
                         if (gate or presub_merge) else None,
         # With the merge gate on, every member tree already contains the
         # merged team work — select the best one instead of re-merging.
-        select_integration=(lambda patches: max(range(len(patches)),
-                            key=lambda i: _score(instance, patches[i]))) if presub_merge else None,
+        select_integration=_select if presub_merge else None,
     )
     vols = [f"cbs{run_id}:/cbshared"] if spec.git_share else []
 
     def make_env(_id: str, _v=vols or None) -> DockerEnv:
         env = DockerEnv(ADAPTER.image(instance), volumes=_v, **ADAPTER.env_kwargs())
+        env._include_untracked = getattr(ADAPTER, "include_untracked_in_diff", True)
         ADAPTER.setup_env(env, _id)
         return env
 

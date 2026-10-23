@@ -37,6 +37,11 @@ class StateBenchmark(abc.ABC):
     def task_prompt(self, instance: Any) -> str:
         """The instruction handed to each agent for ``instance``."""
 
+    def brief(self, instance: Any) -> str:
+        """Optional environment-orientation text prepended to the task (the
+        non-code analogue of the git ``--env-brief``). Default: none."""
+        return ""
+
     @abc.abstractmethod
     def make_env(self, instance: Any) -> StateEnv:
         """A FRESH, isolated environment (with its own sandbox) for one agent on
