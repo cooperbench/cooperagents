@@ -18,8 +18,9 @@ mini = ["litellm>=1.40", "jinja2>=3.1", "pydantic>=2.0", "tenacity>=8.0", "pyyam
 # Non-code benchmarks (state substrate). PlanCraft is a pip package; WorkBench is
 # imported from a sibling checkout (see docs/SCALING_BENCHMARKS.md), not installed.
 # datasets+pandas back the HuggingFace loaders (SWE-bench instances, Finance CSV);
-# tavily-python backs the Finance live web-search backend.
-benchmarks = ["plancraft>=0.4", "datasets>=2.0", "pandas>=2.0", "tavily-python>=0.5", "bm25s>=0.3"]
+# the Finance web-search backend is tavily-python (needs TAVILY_API_KEY) or the
+# keyless ddgs (DuckDuckGo) selected with FINANCE_SEARCH=ddg.
+benchmarks = ["plancraft>=0.4", "datasets>=2.0", "pandas>=2.0", "tavily-python>=0.5", "ddgs>=9.0", "bm25s>=0.3"]
 # Code benchmarks (git substrate) pull heavy infra and have strict Python floors
 # incompatible with this project's requires-python>=3.11, so they are NOT declared
 # as resolvable extras. Install them manually into a 3.12+ venv when running those

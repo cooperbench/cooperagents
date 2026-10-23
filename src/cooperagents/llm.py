@@ -66,7 +66,11 @@ def parse_actions(text: str, *, cost: float = 0.0) -> list[Action]:
                 )
             )
     if not actions:
-        return [Action(tool="finish", thought=text[:200], cost=cost)]
+        # An unparseable (prose) reply becomes a single ``finish`` so the agent
+        # always terminates. Keep the full text (capped) rather than a 200-char
+        # slice: for state benchmarks it carries the model's final answer, which
+        # the agent loop harvests when no submit tool was called.
+        return [Action(tool="finish", thought=text[:4000], cost=cost)]
     return actions
 
 

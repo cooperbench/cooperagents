@@ -233,9 +233,14 @@ class FinanceAgentBenchmark(StateBenchmark):
 
     def task_prompt(self, instance: Any) -> str:
         return (
-            "Answer the finance question by fetching sources with the tools "
-            "(google_search / edgar_search / parse_html / retrieve_information), then call "
-            "submit_answer with your answer and its sources.\n\nQuestion: " + instance.question
+            "Answer the finance question using the tools (google_search / "
+            "edgar_search / parse_html / retrieve_information), then FINISH by "
+            "calling the submit_answer tool. You MUST end with exactly this JSON "
+            "object (not prose):\n"
+            '{"thought": "...", "tool": "submit_answer", '
+            '"args": {"answer": "<your full answer>", "sources": ["<url>", "..."]}}\n'
+            "A plain-text reply without a submit_answer call does not record an "
+            "answer and scores zero.\n\nQuestion: " + instance.question
         )
 
     def make_env(self, instance: Any) -> StateEnv:
@@ -358,15 +363,42 @@ def load_finance(path: str | Path) -> list[FinanceInstance]:
     return out
 
 
+def _ddg_web_search(query: str, max_results: int = 5) -> str:
+    """Keyless web-search backend (DuckDuckGo via ``ddgs``) as a drop-in for the
+    Tavily ``google_search`` tool. Returns a plain-text block of ranked
+    title/url/snippet triples — the observation the agent reads. Not canonical vs
+    the official Finance-Agent (which uses Tavily), but needs no API key."""
+    from ddgs import DDGS
+
+    with DDGS() as d:
+        results = list(d.text(query, max_results=max_results))
+    if not results:
+        return f"No web results for: {query}"
+    lines = []
+    for i, r in enumerate(results, 1):
+        title = (r.get("title") or "").strip()
+        url = (r.get("href") or r.get("url") or "").strip()
+        body = (r.get("body") or "").strip()
+        lines.append(f"[{i}] {title}\n{url}\n{body}")
+    return "\n\n".join(lines)
+
+
 def finance_from_env() -> FinanceAgentBenchmark:
     """Build a Finance benchmark from environment configuration.
 
-    Reads FINANCE_DATA (csv), FINANCE_GRADER_MODEL, and TAVILY_API_KEY. Any
-    missing piece leaves that service as an unconfigured shell.
+    Reads FINANCE_DATA (csv), FINANCE_GRADER_MODEL, and the search backend. Search
+    is Tavily when TAVILY_API_KEY is set; otherwise FINANCE_SEARCH=ddg selects the
+    keyless DuckDuckGo backend. Any missing piece leaves that service as an
+    unconfigured shell.
     """
     data_path = os.getenv("FINANCE_DATA")
     grader_model = os.getenv("FINANCE_GRADER_MODEL")
-    backend = LiveFinanceBackend() if os.getenv("TAVILY_API_KEY") else None
+    if os.getenv("TAVILY_API_KEY"):
+        backend = LiveFinanceBackend()
+    elif os.getenv("FINANCE_SEARCH", "").lower() in ("ddg", "duckduckgo"):
+        backend = LiveFinanceBackend(web_search_fn=_ddg_web_search)
+    else:
+        backend = None
     grader = LLMRubricGrader(grader_model) if grader_model else None
     data = load_finance(data_path) if data_path else None
     return FinanceAgentBenchmark(backend=backend, grader=grader, instances_data=data)

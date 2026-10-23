@@ -229,6 +229,20 @@ class Agent:
             status = "error"
             error = str(e)
 
+        # Fallback: a model that answers in prose terminates via a parsed
+        # 'finish' action rather than a submit tool, leaving a state env's
+        # free-text ``answer`` empty. Capture the last assistant message so the
+        # answer is not lost. No-op for code envs (no ``answer`` attribute) and
+        # when an answer was already submitted.
+        if getattr(self.env, "answer", None) == "":
+            last = next(
+                (m["content"] for m in reversed(self.messages)
+                 if m.get("role") == "assistant" and str(m.get("content", "")).strip()),
+                "",
+            )
+            if last:
+                self.env.answer = last
+
         contribution = self.env.contribution()
         return AgentResult(
             agent_id=self.agent_id,
