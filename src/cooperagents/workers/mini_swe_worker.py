@@ -26,6 +26,7 @@ import yaml
 
 from cooperagents.completion import CompletionBinding
 from cooperagents.env.base import Environment
+from cooperagents.human_phase_prompts import HUMAN_PLANNING_CHAT, HUMAN_PLANNING_GIT, HUMAN_PLANNING_INSTANCE
 from cooperagents.sampling import sampling_kwargs
 from cooperagents.types import AgentResult
 from cooperagents.vendor.mini_swe.agents.default import DefaultAgent
@@ -423,28 +424,35 @@ def run_mini_swe_agent(
         # process start time in the name prevents pid-recycling collisions
         # from appending new lines onto a dead run's file
         model.heartbeat_path = os.path.join(hb_dir, f"{os.getpid()}_{int(_time.time())}_{agent_id}.hb")
-    system_template = cfg["system_template"]
-    if not isinstance(system_template, str):
-        raise ValueError("Agent system_template must be a string")
-    if monitor is not None and git_share:
-        # Keep both coordinator arms' shared prefix in the human-reviewed order.
-        system_template = system_template.rstrip("\n") + _GIT_SHARE_SYSTEM
-    if (tool_protocol or monitor is not None) and comm is not None:
-        system_template = system_template + _SEND_MESSAGE_SYSTEM
-    if monitor is not None:
-        system_template += monitor.worker_instructions()
-        system_template += (
-            '\nThe coordinator is also a valid send_message recipient: {"recipient":"coordinator","content":"..."}. '
-            "Report proposed edit regions, interface agreements, blockers and verification results without waiting for a reply."
-        )
-    if wait_protocol and comm is not None:
-        system_template = system_template + _WAIT_SYSTEM
-    if task_board is not None:
-        system_template = system_template + _TASK_BOARD_SYSTEM
-    if spawn_handler is not None:
-        system_template = system_template + _SPAWN_SYSTEM
-    if git_share and monitor is None:
-        system_template = system_template + _GIT_SHARE_SYSTEM
+    human_phase = monitor is not None and monitor.coordination_variant == "human-prompt" and monitor._planning
+
+    def system_for_phase(planning: bool) -> str:
+        system_template = cfg["system_template"]
+        if not isinstance(system_template, str):
+            raise ValueError("Agent system_template must be a string")
+        if monitor is not None and git_share:
+            # Keep both coordinator arms' shared prefix in the human-reviewed order.
+            system_template = system_template.rstrip("\n") + (HUMAN_PLANNING_GIT if planning else _GIT_SHARE_SYSTEM)
+        if (tool_protocol or monitor is not None) and comm is not None:
+            system_template = system_template + (HUMAN_PLANNING_CHAT if planning else _SEND_MESSAGE_SYSTEM)
+        if monitor is not None:
+            system_template += (monitor.worker_instructions(planning=planning) if human_phase else monitor.worker_instructions())
+            system_template += (
+                '\nThe coordinator is also a valid send_message recipient: {"recipient":"coordinator","content":"..."}. '
+                "Report proposed edit regions, interface agreements, blockers and verification results without waiting for a reply."
+            )
+        if wait_protocol and comm is not None:
+            system_template = system_template + _WAIT_SYSTEM
+        if task_board is not None:
+            system_template = system_template + _TASK_BOARD_SYSTEM
+        if spawn_handler is not None:
+            system_template = system_template + _SPAWN_SYSTEM
+        if git_share and monitor is None:
+            system_template = system_template + (HUMAN_PLANNING_GIT if planning else _GIT_SHARE_SYSTEM)
+        return system_template
+
+    initial_planning = human_phase and monitor.phase in ("planning", "finalizing")
+    system_template = system_for_phase(initial_planning)
     import time as _time
 
     deadline = (_time.time() + time_limit_s) if time_limit_s else None
@@ -463,7 +471,7 @@ def run_mini_swe_agent(
         agent_id=agent_id,
         system_template=system_template,
         wall_deadline=deadline,
-        instance_template=cfg["instance_template"],
+        instance_template=HUMAN_PLANNING_INSTANCE if initial_planning else cfg["instance_template"],
         step_limit=step_limit,
         cost_limit=cost_limit,
         compaction_token_trigger=cfg.get("compaction_token_trigger", 28000),
@@ -474,6 +482,31 @@ def run_mini_swe_agent(
         agent.config.wall_deadline = (_time.time() + time_limit_s) if time_limit_s else None
     agent.trace = trace
     agent.coordinator = monitor
+    if human_phase:
+        prompt_phase = "planning" if initial_planning else "implementation"
+
+        def set_prompt_phase(phase: str) -> None:
+            nonlocal prompt_phase
+            if phase not in ("planning", "implementation") or phase == prompt_phase:
+                return
+            agent.config.system_template = system_for_phase(phase == "planning")
+            agent.config.instance_template = HUMAN_PLANNING_INSTANCE if phase == "planning" else cfg["instance_template"]
+            # Keep inspection/discussion history, but replace the active system/task prefix.
+            agent.messages[:2] = [
+                agent.model.format_message(role="system", content=agent._render_template(agent.config.system_template)),
+                agent.model.format_message(role="user", content=agent._render_template(agent.config.instance_template)),
+            ]
+            if phase == "implementation":
+                for message in agent.messages[2:]:
+                    if message.get("extra", {}).get("host_phase_notice") == "planning":
+                        _, _, notebook = message["content"].partition("Current notebook version:")
+                        message["content"] = "Historical planning notebook (superseded by the implementation handoff):\n" + notebook
+                        message["extra"]["host_phase_notice"] = "historical"
+            prompt_phase = phase
+            if trace is not None:
+                trace("context", messages=agent.messages, reason="human_prompt_phase_transition")
+
+        agent.set_prompt_phase = set_prompt_phase
     if comm is not None and getattr(comm, "group", None) is not None:
         model._tools = [
             dict(

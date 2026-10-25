@@ -61,6 +61,17 @@ from cooperagents.coordination_prompts import (
 from cooperagents.env.base import Environment
 from cooperagents.git_snapshots import GitEvidence
 from cooperagents.git_snapshots import GitShareSync as _GitShareSync
+from cooperagents.human_phase_prompts import (
+    HUMAN_IMPLEMENTATION_INITIAL,
+    HUMAN_IMPLEMENTATION_SYSTEM,
+    HUMAN_PLANNING_BASE,
+    HUMAN_PLANNING_INITIAL,
+    HUMAN_PLANNING_MODE,
+    HUMAN_PLANNING_PROTOCOL,
+    HUMAN_PLANNING_SYSTEM,
+    HUMAN_PLANNING_WARNINGS,
+    HUMAN_PLANNING_WORKFLOW,
+)
 from cooperagents.initial_plan import InitialPlan
 from cooperagents.llm import LLMClient
 from cooperagents.metrics import coordination_metrics, spawn_metrics
@@ -482,10 +493,15 @@ class _Coordinator:
         if self.trace is not None:
             self.trace(event, **data)
 
-    def worker_instructions(self) -> str:
+    def worker_instructions(self, *, planning: bool | None = None) -> str:
         phase_protocol = PLANNING_SYSTEM if self.coordination_mode == "group-chat-planning" else ""
         if self.coordination_variant == "human-prompt":
-            return "\n\n" + HUMAN_WORKER_WORKFLOW + (GROUP_CHAT if self.coordination_mode != "direct" else "") + phase_protocol
+            is_planning = self.phase in ("planning", "finalizing") if planning is None else planning
+            workflow = HUMAN_PLANNING_WORKFLOW if is_planning else HUMAN_WORKER_WORKFLOW
+            phase = ""
+            if self._planning:
+                phase = HUMAN_PLANNING_SYSTEM if is_planning else HUMAN_IMPLEMENTATION_SYSTEM
+            return "\n\n" + workflow + (GROUP_CHAT if self.coordination_mode != "direct" else "") + phase
         note = ""
         if self._notebook_path is not None:
             note = (
@@ -752,6 +768,8 @@ class _Coordinator:
 
     def _implementation_text(self) -> str:
         text = IMPLEMENTATION_MODE.format(**self._final_plan)
+        if self.coordination_variant == "human-prompt":
+            text += "\nThe coordinator may update this plan during implementation. Follow the latest notebook and coordination notices.\n"
         if self.initial_plan is not None:
             text = text.replace("Planning outcome: injected\n", "")
         return text
@@ -759,11 +777,13 @@ class _Coordinator:
     def _restore_plan_locked(self, aid: str, agent) -> None:
         if not self._planning or self.phase in ("finalizing", "failed"):
             return
+        if self.coordination_variant == "human-prompt" and hasattr(agent, "set_prompt_phase"):
+            agent.set_prompt_phase(self.phase)
         marker = (self.phase, self._version if self.phase == "planning" else self._final_plan["version"], agent._compaction_count)
         if self._plan_context.get(aid) != marker:
             if self.phase == "planning":
                 text = (
-                    PLANNING_MODE
+                    (HUMAN_PLANNING_MODE if self.coordination_variant == "human-prompt" else PLANNING_MODE)
                     + f"\nCurrent notebook version: {self._version}\n<planning_notebook>\n{self._notebook}\n</planning_notebook>"
                 )
             else:
@@ -776,7 +796,10 @@ class _Coordinator:
                         self._summary_delivered.add(aid)
                         self._emit("worker_summary_delivery", target=aid, content=summary, synthetic=True)
                 text = self._implementation_text()
-            agent.add_messages(agent.model.format_message(role="user", content=text))
+            message = agent.model.format_message(role="user", content=text)
+            if self.coordination_variant == "human-prompt":
+                message.setdefault("extra", {})["host_phase_notice"] = self.phase
+            agent.add_messages(message)
             self._plan_context[aid] = marker
             if self.phase == "implementation" and aid not in self._delivered:
                 self._delivered.add(aid)
@@ -849,7 +872,8 @@ class _Coordinator:
             snapshot["chat_position"] = self._chat_positions[aid]
             if self._planning:
                 snapshot["phase_text"] = (
-                    PLANNING_MODE + f"\nCurrent notebook version: {self._version}\n"
+                    (HUMAN_PLANNING_MODE if self.coordination_variant == "human-prompt" else PLANNING_MODE)
+                    + f"\nCurrent notebook version: {self._version}\n"
                     f"<planning_notebook>\n{self._notebook}\n</planning_notebook>"
                     if self.phase == "planning"
                     else self._implementation_text()
@@ -1310,10 +1334,14 @@ class _Coordinator:
         if self.coordination_mode == "direct":
             observation["replies"] = list(self._pending)
         observation["previous_error"] = self._last_error
+        human_planning = self.coordination_variant == "human-prompt" and decision_phase in ("planning", "finalizing")
         if self.coordination_variant == "human-prompt":
-            protocol = HUMAN_COORDINATOR_BASE + "\n"
+            protocol = (HUMAN_PLANNING_BASE if human_planning else HUMAN_COORDINATOR_BASE) + "\n"
             if initial:
-                protocol += "\n" + HUMAN_COORDINATOR_INITIAL + "\n"
+                initial_protocol = HUMAN_PLANNING_INITIAL if human_planning else (
+                    HUMAN_IMPLEMENTATION_INITIAL if self._planning else HUMAN_COORDINATOR_INITIAL
+                )
+                protocol += "\n" + initial_protocol + "\n"
         else:
             protocol = _COORDINATOR_PROMPT
             if initial:
@@ -1324,7 +1352,7 @@ class _Coordinator:
                     "but leave concrete edit boundaries and ownership pending worker evidence and confirmation. "
                     "Do not guess filenames, existing symbols or new shared APIs, or declare coordination complete.\n"
                 )
-        protocol += "\n" + COORDINATOR_WARNING_RULES
+        protocol += "\n" + (HUMAN_PLANNING_WARNINGS if human_planning else COORDINATOR_WARNING_RULES)
         if self._notebook_path is not None:
             observation["notebook"] = {"version": version, "content": notebook}
             if self.coordination_variant == "auto-prompt":
@@ -1351,7 +1379,7 @@ class _Coordinator:
                 observation["initial"] = False
                 protocol += FORCED_PLANNING
             elif self.phase == "planning":
-                protocol += COORDINATOR_PLANNING
+                protocol += HUMAN_PLANNING_PROTOCOL if human_planning else COORDINATOR_PLANNING
         system = None
         if self._planning:
             system = COORDINATOR_IMPLEMENTATION_SYSTEM if decision_phase == "implementation" else COORDINATOR_PLANNING_SYSTEM
@@ -2243,6 +2271,9 @@ class UnifiedHarness:
                             f"{x.agent_id} (feature {x.feature_id})" for x in assignments if x.agent_id != a.agent_id
                         )
                         task = a.task + (
+                            f"\n\nTEAMMATES: {mates} are assigned features in parallel repository copies. "
+                            "Follow the host-provided phase. Coordinate proposed edit regions, shared interfaces and dependencies."
+                        ) if self.coordination_variant == "human-prompt" else a.task + (
                             f"\n\nTEAMMATES: {mates} are implementing their features RIGHT NOW in parallel "
                             "copies of this repo; your diffs will be merged at the end. Coordinate via the "
                             "send_message tool (incoming messages appear as [Message from ...]): agree on "

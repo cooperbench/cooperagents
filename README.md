@@ -287,6 +287,15 @@ or configuration. This is a prompt instruction, not a write-permission barrier.
 Early changes remain in the trace and raw patch; they are not rolled back or
 automatically excluded from scoring.
 
+With `human-prompt`, planning uses separate coordinator and worker instructions.
+The original feature description is preserved; the worker's implementation workflow,
+mandatory bash-per-response rule and patch submission procedure are deferred until
+implementation. At the host transition, the worker replaces its system/task prefix,
+keeps inspection and discussion history, and archives prior host planning notices.
+Compaction retains the current phase prefix. The final planning notebook is a starting
+plan: the coordinator may update it during implementation, and workers follow the latest
+notebook and notices. `auto-prompt` retains its existing prompts and transition behavior.
+
 Workers confirm the current delivered notebook with `confirm_plan(version)` as
 their sole action. A revised notebook invalidates confirmations. After both
 workers participate and confirm the same candidate, the coordinator calls

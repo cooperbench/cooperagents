@@ -289,9 +289,25 @@ def test_real_loop_planning_patch_and_request_order(tmp_path, monkeypatch, varia
     def complete(**kwargs):
         messages = kwargs["messages"]
         system = next(m["content"] for m in messages if m["role"] == "system")
-        assert "OPENING PHASE PROTOCOL" in system
-        assert "Earlier advice to continue independent edits" in system
-        assert "Mode labels in group chat do not" in system
+        if variant == "auto-prompt":
+            assert "OPENING PHASE PROTOCOL" in system
+            assert "Earlier advice to continue independent edits" in system
+            assert "Mode labels in group chat do not" in system
+        else:
+            task = messages[1]["content"]
+            assert "SYNTHETIC feature" in task
+            assert "RIGHT NOW" not in task
+            if "CURRENT PHASE — PLANNING" in system:
+                assert "clearly independent edits" not in system
+                assert "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT" not in task
+                assert "MUST include AT LEAST ONE bash" not in task
+                assert "confirm_plan(version)" in task
+            else:
+                assert "CURRENT PHASE — IMPLEMENTATION" in system
+                assert "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT" in task
+                assert "The coordinator may update the plan" in system
+                assert not any(m.get("content", "").startswith("[PLANNING MODE]") for m in messages)
+                assert any(m["role"] == "assistant" for m in messages[2:])
         requests.append(json.loads(json.dumps(kwargs, default=str)))
         assert {"bash", "send_message"} <= {t["function"]["name"] for t in kwargs["tools"]}
         assert (
