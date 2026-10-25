@@ -434,3 +434,21 @@ tool preconditions report factual errors without suggested calls. Coordinator to
 continue through `observation.previous_error`. Ordinary replies without tool calls keep their
 existing protocol behavior; no new no-tool-call feedback or project-write enforcement is added.
 A recovered planning outcome must be reported separately from attempted submission violations.
+
+
+Reviewing this behavior:
+
+- A successful plan after a rejected submission is recovery, not evidence that the worker never
+  attempted to submit. Report attempts, rejections, recovery and final outcome separately.
+- Native planning XML with no complete tool-call block retains legacy no-tool-call feedback.
+  A complete block followed by a truncated block is rejected as a malformed response, matching
+  the completion-binding parser; the complete prefix is not executed.
+- Rejected `confirm_plan` and `finish_planning` calls do not fabricate agreement or advance the
+  phase. Confirmation is distinct from the host's decision to finish planning.
+- `environment_output` follows the submission/gate checks. Trace consumers should use its
+  observed result and the explicit rejection events, not infer acceptance from `raw_output`.
+
+Focused offline coverage lives in `tests/test_planning_feedback.py`, `tests/test_planning.py`
+and `tests/test_human_phase_prompts.py`. These tests cover pre/post-execution rejection,
+recovery into implementation, active-tool validation, handoff wording, and observation tracing.
+They do not replace live rollout evaluation or concurrent stress testing.
