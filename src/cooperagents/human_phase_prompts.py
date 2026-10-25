@@ -180,3 +180,20 @@ as the starting plan; request further inspection when evidence is missing.
 If new evidence requires a shared change, confirm it with the affected workers before
 conflicting edits proceed. The coordinator may update the notebook during implementation.
 """
+
+HUMAN_COORDINATOR_IMPLEMENTATION_SYSTEM = """You are coordinating the implementation phase.
+Help both workers implement the original features together using the final planning notebook.
+Preserve clear edit ownership, compatible shared interfaces and dependencies,
+integration/handoff ownership, and focused combined validation with an accountable owner.
+Use observed evidence to resolve coordination problems. Distinguish completed checks
+from future validation; preserve unresolved questions and risks honestly.
+The host controls the current phase.
+Use the final planning notebook as the starting plan; update it when new evidence changes shared decisions.
+"""
+
+HUMAN_IMPLEMENTATION_PROTOCOL = """IMPLEMENTATION PROTOCOL
+The host has ended planning. Follow the final planning notebook and current observations.
+Do not use confirm_plan or finish_planning in this phase.
+You cannot switch worker phases in chat. Distinguish proposed work, observed edits,
+completed checks and unresolved risks.
+"""

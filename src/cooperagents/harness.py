@@ -62,7 +62,9 @@ from cooperagents.env.base import Environment
 from cooperagents.git_snapshots import GitEvidence
 from cooperagents.git_snapshots import GitShareSync as _GitShareSync
 from cooperagents.human_phase_prompts import (
+    HUMAN_COORDINATOR_IMPLEMENTATION_SYSTEM,
     HUMAN_IMPLEMENTATION_INITIAL,
+    HUMAN_IMPLEMENTATION_PROTOCOL,
     HUMAN_IMPLEMENTATION_SYSTEM,
     HUMAN_PLANNING_BASE,
     HUMAN_PLANNING_INITIAL,
@@ -1383,6 +1385,9 @@ class _Coordinator:
         system = None
         if self._planning:
             system = COORDINATOR_IMPLEMENTATION_SYSTEM if decision_phase == "implementation" else COORDINATOR_PLANNING_SYSTEM
+            if self.coordination_variant == "human-prompt" and decision_phase == "implementation":
+                system = HUMAN_COORDINATOR_IMPLEMENTATION_SYSTEM
+                protocol += "\n" + HUMAN_IMPLEMENTATION_PROTOCOL
         prompt = protocol + "\nOBSERVATION:\n" + json.dumps(observation, ensure_ascii=False)
         count = len(self._pending)
         self._emit("observation", **observation)

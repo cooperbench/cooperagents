@@ -113,6 +113,34 @@ def test_human_coordinator_uses_phase_specific_protocol(tmp_path):
     last = requests[-1].split("OBSERVATION:")[0]
     assert "Keep implementation moving" in last
     assert "PLANNING PROTOCOL" not in last
-    assert "finish_planning" not in last
+    assert "Do not use confirm_plan or finish_planning in this phase." in last
     assert "Workers have not yet inspected" not in last
     assert "The coordinator may update the notebook" in last
+
+
+@pytest.mark.parametrize("variant", ["human-prompt", "auto-prompt"])
+@pytest.mark.parametrize("initial", [True, False])
+def test_implementation_coordinator_retains_reviewed_obligations(tmp_path, variant, initial):
+    from cooperagents.coordination_prompts import COORDINATOR_IMPLEMENTATION_SYSTEM
+    from test_planning import planning, publish_plan
+
+    requests = []
+    c = planning(tmp_path, coordination_variant=variant, complete=lambda p: requests.append(p) or [])
+    c.decide(initial=True)
+    assert "IMPLEMENTATION PROTOCOL" not in requests[-1].split("OBSERVATION:")[0]
+    publish_plan(c)
+    for aid in c._assignments:
+        c.confirm_plan(aid, {"version": c._version}, sole=True)
+    c._observed_confirmations = dict(c._confirmations)
+    c.finish_planning(c._version)
+    c.decide(initial=initial)
+    prompt = requests[-1].split("OBSERVATION:")[0]
+    if variant == "human-prompt":
+        assert "focused combined validation with an accountable owner" in prompt
+        assert "Do not use confirm_plan or finish_planning in this phase." in prompt
+        assert "You cannot switch worker phases in chat." in prompt
+        assert "update it when new evidence changes shared decisions" in prompt
+    else:
+        assert prompt.startswith(COORDINATOR_IMPLEMENTATION_SYSTEM)
+        assert "IMPLEMENTATION PROTOCOL" not in prompt
+        assert "focused combined validation with an accountable owner" not in prompt
