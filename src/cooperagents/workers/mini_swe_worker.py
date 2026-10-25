@@ -115,9 +115,13 @@ class MiniSweEnvAdapter:
 
         res = record_call(self.trace, self._env.execute, command=_ENV_PREFIX + command, timeout=timeout or self._timeout)
         output = {"output": res.stdout, "returncode": res.exit_code, "exception_info": ""}
-        if self.trace is not None:
-            self.trace("environment_output", action=action, command=_ENV_PREFIX + command, output=output)
-        self._check_finished(output)
+        raw_output = output.copy()
+        try:
+            self._check_finished(output)
+        finally:
+            if self.trace is not None:
+                extra = {"raw_output": raw_output} if raw_output != output else {}
+                self.trace("environment_output", action=action, command=_ENV_PREFIX + command, output=output, **extra)
         return output
 
     def _reject_submission(self, *, executed: bool) -> dict | None:
@@ -441,6 +445,7 @@ def run_mini_swe_agent(
         # process start time in the name prevents pid-recycling collisions
         # from appending new lines onto a dead run's file
         model.heartbeat_path = os.path.join(hb_dir, f"{os.getpid()}_{int(_time.time())}_{agent_id}.hb")
+    model._validate_active_tools = monitor is not None and monitor._planning
     human_phase = monitor is not None and monitor.coordination_variant == "human-prompt" and monitor._planning
 
     def system_for_phase(planning: bool) -> str:

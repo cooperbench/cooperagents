@@ -83,6 +83,7 @@ def test_finalizing_and_planning_only_completion_do_not_accept_submit(tmp_path):
 ])
 def test_tool_errors_are_factual_on_both_transports(binding, name, args, expected):
     model = LitellmModel(model_name="openai/dummy", cost_tracking="ignore_errors", format_error_template="old coaching {{error}}")
+    model._validate_active_tools = True
     if binding:
         model.completion = object()
     response = litellm.ModelResponse(choices=[{"message": {"role": "assistant", "content": "", "tool_calls": [
@@ -125,6 +126,7 @@ def test_coordinator_error_then_valid_finish(tmp_path):
 @pytest.mark.parametrize("binding", [False, True])
 def test_unknown_xml_tool_lists_active_tools(binding):
     model = LitellmModel(model_name="openai/dummy", cost_tracking="ignore_errors")
+    model._validate_active_tools = True
     if binding:
         model.completion = object()
     response = litellm.ModelResponse(choices=[{"message": {
@@ -152,3 +154,91 @@ def test_worker_rejection_is_a_correlated_nonterminal_tool_result(tmp_path):
     assert len(ran) == 1 and c.phase == "planning" and not c._finished
     assert all(message["role"] != "exit" for message in worker.messages)
     assert "SUBMISSION_NOT_ALLOWED_IN_PLANNING" in worker.messages[0]["content"]
+
+
+@pytest.mark.parametrize("binding", [False, True])
+@pytest.mark.parametrize("name,parameter,value,expected", [
+    ("confirm_plan", "version", "3", 3),
+    ("bash", "command", "true", "true"),
+    ("bash", "command", "false", "false"),
+])
+def test_planning_xml_uses_schema_types(binding, name, parameter, value, expected):
+    from cooperagents.vendor.mini_swe.models.utils.actions_toolcall import CONFIRM_PLAN_TOOL
+
+    model = LitellmModel(model_name="openai/dummy", cost_tracking="ignore_errors", extra_tools=[CONFIRM_PLAN_TOOL])
+    model._validate_active_tools = True
+    if binding:
+        model.completion = object()
+    response = litellm.ModelResponse(choices=[{"message": {
+        "role": "assistant",
+        "content": f"<tool_call><function={name}><parameter={parameter}>{value}</parameter></function></tool_call>",
+    }}])
+    action = model._parse_actions(response)[0]
+    assert action[parameter] == expected and type(action[parameter]) is type(expected)
+
+
+def test_nonplanning_native_transport_preserves_legacy_dispatch():
+    model = LitellmModel(model_name="openai/dummy", cost_tracking="ignore_errors")
+    response = litellm.ModelResponse(choices=[{"message": {"role": "assistant", "tool_calls": [
+        {"id": "legacy", "type": "function", "function": {
+            "name": "send_message", "arguments": json.dumps({"recipient": "agent2", "content": "hello"})
+        }}
+    ]}}])
+    assert not model._validate_active_tools
+    assert model._parse_actions(response)[0]["tool_name"] == "send_message"
+
+
+@pytest.mark.parametrize("executed", [False, True])
+def test_handoff_window_rejection_describes_actual_phase(tmp_path, executed):
+    c = planning(tmp_path)
+    publish_plan(c)
+    for aid in c._assignments:
+        c.confirm_plan(aid, {"version": c._version}, sole=True)
+    c._observed_confirmations = dict(c._confirmations)
+    c.finish_planning(c._version)
+    feedback = c.submission_error("agent1", executed=executed)
+    assert "Implementation has started" in feedback and "handoff has not reached every worker" in feedback
+    assert "Only the host can enable implementation" not in feedback
+    assert "Do not make further project edits" not in feedback
+    if not executed:
+        assert "SUBMISSION_AWAITS_HANDOFF" in feedback
+
+
+def test_trace_distinguishes_raw_output_from_rejected_observation(tmp_path):
+    c = planning(tmp_path)
+    recorded = []
+    # Serialize immediately, as the native journal does.
+    def trace(event, **data):
+        if event == "environment_output":
+            recorded.append(json.loads(json.dumps({"event": event, **data})))
+
+    env = SimpleNamespace(execute=lambda **kwargs: ExecResult(MARKER + "\ndiff", 0))
+    adapter = MiniSweEnvAdapter(env, trace=trace, submission_guard=lambda executed: c.submission_error("agent1", executed=executed))
+    returned = adapter.execute({"command": "echo " + MARKER + " && git diff"})
+    event = next(e for e in recorded if e["event"] == "environment_output")
+    assert event["output"] == returned and returned["returncode"] == 1
+    assert event["raw_output"]["returncode"] == 0
+    assert event["raw_output"]["output"] == MARKER + "\ndiff"
+    recorded.clear()
+    adapter._submission_guard = None
+    with pytest.raises(Submitted):
+        adapter.execute({"command": "echo " + MARKER})
+    event = next(e for e in recorded if e["event"] == "environment_output")
+    assert event["output"]["returncode"] == 0 and "raw_output" not in event
+
+
+@pytest.mark.parametrize("content", [
+    "No action needed.", "Use <tool_call> syntax.",
+    "<tool_call><function=bash>\n<parameter=command>true</parameter>",
+])
+def test_planning_without_complete_xml_call_preserves_legacy_feedback(content):
+    messages = []
+    for planning_enabled in (False, True):
+        model = LitellmModel(model_name="openai/dummy", cost_tracking="ignore_errors", format_error_template="legacy {{error}}")
+        model._validate_active_tools = planning_enabled
+        response = litellm.ModelResponse(choices=[{"message": {"role": "assistant", "content": content}}])
+        with pytest.raises(FormatError) as error:
+            model._parse_actions(response)
+        messages.append(error.value.messages)
+    assert messages[0] == messages[1]
+    assert "legacy No tool calls found" in messages[1][0]["content"]

@@ -423,6 +423,12 @@ claim to undo its effects. Rejections return ordinary tool observations, emit
 the optional implementation completion gate's rejection allowance. Existing step/time budgets
 still apply; repeated rejection never forces a planning submission to be accepted.
 
+Native planning workers validate both structured and XML tool calls against the active schemas;
+XML argument types follow those schemas. Native runs without planning retain their existing parser.
+During the implementation handoff window, rejection feedback describes the pending delivery.
+The `environment_output` event records the observation returned to the agent; when rejection
+changes that observation, `raw_output` preserves the original command result.
+
 Unavailable-tool errors list the tools active for the request. Argument validation and planning
 tool preconditions report factual errors without suggested calls. Coordinator tool failures
 continue through `observation.previous_error`. Ordinary replies without tool calls keep their

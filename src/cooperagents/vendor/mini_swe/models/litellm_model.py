@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import re
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -98,6 +99,8 @@ class LitellmModelConfig(BaseModel):
 
 
 class LitellmModel:
+    _validate_active_tools = False
+
     abort_exceptions: list[type[BaseException]] = [
         litellm.exceptions.UnsupportedParamsError,
         litellm.exceptions.NotFoundError,
@@ -343,7 +346,11 @@ class LitellmModel:
     def _parse_actions(self, response) -> list[dict]:
         """Parse tool calls; injected responses use the active tool schemas for both transports."""
         tool_calls = response.choices[0].message.tool_calls or []
-        if self.completion is not None:
+        schema_validation = self.completion is not None or (
+            self._validate_active_tools
+            and (tool_calls or re.search(r"<tool_call>.*?</tool_call>", response.choices[0].message.content or "", re.S))
+        )
+        if schema_validation:
             from types import SimpleNamespace
 
             from cooperagents.completion import parse_completion_tool_calls
@@ -357,18 +364,6 @@ class LitellmModel:
                 tool_calls = [SimpleNamespace(id=f"xmlcall-{i}", function=SimpleNamespace(**row)) for i, row in enumerate(rows)]
         elif not tool_calls:
             tool_calls = _toolcalls_from_xml(response.choices[0].message.content or "")
-        if tool_calls and self.completion is None:
-            from types import SimpleNamespace
-
-            from cooperagents.completion import parse_completion_tool_calls
-            from cooperagents.vendor.mini_swe.exceptions import FormatError
-
-            try:
-                parse_completion_tool_calls(
-                    SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(tool_calls=tool_calls))]), self._tools
-                )
-            except (ValueError, TypeError) as exc:
-                raise FormatError({"role": "user", "content": str(exc), "extra": {"interrupt_type": "FormatError"}}) from exc
         return parse_toolcall_actions(tool_calls, format_error_template=self.config.format_error_template)
 
     def format_message(self, **kwargs) -> dict:

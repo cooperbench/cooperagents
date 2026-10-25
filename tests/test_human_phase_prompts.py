@@ -48,6 +48,7 @@ def test_worker_transition_compaction_and_later_notebook(tmp_path, monkeypatch, 
                     on_start=capture,
                 )
         first = workers[0]
+        assert all(w.model._validate_active_tools for w in workers)
         original = copy.deepcopy(first.messages[:2])
         for w in workers:
             c.publish(w.agent_id, "group", "Inspected relevant source; propose independent edits.")

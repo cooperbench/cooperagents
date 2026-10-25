@@ -128,10 +128,11 @@ def test_finish_planning_reports_version_mismatch(tmp_path, stale):
     version = c._version - 1 if stale == "request" else c._version
     if stale == "candidate":
         c._candidate_version = None
-    with pytest.raises(ValueError, match="version mismatch") as error:
+    with pytest.raises(ValueError, match="no candidate" if stale == "candidate" else "version mismatch") as error:
         c.finish_planning(version)
-    assert f"Requested: {version}" in str(error.value)
-    assert f"Current candidate: {c._candidate_version}" in str(error.value)
+    if stale == "request":
+        assert f"Requested: {version}" in str(error.value)
+        assert f"Current candidate: {c._candidate_version}" in str(error.value)
     assert "missing" not in str(error.value)
     assert c.phase == "planning"
 

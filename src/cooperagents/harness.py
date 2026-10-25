@@ -728,6 +728,8 @@ class _Coordinator:
             self._check_planning_limits_locked()
             if self.phase != "planning" or self._finished:
                 raise ValueError(f"finish_planning failed: unavailable in phase {self.phase} or a worker has exited.")
+            if self._candidate_version is None:
+                raise ValueError("finish_planning failed: no candidate notebook is available. Planning remains active.")
             if version != self._candidate_version or version != self._version:
                 raise ValueError(
                     f"finish_planning failed: version mismatch. Requested: {version}. "
@@ -904,14 +906,22 @@ class _Coordinator:
                     f"SUBMISSION_NOT_ACCEPTED\nCurrent phase: {self.phase}. "
                     "The command ran, but its completion marker did not submit your task.\n"
                     "Any earlier command effects remain; no rollback was performed. Review the command output "
-                    "and report any project changes to the coordinator. Do not make further project edits.\n"
+                    "and report any project changes to the coordinator.\n"
                 )
             else:
+                code = "SUBMISSION_AWAITS_HANDOFF" if self.phase == "implementation" else "SUBMISSION_NOT_ALLOWED_IN_PLANNING"
                 text = (
-                    f"SUBMISSION_NOT_ALLOWED_IN_PLANNING\nCurrent phase: {self.phase}. "
+                    f"{code}\nCurrent phase: {self.phase}. "
                     "This command was not executed and your task was not submitted.\n"
                 )
-            if self.phase == "planning":
+            if self.phase in ("planning", "finalizing") and executed:
+                text += "Do not make further project edits.\n"
+            if self.phase == "implementation":
+                text += (
+                    "Implementation has started, but the final planning handoff has not reached every worker. "
+                    "The next turn will deliver your handoff and wait for every worker to receive it."
+                )
+            elif self.phase == "planning":
                 text += (
                     "Continue read-only inspection and discussion. Read /coordination/notebook.md when its version changes.\n"
                     "If you agree with the current candidate, call confirm_plan(version) as the only tool action in your response. "
