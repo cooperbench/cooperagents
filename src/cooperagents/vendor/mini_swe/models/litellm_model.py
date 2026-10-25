@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import re
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -98,6 +99,8 @@ class LitellmModelConfig(BaseModel):
 
 
 class LitellmModel:
+    _validate_active_tools = False
+
     abort_exceptions: list[type[BaseException]] = [
         litellm.exceptions.UnsupportedParamsError,
         litellm.exceptions.NotFoundError,
@@ -343,7 +346,11 @@ class LitellmModel:
     def _parse_actions(self, response) -> list[dict]:
         """Parse tool calls; injected responses use the active tool schemas for both transports."""
         tool_calls = response.choices[0].message.tool_calls or []
-        if self.completion is not None:
+        schema_validation = self.completion is not None or (
+            self._validate_active_tools
+            and (tool_calls or re.search(r"<tool_call>.*?</tool_call>", response.choices[0].message.content or "", re.S))
+        )
+        if schema_validation:
             from types import SimpleNamespace
 
             from cooperagents.completion import parse_completion_tool_calls

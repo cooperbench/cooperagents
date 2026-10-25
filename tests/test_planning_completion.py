@@ -329,6 +329,7 @@ def test_coordinator_system_switches_after_finalization(tmp_path, monkeypatch, t
 
     import openai
 
+    from cooperagents.human_phase_prompts import HUMAN_COORDINATOR_IMPLEMENTATION_SYSTEM
     from test_planning import planning, publish_plan
 
     def forbidden(*args, **kwargs):
@@ -360,7 +361,10 @@ def test_coordinator_system_switches_after_finalization(tmp_path, monkeypatch, t
     c.finish_planning(c._version)
     c.decide(initial=True)
     assert len(requests) == 2
-    for messages, system in zip(requests, (COORDINATOR_PLANNING_SYSTEM, COORDINATOR_IMPLEMENTATION_SYSTEM), strict=True):
+    implementation_system = (
+        HUMAN_COORDINATOR_IMPLEMENTATION_SYSTEM if variant == "human-prompt" else COORDINATOR_IMPLEMENTATION_SYSTEM
+    )
+    for messages, system in zip(requests, (COORDINATOR_PLANNING_SYSTEM, implementation_system), strict=True):
         assert len(messages) == 2 and messages[0] == {"role": "system", "content": system}
         user = messages[1]["content"]
         assert messages[1]["role"] == "user"

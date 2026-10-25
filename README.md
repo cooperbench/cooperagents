@@ -287,6 +287,15 @@ or configuration. This is a prompt instruction, not a write-permission barrier.
 Early changes remain in the trace and raw patch; they are not rolled back or
 automatically excluded from scoring.
 
+With `human-prompt`, planning uses separate coordinator and worker instructions.
+The original feature description is preserved; the worker's implementation workflow,
+mandatory bash-per-response rule and patch submission procedure are deferred until
+implementation. At the host transition, the worker replaces its system/task prefix,
+keeps inspection and discussion history, and archives prior host planning notices.
+Compaction retains the current phase prefix. The final planning notebook is a starting
+plan: the coordinator may update it during implementation, and workers follow the latest
+notebook and notices. `auto-prompt` retains its existing prompts and transition behavior.
+
 Workers confirm the current delivered notebook with `confirm_plan(version)` as
 their sole action. A revised notebook invalidates confirmations. After both
 workers participate and confirm the same candidate, the coordinator calls
@@ -402,3 +411,44 @@ raises `cooperagents.planning.PlanningCleanupError` (`category="cleanup"`); call
 stop training rather than discard that episode and continue. All registered cleanup
 callbacks still run. This API provides lifecycle/transport plumbing,
 not evidence of rubric calibration or downstream implementation correctness.
+
+### Planning action feedback
+
+Planning-enabled workers in both prompt variants reject terminal submission until the host
+has entered implementation and delivered the handoff to both workers. The canonical plain
+submission command is rejected before execution; completion markers from other commands are
+rejected after execution. Post-execution feedback preserves the command output and does not
+claim to undo its effects. Rejections return ordinary tool observations, emit
+`submission_rejected` with the authoritative phase and execution status, and do not consume
+the optional implementation completion gate's rejection allowance. Existing step/time budgets
+still apply; repeated rejection never forces a planning submission to be accepted.
+
+Native planning workers validate both structured and XML tool calls against the active schemas;
+XML argument types follow those schemas. Native runs without planning retain their existing parser.
+During the implementation handoff window, rejection feedback describes the pending delivery.
+The `environment_output` event records the observation returned to the agent; when rejection
+changes that observation, `raw_output` preserves the original command result.
+
+Unavailable-tool errors list the tools active for the request. Argument validation and planning
+tool preconditions report factual errors without suggested calls. Coordinator tool failures
+continue through `observation.previous_error`. Ordinary replies without tool calls keep their
+existing protocol behavior; no new no-tool-call feedback or project-write enforcement is added.
+A recovered planning outcome must be reported separately from attempted submission violations.
+
+
+Reviewing this behavior:
+
+- A successful plan after a rejected submission is recovery, not evidence that the worker never
+  attempted to submit. Report attempts, rejections, recovery and final outcome separately.
+- Native planning XML with no complete tool-call block retains legacy no-tool-call feedback.
+  A complete block followed by a truncated block is rejected as a malformed response, matching
+  the completion-binding parser; the complete prefix is not executed.
+- Rejected `confirm_plan` and `finish_planning` calls do not fabricate agreement or advance the
+  phase. Confirmation is distinct from the host's decision to finish planning.
+- `environment_output` follows the submission/gate checks. Trace consumers should use its
+  observed result and the explicit rejection events, not infer acceptance from `raw_output`.
+
+Focused offline coverage lives in `tests/test_planning_feedback.py`, `tests/test_planning.py`
+and `tests/test_human_phase_prompts.py`. These tests cover pre/post-execution rejection,
+recovery into implementation, active-tool validation, handoff wording, and observation tracing.
+They do not replace live rollout evaluation or concurrent stress testing.
