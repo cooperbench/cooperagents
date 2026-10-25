@@ -411,3 +411,20 @@ raises `cooperagents.planning.PlanningCleanupError` (`category="cleanup"`); call
 stop training rather than discard that episode and continue. All registered cleanup
 callbacks still run. This API provides lifecycle/transport plumbing,
 not evidence of rubric calibration or downstream implementation correctness.
+
+### Planning action feedback
+
+Planning-enabled workers in both prompt variants reject terminal submission until the host
+has entered implementation and delivered the handoff to both workers. The canonical plain
+submission command is rejected before execution; completion markers from other commands are
+rejected after execution. Post-execution feedback preserves the command output and does not
+claim to undo its effects. Rejections return ordinary tool observations, emit
+`submission_rejected` with the authoritative phase and execution status, and do not consume
+the optional implementation completion gate's rejection allowance. Existing step/time budgets
+still apply; repeated rejection never forces a planning submission to be accepted.
+
+Unavailable-tool errors list the tools active for the request. Argument validation and planning
+tool preconditions report factual errors without suggested calls. Coordinator tool failures
+continue through `observation.previous_error`. Ordinary replies without tool calls keep their
+existing protocol behavior; no new no-tool-call feedback or project-write enforcement is added.
+A recovered planning outcome must be reported separately from attempted submission violations.

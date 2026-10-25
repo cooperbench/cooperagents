@@ -727,20 +727,20 @@ class _Coordinator:
         with self._condition:
             self._check_planning_limits_locked()
             if self.phase != "planning" or self._finished:
-                raise ValueError("finish_planning requires current observed confirmations from both live workers")
+                raise ValueError(f"finish_planning failed: unavailable in phase {self.phase} or a worker has exited.")
             if version != self._candidate_version or version != self._version:
                 raise ValueError(
-                    f"finish_planning version mismatch: requested={version}; "
-                    f"current notebook={self._version}; candidate={self._candidate_version}"
+                    f"finish_planning failed: version mismatch. Requested: {version}. "
+                    f"Current candidate: {self._candidate_version}. Planning remains active."
                 )
             if set(self._confirmations) != set(self._assignments) or any(v != version for v in self._confirmations.values()):
                 missing = sorted(aid for aid in self._assignments if self._confirmations.get(aid) != version)
                 raise ValueError(
-                    f"finish_planning requires valid notebook v{version} confirmations: "
-                    f"missing or wrong-version workers={missing}; current confirmations={self._confirmations}"
+                    f"finish_planning failed: missing valid confirmations. Candidate: {version}. "
+                    f"Missing or invalid: {missing}. Current confirmations: {self._confirmations}. Planning remains active."
                 )
             if getattr(self, "_observed_confirmations", {}) != self._confirmations:
-                raise ValueError("finish_planning rejected: confirmations changed during this decision.")
+                raise ValueError("finish_planning failed: confirmation state changed during this decision. Planning remains active.")
             self._set_final_plan_locked("agreed")
 
     def confirm_plan(self, aid: str, action: dict, *, sole: bool) -> dict:
@@ -749,24 +749,31 @@ class _Coordinator:
             request = self._requests.get(aid, {})
             reason = "accepted"
             if not sole:
-                reason = "confirm_plan must be the only tool action"
+                reason = "it must be the only tool action in the response. Other actions may have executed."
             elif self.phase != "planning" or request.get("phase") != "planning" or aid in self._finished:
-                reason = "expired planning request"
+                reason = f"unavailable in phase {self.phase} or the planning request has expired."
+            elif type(version) is not int:
+                reason = "version must be an integer."
+            elif self._candidate_version is None or not self._notebook.strip():
+                reason = "no candidate notebook is available."
             elif (
-                type(version) is not int
-                or version != self._version
+                version != self._version
                 or version != self._candidate_version
                 or request.get("notebook_version") != version
                 or not self._notebook.strip()
             ):
-                reason = "version was not the current candidate delivered in this request"
+                reason = (
+                    f"version mismatch. Requested: {version}. Current candidate: {self._candidate_version}. "
+                    f"Delivered to this worker: {request.get('notebook_version')}."
+                )
             accepted = reason == "accepted"
             if accepted:
                 self._confirmations[aid] = version
                 self._wake.set()
             self._emit("plan_confirmation", target=aid, version=version, accepted=accepted, reason=reason)
             self._condition.notify_all()
-            return {"output": f"Plan confirmation: {reason}", "returncode": 0 if accepted else 1, "exception_info": ""}
+            output = "Plan confirmation: accepted" if accepted else f"confirm_plan failed: {reason} Confirmation was not recorded."
+            return {"output": output, "returncode": 0 if accepted else 1, "exception_info": ""}
 
     def _implementation_text(self) -> str:
         text = IMPLEMENTATION_MODE.format(**self._final_plan)
@@ -885,6 +892,34 @@ class _Coordinator:
                 self._planning_steps[aid] += 1
             self._emit("worker_request", target=aid, **{k: v for k, v in snapshot.items() if k != "phase_text"})
             return snapshot
+
+    def submission_error(self, aid: str, *, executed: bool) -> str | None:
+        with self._condition:
+            self.before_action()
+            if self.phase == "implementation" and self._delivered == set(self._assignments):
+                return None
+            self._emit("submission_rejected", target=aid, phase=self.phase, command_executed=executed)
+            if executed:
+                text = (
+                    f"SUBMISSION_NOT_ACCEPTED\nCurrent phase: {self.phase}. "
+                    "The command ran, but its completion marker did not submit your task.\n"
+                    "Any earlier command effects remain; no rollback was performed. Review the command output "
+                    "and report any project changes to the coordinator. Do not make further project edits.\n"
+                )
+            else:
+                text = (
+                    f"SUBMISSION_NOT_ALLOWED_IN_PLANNING\nCurrent phase: {self.phase}. "
+                    "This command was not executed and your task was not submitted.\n"
+                )
+            if self.phase == "planning":
+                text += (
+                    "Continue read-only inspection and discussion. Read /coordination/notebook.md when its version changes.\n"
+                    "If you agree with the current candidate, call confirm_plan(version) as the only tool action in your response. "
+                    "Only the host can end planning. Do not submit to wait."
+                )
+            else:
+                text += "Only the host can enable implementation. No planning confirmation is accepted in this phase."
+            return text
 
     def before_action(self) -> None:
         """Discard in-flight worker output after the planning-only notebook is frozen."""
@@ -1036,6 +1071,9 @@ class _Coordinator:
             if not isinstance(call, dict) or set(call) != {"name", "arguments"}:
                 raise ValueError("Expected a named tool call with arguments")
             kind, arguments = call["name"], call["arguments"]
+            available = [tool["function"]["name"] for tool in self._tools]
+            if kind not in available:
+                raise ValueError(f"Unknown or unavailable tool: {kind}. Available tools: {', '.join(available)}.")
             if not isinstance(arguments, str) or len(arguments) > 65536:
                 raise ValueError("Tool arguments must be JSON text of at most 65536 characters")
             try:
@@ -1047,7 +1085,10 @@ class _Coordinator:
             if kind == "finish_planning":
                 version = item.get("version")
                 if not self._planning or len(response) != 1 or set(item) != {"version"} or type(version) is not int:
-                    raise ValueError("finish_planning requires a sole integer version action")
+                    raise ValueError(
+                        "finish_planning failed: it must be the only action and version must be an integer. "
+                        "The action batch was not applied."
+                    )
                 parsed.append(_FinishPlanning(version))
                 continue
             content = item.get("content")

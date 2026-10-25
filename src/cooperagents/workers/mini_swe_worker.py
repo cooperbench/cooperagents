@@ -65,6 +65,7 @@ class MiniSweEnvAdapter:
         guard_git: bool = False,
         deadline: float | None = None,
         completion_gate=None,
+        submission_guard: Callable[[bool], str | None] | None = None,
         gate_max_rejections: int = 3,
         trace=None,
     ) -> None:
@@ -79,6 +80,7 @@ class MiniSweEnvAdapter:
         # fixes the problem with its full context and remaining budget
         # (post-hoc repair agents start cold and failed 150-step budgets on
         # errors the original agent could fix in-context).
+        self._submission_guard = submission_guard
         self._completion_gate = completion_gate
         self._gate_rejections = 0
         self._gate_max_rejections = gate_max_rejections
@@ -98,6 +100,10 @@ class MiniSweEnvAdapter:
         # ValueError("embedded null byte") and kills the agent thread
         if "\x00" in command:
             command = command.replace("\x00", "")
+        if command.strip() == "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT":
+            rejection = self._reject_submission(executed=False)
+            if rejection is not None:
+                return rejection
         if self._guard_git and _DESTRUCTIVE_GIT.search(command):
             return {
                 "output": "BLOCKED: destructive git on the shared team tree is not allowed "
@@ -114,9 +120,20 @@ class MiniSweEnvAdapter:
         self._check_finished(output)
         return output
 
+    def _reject_submission(self, *, executed: bool) -> dict | None:
+        error = self._submission_guard(executed) if self._submission_guard is not None else None
+        if error is None:
+            return None
+        return {"output": error, "returncode": 1, "exception_info": ""}
+
     def _check_finished(self, output: dict) -> None:
         lines = output.get("output", "").lstrip().splitlines(keepends=True)
         if lines and lines[0].strip() == "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT" and output["returncode"] == 0:
+            rejection = self._reject_submission(executed=True)
+            if rejection is not None:
+                rejection["output"] += "\nCommand output (already executed):\n" + output["output"]
+                output.update(rejection)
+                return
             if self._completion_gate is not None and self._gate_rejections < self._gate_max_rejections:
                 err = self._completion_gate(self._env)
                 if err:
@@ -466,6 +483,10 @@ def run_mini_swe_agent(
             guard_git=guard_git,
             deadline=deadline,
             completion_gate=completion_gate,
+            submission_guard=(
+                (lambda executed: monitor.submission_error(agent_id, executed=executed))
+                if monitor is not None and monitor._planning else None
+            ),
             trace=trace,
         ),
         agent_id=agent_id,

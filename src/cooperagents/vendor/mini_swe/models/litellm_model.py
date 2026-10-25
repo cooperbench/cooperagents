@@ -357,6 +357,18 @@ class LitellmModel:
                 tool_calls = [SimpleNamespace(id=f"xmlcall-{i}", function=SimpleNamespace(**row)) for i, row in enumerate(rows)]
         elif not tool_calls:
             tool_calls = _toolcalls_from_xml(response.choices[0].message.content or "")
+        if tool_calls and self.completion is None:
+            from types import SimpleNamespace
+
+            from cooperagents.completion import parse_completion_tool_calls
+            from cooperagents.vendor.mini_swe.exceptions import FormatError
+
+            try:
+                parse_completion_tool_calls(
+                    SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(tool_calls=tool_calls))]), self._tools
+                )
+            except (ValueError, TypeError) as exc:
+                raise FormatError({"role": "user", "content": str(exc), "extra": {"interrupt_type": "FormatError"}}) from exc
         return parse_toolcall_actions(tool_calls, format_error_template=self.config.format_error_template)
 
     def format_message(self, **kwargs) -> dict:
