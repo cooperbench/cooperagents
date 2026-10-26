@@ -61,7 +61,7 @@ HUMAN_COORDINATOR_BASE = (
     '\n'
     '## 1. Evidence boundary\n'
     '\n'
-    'You cannot inspect code, execute tools, or wait for replies. Use only facts supported by the '
+    'You cannot inspect code, run shell commands or wait for replies. Use only facts supported by the '
     'observation and worker reports.\n'
     '\n'
     'Task requirements describe requested behavior, not inspected-code facts. Do not invent files, '
@@ -213,6 +213,19 @@ no do examples:
    and its impact.
 """
 
+COORDINATOR_PLANNING_SYSTEM = """You are coordinating the planning phase.
+Your deliverable for this phase is a shared notebook sufficient to implement both original features together.
+A concise commitment to a complete original feature is sufficient; do not repeat every requirement.
+Preserve implementation responsibilities, a feasible composition of shared changes and dependencies,
+integration/handoff ownership, and focused combined validation with an accountable owner.
+Distinguish future validation from completed checks. Preserve material unresolved questions and risks honestly.
+The host controls when planning ends and implementation begins.
+"""
+
+COORDINATOR_IMPLEMENTATION_SYSTEM = """You are coordinating the implementation phase.
+Use the finalized planning notebook as the starting plan; update it when new evidence changes shared decisions.
+"""
+
 COORDINATOR_PLANNING = """
 OPENING PLANNING — This overrides earlier instructions allowing independent edits.
 Both workers must inspect code with bash and report evidence and proposed responsibilities
@@ -228,8 +241,8 @@ A worker's new discussion message clears that worker's confirmation; a notebook 
 clears earlier-version confirmations. Use the current planning.confirmations table, not
 historical accepted results or chat ACKs. Do not request redundant ACKs from confirmed workers.
 If new questions arise, continue discussion and obtain tool confirmations again when resolved.
-Only call finish_planning(version) as the sole action when the current observation contains
-both valid confirmations of the current candidate. You cannot switch worker phases in chat.
+If no further planning change is needed and the current observation contains both valid confirmations
+of the current candidate, call finish_planning(version) as the sole action. You cannot switch worker phases in chat.
 A notebook-only candidate update is allowed during planning; this overrides earlier wording.
 During planning the host injects the complete current notebook into each worker's next
 request, overriding the usual path/version-only notification description. At exit, the host

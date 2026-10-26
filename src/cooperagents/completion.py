@@ -153,3 +153,89 @@ class CompletionBinding:
         if not isinstance(response, ModelResponse) or not response.choices:
             raise ValueError("completion must return a complete ModelResponse")
         return response
+
+
+def parse_completion_tool_calls(
+    response: ModelResponse, tools: list[ChatCompletionToolParam]
+) -> list[dict[str, str]]:
+    """Parse SDK calls or native Qwen XML against the tools active for this request."""
+    import json
+    import re
+
+    schemas = {tool["function"]["name"]: tool["function"]["parameters"] for tool in tools}
+
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"Duplicate tool argument: {key}")
+            result[key] = value
+        return result
+
+    def validate(value, schema):
+        kind = schema.get("type")
+        valid = {
+            "string": isinstance(value, str),
+            "integer": type(value) is int,
+            "boolean": type(value) is bool,
+            "number": type(value) in (int, float),
+            "object": isinstance(value, dict),
+            "array": isinstance(value, list),
+        }.get(kind, True)
+        if not valid:
+            raise ValueError(f"Expected tool argument type {kind}")
+        if isinstance(value, dict):
+            properties = schema.get("properties", {})
+            if set(schema.get("required", [])) - set(value):
+                raise ValueError("Missing required tool arguments")
+            if schema.get("additionalProperties") is False and set(value) - set(properties):
+                raise ValueError("Unknown tool arguments")
+            for key, item in value.items():
+                if key in properties:
+                    validate(item, properties[key])
+        if isinstance(value, list) and "items" in schema:
+            for item in value:
+                validate(item, schema["items"])
+
+    message = response.choices[0].message
+    calls = message.tool_calls or []
+    rows = [{"name": call.function.name, "arguments": call.function.arguments} for call in calls]
+    if not rows:
+        content = message.content or ""
+        blocks = list(re.finditer(r"<tool_call>\s*(.*?)\s*</tool_call>", content, re.S))
+        if not blocks or content.count("<tool_call>") != len(blocks) or content.count("</tool_call>") != len(blocks):
+            raise ValueError("Expected complete tool calls")
+        for block in blocks:
+            raw = block.group(1)
+            if raw.startswith("{"):
+                row = json.loads(raw, object_pairs_hook=unique)
+                if not isinstance(row, dict) or set(row) != {"name", "arguments"}:
+                    raise ValueError("Invalid JSON tool call")
+                rows.append({"name": row["name"], "arguments": json.dumps(row["arguments"])})
+                continue
+            function = re.fullmatch(r"<function=([\w-]+)>\s*(.*?)\s*</function>", raw, re.S)
+            if function is None:
+                raise ValueError("Invalid XML tool function")
+            if function[1] not in schemas:
+                raise ValueError(f"Unknown or unavailable tool: {function[1]}. Available tools: {', '.join(schemas)}.")
+            name, body = function[1], function[2]
+            parameters = list(re.finditer(r"<parameter=([\w-]+)>\n?(.*?)\n?</parameter>", body, re.S))
+            if re.sub(r"<parameter=([\w-]+)>\n?(.*?)\n?</parameter>", "", body, flags=re.S).strip():
+                raise ValueError("Malformed XML tool arguments")
+            args = {}
+            properties = schemas[name].get("properties", {})
+            for parameter in parameters:
+                key, value = parameter[1], parameter[2]
+                if key in args or key not in properties:
+                    raise ValueError("Duplicate or unknown XML parameter")
+                args[key] = value if properties[key].get("type") == "string" else json.loads(value, object_pairs_hook=unique)
+            rows.append({"name": name, "arguments": json.dumps(args)})
+    for row in rows:
+        if row["name"] not in schemas:
+            raise ValueError(f"Unknown or unavailable tool: {row['name']}. Available tools: {', '.join(schemas)}.")
+        try:
+            args = json.loads(row["arguments"], object_pairs_hook=unique)
+            validate(args, schemas[row["name"]])
+        except (ValueError, TypeError) as exc:
+            raise ValueError(f"{row['name']} failed: {exc}") from exc
+    return rows

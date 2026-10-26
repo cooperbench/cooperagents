@@ -45,7 +45,9 @@ from cooperagents.agent import Agent
 from cooperagents.bus.base import TeamBus
 from cooperagents.bus.memory import InMemoryBus
 from cooperagents.coordination_prompts import (
+    COORDINATOR_IMPLEMENTATION_SYSTEM,
     COORDINATOR_PLANNING,
+    COORDINATOR_PLANNING_SYSTEM,
     COORDINATOR_WARNING_RULES,
     FORCED_PLANNING,
     GROUP_CHAT,
@@ -59,6 +61,19 @@ from cooperagents.coordination_prompts import (
 from cooperagents.env.base import Environment
 from cooperagents.git_snapshots import GitEvidence
 from cooperagents.git_snapshots import GitShareSync as _GitShareSync
+from cooperagents.human_phase_prompts import (
+    HUMAN_COORDINATOR_IMPLEMENTATION_SYSTEM,
+    HUMAN_IMPLEMENTATION_INITIAL,
+    HUMAN_IMPLEMENTATION_PROTOCOL,
+    HUMAN_IMPLEMENTATION_SYSTEM,
+    HUMAN_PLANNING_BASE,
+    HUMAN_PLANNING_INITIAL,
+    HUMAN_PLANNING_MODE,
+    HUMAN_PLANNING_PROTOCOL,
+    HUMAN_PLANNING_SYSTEM,
+    HUMAN_PLANNING_WARNINGS,
+    HUMAN_PLANNING_WORKFLOW,
+)
 from cooperagents.initial_plan import InitialPlan
 from cooperagents.llm import LLMClient
 from cooperagents.metrics import coordination_metrics, spawn_metrics
@@ -242,7 +257,7 @@ _COORDINATION_WORKFLOW = (
     "verification results. A proposal is not an agreement; silence is not confirmation."
 )
 _COORDINATOR_PROMPT = """You coordinate software workers implementing features in separate copies of one repository.
-You make one decision from the current OBSERVATION. You cannot inspect code, execute tools or wait for replies.
+You make one decision from the current OBSERVATION. You cannot inspect code, run shell commands or wait for replies.
 The harness executes your returned actions; workers inspect code and may report back in a later observation.
 Their patches will be merged. Help them agree on responsibilities, file regions and shared interfaces before
 contested edits, resolve concrete overlaps or repeated failures during implementation, and decide when remaining
@@ -343,6 +358,8 @@ class _Coordinator:
         time_limit_s: int | None = None,
         trace=None,
         complete: Callable[[str], list[dict[str, str]]] | None = None,
+        completion: CompletionBinding | None = None,
+        planning_only: bool = False,
     ) -> None:
         from cooperagents.planner import _default_planner_complete
 
@@ -356,6 +373,10 @@ class _Coordinator:
             raise ValueError("Planning budgets must be positive")
         if worker_reminder_interval < 0:
             raise ValueError("Worker reminder interval must be nonnegative")
+        self.planning_only = planning_only
+        self.completion = completion
+        self._failure_kind: str | None = None
+        self.worker_base_commits: dict[str, str] = {}
         self.worker_reminder_interval = worker_reminder_interval
         self.planning_step_limit = planning_step_limit
         self.planning_time_limit_s = planning_time_limit_s
@@ -411,7 +432,7 @@ class _Coordinator:
         self._notebook_path = notebook_path
         self._notebook = ""
         self._version = -1
-        self._injected = complete is not None
+        self._injected = complete is not None or completion is not None
         self._tools = [
             dict(
                 _SEND_MESSAGE_TOOL,
@@ -444,7 +465,7 @@ class _Coordinator:
         self._complete = (
             complete
             if complete is not None
-            else _default_planner_complete(
+            else None if completion is not None else _default_planner_complete(
                 model,
                 None,
                 None,
@@ -474,10 +495,15 @@ class _Coordinator:
         if self.trace is not None:
             self.trace(event, **data)
 
-    def worker_instructions(self) -> str:
+    def worker_instructions(self, *, planning: bool | None = None) -> str:
         phase_protocol = PLANNING_SYSTEM if self.coordination_mode == "group-chat-planning" else ""
         if self.coordination_variant == "human-prompt":
-            return "\n\n" + HUMAN_WORKER_WORKFLOW + (GROUP_CHAT if self.coordination_mode != "direct" else "") + phase_protocol
+            is_planning = self.phase in ("planning", "finalizing") if planning is None else planning
+            workflow = HUMAN_PLANNING_WORKFLOW if is_planning else HUMAN_WORKER_WORKFLOW
+            phase = ""
+            if self._planning:
+                phase = HUMAN_PLANNING_SYSTEM if is_planning else HUMAN_IMPLEMENTATION_SYSTEM
+            return "\n\n" + workflow + (GROUP_CHAT if self.coordination_mode != "direct" else "") + phase
         note = ""
         if self._notebook_path is not None:
             note = (
@@ -621,6 +647,7 @@ class _Coordinator:
             self._finalizing_duration = now - self._finalizing_started
         self.phase = "failed"
         self._planning_outcome, self._planning_reason = "error", reason
+        self._failure_kind = self._failure_kind or "model_protocol"
         self._emit("planning_failed", reason=reason, phase=self.phase, budget=self._planning_snapshot_locked())
         self._condition.notify_all()
         self._wake.set()
@@ -691,7 +718,7 @@ class _Coordinator:
             sha256=hashlib.sha256(self._notebook.encode()).hexdigest(),
         )
         self._planning_outcome = outcome
-        self.phase = "implementation"
+        self.phase = "complete" if self.planning_only else "implementation"
         self._tools[:] = [tool for tool in self._tools if tool["function"]["name"] != "finish_planning"]
         self._emit("planning_end", **self._final_plan, reason=self._planning_reason, planning_steps=dict(self._planning_steps))
         self._condition.notify_all()
@@ -700,20 +727,22 @@ class _Coordinator:
         with self._condition:
             self._check_planning_limits_locked()
             if self.phase != "planning" or self._finished:
-                raise ValueError("finish_planning requires current observed confirmations from both live workers")
+                raise ValueError(f"finish_planning failed: unavailable in phase {self.phase} or a worker has exited.")
+            if self._candidate_version is None:
+                raise ValueError("finish_planning failed: no candidate notebook is available. Planning remains active.")
             if version != self._candidate_version or version != self._version:
                 raise ValueError(
-                    f"finish_planning version mismatch: requested={version}; "
-                    f"current notebook={self._version}; candidate={self._candidate_version}"
+                    f"finish_planning failed: version mismatch. Requested: {version}. "
+                    f"Current candidate: {self._candidate_version}. Planning remains active."
                 )
             if set(self._confirmations) != set(self._assignments) or any(v != version for v in self._confirmations.values()):
                 missing = sorted(aid for aid in self._assignments if self._confirmations.get(aid) != version)
                 raise ValueError(
-                    f"finish_planning requires valid notebook v{version} confirmations: "
-                    f"missing or wrong-version workers={missing}; current confirmations={self._confirmations}"
+                    f"finish_planning failed: missing valid confirmations. Candidate: {version}. "
+                    f"Missing or invalid: {missing}. Current confirmations: {self._confirmations}. Planning remains active."
                 )
             if getattr(self, "_observed_confirmations", {}) != self._confirmations:
-                raise ValueError("finish_planning rejected: confirmations changed during this decision.")
+                raise ValueError("finish_planning failed: confirmation state changed during this decision. Planning remains active.")
             self._set_final_plan_locked("agreed")
 
     def confirm_plan(self, aid: str, action: dict, *, sole: bool) -> dict:
@@ -722,27 +751,36 @@ class _Coordinator:
             request = self._requests.get(aid, {})
             reason = "accepted"
             if not sole:
-                reason = "confirm_plan must be the only tool action"
+                reason = "it must be the only tool action in the response. Other actions may have executed."
             elif self.phase != "planning" or request.get("phase") != "planning" or aid in self._finished:
-                reason = "expired planning request"
+                reason = f"unavailable in phase {self.phase} or the planning request has expired."
+            elif type(version) is not int:
+                reason = "version must be an integer."
+            elif self._candidate_version is None or not self._notebook.strip():
+                reason = "no candidate notebook is available."
             elif (
-                type(version) is not int
-                or version != self._version
+                version != self._version
                 or version != self._candidate_version
                 or request.get("notebook_version") != version
                 or not self._notebook.strip()
             ):
-                reason = "version was not the current candidate delivered in this request"
+                reason = (
+                    f"version mismatch. Requested: {version}. Current candidate: {self._candidate_version}. "
+                    f"Delivered to this worker: {request.get('notebook_version')}."
+                )
             accepted = reason == "accepted"
             if accepted:
                 self._confirmations[aid] = version
                 self._wake.set()
             self._emit("plan_confirmation", target=aid, version=version, accepted=accepted, reason=reason)
             self._condition.notify_all()
-            return {"output": f"Plan confirmation: {reason}", "returncode": 0 if accepted else 1, "exception_info": ""}
+            output = "Plan confirmation: accepted" if accepted else f"confirm_plan failed: {reason} Confirmation was not recorded."
+            return {"output": output, "returncode": 0 if accepted else 1, "exception_info": ""}
 
     def _implementation_text(self) -> str:
         text = IMPLEMENTATION_MODE.format(**self._final_plan)
+        if self.coordination_variant == "human-prompt":
+            text += "\nThe coordinator may update this plan during implementation. Follow the latest notebook and coordination notices.\n"
         if self.initial_plan is not None:
             text = text.replace("Planning outcome: injected\n", "")
         return text
@@ -750,11 +788,13 @@ class _Coordinator:
     def _restore_plan_locked(self, aid: str, agent) -> None:
         if not self._planning or self.phase in ("finalizing", "failed"):
             return
+        if self.coordination_variant == "human-prompt" and hasattr(agent, "set_prompt_phase"):
+            agent.set_prompt_phase(self.phase)
         marker = (self.phase, self._version if self.phase == "planning" else self._final_plan["version"], agent._compaction_count)
         if self._plan_context.get(aid) != marker:
             if self.phase == "planning":
                 text = (
-                    PLANNING_MODE
+                    (HUMAN_PLANNING_MODE if self.coordination_variant == "human-prompt" else PLANNING_MODE)
                     + f"\nCurrent notebook version: {self._version}\n<planning_notebook>\n{self._notebook}\n</planning_notebook>"
                 )
             else:
@@ -767,7 +807,10 @@ class _Coordinator:
                         self._summary_delivered.add(aid)
                         self._emit("worker_summary_delivery", target=aid, content=summary, synthetic=True)
                 text = self._implementation_text()
-            agent.add_messages(agent.model.format_message(role="user", content=text))
+            message = agent.model.format_message(role="user", content=text)
+            if self.coordination_variant == "human-prompt":
+                message.setdefault("extra", {})["host_phase_notice"] = self.phase
+            agent.add_messages(message)
             self._plan_context[aid] = marker
             if self.phase == "implementation" and aid not in self._delivered:
                 self._delivered.add(aid)
@@ -811,6 +854,7 @@ class _Coordinator:
         with self._condition:
             while self._planning:
                 self._check_planning_limits_locked()
+                self.before_action()
                 if self.phase == "failed" or self._stop.is_set():
                     raise RuntimeError(f"planning_failed: {self._planning_reason}")
                 self._restore_plan_locked(aid, agent)
@@ -839,7 +883,8 @@ class _Coordinator:
             snapshot["chat_position"] = self._chat_positions[aid]
             if self._planning:
                 snapshot["phase_text"] = (
-                    PLANNING_MODE + f"\nCurrent notebook version: {self._version}\n"
+                    (HUMAN_PLANNING_MODE if self.coordination_variant == "human-prompt" else PLANNING_MODE)
+                    + f"\nCurrent notebook version: {self._version}\n"
                     f"<planning_notebook>\n{self._notebook}\n</planning_notebook>"
                     if self.phase == "planning"
                     else self._implementation_text()
@@ -849,6 +894,52 @@ class _Coordinator:
                 self._planning_steps[aid] += 1
             self._emit("worker_request", target=aid, **{k: v for k, v in snapshot.items() if k != "phase_text"})
             return snapshot
+
+    def submission_error(self, aid: str, *, executed: bool) -> str | None:
+        with self._condition:
+            self.before_action()
+            if self.phase == "implementation" and self._delivered == set(self._assignments):
+                return None
+            self._emit("submission_rejected", target=aid, phase=self.phase, command_executed=executed)
+            if executed:
+                text = (
+                    f"SUBMISSION_NOT_ACCEPTED\nCurrent phase: {self.phase}. "
+                    "The command ran, but its completion marker did not submit your task.\n"
+                    "Any earlier command effects remain; no rollback was performed. Review the command output "
+                    "and report any project changes to the coordinator.\n"
+                )
+            else:
+                code = "SUBMISSION_AWAITS_HANDOFF" if self.phase == "implementation" else "SUBMISSION_NOT_ALLOWED_IN_PLANNING"
+                text = (
+                    f"{code}\nCurrent phase: {self.phase}. "
+                    "This command was not executed and your task was not submitted.\n"
+                )
+            if self.phase in ("planning", "finalizing") and executed:
+                text += "Do not make further project edits.\n"
+            if self.phase == "implementation":
+                text += (
+                    "Implementation has started, but the final planning handoff has not reached every worker. "
+                    "The next turn will deliver your handoff and wait for every worker to receive it."
+                )
+            elif self.phase == "planning":
+                text += (
+                    "Continue read-only inspection and discussion. Read /coordination/notebook.md when its version changes.\n"
+                    "If you agree with the current candidate, call confirm_plan(version) as the only tool action in your response. "
+                    "Only the host can end planning. Do not submit to wait."
+                )
+            else:
+                text += "Only the host can enable implementation. No planning confirmation is accepted in this phase."
+            return text
+
+    def before_action(self) -> None:
+        """Discard in-flight worker output after the planning-only notebook is frozen."""
+        if self.planning_only and self._final_plan is not None:
+            from cooperagents.vendor.mini_swe.exceptions import PlanningComplete
+
+            raise PlanningComplete({
+                "role": "exit", "content": "Planning complete",
+                "extra": {"exit_status": "PlanningComplete", "submission": ""},
+            })
 
     def planning_metrics(self) -> dict:
         with self._lock:
@@ -862,6 +953,8 @@ class _Coordinator:
                     {
                         "planning": dict(
                             outcome=self._planning_outcome,
+                            failure_kind=self._failure_kind,
+                            worker_base_commits=dict(self.worker_base_commits),
                             reason=self._planning_reason,
                             final_plan=copy.deepcopy(self._final_plan),
                             delivered=sorted(self._delivered),
@@ -894,7 +987,9 @@ class _Coordinator:
 
     def mark_finished(self, agent_id: str, status: str) -> None:
         with self._lock:
-            if self._planning and (self.phase != "implementation" or len(self._delivered) != len(self._assignments)):
+            if self._planning and self.phase != "complete" and (
+                self.phase != "implementation" or len(self._delivered) != len(self._assignments)
+            ):
                 self._fail_planning_locked(f"worker_exit:{agent_id}:{status}")
             self._finished[agent_id] = status
             dropped = self._queues[agent_id]
@@ -941,7 +1036,7 @@ class _Coordinator:
     def stop(self) -> None:
         with self._lock:
             self._stop.set()
-            if self._planning and self.phase not in ("implementation", "failed"):
+            if self._planning and self.phase not in ("implementation", "complete", "failed"):
                 self._fail_planning_locked("stopped")
             self._condition.notify_all()
             self._wake.set()
@@ -986,6 +1081,9 @@ class _Coordinator:
             if not isinstance(call, dict) or set(call) != {"name", "arguments"}:
                 raise ValueError("Expected a named tool call with arguments")
             kind, arguments = call["name"], call["arguments"]
+            available = [tool["function"]["name"] for tool in self._tools]
+            if kind not in available:
+                raise ValueError(f"Unknown or unavailable tool: {kind}. Available tools: {', '.join(available)}.")
             if not isinstance(arguments, str) or len(arguments) > 65536:
                 raise ValueError("Tool arguments must be JSON text of at most 65536 characters")
             try:
@@ -997,7 +1095,10 @@ class _Coordinator:
             if kind == "finish_planning":
                 version = item.get("version")
                 if not self._planning or len(response) != 1 or set(item) != {"version"} or type(version) is not int:
-                    raise ValueError("finish_planning requires a sole integer version action")
+                    raise ValueError(
+                        "finish_planning failed: it must be the only action and version must be an integer. "
+                        "The action batch was not applied."
+                    )
                 parsed.append(_FinishPlanning(version))
                 continue
             content = item.get("content")
@@ -1194,7 +1295,7 @@ class _Coordinator:
 
     def decide(self, *, initial: bool = False) -> None:
         with self._lock:
-            if self.phase == "implementation" and not self.coordinator_implementation_enabled:
+            if self.phase == "complete" or self.phase == "implementation" and not self.coordinator_implementation_enabled:
                 return
         replies = self._bus.receive("coordinator")
         self._pending.extend(replies)
@@ -1278,13 +1379,22 @@ class _Coordinator:
         }
         if not forced:
             observation["git_snapshots"] = git_evidence.metadata()
+            if initial and self.planning_only:
+                # Initial source identity is stable; publication wall clocks add no task evidence.
+                observation["git_snapshots"]["workers"] = {
+                    aid: {"sha": snapshot.sha} for aid, snapshot in git_evidence.workers.items()
+                }
         if self.coordination_mode == "direct":
             observation["replies"] = list(self._pending)
         observation["previous_error"] = self._last_error
+        human_planning = self.coordination_variant == "human-prompt" and decision_phase in ("planning", "finalizing")
         if self.coordination_variant == "human-prompt":
-            protocol = HUMAN_COORDINATOR_BASE + "\n"
+            protocol = (HUMAN_PLANNING_BASE if human_planning else HUMAN_COORDINATOR_BASE) + "\n"
             if initial:
-                protocol += "\n" + HUMAN_COORDINATOR_INITIAL + "\n"
+                initial_protocol = HUMAN_PLANNING_INITIAL if human_planning else (
+                    HUMAN_IMPLEMENTATION_INITIAL if self._planning else HUMAN_COORDINATOR_INITIAL
+                )
+                protocol += "\n" + initial_protocol + "\n"
         else:
             protocol = _COORDINATOR_PROMPT
             if initial:
@@ -1295,7 +1405,7 @@ class _Coordinator:
                     "but leave concrete edit boundaries and ownership pending worker evidence and confirmation. "
                     "Do not guess filenames, existing symbols or new shared APIs, or declare coordination complete.\n"
                 )
-        protocol += "\n" + COORDINATOR_WARNING_RULES
+        protocol += "\n" + (HUMAN_PLANNING_WARNINGS if human_planning else COORDINATOR_WARNING_RULES)
         if self._notebook_path is not None:
             observation["notebook"] = {"version": version, "content": notebook}
             if self.coordination_variant == "auto-prompt":
@@ -1322,25 +1432,53 @@ class _Coordinator:
                 observation["initial"] = False
                 protocol += FORCED_PLANNING
             elif self.phase == "planning":
-                protocol += COORDINATOR_PLANNING
+                protocol += HUMAN_PLANNING_PROTOCOL if human_planning else COORDINATOR_PLANNING
+        system = None
+        if self._planning:
+            system = COORDINATOR_IMPLEMENTATION_SYSTEM if decision_phase == "implementation" else COORDINATOR_PLANNING_SYSTEM
+            if self.coordination_variant == "human-prompt" and decision_phase == "implementation":
+                system = HUMAN_COORDINATOR_IMPLEMENTATION_SYSTEM
+                protocol += "\n" + HUMAN_IMPLEMENTATION_PROTOCOL
         prompt = protocol + "\nOBSERVATION:\n" + json.dumps(observation, ensure_ascii=False)
         count = len(self._pending)
         self._emit("observation", **observation)
         try:
-            if self._complete is None:
+            if self._complete is None and self.completion is None:
                 raise ConnectionError("Coordinator completion client unavailable")
             if forced:
                 self._tools[:] = [_UPDATE_NOTEBOOK_TOOL]
             self._coordinator_calls += 1
-            if forced and not self._injected:
+            if self.completion is not None:
+                response = self.completion.complete(
+                    messages=[*([{"role": "system", "content": system}] if system else []), {"role": "user", "content": prompt}],
+                    tools=self._tools,
+                    actor_id="coordinator", call_id=self._coordinator_calls,
+                )
+            elif self._injected:
+                response = self._complete(system + "\n" + prompt if system else prompt)
+            elif forced:
                 deadlines = [agent.config.wall_deadline for agent in agents.values() if agent.config.wall_deadline is not None]
                 remaining = min([d - time.time() for d in deadlines] or [60])
-                response = self._complete(prompt, timeout=max(0.001, min(60, remaining)))
+                response = self._complete(prompt, system_prompt=system, timeout=max(0.001, min(60, remaining)))
             else:
-                response = self._complete(prompt)
+                response = self._complete(prompt, **({"system_prompt": system} if system else {}))
         except Exception as exc:
             self._last_error = f"Completion failed: {type(exc).__name__}"
             self._emit("decision", initial=initial, valid=False, outcome="transport_error", error=str(exc))
+            if self.completion is not None and getattr(exc, "category", None) == "model_protocol":
+                self._failure_kind = "model_protocol"
+                with self._condition:
+                    self._fail_planning_locked(f"completion_protocol:{type(exc).__name__}")
+                return
+            if self.completion is not None:
+                from cooperagents.planning import PlanningInfrastructureError
+
+                self._failure_kind = "infrastructure"
+                self.error = PlanningInfrastructureError("Coordinator completion transport failed")
+                self.error.__cause__ = exc
+                with self._condition:
+                    self._fail_planning_locked(self._last_error)
+                return
             if forced:
                 with self._condition:
                     self._fail_planning_locked(self._last_error)
@@ -1349,6 +1487,10 @@ class _Coordinator:
                 raise
             return
         try:
+            if self.completion is not None:
+                from cooperagents.completion import parse_completion_tool_calls
+
+                response = parse_completion_tool_calls(response, self._tools)
             if forced and (not isinstance(response, list) or len(response) != 1 or response[0].get("name") != "update_notebook"):
                 raise ValueError("Finalization requires exactly one notebook update")
             actions = self._parse_actions(response)
@@ -1383,6 +1525,12 @@ class _Coordinator:
                         self._last_error = str(exc)
                         self._emit("decision", initial=initial, valid=False, outcome="invalid_action", error=str(exc))
                     else:
+                        if not isinstance(exc, ValueError) and (self.planning_only or self.completion is not None):
+                            from cooperagents.planning import PlanningInfrastructureError
+
+                            self._failure_kind = "infrastructure"
+                            self.error = PlanningInfrastructureError("Planning action execution failed")
+                            self.error.__cause__ = exc
                         self._fail_planning_locked(f"plan_action_failed:{exc}")
                     return
                 raise
@@ -1398,7 +1546,7 @@ class _Coordinator:
     def run(self) -> None:
         next_decision = time.monotonic() + 20
         try:
-            while not self._stop.is_set():
+            while not self._stop.is_set() and self.phase != "complete":
                 if self._planning and self.phase in ("planning", "finalizing"):
                     triggered = self._wake.wait(0.1)
                     self._wake.clear()
@@ -1410,7 +1558,13 @@ class _Coordinator:
                 elif not self._stop.wait(20):
                     self.decide()
         except Exception as exc:
-            if self._planning and self.phase != "implementation":
+            if self._planning and self.phase not in ("implementation", "complete"):
+                if self.planning_only or self.completion is not None:
+                    from cooperagents.planning import PlanningInfrastructureError
+
+                    self._failure_kind = "infrastructure"
+                    self.error = PlanningInfrastructureError("Planning coordinator failed")
+                    self.error.__cause__ = exc
                 with self._condition:
                     self._fail_planning_locked(f"coordinator_error:{exc}")
             else:
@@ -1422,7 +1576,7 @@ class _Coordinator:
         thread.join(timeout=600)
         if thread.is_alive():
             raise RuntimeError("Coordinator still running; episode is incomplete")
-        if self.error is not None:
+        if self.error is not None and not self.planning_only:
             raise RuntimeError("Coordinator failed; episode is incomplete") from self.error
 
 
@@ -1749,9 +1903,21 @@ class UnifiedHarness:
         worker_reminder_interval: int = 10,
         checkpoint_dir: Path | None = None,
         repair_completion: CompletionBinding | None = None,
+        coordinator_completion: CompletionBinding | None = None,
+        worker_completion: CompletionBinding | None = None,
+        planning_only: bool = False,
     ) -> None:
         if coordinator_complete is not None and not callable(coordinator_complete):
             raise TypeError("coordinator_complete must be callable")
+        if coordinator_completion is not None and coordinator_complete is not None:
+            raise ValueError("Choose one coordinator completion interface")
+        if (
+            coordinator_completion is not None or worker_completion is not None or planning_only
+        ) and coordination_mode != "group-chat-planning":
+            raise ValueError("Planning bindings require group-chat-planning")
+        self.coordinator_completion = coordinator_completion
+        self.worker_completion = worker_completion
+        self.planning_only = planning_only
         self.repair_completion = repair_completion
         self.coordinator_complete = coordinator_complete
         if coordination_variant not in ("auto-prompt", "human-prompt"):
@@ -1880,7 +2046,7 @@ class UnifiedHarness:
                     monitor=monitor,
                     git_share=spec.git_share,
                     on_start=on_start,
-                    completion=self.repair_completion if role == "integrator" else None,
+                    completion=self.repair_completion if role == "integrator" else self.worker_completion,
                     completion_gate=spec.completion_gate,
                     trace=partial(self.trajectory.emit, agent_id) if self.trajectory else None,
                 )
@@ -1987,6 +2153,21 @@ class UnifiedHarness:
             contract = _build_contract(assignments, spec.model) if spec.contract_first else ""
             # Create all environments before starting coordinator observations and Git sync.
             with ExitStack() as cleanup:
+                def register_cleanup(callback, *args) -> None:
+                    if not self.planning_only:
+                        cleanup.callback(callback, *args)
+                        return
+
+                    def close() -> None:
+                        try:
+                            callback(*args)
+                        except Exception as exc:
+                            from cooperagents.planning import PlanningCleanupError
+
+                            raise PlanningCleanupError("Planning resource cleanup failed") from exc
+
+                    cleanup.callback(close)
+
                 coop_envs: dict[str, Environment] = {}
                 coordinator = (
                     _Coordinator(
@@ -2007,6 +2188,8 @@ class UnifiedHarness:
                         step_limit=self.step_limit,
                         time_limit_s=spec.agent_time_limit,
                         complete=self.coordinator_complete,
+                        completion=self.coordinator_completion,
+                        planning_only=self.planning_only,
                         trace=partial(self.trajectory.emit, "coordinator") if self.trajectory else None,
                     )
                     if spec.coordinator
@@ -2014,7 +2197,7 @@ class UnifiedHarness:
                 )
                 for assignment in assignments:
                     env = env_factory(assignment.agent_id)
-                    cleanup.callback(env.cleanup)
+                    register_cleanup(env.cleanup)
                     coop_envs[assignment.agent_id] = env
                 gitsync = None
                 if spec.git_share:
@@ -2039,8 +2222,16 @@ class UnifiedHarness:
                         gitsync.initialize(initial_heads, published)
                         coordinator._git_sync = gitsync
                     gitsync_thread = threading.Thread(target=gitsync.run, daemon=True)
-                    cleanup.callback(gitsync.finish, gitsync_thread)
+                    register_cleanup(gitsync.finish, gitsync_thread)
                     gitsync_thread.start()
+                if coordinator is not None and self.planning_only:
+                    for aid, env in coop_envs.items():
+                        head = env.execute("git rev-parse HEAD", timeout=10)
+                        if head.exit_code or not head.stdout.strip():
+                            from cooperagents.planning import PlanningInfrastructureError
+
+                            raise PlanningInfrastructureError(f"Cannot identify planning base for {aid}")
+                        coordinator.worker_base_commits[aid] = head.stdout.strip()
                 coordinator_thread = None
                 if coordinator is not None:
                     coordinator.verify_mounts()
@@ -2054,7 +2245,7 @@ class UnifiedHarness:
                     coordinator.start_planning()
                     coordinator_thread = threading.Thread(target=coordinator.run, daemon=True)
                     coordinator_thread.start()
-                    cleanup.callback(coordinator.finish, coordinator_thread)
+                    register_cleanup(coordinator.finish, coordinator_thread)
 
 
                 def collect_raw_diff(env, aid: str) -> tuple[str, str]:
@@ -2136,6 +2327,9 @@ class UnifiedHarness:
                             f"{x.agent_id} (feature {x.feature_id})" for x in assignments if x.agent_id != a.agent_id
                         )
                         task = a.task + (
+                            f"\n\nTEAMMATES: {mates} are assigned features in parallel repository copies. "
+                            "Follow the host-provided phase. Coordinate proposed edit regions, shared interfaces and dependencies."
+                        ) if self.coordination_variant == "human-prompt" else a.task + (
                             f"\n\nTEAMMATES: {mates} are implementing their features RIGHT NOW in parallel "
                             "copies of this repo; your diffs will be merged at the end. Coordinate via the "
                             "send_message tool (incoming messages appear as [Message from ...]): agree on "
@@ -2203,7 +2397,7 @@ class UnifiedHarness:
                         r = run_on_shared(env, a.agent_id, a.role, task, a.feature_id,
                                           poller=poller, monitor=coordinator, time_limit_s=spec.agent_time_limit)
 
-                        return a.agent_id, r, collect_diff(env, a.agent_id, r)
+                        return a.agent_id, r, "" if self.planning_only else collect_diff(env, a.agent_id, r)
                     return None  # unreachable
 
                 with ThreadPoolExecutor(max_workers=len(roster)) as ex:
@@ -2213,6 +2407,18 @@ class UnifiedHarness:
                         if spec.team_roles and aid == assignments[0].agent_id:
                             team_lead_patch = diff
                         prior.append(f"feature {roster[aid].feature_id}" if roster[aid].feature_id is not None else roster[aid].role)
+            if self.planning_only:
+                if coordinator.error is not None:
+                    raise coordinator.error
+                return RunResult(
+                    run_id=spec.run_id, repo=spec.repo, task_id=spec.task_id,
+                    features=sorted(spec.features), seeds=seeds,
+                    duration_seconds=time.time() - start,
+                    integrated=AgentResult(
+                        agent_id="team", role="team", status="planned" if coordinator._final_plan is not None else "planning_failed"
+                    ),
+                    metrics=coordinator.planning_metrics(),
+                )
             for th in spawn_threads:
                 th.join(timeout=1200)
             member_patches.extend(p for p in helper_patches if p.strip())
@@ -2903,7 +3109,10 @@ class UnifiedHarness:
             raise ValueError("Disabling implementation decisions requires coordinator enabled")
         if self.coordination_variant == "human-prompt" and not (spec.coordinator and spec.coordinator_notebook):
             raise ValueError("Human-prompt coordination requires coordinator and notebook")
-        if (spec.coordinator or self.coordinator_complete is not None) and (
+        if (
+            spec.coordinator or self.coordinator_complete is not None or self.coordinator_completion is not None
+            or self.worker_completion is not None or self.planning_only
+        ) and (
             not spec.coordinator or not spec.shared_workspace or not spec.coop_tools
             or spec.worker != "mini_swe" or spec.team_roles
             or spec.adaptive or spec.decompose or spec.best_of_n != 1

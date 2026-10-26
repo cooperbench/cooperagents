@@ -51,7 +51,7 @@ def test_coordination_variant_names(tmp_path):
 def test_unsupported_recipient_feedback_lists_supported_values(tmp_path, monkeypatch, mode):
     monkeypatch.setattr(
         "cooperagents.planner._default_planner_complete",
-        lambda *args, **kwargs: lambda _: [message("Please confirm the API.", "all")],
+        lambda *args, **kwargs: lambda _, **options: [message("Please confirm the API.", "all")],
     )
     c = coordinator(
         coordination_mode=mode, notebook_path=tmp_path / "notebook.md",
@@ -62,7 +62,7 @@ def test_unsupported_recipient_feedback_lists_supported_values(tmp_path, monkeyp
     expected = f"Unsupported recipient 'all'. Supported values: {supported}."
     assert c._last_error == expected and not c._chat and not c.events()
 
-    def corrected(prompt):
+    def corrected(prompt, **options):
         observation = json.loads(prompt.split("OBSERVATION:\n", 1)[1])
         assert observation["previous_error"] == expected
         return [message("Corrected message", "agent2")]
@@ -79,7 +79,7 @@ def test_unsupported_recipient_feedback_lists_supported_values(tmp_path, monkeyp
 def test_invalid_batch_and_failed_write_have_no_effect(tmp_path, monkeypatch):
     path = tmp_path / "notebook.md"
     c = coordinator(notebook_path=path)
-    with pytest.raises(ValueError, match="disabled"):
+    with pytest.raises(ValueError, match="Unknown or unavailable tool: update_notebook"):
         coordinator()._parse_actions([tool("update_notebook", content="disabled")])
     previous = path.read_text()
     update = tool("update_notebook", content="new content")
@@ -292,7 +292,7 @@ def test_initial_prompt_keeps_evidence_pending_and_supplies_feature_identity(tmp
     assert ("notebook" in initial) == notebook
     assert "INITIAL DECISION:" in prompts[0] and "INITIAL DECISION:" not in prompts[1]
     assert "pending worker evidence and confirmation" in prompts[0]
-    assert all("You cannot inspect code, execute tools or wait for replies." in prompt for prompt in prompts)
+    assert all("You cannot inspect code, run shell commands or wait for replies." in prompt for prompt in prompts)
     assert all("Use the provided tools to act." in prompt for prompt in prompts)
     assert all("Return ONLY a JSON object" not in prompt for prompt in prompts)
 
@@ -311,7 +311,7 @@ def test_human_prompt_initial_prompt_and_direct_message_wrapper(tmp_path):
         '\n'
         '## 1. Evidence boundary\n'
         '\n'
-        'You cannot inspect code, execute tools, or wait for replies. Use only facts supported by the '
+        'You cannot inspect code, run shell commands or wait for replies. Use only facts supported by the '
         'observation and worker reports.\n'
         '\n'
         'Task requirements describe requested behavior, not inspected-code facts. Do not invent files, '
@@ -454,6 +454,15 @@ def test_finish_joins_inflight_even_if_already_stopped():
     with pytest.raises(RuntimeError, match="still running"):
         c.finish(SimpleNamespace(join=lambda timeout: deadlines.append(timeout), is_alive=lambda: True))
     assert deadlines == [600]
+
+
+def test_finish_preserves_legacy_error_wrapper():
+    c = coordinator()
+    failure = ValueError("synthetic coordinator failure")
+    c.error = failure
+    with pytest.raises(RuntimeError, match="Coordinator failed; episode is incomplete") as caught:
+        c.finish(SimpleNamespace(join=lambda timeout: None, is_alive=lambda: False))
+    assert caught.value.__cause__ is failure
 
 
 @pytest.mark.parametrize("remote", [False, True])
