@@ -197,9 +197,9 @@ def test_concurrent_failures_and_recording_failure(tmp_path):
 
 
 @pytest.mark.parametrize("n_workers", [2, 3])
-@pytest.mark.parametrize("stop_after_capture", [False, True])
+@pytest.mark.parametrize("stop_after_capture,only_first", [(False, False), (True, False), (True, True)])
 @pytest.mark.parametrize("healthy", [False, True])
-def test_two_repair_attempts_and_collection_audit(monkeypatch, tmp_path, n_workers, stop_after_capture, healthy):
+def test_two_repair_attempts_and_collection_audit(monkeypatch, tmp_path, n_workers, stop_after_capture, only_first, healthy):
     import importlib.util
     from pathlib import Path
 
@@ -255,6 +255,7 @@ def test_two_repair_attempts_and_collection_audit(monkeypatch, tmp_path, n_worke
     journal.emit("harness", "pair_start")
     result = UnifiedHarness(
         trajectory=journal, checkpoint_dir=directory / "checkpoints", stop_after_repair_checkpoint=stop_after_capture,
+        only_first_repair_checkpoint=only_first,
     ).run(
         spec, env_factory=lambda _: LocalEnv.fresh()
     )
@@ -279,12 +280,23 @@ def test_two_repair_attempts_and_collection_audit(monkeypatch, tmp_path, n_worke
     write_run_outputs(result, run_name="real", logs_dir=tmp_path / "logs")
     (tmp_path / "metadata.json").write_text(json.dumps({
         "pairs": ["demo:1:1,2"], "checkpoint_repair": True, "stop_after_repair_checkpoint": stop_after_capture,
+        "only_first_repair_checkpoint": only_first,
     }))
     module_spec = importlib.util.spec_from_file_location("audit", Path(__file__).parents[1] / "scripts/audit_trajectories.py")
     module = importlib.util.module_from_spec(module_spec)
     module_spec.loader.exec_module(module)
     audited = module.audit(tmp_path)
     assert audited["workers"] == n_workers
+    if only_first:
+        checkpoint_root = directory / "checkpoints"
+        expected = set() if healthy else {"before-integrator1"}
+        assert {p.name for p in checkpoint_root.iterdir() if p.is_dir()} == expected
+        assert set(audited["entries"][0]["checkpoints"]) == expected
+        unwanted = checkpoint_root / "worker-agent1"
+        unwanted.mkdir()
+        with pytest.raises(ValueError, match="inventory"):
+            module.audit(tmp_path)
+        unwanted.rmdir()
     if stop_after_capture and not healthy:
         with open_events(directory / "trajectory.jsonl.gz") as handle:
             events = [json.loads(row) for row in handle]
@@ -311,6 +323,8 @@ def test_two_repair_attempts_and_collection_audit(monkeypatch, tmp_path, n_worke
         config = json.loads(config_path.read_text())
         reject_json_change(metadata_path, {**metadata, "stop_after_repair_checkpoint": not stop_after_capture})
         reject_json_change(config_path, {**config, "stop_after_repair_checkpoint": not stop_after_capture})
+        reject_json_change(metadata_path, {**metadata, "only_first_repair_checkpoint": not only_first})
+        reject_json_change(config_path, {**config, "only_first_repair_checkpoint": not only_first})
         result_path = directory / "result.json"
         serialized = json.loads(result_path.read_text())
         if stop_after_capture:
@@ -345,7 +359,7 @@ def test_two_repair_attempts_and_collection_audit(monkeypatch, tmp_path, n_worke
                 with pytest.raises(ValueError, match="precede all repair inference"):
                     module.audit(tmp_path)
                 journal_path.write_bytes(original_journal)
-            else:
+            elif not only_first:
                 state_path = directory / "checkpoints/pre-repair/state.json"
                 manifest_path = state_path.parent / "manifest.json"
                 original_state, original_manifest = state_path.read_bytes(), manifest_path.read_bytes()
@@ -361,7 +375,19 @@ def test_two_repair_attempts_and_collection_audit(monkeypatch, tmp_path, n_worke
                     module.audit(tmp_path)
                 state_path.write_bytes(original_state)
                 manifest_path.write_bytes(original_manifest)
-        elif not healthy:
+        if only_first:
+            journal_path = directory / "trajectory.jsonl.gz"
+            original = journal_path.read_bytes()
+            with open_events(journal_path) as handle:
+                rows = [json.loads(row) for row in handle]
+            health_row = next(row for row in rows if row["event"] == "initial_repair_health")
+            health_row["data"]["healthy"] = not healthy
+            with gzip.open(journal_path, "wt") as handle:
+                handle.write("".join(json.dumps(row) + "\n" for row in rows))
+            with pytest.raises(ValueError, match="health evidence"):
+                module.audit(tmp_path)
+            journal_path.write_bytes(original)
+        if not stop_after_capture and not healthy:
             # Matching stop flags still cannot certify a normal full repair as collection.
             metadata_path.write_text(json.dumps({**metadata, "stop_after_repair_checkpoint": True}))
             config_path.write_text(json.dumps({**config, "stop_after_repair_checkpoint": True}))
@@ -371,7 +397,7 @@ def test_two_repair_attempts_and_collection_audit(monkeypatch, tmp_path, n_worke
             metadata_path.write_text(json.dumps(metadata))
             config_path.write_text(json.dumps(config))
 
-    if n_workers == 3:
+    if n_workers == 3 and not only_first:
         checkpoint = directory / "checkpoints/worker-agent3"
         manifest = checkpoint / "manifest.json"
         saved = manifest.read_bytes()

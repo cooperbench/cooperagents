@@ -39,6 +39,15 @@ python scripts/bench_compare.py --pairs go_chi_task:26:1,2 \
   --stop-after-repair-checkpoint
 ```
 
+Add `--only-first-repair-checkpoint` to that command to omit worker, pre-repair
+and post-repair filesystem snapshots. This option requires the stop option above;
+it does not change ordinary checkpoint collection. A captured pair has exactly
+one snapshot directory, `before-integrator1`; a healthy skip has none. The small
+`checkpoints/run.json`, normal results and I/O journal remain. The journal records
+the initial gate result so the auditor can verify skips without a pre-repair snapshot.
+The retained checkpoint restores independently with its exact base image, without
+any sibling checkpoint. Both options are also accepted by the NLP submit launcher.
+
 The first integrator prepares its exact initial input and saves the complete
 `before-integrator1` checkpoint, then returns with status `checkpointed` and zero
 model calls. No repair action, post-repair gate, second attempt or post-repair
@@ -50,7 +59,7 @@ The initial health gate is unchanged. A healthy merged tree does not enter repai
 so it produces no repair starting point and reports `repair_checkpoint.outcome`
 as `skipped_healthy`; a collected starting point reports `captured`. Select only
 captured `before-integrator1` directories for the repair training manifest.
-Worker and pre-repair snapshots are still retained. The trajectory auditor accepts
+Worker and pre-repair snapshots are retained unless only-first mode is selected. The trajectory auditor accepts
 this explicit collection outcome, verifies the saved input and checks that no
 repair inference occurred; it does not require a post-repair checkpoint for it.
 

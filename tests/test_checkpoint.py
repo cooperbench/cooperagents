@@ -432,3 +432,8 @@ def test_capture_stop_failures_do_not_return_success(monkeypatch, tmp_path, fail
     finally:
         journal.close()
     assert roots and all(not root.exists() for root in roots)
+
+
+def test_only_first_checkpoint_requires_stop_mode(tmp_path):
+    with pytest.raises(ValueError, match="requires stop_after_repair_checkpoint"):
+        UnifiedHarness(checkpoint_dir=tmp_path, only_first_repair_checkpoint=True)

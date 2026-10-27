@@ -227,12 +227,17 @@ def audit(run: Path) -> dict:
                 raise ValueError(f"{pair}: coordinator nudge count mismatch")
         workers = {"agent1", "agent2"}
         stop_mode = metadata.get("stop_after_repair_checkpoint", False)
+        only_first = metadata.get("only_first_repair_checkpoint", False)
+        if only_first and not stop_mode:
+            raise ValueError("Only-first repair checkpoint requires stop mode")
         if stop_mode and not metadata.get("checkpoint_repair"):
             raise ValueError("Stop mode requires checkpoint collection")
         if metadata.get("checkpoint_repair"):
             config = json.loads((directory / "checkpoints/run.json").read_text())
             if config.get("stop_after_repair_checkpoint", False) != stop_mode:
                 raise ValueError("Run and pair repair stop modes differ")
+            if config.get("only_first_repair_checkpoint", False) != only_first:
+                raise ValueError("Run and pair checkpoint selections differ")
             workers = {assignment["agent_id"] for assignment in config["assignments"]}
         if not workers <= ends.keys() or not workers <= result["agents"].keys():
             raise ValueError(f"{pair}: missing workers")
@@ -242,6 +247,10 @@ def audit(run: Path) -> dict:
         if not stop_mode and outcome is not None:
             raise ValueError("Unexpected repair checkpoint outcome outside stop mode")
         captured = outcome == "captured"
+        if only_first:
+            health = [r for r in rows if r["actor"] == "merge_gate" and r["event"] == "initial_repair_health"]
+            if len(health) != 1 or health[0]["data"].get("healthy") is not (outcome == "skipped_healthy"):
+                raise ValueError("Initial repair health evidence differs from collection outcome")
         if captured and not (metadata.get("stop_after_repair_checkpoint") and metadata.get("checkpoint_repair")):
             raise ValueError("Unexpected repair capture termination")
         if captured and (result["agents"].get("integrator1", {}).get("status") != "checkpointed"
@@ -282,6 +291,10 @@ def audit(run: Path) -> dict:
             if not captured:
                 expected.add("post-repair")
             expected.update(f"before-{actor}" for actor in result["agents"] if actor.startswith("integrator"))
+            if only_first:
+                expected = {"before-integrator1"} if captured else set()
+                if {p.name for p in root.iterdir() if p.is_dir()} != expected:
+                    raise ValueError("Only-first checkpoint inventory contains missing or extra snapshots")
             for name in sorted(expected):
                 saved = verify_checkpoint(root / name)
                 checkpoints[name] = saved["metadata"]["boundary"]
@@ -296,8 +309,9 @@ def audit(run: Path) -> dict:
                     ):
                         raise ValueError(f"{pair}/{actor}: checkpoint worker state mismatch")
             if stop_mode and outcome == "skipped_healthy":
-                before = verify_checkpoint(root / "pre-repair")
-                if (before["metadata"].get("healthy") is not True
+                healthy = (health[0]["data"].get("healthy") if only_first
+                           else verify_checkpoint(root / "pre-repair")["metadata"].get("healthy"))
+                if (healthy is not True
                         or any(a.startswith("integrator") for a in result["agents"])
                         or any(r["actor"].startswith("integrator") for r in rows)
                         or any(root.glob("before-integrator*"))):
@@ -309,8 +323,9 @@ def audit(run: Path) -> dict:
                 load_repair_input(root / final)
                 if (root / "post-repair").exists() or (root / "before-integrator2").exists():
                     raise ValueError("Captured handoff continued past the first checkpoint")
-            if (root / final / "submission.patch").read_text() != (directory / "integrated.patch").read_text():
-                raise ValueError(f"{pair}: checkpoint differs from official submission")
+            if not (only_first and not captured):
+                if (root / final / "submission.patch").read_text() != (directory / "integrated.patch").read_text():
+                    raise ValueError(f"{pair}: checkpoint differs from official submission")
         with path.open("rb") as handle:
             digest = hashlib.file_digest(handle, "sha256").hexdigest()
         entries.append(

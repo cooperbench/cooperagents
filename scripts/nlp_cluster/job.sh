@@ -89,6 +89,7 @@ PYCONFIG
   fi
   if [[ "${COOPER_CHECKPOINT_REPAIR:-0}" == 1 ]]; then args+=(--checkpoint-repair); fi
   if [[ "${COOPER_STOP_AFTER_REPAIR_CHECKPOINT:-0}" == 1 ]]; then args+=(--stop-after-repair-checkpoint); fi
+  if [[ "${COOPER_ONLY_FIRST_REPAIR_CHECKPOINT:-0}" == 1 ]]; then args+=(--only-first-repair-checkpoint); fi
   if [[ "${COOPER_RECORD_TRAJECTORIES:-0}" == 1 || "${COOPER_COLLECT_TRAJECTORIES:-0}" == 1 ]]; then
     args+=(--record-trajectory)
   fi

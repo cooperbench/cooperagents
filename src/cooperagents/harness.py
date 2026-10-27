@@ -1918,6 +1918,7 @@ class UnifiedHarness:
         worker_reminder_interval: int = 10,
         checkpoint_dir: Path | None = None,
         stop_after_repair_checkpoint: bool = False,
+        only_first_repair_checkpoint: bool = False,
         repair_completion: CompletionBinding | None = None,
         coordinator_completion: CompletionBinding | None = None,
         worker_completion: CompletionBinding | None = None,
@@ -1958,6 +1959,9 @@ class UnifiedHarness:
         self.checkpoint_dir = Path(checkpoint_dir) if checkpoint_dir is not None else None
         if stop_after_repair_checkpoint and checkpoint_dir is None:
             raise ValueError("Stopping after the repair checkpoint requires checkpoint_dir")
+        if only_first_repair_checkpoint and not stop_after_repair_checkpoint:
+            raise ValueError("Only-first repair checkpoint requires stop_after_repair_checkpoint")
+        self.only_first_repair_checkpoint = only_first_repair_checkpoint
         self.stop_after_repair_checkpoint = stop_after_repair_checkpoint
         self.langfuse = langfuse
         self.bus = bus
@@ -2298,7 +2302,7 @@ class UnifiedHarness:
                     return raw, "empty_working_tree"
 
                 def collect_diff(env, aid: str, result: AgentResult) -> str:
-                    if self.checkpoint_dir is None:
+                    if self.checkpoint_dir is None or self.only_first_repair_checkpoint:
                         raw = collect_raw_diff(env, aid)[0]
                         if coordinator is not None and coordinator._planning:
                             raw_worker_patches[aid] = raw
@@ -2589,7 +2593,9 @@ class UnifiedHarness:
                     return _gate(GateEnv())
 
                 initial_healthy = healthy = check_gate() if spec.repair_integrator else None
-                if self.checkpoint_dir is not None:
+                if self.only_first_repair_checkpoint and self.trajectory is not None:
+                    self.trajectory.emit("merge_gate", "initial_repair_health", healthy=initial_healthy, gate_checks=gate_checks)
+                if self.checkpoint_dir is not None and not self.only_first_repair_checkpoint:
                     from cooperagents.checkpoint import save_checkpoint
 
                     save_checkpoint(env, self.checkpoint_dir / "pre-repair", metadata=dict(
@@ -2627,7 +2633,7 @@ class UnifiedHarness:
                 if not checkpoint_captured:
                     raw_integrated_patch = env.git_diff()
                     integrated_patch = strip_test_sections(raw_integrated_patch)
-                    if self.checkpoint_dir is not None:
+                    if self.checkpoint_dir is not None and not self.only_first_repair_checkpoint:
                         # Capture after final collect_diff so the saved patch is the actual submission.
                         save_checkpoint(env, self.checkpoint_dir / "post-repair", metadata=dict(
                             boundary="integrated_submission", healthy=healthy, gate_checks=gate_checks, attempts=attempts,
@@ -3168,6 +3174,7 @@ class UnifiedHarness:
             (self.checkpoint_dir / "run.json").write_text(json.dumps(dict(
                 spec=config, assignments=[asdict(a) for a in assignments], step_limit=self.step_limit,
                 stop_after_repair_checkpoint=self.stop_after_repair_checkpoint,
+                only_first_repair_checkpoint=self.only_first_repair_checkpoint,
                 cost_limit=self.cost_limit, command_timeout=self.command_timeout,
                 coordination_variant=self.coordination_variant,
                 coordinator_implementation_enabled=self.coordinator_implementation_enabled,
