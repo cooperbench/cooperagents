@@ -27,6 +27,41 @@ two workers and mechanical integration. Alternative selectors, helper spawning,
 best-of-N and decomposition fail explicitly. The launcher saves immutable source,
 dependencies, image hashes and evaluator patches through its existing workflow.
 
+## Collect repair starting points without running repair
+
+Add `--stop-after-repair-checkpoint` together with `--checkpoint-repair` and
+`--repair-integrator`. On `bench_compare.py`, also use `--team-only`:
+
+```bash
+python scripts/bench_compare.py --pairs go_chi_task:26:1,2 \
+  --team-only --no-seed --coop-tools --git-share \
+  --checkpoint-repair --repair-integrator --repair-attempts 2 \
+  --stop-after-repair-checkpoint
+```
+
+The first integrator prepares its exact initial input and saves the complete
+`before-integrator1` checkpoint, then returns with status `checkpointed` and zero
+model calls. No repair action, post-repair gate, second attempt or post-repair
+checkpoint runs. Environment cleanup, result writing and trajectory finalization
+still complete normally. Collection failures still fail; they are not successful
+stops. Official evaluation is skipped automatically for the whole invocation.
+
+The initial health gate is unchanged. A healthy merged tree does not enter repair,
+so it produces no repair starting point and reports `repair_checkpoint.outcome`
+as `skipped_healthy`; a collected starting point reports `captured`. Select only
+captured `before-integrator1` directories for the repair training manifest.
+Worker and pre-repair snapshots are still retained. The trajectory auditor accepts
+this explicit collection outcome, verifies the saved input and checks that no
+repair inference occurred; it does not require a post-repair checkpoint for it.
+
+`scripts/nlp_cluster/submit.py --mode real` accepts the same stop option and
+implies `--collect-trajectories`. It records the option in metadata and the saved
+variant, forwards it to the benchmark and runs the collection audit. In the public
+API, use `UnifiedHarness(checkpoint_dir=..., stop_after_repair_checkpoint=True)`
+with `spec.repair_integrator=True` and omit an explicit `bus=`. The default is
+`False`, retaining full execution. Checkpoints continue to use filesystem deltas
+by default; the stop option does not select a storage format.
+
 ## Recorded boundaries
 
 Each pair contains `checkpoints/run.json` with the task assignments, effective

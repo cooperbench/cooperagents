@@ -226,18 +226,36 @@ def audit(run: Path) -> dict:
             ):
                 raise ValueError(f"{pair}: coordinator nudge count mismatch")
         workers = {"agent1", "agent2"}
+        stop_mode = metadata.get("stop_after_repair_checkpoint", False)
+        if stop_mode and not metadata.get("checkpoint_repair"):
+            raise ValueError("Stop mode requires checkpoint collection")
         if metadata.get("checkpoint_repair"):
             config = json.loads((directory / "checkpoints/run.json").read_text())
+            if config.get("stop_after_repair_checkpoint", False) != stop_mode:
+                raise ValueError("Run and pair repair stop modes differ")
             workers = {assignment["agent_id"] for assignment in config["assignments"]}
         if not workers <= ends.keys() or not workers <= result["agents"].keys():
             raise ValueError(f"{pair}: missing workers")
+        outcome = result.get("metrics", {}).get("repair_checkpoint", {}).get("outcome")
+        if stop_mode and outcome not in {"captured", "skipped_healthy"}:
+            raise ValueError("Stop mode requires an explicit repair checkpoint outcome")
+        if not stop_mode and outcome is not None:
+            raise ValueError("Unexpected repair checkpoint outcome outside stop mode")
+        captured = outcome == "captured"
+        if captured and not (metadata.get("stop_after_repair_checkpoint") and metadata.get("checkpoint_repair")):
+            raise ValueError("Unexpected repair capture termination")
+        if captured and (result["agents"].get("integrator1", {}).get("status") != "checkpointed"
+                         or result["agents"]["integrator1"]["steps"] != 0
+                         or any(r["actor"].startswith("integrator") and r["event"] == "request" for r in rows)):
+            raise ValueError("Captured handoff must precede all repair inference")
         for actor, info in result["agents"].items():
             final = json.loads((directory / f"{actor}_traj.json").read_text())
             if state["contexts"].get(actor) != final["messages"]:
                 raise ValueError(f"{pair}/{actor}: replay differs from exported final history")
             if ends[actor]["steps"] != info["steps"] or ends[actor]["status"] != info["status"]:
                 raise ValueError(f"{pair}/{actor}: final status or step mismatch")
-            if counts[f"{actor}:request"] == 0 and not result.get("metrics", {}).get("planning_failed"):
+            if (counts[f"{actor}:request"] == 0 and not (captured and actor == "integrator1")
+                    and not result.get("metrics", {}).get("planning_failed")):
                 raise ValueError(f"{pair}/{actor}: missing requests")
         coordination = audit_coordination(rows, result)
         approved_digest = metadata.get("initial_plans", {}).get(pair)
@@ -260,7 +278,9 @@ def audit(run: Path) -> dict:
             from cooperagents.checkpoint import verify_checkpoint
 
             root = directory / "checkpoints"
-            expected = {"pre-repair", "post-repair", *(f"worker-{actor}" for actor in workers)}
+            expected = {"pre-repair", *(f"worker-{actor}" for actor in workers)}
+            if not captured:
+                expected.add("post-repair")
             expected.update(f"before-{actor}" for actor in result["agents"] if actor.startswith("integrator"))
             for name in sorted(expected):
                 saved = verify_checkpoint(root / name)
@@ -275,7 +295,21 @@ def audit(run: Path) -> dict:
                         or snapshot["steps"] != ends[actor]["steps"]
                     ):
                         raise ValueError(f"{pair}/{actor}: checkpoint worker state mismatch")
-            if (root / "post-repair/submission.patch").read_text() != (directory / "integrated.patch").read_text():
+            if stop_mode and outcome == "skipped_healthy":
+                before = verify_checkpoint(root / "pre-repair")
+                if (before["metadata"].get("healthy") is not True
+                        or any(a.startswith("integrator") for a in result["agents"])
+                        or any(r["actor"].startswith("integrator") for r in rows)
+                        or any(root.glob("before-integrator*"))):
+                    raise ValueError("Healthy skip has unhealthy state or repair activity")
+            final = "before-integrator1" if captured else "post-repair"
+            if captured:
+                from cooperagents.repair import load_repair_input
+
+                load_repair_input(root / final)
+                if (root / "post-repair").exists() or (root / "before-integrator2").exists():
+                    raise ValueError("Captured handoff continued past the first checkpoint")
+            if (root / final / "submission.patch").read_text() != (directory / "integrated.patch").read_text():
                 raise ValueError(f"{pair}: checkpoint differs from official submission")
         with path.open("rb") as handle:
             digest = hashlib.file_digest(handle, "sha256").hexdigest()
@@ -290,6 +324,7 @@ def audit(run: Path) -> dict:
                 agents=ends,
                 checkpoints=checkpoints,
                 coordination=coordination,
+                repair_checkpoint=result.get("metrics", {}).get("repair_checkpoint"),
             )
         )
     return dict(
