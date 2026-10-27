@@ -1824,7 +1824,8 @@ def repair_brief(env: Environment, spec: TeamSpec, assignments: list[Assignment]
 def run_repair_tail(env: Environment, *, spec: TeamSpec, assignments: list[Assignment], seeds: dict[str, AgentResult],
                     run_agent: Callable, check_gate: Callable[[], bool], gate_checks: list[dict],
                     checkpoint_dir: Path | None = None,
-        trace=None, first_task: str | None = None, checkpoint_bus: TeamBus | None = None) -> list[dict]:
+                    trace=None, first_task: str | None = None, checkpoint_bus: TeamBus | None = None,
+                    stop_after_repair_checkpoint: bool = False) -> list[dict]:
     """Shared by full-team and checkpoint entrypoints; no initial health check here."""
     attempts = []
     for attempt in range(1, max(1, spec.repair_attempts) + 1):
@@ -1832,9 +1833,10 @@ def run_repair_tail(env: Environment, *, spec: TeamSpec, assignments: list[Assig
         actor = f"integrator{attempt}"
 
         capture_seconds = 0.0
+        capture_complete = False
 
         def capture(agent, task=task, actor=actor, attempt=attempt):
-            nonlocal capture_seconds
+            nonlocal capture_seconds, capture_complete
             capture_started = time.monotonic()
             from cooperagents.checkpoint import save_checkpoint
             from cooperagents.repair import capture_repair_input
@@ -1847,10 +1849,23 @@ def run_repair_tail(env: Environment, *, spec: TeamSpec, assignments: list[Assig
                 boundary="repair_agent_start", task=task, attempt=attempt, healthy=False, gate_checks=gate_checks,
             ), repair_input=repair_input, trace=partial(trace, actor) if trace else None)
             capture_seconds += time.monotonic() - capture_started
+            capture_complete = True
+            if stop_after_repair_checkpoint and attempt == 1:
+                from cooperagents.checkpoint import RepairCheckpointCaptured
+
+                raise RepairCheckpointCaptured()
 
         started = time.monotonic()
         result = run_agent(actor, task, capture if checkpoint_dir is not None else None)
         seeds[actor] = result
+        if stop_after_repair_checkpoint or result.status == "checkpointed":
+            if not (stop_after_repair_checkpoint and attempt == 1 and capture_complete
+                    and result.status == "checkpointed" and result.steps == 0 and result.error is None):
+                raise RuntimeError("Repair did not stop at the completed first checkpoint")
+            from cooperagents.repair import load_repair_input
+
+            load_repair_input(checkpoint_dir / "before-integrator1")
+            return attempts
         if first_task is not None and result.status == "error":
             from cooperagents.repair import RepairInfrastructureError
 
@@ -1902,6 +1917,7 @@ class UnifiedHarness:
         planning_time_limit_s: int = 600,
         worker_reminder_interval: int = 10,
         checkpoint_dir: Path | None = None,
+        stop_after_repair_checkpoint: bool = False,
         repair_completion: CompletionBinding | None = None,
         coordinator_completion: CompletionBinding | None = None,
         worker_completion: CompletionBinding | None = None,
@@ -1940,6 +1956,9 @@ class UnifiedHarness:
         self.coordinator_notebook_path = Path(coordinator_notebook_path).resolve() if coordinator_notebook_path is not None else None
         self.trajectory = trajectory
         self.checkpoint_dir = Path(checkpoint_dir) if checkpoint_dir is not None else None
+        if stop_after_repair_checkpoint and checkpoint_dir is None:
+            raise ValueError("Stopping after the repair checkpoint requires checkpoint_dir")
+        self.stop_after_repair_checkpoint = stop_after_repair_checkpoint
         self.langfuse = langfuse
         self.bus = bus
         self.step_limit = step_limit
@@ -2498,6 +2517,7 @@ class UnifiedHarness:
                 metrics={**coordinator.planning_metrics(), "planning_failed": True, "raw_worker_patches": raw_worker_patches},
             )
 
+        checkpoint_captured = False
         # Integration. Seed mode already has the cumulative diff; no-seed must merge
         # the independent member patches in a fresh integrator container.
         if not spec.seed_prior:
@@ -2568,7 +2588,7 @@ class UnifiedHarness:
                             return result
                     return _gate(GateEnv())
 
-                healthy = check_gate() if spec.repair_integrator else None
+                initial_healthy = healthy = check_gate() if spec.repair_integrator else None
                 if self.checkpoint_dir is not None:
                     from cooperagents.checkpoint import save_checkpoint
 
@@ -2593,20 +2613,29 @@ class UnifiedHarness:
                         run_agent=run_repair_agent, check_gate=check_gate, gate_checks=gate_checks,
                         checkpoint_dir=self.checkpoint_dir,
                         checkpoint_bus=bus,
+                        stop_after_repair_checkpoint=self.stop_after_repair_checkpoint,
                         trace=self.trajectory.emit if self.trajectory else None,
                     )
-                    healthy = attempts[-1]["healthy"]
-                raw_integrated_patch = env.git_diff()
-                integrated_patch = strip_test_sections(raw_integrated_patch)
-                if self.checkpoint_dir is not None:
-                    # Capture after final collect_diff so the saved patch is the actual submission.
-                    save_checkpoint(env, self.checkpoint_dir / "post-repair", metadata=dict(
-                        boundary="integrated_submission", healthy=healthy, gate_checks=gate_checks, attempts=attempts,
-                        repair_duration_seconds=sum(a["duration_seconds"] for a in attempts),
-                        repair_wall_seconds_including_checkpoints=time.monotonic() - repair_started if attempts else 0,
-                        results={aid: asdict(r) for aid, r in seeds.items() if aid.startswith("integrator")},
-                    ), collect_patch=lambda: (raw_integrated_patch, "integrated_submission"),
-                        trace=partial(self.trajectory.emit, "merge") if self.trajectory else None)
+                    checkpoint_captured = self.stop_after_repair_checkpoint and not attempts
+                    if checkpoint_captured:
+                        integrated_patch = (self.checkpoint_dir / "before-integrator1/integration.patch").read_text()
+                    else:
+                        healthy = attempts[-1]["healthy"]
+                if self.stop_after_repair_checkpoint and not checkpoint_captured:
+                    if initial_healthy is not True or any(a.startswith("integrator") for a in seeds):
+                        raise RuntimeError("Repair checkpoint was neither captured nor skipped as healthy")
+                if not checkpoint_captured:
+                    raw_integrated_patch = env.git_diff()
+                    integrated_patch = strip_test_sections(raw_integrated_patch)
+                    if self.checkpoint_dir is not None:
+                        # Capture after final collect_diff so the saved patch is the actual submission.
+                        save_checkpoint(env, self.checkpoint_dir / "post-repair", metadata=dict(
+                            boundary="integrated_submission", healthy=healthy, gate_checks=gate_checks, attempts=attempts,
+                            repair_duration_seconds=sum(a["duration_seconds"] for a in attempts),
+                            repair_wall_seconds_including_checkpoints=time.monotonic() - repair_started if attempts else 0,
+                            results={aid: asdict(r) for aid, r in seeds.items() if aid.startswith("integrator")},
+                        ), collect_patch=lambda: (raw_integrated_patch, "integrated_submission"),
+                            trace=partial(self.trajectory.emit, "merge") if self.trajectory else None)
             finally:
                 env.cleanup()
         elif not spec.seed_prior:
@@ -2626,7 +2655,7 @@ class UnifiedHarness:
         integrated = AgentResult(
             agent_id="team",
             role="integrated",
-            status="submitted" if integrated_patch.strip() else "error",
+            status="checkpointed" if checkpoint_captured else "submitted" if integrated_patch.strip() else "error",
             patch=integrated_patch,
             cost=sum(r.cost for r in seeds.values()),
             steps=sum(r.steps for r in seeds.values()),
@@ -2641,6 +2670,8 @@ class UnifiedHarness:
             integrated=integrated,
             duration_seconds=time.time() - start,
             metrics={
+                **({"repair_checkpoint": {"outcome": "captured" if checkpoint_captured else "skipped_healthy"}}
+                   if self.stop_after_repair_checkpoint else {}),
                 **coordination_metrics(bus.task_events(), final_tasks=bus.list_tasks()),
                 **({"do_no_harm_discards": gate_discards} if spec.do_no_harm else {}),
                 **(
@@ -3076,6 +3107,8 @@ class UnifiedHarness:
         selector: Callable[[list[RunResult]], int] | None = None,
         planner: Planner | None = None,
     ) -> RunResult:
+        if self.stop_after_repair_checkpoint and not spec.repair_integrator:
+            raise ValueError("Stopping after the repair checkpoint requires repair_integrator")
         if self.checkpoint_dir is not None:
             from cooperagents.repair import validate_capture_spec
 
@@ -3134,6 +3167,7 @@ class UnifiedHarness:
             config["completion_gate"] = describe_gate(spec.completion_gate)
             (self.checkpoint_dir / "run.json").write_text(json.dumps(dict(
                 spec=config, assignments=[asdict(a) for a in assignments], step_limit=self.step_limit,
+                stop_after_repair_checkpoint=self.stop_after_repair_checkpoint,
                 cost_limit=self.cost_limit, command_timeout=self.command_timeout,
                 coordination_variant=self.coordination_variant,
                 coordinator_implementation_enabled=self.coordinator_implementation_enabled,

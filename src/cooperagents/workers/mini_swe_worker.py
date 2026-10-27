@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 
 import yaml
 
+from cooperagents.checkpoint import RepairCheckpointCaptured
 from cooperagents.completion import CompletionBinding
 from cooperagents.env.base import Environment
 from cooperagents.human_phase_prompts import HUMAN_PLANNING_CHAT, HUMAN_PLANNING_GIT, HUMAN_PLANNING_INSTANCE
@@ -578,15 +579,19 @@ def run_mini_swe_agent(
                 pass
 
     capture_failed = False
+    stopped_at_capture = False
     status = "error"
     error = None
     try:
 
         def started(current: DefaultAgent) -> None:
-            nonlocal capture_failed
+            nonlocal capture_failed, stopped_at_capture
             if on_start is not None:
                 try:
                     on_start(current)
+                except RepairCheckpointCaptured:
+                    stopped_at_capture = True
+                    raise
                 except Exception:
                     capture_failed = True
                     raise
@@ -604,6 +609,10 @@ def run_mini_swe_agent(
             "planned" if exit_extra.get("exit_status") == "PlanningComplete"
             else "submitted" if exit_extra.get("exit_status") == "Submitted" else "limit"
         )
+    except RepairCheckpointCaptured:
+        if not stopped_at_capture:
+            raise
+        status = "checkpointed"
     except Exception as e:  # noqa: BLE001 - surface any failure as an error result
         from cooperagents.repair import RepairInfrastructureError
 

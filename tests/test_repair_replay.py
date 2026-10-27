@@ -885,3 +885,20 @@ def test_attempt_limit_narrows_without_changing_checkpoint(monkeypatch, tmp_path
     for invalid in (0, -1, True, 3):
         with pytest.raises(ValueError, match="cannot exceed the saved budget"):
             run_repair_checkpoint(checkpoint, scratch=tmp_path / "scratch", run_id="invalid", max_attempts=invalid)
+
+
+def test_stop_signal_outside_start_callback_is_not_capture(monkeypatch, tmp_path):
+    from cooperagents.checkpoint import RepairCheckpointCaptured
+
+    env = LocalEnv.fresh(workdir=str(tmp_path))
+    try:
+        def misplaced_stop(_):
+            raise RepairCheckpointCaptured()
+
+        monkeypatch.setattr(worker.DefaultAgent, "step", misplaced_stop)
+        with pytest.raises(RepairCheckpointCaptured):
+            worker.run_mini_swe_agent(
+                env, task="repair", agent_id="integrator1", role="integrator", model_name="fixture", step_limit=1, cost_limit=5,
+            )
+    finally:
+        env.cleanup()
