@@ -134,6 +134,13 @@ unchanged. The benchmark and NLP submission CLIs accept this flag; direct
 `UnifiedHarness` callers use `coordinator_implementation_enabled=False`.
 This disables model intervention, not the coordinator host that delivers chat.
 
+For separate token limits, set `COOPER_MAX_TOKENS=8192` and
+`COOPER_WORKER_MAX_TOKENS=4096` in the sourced runtime profile. Coordinator calls
+keep the shared limit; mini-SWE planning/implementation workers, their summaries
+and saved repair model settings use the worker limit. An unset or empty worker
+override inherits the shared value. The NLP launcher records both effective
+limits in `rendered-config/runtime-config.json`.
+
 Add `--initial-plan-dir <directory>` to start an `auto-prompt` or `human-prompt` / `group-chat`
 team from reviewed notebook, public discussion and per-worker memory bundles.
 Pair, feature text hashes and clean source HEAD must match the bundle. The host

@@ -11,8 +11,8 @@ def sampling_kwargs(temperature: float | None = None, *, worker: bool = False) -
     """Read explicit settings; FORCE keeps precedence over per-call temperature.
 
     Nonstandard OpenAI fields go in extra_body so both OpenAI SDK and LiteLLM's
-    OpenAI-compatible transport send them unchanged. Workers may override only
-    the chat-template thinking switch; coordinator calls keep the shared value.
+    OpenAI-compatible transport send them unchanged. Workers may override the
+    token limit and thinking switch; coordinator calls keep the shared values.
     """
     result: dict[str, Any] = {}
     extra: dict[str, Any] = {}
@@ -22,6 +22,8 @@ def sampling_kwargs(temperature: float | None = None, *, worker: bool = False) -
         ("max_tokens", 1, math.inf),
     ):
         key = f"COOPER_{name.upper()}"
+        if worker and name == "max_tokens" and os.getenv("COOPER_WORKER_MAX_TOKENS"):
+            key = "COOPER_WORKER_MAX_TOKENS"
         raw = os.getenv(key)
         if name == "temperature":
             raw = os.getenv("COOPER_TEMPERATURE_FORCE") or (
@@ -29,7 +31,10 @@ def sampling_kwargs(temperature: float | None = None, *, worker: bool = False) -
             )
         if not raw:
             continue
-        value = int(raw) if name in ("top_k", "max_tokens") else float(raw)
+        try:
+            value = int(raw) if name in ("top_k", "max_tokens") else float(raw)
+        except ValueError:
+            raise ValueError(f"{key} must be a valid number") from None
         if not math.isfinite(value) or not lower <= value <= upper:
             raise ValueError(f"{key} must be finite and between {lower} and {upper}")
         target = extra if name in ("top_k", "min_p", "repetition_penalty") else result
