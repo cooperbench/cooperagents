@@ -1,5 +1,7 @@
 """Collection and replay require no containers, network, or paid inference."""
 
+import gzip
+import hashlib
 import json
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
@@ -11,7 +13,7 @@ import pytest
 from cooperagents.bus.memory import InMemoryBus
 from cooperagents.env.base import ExecResult
 from cooperagents.harness import _Coordinator
-from cooperagents.trajectory import Trajectory, record_call, replay
+from cooperagents.trajectory import Trajectory, open_events, record_call, replay
 from cooperagents.types import Assignment
 from cooperagents.vendor.mini_swe.agents.default import DefaultAgent
 from cooperagents.vendor.mini_swe.models.litellm_model import LitellmModel
@@ -195,7 +197,9 @@ def test_concurrent_failures_and_recording_failure(tmp_path):
 
 
 @pytest.mark.parametrize("n_workers", [2, 3])
-def test_two_repair_attempts_and_collection_audit(monkeypatch, tmp_path, n_workers):
+@pytest.mark.parametrize("stop_after_capture,only_first", [(False, False), (True, False), (True, True)])
+@pytest.mark.parametrize("healthy", [False, True])
+def test_two_repair_attempts_and_collection_audit(monkeypatch, tmp_path, n_workers, stop_after_capture, only_first, healthy):
     import importlib.util
     from pathlib import Path
 
@@ -228,7 +232,7 @@ def test_two_repair_attempts_and_collection_audit(monkeypatch, tmp_path, n_worke
         )
 
     monkeypatch.setattr(litellm, "completion", complete)
-    monkeypatch.setattr("cooperagents.harness._tree_health", lambda env: False)
+    monkeypatch.setattr("cooperagents.harness._tree_health", lambda env: healthy)
     spec = TeamSpec(
         run_id="test",
         repo="demo",
@@ -249,20 +253,151 @@ def test_two_repair_attempts_and_collection_audit(monkeypatch, tmp_path, n_worke
     directory = tmp_path / "logs/real/team/demo/1/f1_f2"
     journal = Trajectory(directory / "trajectory.jsonl.gz")
     journal.emit("harness", "pair_start")
-    result = UnifiedHarness(trajectory=journal, checkpoint_dir=directory / "checkpoints").run(
+    result = UnifiedHarness(
+        trajectory=journal, checkpoint_dir=directory / "checkpoints", stop_after_repair_checkpoint=stop_after_capture,
+        only_first_repair_checkpoint=only_first,
+    ).run(
         spec, env_factory=lambda _: LocalEnv.fresh()
     )
     journal.emit("harness", "pair_end")
     journal.close()
-    assert set(result.seeds) == {*(f"agent{i}" for i in range(1, n_workers + 1)), "integrator1", "integrator2"}
+    integrators = set() if healthy else {"integrator1"} if stop_after_capture else {"integrator1", "integrator2"}
+    assert set(result.seeds) == {*(f"agent{i}" for i in range(1, n_workers + 1)), *integrators}
+    if stop_after_capture and not healthy:
+        from cooperagents.checkpoint import verify_checkpoint
+        from cooperagents.repair import load_repair_input
+
+        checkpoint = directory / "checkpoints/before-integrator1"
+        assert verify_checkpoint(checkpoint)["metadata"]["attempt"] == 1
+        assert load_repair_input(checkpoint).pending_messages is not None
+        assert result.seeds["integrator1"].status == "checkpointed"
+        assert result.seeds["integrator1"].steps == 0
+        assert result.seeds["integrator1"].error is None
+        assert result.integrated.status == "checkpointed"
+        assert result.metrics["repair_checkpoint"] == {"outcome": "captured"}
+        assert not (directory / "checkpoints/post-repair").exists()
+        assert not (directory / "checkpoints/before-integrator2").exists()
     write_run_outputs(result, run_name="real", logs_dir=tmp_path / "logs")
-    (tmp_path / "metadata.json").write_text(json.dumps({"pairs": ["demo:1:1,2"], "checkpoint_repair": True}))
+    (tmp_path / "metadata.json").write_text(json.dumps({
+        "pairs": ["demo:1:1,2"], "checkpoint_repair": True, "stop_after_repair_checkpoint": stop_after_capture,
+        "only_first_repair_checkpoint": only_first,
+    }))
     module_spec = importlib.util.spec_from_file_location("audit", Path(__file__).parents[1] / "scripts/audit_trajectories.py")
     module = importlib.util.module_from_spec(module_spec)
     module_spec.loader.exec_module(module)
     audited = module.audit(tmp_path)
     assert audited["workers"] == n_workers
-    if n_workers == 3:
+    if only_first:
+        checkpoint_root = directory / "checkpoints"
+        expected = set() if healthy else {"before-integrator1"}
+        assert {p.name for p in checkpoint_root.iterdir() if p.is_dir()} == expected
+        assert set(audited["entries"][0]["checkpoints"]) == expected
+        unwanted = checkpoint_root / "worker-agent1"
+        unwanted.mkdir()
+        with pytest.raises(ValueError, match="inventory"):
+            module.audit(tmp_path)
+        unwanted.rmdir()
+    if stop_after_capture and not healthy:
+        with open_events(directory / "trajectory.jsonl.gz") as handle:
+            events = [json.loads(row) for row in handle]
+        assert not any(row["actor"].startswith("integrator") and row["event"] == "request" for row in events)
+        captured_at = next(row["seq"] for row in events if row["event"] == "checkpoint_end" and row["actor"] == "integrator1")
+        assert not any(row["actor"] == "merge_gate" and row["seq"] > captured_at for row in events)
+    if stop_after_capture and healthy:
+        assert result.metrics["repair_checkpoint"] == {"outcome": "skipped_healthy"}
+        assert not (directory / "checkpoints/before-integrator1").exists()
+
+    if n_workers == 2:
+        def reject_json_change(path, value):
+            original = path.read_bytes()
+            path.write_text(json.dumps(value))
+            try:
+                with pytest.raises(ValueError):
+                    module.audit(tmp_path)
+            finally:
+                path.write_bytes(original)
+
+        metadata_path = tmp_path / "metadata.json"
+        metadata = json.loads(metadata_path.read_text())
+        config_path = directory / "checkpoints/run.json"
+        config = json.loads(config_path.read_text())
+        reject_json_change(metadata_path, {**metadata, "stop_after_repair_checkpoint": not stop_after_capture})
+        reject_json_change(config_path, {**config, "stop_after_repair_checkpoint": not stop_after_capture})
+        reject_json_change(metadata_path, {**metadata, "only_first_repair_checkpoint": not only_first})
+        reject_json_change(config_path, {**config, "only_first_repair_checkpoint": not only_first})
+        result_path = directory / "result.json"
+        serialized = json.loads(result_path.read_text())
+        if stop_after_capture:
+            reject_json_change(result_path, {**serialized, "metrics": {}})
+            if not healthy:
+                wrong = {**serialized, "agents": {**serialized["agents"], "integrator1": {
+                    **serialized["agents"]["integrator1"], "steps": 1,
+                }}}
+                reject_json_change(result_path, wrong)
+                reject_json_change(result_path, {**serialized, "metrics": {"repair_checkpoint": {"outcome": "skipped_healthy"}}})
+                handoff = directory / "checkpoints/before-integrator1/manifest.json"
+                original = handoff.read_bytes()
+                handoff.unlink()
+                with pytest.raises(FileNotFoundError):
+                    module.audit(tmp_path)
+                handoff.write_bytes(original)
+                journal_path = directory / "trajectory.jsonl.gz"
+                original_journal = journal_path.read_bytes()
+                with open_events(journal_path) as handle:
+                    rows = [json.loads(row) for row in handle]
+                terminal = rows.pop()
+                seq = rows[-1]["seq"] + 1
+                request = next(row for row in rows if row["event"] == "request")
+                response = next(row for row in rows if row["event"] == "response")
+                rows.extend([
+                    {**request, "actor": "integrator1", "seq": seq},
+                    {**response, "actor": "integrator1", "seq": seq + 1, "data": {**response["data"], "call_id": seq}},
+                    {**terminal, "seq": seq + 2},
+                ])
+                with gzip.open(journal_path, "wt") as handle:
+                    handle.write("".join(json.dumps(row) + "\n" for row in rows))
+                with pytest.raises(ValueError, match="precede all repair inference"):
+                    module.audit(tmp_path)
+                journal_path.write_bytes(original_journal)
+            elif not only_first:
+                state_path = directory / "checkpoints/pre-repair/state.json"
+                manifest_path = state_path.parent / "manifest.json"
+                original_state, original_manifest = state_path.read_bytes(), manifest_path.read_bytes()
+                wrong = json.loads(original_state)
+                wrong["metadata"]["healthy"] = False
+                state_path.write_text(json.dumps(wrong))
+                manifest = json.loads(original_manifest)
+                manifest["files"]["state.json"] = {
+                    "bytes": state_path.stat().st_size, "sha256": hashlib.sha256(state_path.read_bytes()).hexdigest(),
+                }
+                manifest_path.write_text(json.dumps(manifest))
+                with pytest.raises(ValueError, match="Healthy skip"):
+                    module.audit(tmp_path)
+                state_path.write_bytes(original_state)
+                manifest_path.write_bytes(original_manifest)
+        if only_first:
+            journal_path = directory / "trajectory.jsonl.gz"
+            original = journal_path.read_bytes()
+            with open_events(journal_path) as handle:
+                rows = [json.loads(row) for row in handle]
+            health_row = next(row for row in rows if row["event"] == "initial_repair_health")
+            health_row["data"]["healthy"] = not healthy
+            with gzip.open(journal_path, "wt") as handle:
+                handle.write("".join(json.dumps(row) + "\n" for row in rows))
+            with pytest.raises(ValueError, match="health evidence"):
+                module.audit(tmp_path)
+            journal_path.write_bytes(original)
+        if not stop_after_capture and not healthy:
+            # Matching stop flags still cannot certify a normal full repair as collection.
+            metadata_path.write_text(json.dumps({**metadata, "stop_after_repair_checkpoint": True}))
+            config_path.write_text(json.dumps({**config, "stop_after_repair_checkpoint": True}))
+            for outcome in (None, "skipped_healthy"):
+                wrong = {**serialized, "metrics": {} if outcome is None else {"repair_checkpoint": {"outcome": outcome}}}
+                reject_json_change(result_path, wrong)
+            metadata_path.write_text(json.dumps(metadata))
+            config_path.write_text(json.dumps(config))
+
+    if n_workers == 3 and not only_first:
         checkpoint = directory / "checkpoints/worker-agent3"
         manifest = checkpoint / "manifest.json"
         saved = manifest.read_bytes()

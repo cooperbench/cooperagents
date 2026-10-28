@@ -18,6 +18,10 @@ from cooperagents.patching import strip_for_submission, strip_test_sections
 from cooperagents.trajectory import _json_default
 
 
+class RepairCheckpointCaptured(Exception):
+    """Successful handoff capture; stop before the first repair model request."""
+
+
 def archive_tree(source: Path, destination: Path) -> None:
     with tarfile.open(destination, "w:gz", compresslevel=1, dereference=False) as archive:
         archive.add(source, arcname=".")

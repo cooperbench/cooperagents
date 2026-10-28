@@ -43,11 +43,21 @@ def main():
     parser.add_argument("--collect-trajectories", action="store_true", help="record full I/O and skip official evaluation")
     parser.add_argument("--record-trajectories", action="store_true", help="record full I/O alongside official evaluation")
     parser.add_argument("--checkpoint-repair", action="store_true", help="save worker/repair filesystems and full I/O")
+    parser.add_argument("--stop-after-repair-checkpoint", action="store_true",
+                        help="save before-integrator1 and stop; implies --collect-trajectories")
+    parser.add_argument("--only-first-repair-checkpoint", action="store_true",
+                        help="save only before-integrator1; requires --stop-after-repair-checkpoint")
     parser.add_argument("--langfuse", action="store_true", help="export worker and coordinator traces to Langfuse")
     parser.add_argument("--repair-integrator", action="store_true")
     parser.add_argument("--repair-attempts", type=int, default=1)
     parser.add_argument("--cooperbench-dir", help="Immutable patched CooperBench checkout on the cluster")
     args = parser.parse_args()
+    if args.only_first_repair_checkpoint and not args.stop_after_repair_checkpoint:
+        parser.error("--only-first-repair-checkpoint requires --stop-after-repair-checkpoint")
+    if args.stop_after_repair_checkpoint:
+        if args.mode != "real" or not (args.checkpoint_repair and args.repair_integrator):
+            parser.error("--stop-after-repair-checkpoint requires --mode real, --checkpoint-repair and --repair-integrator")
+        args.collect_trajectories = True
     if args.no_implementation_coordinator and (args.no_coordinator or args.mode != "real"):
         parser.error("--no-implementation-coordinator requires a real run with coordinator enabled")
     if args.worker_reminder_interval < 0:
@@ -140,6 +150,8 @@ def main():
         collect_trajectories=args.collect_trajectories,
         record_trajectories=args.record_trajectories or args.collect_trajectories or args.checkpoint_repair,
         checkpoint_repair=args.checkpoint_repair,
+        stop_after_repair_checkpoint=args.stop_after_repair_checkpoint,
+        only_first_repair_checkpoint=args.only_first_repair_checkpoint,
         langfuse=args.langfuse,
         official_evaluation=not args.collect_trajectories,
         pairs=args.pairs,
@@ -185,9 +197,12 @@ def main():
                 f"repair = {str(args.repair_integrator).lower()}\n"
                 f"repair_attempts = {args.repair_attempts if args.repair_integrator else 0}\n"
                 f"checkpoint_repair = {str(args.checkpoint_repair).lower()}\n"
+                f"stop_after_repair_checkpoint = {str(args.stop_after_repair_checkpoint).lower()}\n"
+                f"only_first_repair_checkpoint = {str(args.only_first_repair_checkpoint).lower()}\n"
             ),
             "checkpoint.json": json.dumps(
-                dict(enabled=args.checkpoint_repair, format="filesystem-v1", location="logs/real/team/<repo>/<task>/<features>/checkpoints")
+                dict(enabled=args.checkpoint_repair, format="checkpoint-tar-delta-v1",
+                     location="logs/real/team/<repo>/<task>/<features>/checkpoints")
             ),
         }
         records.update(plan_files)
@@ -238,6 +253,8 @@ def main():
         COOPER_COLLECT_TRAJECTORIES="1" if args.collect_trajectories else "0",
         COOPER_RECORD_TRAJECTORIES="1" if args.record_trajectories or args.checkpoint_repair else "0",
         COOPER_CHECKPOINT_REPAIR="1" if args.checkpoint_repair else "0",
+        COOPER_STOP_AFTER_REPAIR_CHECKPOINT="1" if args.stop_after_repair_checkpoint else "0",
+        COOPER_ONLY_FIRST_REPAIR_CHECKPOINT="1" if args.only_first_repair_checkpoint else "0",
         COOPER_LANGFUSE="1" if args.langfuse else "0",
         COOPER_CREDENTIAL_FILE=args.env_file or "",
     )

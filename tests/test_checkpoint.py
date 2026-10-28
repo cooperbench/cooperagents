@@ -80,7 +80,8 @@ def test_delivery_snapshot_precedes_staging_and_preserves_non_patch_files(tmp_pa
 
 
 @pytest.mark.parametrize("repair,broken", [(False, True), (True, False), (True, True)])
-def test_team_captures_actual_delivery_and_repair_handoff(monkeypatch, tmp_path, repair, broken):
+@pytest.mark.parametrize("stop_after_capture", [False, True])
+def test_team_captures_actual_delivery_and_repair_handoff(monkeypatch, tmp_path, repair, broken, stop_after_capture):
     import cooperagents.workers.mini_swe_worker as worker
 
     real_run = worker.run_mini_swe_agent
@@ -94,7 +95,9 @@ def test_team_captures_actual_delivery_and_repair_handoff(monkeypatch, tmp_path,
             status = "submitted"
         else:
             kwargs["step_limit"] = 1
-            real_run(env, agent_id=agent_id, role=role, **kwargs)
+            result = real_run(env, agent_id=agent_id, role=role, **kwargs)
+            if stop_after_capture:
+                return result
             assert env.read_file("a.py") == "broken(\n"
             env.write_file("a.py", "value = 1\n")
             status = "submitted"
@@ -121,7 +124,29 @@ def test_team_captures_actual_delivery_and_repair_handoff(monkeypatch, tmp_path,
         repair_attempts=2,
     )
     root = tmp_path / "checkpoints"
-    result = UnifiedHarness(checkpoint_dir=root).run(spec, env_factory=lambda _: LocalEnv.fresh(workdir=str(tmp_path)))
+    if stop_after_capture and not repair:
+        with pytest.raises(ValueError, match="requires repair_integrator"):
+            UnifiedHarness(checkpoint_dir=root, stop_after_repair_checkpoint=True).run(
+                spec, env_factory=lambda _: pytest.fail("invalid options created an environment"),
+            )
+        return
+    envs = []
+
+    def environment(_):
+        env = LocalEnv.fresh(workdir=str(tmp_path))
+        envs.append(env)
+        return env
+
+    result = UnifiedHarness(checkpoint_dir=root, stop_after_repair_checkpoint=stop_after_capture).run(spec, env_factory=environment)
+    assert all(not Path(env.repo_path).exists() for env in envs)
+    if stop_after_capture and broken:
+        assert result.seeds["integrator1"].steps == 0
+        assert result.seeds["integrator1"].status == "checkpointed"
+        assert not (root / "post-repair").exists()
+        verify_checkpoint(root / "before-integrator1")
+        return
+    if stop_after_capture:
+        assert result.metrics["repair_checkpoint"] == {"outcome": "skipped_healthy"}
     before = verify_checkpoint(root / "pre-repair")
     after = verify_checkpoint(root / "post-repair")
     assert before["metadata"]["healthy"] == (not broken if repair else None)
@@ -337,6 +362,91 @@ def test_apptainer_base_cache_records_registry_provenance(monkeypatch, tmp_path)
         "org.opencontainers.image.base.name": "docker://example/base:1",
         "org.opencontainers.image.base.digest": "sha256:registry",
     }
+
+
+def test_stop_after_repair_checkpoint_requires_capture_directory():
+    with pytest.raises(ValueError, match="requires checkpoint_dir"):
+        UnifiedHarness(stop_after_repair_checkpoint=True)
+
+
+@pytest.mark.parametrize("failure", [
+    "save", "trace", "cleanup", "forged_status", "default_forged", "missed_stop", "lost_flag", "truthy_gate",
+])
+def test_capture_stop_failures_do_not_return_success(monkeypatch, tmp_path, failure):
+    import cooperagents.workers.mini_swe_worker as worker
+    from cooperagents.trajectory import Trajectory
+
+    real_run = worker.run_mini_swe_agent
+    roots = []
+
+    def run(env, *, agent_id, role, **kwargs):
+        if role != "integrator":
+            env.write_file(f"{agent_id}.py", "broken(\n")
+            return AgentResult(agent_id=agent_id, role=role, status="submitted")
+        if failure in {"forged_status", "default_forged", "missed_stop"}:
+            status = "submitted" if failure == "missed_stop" else "checkpointed"
+            return AgentResult(agent_id=agent_id, role=role, status=status)
+        return real_run(env, agent_id=agent_id, role=role, **kwargs)
+
+    def environment(actor):
+        env = LocalEnv.fresh(workdir=str(tmp_path))
+        roots.append(Path(env.repo_path))
+        if actor == "merge" and failure == "save":
+            checkpoint = env.checkpoint
+
+            def fail_save(destination):
+                if destination.name == "before-integrator1":
+                    raise OSError("save failed")
+                return checkpoint(destination)
+
+            monkeypatch.setattr(env, "checkpoint", fail_save)
+        if actor == "merge" and failure == "cleanup":
+            cleanup = env.cleanup
+
+            def fail_cleanup():
+                cleanup()
+                raise OSError("cleanup failed")
+
+            monkeypatch.setattr(env, "cleanup", fail_cleanup)
+        return env
+
+    journal = Trajectory(tmp_path / "trajectory.jsonl")
+    emit = journal.emit
+
+    def trace(actor, event, **data):
+        if failure == "trace" and actor == "integrator1" and event == "checkpoint_end":
+            raise OSError("trace failed")
+        return emit(actor, event, **data)
+
+    monkeypatch.setattr(journal, "emit", trace)
+    monkeypatch.setattr(worker, "run_mini_swe_agent", run)
+    monkeypatch.setattr(worker.DefaultAgent, "step", lambda _: pytest.fail("repair must not request a model"))
+    monkeypatch.setattr("cooperagents.harness._tree_health", lambda _: 1 if failure == "truthy_gate" else False)
+    if failure == "lost_flag":
+        def lost_flag(env, *, seeds, **kwargs):
+            seeds["integrator1"] = AgentResult(agent_id="integrator1", role="integrator", status="submitted")
+            return [{"healthy": True}]
+
+        monkeypatch.setattr("cooperagents.harness.run_repair_tail", lost_flag)
+    spec = TeamSpec(
+        run_id="failure", repo="demo", task_id=1, features=[1, 2], shared_workspace=True,
+        seed_prior=False, coop_tools=True, worker="mini_swe", repair_integrator=True,
+        assignments=[Assignment(agent_id=f"agent{i}", feature_id=i, task="task") for i in (1, 2)],
+    )
+    try:
+        with pytest.raises((OSError, RuntimeError)):
+            UnifiedHarness(
+                checkpoint_dir=tmp_path / "checkpoints",
+                stop_after_repair_checkpoint=failure != "default_forged", trajectory=journal,
+            ).run(spec, env_factory=environment)
+    finally:
+        journal.close()
+    assert roots and all(not root.exists() for root in roots)
+
+
+def test_only_first_checkpoint_requires_stop_mode(tmp_path):
+    with pytest.raises(ValueError, match="requires stop_after_repair_checkpoint"):
+        UnifiedHarness(checkpoint_dir=tmp_path, only_first_repair_checkpoint=True)
 
 
 def test_apptainer_relocated_image_still_requires_exact_hash(tmp_path):

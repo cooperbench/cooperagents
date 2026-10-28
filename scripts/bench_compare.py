@@ -20,6 +20,7 @@ import json
 import os
 import time
 import uuid
+from functools import partial
 from pathlib import Path
 
 from cooperagents import verification as _verification
@@ -231,6 +232,8 @@ def run_team(
     langfuse: bool = False,
     record_trajectory: bool = False,
     checkpoint_repair: bool = False,
+    stop_after_repair_checkpoint: bool = False,
+    only_first_repair_checkpoint: bool = False,
 ) -> dict:
     feats = sorted(item.features)
     if reverse_order:
@@ -303,7 +306,7 @@ def run_team(
         allow_spawn_tool=allow_spawn,
         repair_attempts=repair_attempts,
         completion_gate=(
-            lambda env, _m=presub_merge: _verification.validate(env, merged=_m)
+            partial(_verification.validate, merged=presub_merge, build_artifact=None)
         ) if (completion_gate or presub_merge) else None,
         select_integration=(
             lambda patches: max(range(len(patches)), key=lambda i: len(patches[i]))
@@ -312,7 +315,7 @@ def run_team(
     pair_dir = logs_dir / run_name / "team" / item.repo / str(item.task_id) / "_".join(f"f{f}" for f in sorted(feats))
     notebook_path = (pair_dir / "coordination" / run_id / "notebook.md").resolve() if coordinator and coordinator_notebook else None
     harness = UnifiedHarness(
-        bus=InMemoryBus(run_id),
+        bus=None if checkpoint_repair else InMemoryBus(run_id),
         step_limit=step_limit,
         command_timeout=300,
         coordinator_notebook_path=notebook_path,
@@ -327,6 +330,8 @@ def run_team(
         planning_time_limit_s=planning_time_limit,
         worker_reminder_interval=worker_reminder_interval,
         checkpoint_dir=pair_dir / "checkpoints" if checkpoint_repair else None,
+        stop_after_repair_checkpoint=stop_after_repair_checkpoint,
+        only_first_repair_checkpoint=only_first_repair_checkpoint,
     )
     img = image_name(item.repo, item.task_id)
     selector = None
@@ -476,8 +481,18 @@ def main() -> None:
     ap.add_argument("--langfuse", action="store_true", help="export worker and coordinator traces to Langfuse (default: off)")
     ap.add_argument("--record-trajectory", action="store_true", help="append complete agent/coordinator I/O for replay")
     ap.add_argument("--checkpoint-repair", action="store_true", help="save worker and repair filesystems and full I/O for replay")
+    ap.add_argument("--stop-after-repair-checkpoint", action="store_true",
+                    help="stop after before-integrator1 is saved, without repair inference or official evaluation")
+    ap.add_argument("--only-first-repair-checkpoint", action="store_true",
+                    help="omit every checkpoint except before-integrator1; requires --stop-after-repair-checkpoint")
     ap.add_argument("--skip-eval", action="store_true", help="write generation artifacts without scoring")
     args = ap.parse_args()
+    if args.only_first_repair_checkpoint and not args.stop_after_repair_checkpoint:
+        ap.error("--only-first-repair-checkpoint requires --stop-after-repair-checkpoint")
+    if args.stop_after_repair_checkpoint:
+        if not (args.checkpoint_repair and args.repair_integrator and args.team_only) or args.solo_only:
+            ap.error("--stop-after-repair-checkpoint requires --checkpoint-repair, --repair-integrator and --team-only")
+        args.skip_eval = True
     if args.no_implementation_coordinator and not args.coordinator:
         ap.error("--no-implementation-coordinator requires --coordinator")
     if args.worker_reminder_interval < 0:
@@ -597,6 +612,8 @@ def main() -> None:
                     repair_attempts=args.repair_attempts,
                     record_trajectory=args.record_trajectory,
                     checkpoint_repair=args.checkpoint_repair,
+                    stop_after_repair_checkpoint=args.stop_after_repair_checkpoint,
+                    only_first_repair_checkpoint=args.only_first_repair_checkpoint,
                 )
         except Exception as e:  # noqa: BLE001 - one bad pair (e.g. missing/arch-incompatible image) must not abort the run
             print(f"  SKIP {tag}: {type(e).__name__}: {str(e)[:160]}", flush=True)

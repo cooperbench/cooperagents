@@ -1,5 +1,7 @@
 """Offline request parity: real SDK serialization, no paid/network calls."""
 
+import os
+
 import httpx
 import openai
 import pytest
@@ -9,9 +11,9 @@ from cooperagents.sampling import sampling_kwargs
 from cooperagents.workers.mini_swe_worker import build_model
 
 
-def test_worker_coordinator_profile_parity(monkeypatch):
+@pytest.mark.parametrize("shared_tokens,worker_tokens", [(4096, None), (8192, "4096")])
+def test_worker_coordinator_profile_parity(monkeypatch, shared_tokens, worker_tokens):
     import json
-    import os
 
     for key in os.environ:
         if key.startswith("COOPER_"):
@@ -29,7 +31,9 @@ def test_worker_coordinator_profile_parity(monkeypatch):
     for key, value in profile.items():
         monkeypatch.setenv(key, value)
     monkeypatch.setenv("OPENAI_API_KEY", "test-only")
-    monkeypatch.setenv("COOPER_MAX_TOKENS", "4096")
+    monkeypatch.setenv("COOPER_MAX_TOKENS", str(shared_tokens))
+    if worker_tokens is not None:
+        monkeypatch.setenv("COOPER_WORKER_MAX_TOKENS", worker_tokens)
     worker = build_model("qwen/qwen3.5-9b", temperature=0.0)
     captured = []
 
@@ -57,7 +61,7 @@ def test_worker_coordinator_profile_parity(monkeypatch):
 
     monkeypatch.setattr("litellm.completion", worker_completion)
     worker._query_inner([{"role": "user", "content": "work"}])
-    for payload in captured:
+    for index, payload in enumerate(captured):
         assert "min_p" not in payload and "repetition_penalty" not in payload
         assert {
             key: payload[key]
@@ -79,7 +83,7 @@ def test_worker_coordinator_profile_parity(monkeypatch):
             "presence_penalty": 1.5,
             "reasoning": {"enabled": False},
             "provider": {"require_parameters": True, "only": ["venice"], "allow_fallbacks": False},
-            "max_tokens": 4096,
+            "max_tokens": int(worker_tokens or shared_tokens) if index == 1 else shared_tokens,
         }
     monkeypatch.setenv("COOPER_CHAT_TEMPLATE_ENABLE_THINKING", "false")
     monkeypatch.setenv("COOPER_WORKER_CHAT_TEMPLATE_ENABLE_THINKING", "true")
@@ -88,6 +92,31 @@ def test_worker_coordinator_profile_parity(monkeypatch):
     assert captured[-2]["chat_template_kwargs"] == {"enable_thinking": True}
     assert captured[-1]["chat_template_kwargs"] == {"enable_thinking": False}
     client.close()
+
+
+@pytest.mark.parametrize("override", [None, ""])
+def test_worker_token_limit_inherits_shared_value(monkeypatch, override):
+    for key in os.environ:
+        if key.startswith("COOPER_"):
+            monkeypatch.delenv(key)
+    monkeypatch.setenv("COOPER_MAX_TOKENS", "8192")
+    monkeypatch.delenv("COOPER_WORKER_MAX_TOKENS", raising=False)
+    if override is not None:
+        monkeypatch.setenv("COOPER_WORKER_MAX_TOKENS", override)
+    assert sampling_kwargs(worker=True)["max_tokens"] == 8192
+    assert sampling_kwargs()["max_tokens"] == 8192
+
+
+@pytest.mark.parametrize("override", ["abc", "4096.5", " ", "0", "-1"])
+def test_invalid_worker_token_limit_does_not_affect_coordinator(monkeypatch, override):
+    for key in os.environ:
+        if key.startswith("COOPER_"):
+            monkeypatch.delenv(key)
+    monkeypatch.setenv("COOPER_MAX_TOKENS", "8192")
+    monkeypatch.setenv("COOPER_WORKER_MAX_TOKENS", override)
+    assert sampling_kwargs()["max_tokens"] == 8192
+    with pytest.raises(ValueError, match="COOPER_WORKER_MAX_TOKENS"):
+        sampling_kwargs(worker=True)
 
 
 def test_invalid_sampling_is_rejected(monkeypatch):

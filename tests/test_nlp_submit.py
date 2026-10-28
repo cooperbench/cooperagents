@@ -110,7 +110,8 @@ def test_qualified_image_pins_resources_and_node(monkeypatch, tmp_path, variant,
         module.main()
 
 
-def test_multi_task_qualification_requires_one_passing_node(monkeypatch, tmp_path):
+@pytest.mark.parametrize("stop_after_capture,only_first", [(False, False), (True, False), (True, True)])
+def test_multi_task_qualification_requires_one_passing_node(monkeypatch, tmp_path, stop_after_capture, only_first):
     spec = importlib.util.spec_from_file_location("nlp_submit", Path(__file__).parents[1] / "scripts/nlp_cluster/submit.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -158,7 +159,8 @@ def test_multi_task_qualification_requires_one_passing_node(monkeypatch, tmp_pat
             "30",
             "--agent-time-limit",
             "300",
-            "--collect-trajectories",
+            "--stop-after-repair-checkpoint" if stop_after_capture else "--collect-trajectories",
+            *(["--only-first-repair-checkpoint"] if only_first else []),
             "--checkpoint-repair",
             "--repair-integrator",
             "--repair-attempts",
@@ -205,6 +207,8 @@ def test_multi_task_qualification_requires_one_passing_node(monkeypatch, tmp_pat
     assert "COOPER_STEP_LIMIT=30" in submission and "COOPER_AGENT_TIME_LIMIT=300" in submission
     assert "COOPER_COLLECT_TRAJECTORIES=1" in submission
     assert "COOPER_CHECKPOINT_REPAIR=1" in submission and "COOPER_RECORD_TRAJECTORIES=1" in submission
+    assert f"COOPER_STOP_AFTER_REPAIR_CHECKPOINT={int(stop_after_capture)}" in submission
+    assert f"COOPER_ONLY_FIRST_REPAIR_CHECKPOINT={int(only_first)}" in submission
     assert "COOPER_REPAIR=1" in submission
     assert "COOPER_REPAIR_ATTEMPTS=2" in submission
     with tarfile.open(fileobj=io.BytesIO(uploaded_archive)) as snapshot:
@@ -213,6 +217,13 @@ def test_multi_task_qualification_requires_one_passing_node(monkeypatch, tmp_pat
         metadata = json.loads(snapshot.extractfile("_run/metadata.json").read())
         assert metadata["step_limit"] == 30 and metadata["agent_time_limit"] == 300
         assert metadata["checkpoint_repair"] and metadata["record_trajectories"]
+        assert metadata["stop_after_repair_checkpoint"] is stop_after_capture
+        assert metadata["only_first_repair_checkpoint"] is only_first
+        assert f"only_first_repair_checkpoint = {str(only_first).lower()}".encode() in variant
+        assert not metadata["official_evaluation"]
+        assert f"stop_after_repair_checkpoint = {str(stop_after_capture).lower()}".encode() in variant
+        checkpoint = json.loads(snapshot.extractfile("_run/checkpoint.json").read())
+        assert checkpoint["format"] == "checkpoint-tar-delta-v1"
         assert not metadata["coordinator_notebook"]
         assert b"repair = true\nrepair_attempts = 2" in variant
     (reports / "27.json").write_text(
@@ -291,3 +302,17 @@ def test_existing_snapshot_aborts_before_copy_or_submission(monkeypatch, tmp_pat
     with pytest.raises(subprocess.CalledProcessError):
         module.main()
     assert sentinel.read_text() == "original record" and len(calls) == 1
+
+
+@pytest.mark.parametrize("missing", ["--checkpoint-repair", "--repair-integrator"])
+def test_stop_option_requires_capture_and_repair(monkeypatch, missing):
+    spec = importlib.util.spec_from_file_location("submit_stop", Path(__file__).parents[1] / "scripts/nlp_cluster/submit.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setattr(sys, "argv", [
+        "submit.py", "--mode", "real", "--stop-after-repair-checkpoint",
+        *[flag for flag in ["--checkpoint-repair", "--repair-integrator"] if flag != missing],
+    ])
+    monkeypatch.setattr(module.subprocess, "check_output", lambda *a, **k: pytest.fail("invalid options reached submission"))
+    with pytest.raises(SystemExit):
+        module.main()

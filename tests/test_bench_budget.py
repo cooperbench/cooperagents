@@ -2,6 +2,8 @@ import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 
 def test_budget_reaches_solo_and_team(monkeypatch, tmp_path):
     spec = importlib.util.spec_from_file_location("bench_compare", Path(__file__).parents[1] / "scripts/bench_compare.py")
@@ -117,3 +119,89 @@ def test_runners_isolate_notebooks_and_mount_workers_only(monkeypatch, tmp_path)
                     notes = [v for v in options["volumes"] if v.endswith(":/coordination:ro")]
                     assert notes == ([f"{path.parent}:/coordination:ro"] if path and index < size else [])
         assert paths[-3] != paths[-2] and paths[-1] is None
+
+
+@pytest.mark.parametrize("only_first", [False, True])
+def test_benchmark_checkpoint_options_reach_valid_harness(monkeypatch, tmp_path, only_first):
+    from cooperagents.repair import validate_capture_spec
+
+    module_spec = importlib.util.spec_from_file_location("bench_capture", Path(__file__).parents[1] / "scripts/bench_compare.py")
+    bench = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(bench)
+
+    def run(self, team, **kwargs):
+        validate_capture_spec(team, self.bus)
+        assert self.stop_after_repair_checkpoint
+        assert self.only_first_repair_checkpoint is only_first
+        assert team.repair_integrator
+        return SimpleNamespace(duration_seconds=0, total_steps=0, helpers={}, seeds={})
+
+    monkeypatch.setattr(bench.UnifiedHarness, "run", run)
+    monkeypatch.setattr(bench, "read_feature", lambda *a: "feature")
+    monkeypatch.setattr(bench, "write_run_outputs", lambda *a, **k: None)
+    bench.run_team(
+        bench.WorkItem("go_chi_task", 26, [1, 2]), run_name="capture", logs_dir=tmp_path,
+        step_limit=10, max_agents=2, seed_prior=False, coop_tools=True, repair_integrator=True,
+        completion_gate=True, checkpoint_repair=True, stop_after_repair_checkpoint=True,
+        only_first_repair_checkpoint=only_first,
+    )
+
+
+@pytest.mark.parametrize("only_first", [False, True])
+def test_stop_cli_skips_official_evaluation(monkeypatch, tmp_path, only_first):
+    import sys
+
+    module_spec = importlib.util.spec_from_file_location("bench_stop", Path(__file__).parents[1] / "scripts/bench_compare.py")
+    bench = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(bench)
+    calls = []
+    monkeypatch.setattr(bench, "_load_env", lambda: None)
+    monkeypatch.setattr(bench, "run_eval", lambda *a, **k: pytest.fail("capture mode must not score"))
+    monkeypatch.setattr(bench, "run_team", lambda *a, **k: calls.append(k) or {"duration": 0, "steps": 0})
+    monkeypatch.setattr(sys, "argv", [
+        "bench_compare.py", "--pairs", "go_chi_task:26:1,2", "--team-only", "--checkpoint-repair",
+        "--repair-integrator", "--stop-after-repair-checkpoint", "--log-dir", str(tmp_path),
+        *(["--only-first-repair-checkpoint"] if only_first else []),
+    ])
+    bench.main()
+    assert len(calls) == 1 and calls[0]["stop_after_repair_checkpoint"]
+    assert calls[0]["only_first_repair_checkpoint"] is only_first
+
+
+def test_standard_completion_gate_partial_preserves_defaults():
+    import inspect
+
+    from cooperagents.verification import validate
+
+    defaults = inspect.signature(validate).parameters
+    assert defaults["merged"].default is False and defaults["build_artifact"].default is None
+
+
+@pytest.mark.parametrize("missing", ["--checkpoint-repair", "--repair-integrator", "--team-only"])
+def test_stop_cli_requires_capture_repair_and_team(monkeypatch, missing):
+    import sys
+
+    module_spec = importlib.util.spec_from_file_location("bench_invalid_stop", Path(__file__).parents[1] / "scripts/bench_compare.py")
+    bench = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(bench)
+    monkeypatch.setattr(bench, "_load_env", lambda: None)
+    monkeypatch.setattr(bench, "run_team", lambda *a, **k: pytest.fail("invalid options reached task execution"))
+    flags = ["--checkpoint-repair", "--repair-integrator", "--team-only"]
+    monkeypatch.setattr(sys, "argv", ["bench_compare.py", "--stop-after-repair-checkpoint", *[f for f in flags if f != missing]])
+    with pytest.raises(SystemExit):
+        bench.main()
+
+
+@pytest.mark.parametrize("script", ["bench_compare.py", "nlp_cluster/submit.py"])
+def test_only_first_cli_requires_stop_mode(monkeypatch, capsys, script):
+    import sys
+
+    spec = importlib.util.spec_from_file_location("only_first_invalid", Path(__file__).parents[1] / "scripts" / script)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    if hasattr(module, "_load_env"):
+        monkeypatch.setattr(module, "_load_env", lambda: None)
+    monkeypatch.setattr(sys, "argv", [script, "--only-first-repair-checkpoint"])
+    with pytest.raises(SystemExit):
+        module.main()
+    assert "requires --stop-after-repair-checkpoint" in capsys.readouterr().err
