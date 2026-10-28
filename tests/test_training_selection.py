@@ -2,17 +2,18 @@ import pytest
 
 from cooperagents.env.base import ExecResult
 from cooperagents.env.local import LocalEnv
-from cooperagents.harness import UnifiedHarness
+from cooperagents.harness import UnifiedHarness, _tree_health
 from cooperagents.training_selection import SOURCE_CONFLICT_COMMAND, select_training_checkpoint
 
 CONFLICT = "<<<<<<< ours\nleft\n=======\nright\n>>>>>>> theirs\n"
 
 
-def test_scan_final_sources_and_preserve_paths(tmp_path):
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+def test_scan_final_sources_and_preserve_paths(tmp_path, newline):
     env = LocalEnv.fresh(workdir=str(tmp_path))
     try:
         for name in ("src/a file.rs", "src/é\nfile.ts", "patch.txt", "Makefile", "tests/test_a.rs", ".cb_checks/check.py"):
-            env.write_file(name, CONFLICT)
+            env.write_file(name, CONFLICT.replace("\n", newline))
         env.write_file("old.rs", CONFLICT)
         env.git_diff()  # Track it, then remove the conflict from the final working tree.
         env.write_file("old.rs", "clean\n")
@@ -39,13 +40,38 @@ def test_complete_blocks_cannot_span_files():
     assert select_training_checkpoint(True, ExecResult(output, 0))["reason"] == "healthy"
 
 
-def test_scan_preserves_multiple_block_locations():
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+def test_scan_preserves_multiple_block_locations(newline):
     records = [(1, "<<<<<<< ours"), (3, "======="), (5, ">>>>>>> theirs"),
                (9, "<<<<<<< ours"), (11, "======="), (15, ">>>>>>> theirs")]
-    output = "".join(f"src/lib.rs\0{line}\0{marker}\n" for line, marker in records)
+    output = "".join(f"src/lib.rs\0{line}\0{marker}{newline}" for line, marker in records)
     assert select_training_checkpoint(True, ExecResult(output, 0))["source_conflicts"] == [
         {"path": "src/lib.rs", "blocks": [[1, 3, 5], [9, 11, 15]]},
     ]
+
+
+def test_git_crlf_merge_selects_checkpoint_without_changing_gate(tmp_path):
+    from pathlib import Path
+
+    env = LocalEnv.fresh(workdir=str(tmp_path))
+    try:
+        env.write_file("src/lib.rs", "fn main() { let n = 0; }\r\n")
+        assert env.execute("git add -A && git commit -qm base").exit_code == 0
+        base = env.execute("git rev-parse HEAD").stdout.strip()
+        for branch, value in [("left", 1), ("right", 2)]:
+            assert env.execute(f"git checkout -q -b {branch} {base}").exit_code == 0
+            env.write_file("src/lib.rs", f"fn main() {{ let n = {value}; }}\r\n")
+            assert env.execute("git commit -qam edit").exit_code == 0
+        assert env.execute("git merge left").exit_code == 1
+        assert b"=======\r\n" in (Path(env.repo_path) / "src/lib.rs").read_bytes()
+        healthy = _tree_health(env)
+        assert healthy is True
+        selection = select_training_checkpoint(healthy, env.execute(SOURCE_CONFLICT_COMMAND))
+        assert selection["initial_healthy"] is True
+        assert selection["reason"] == "source_conflict"
+        assert selection["source_conflicts"] == [{"path": "src/lib.rs", "blocks": [[1, 3, 5]]}]
+    finally:
+        env.cleanup()
 
 
 @pytest.mark.parametrize("result", [

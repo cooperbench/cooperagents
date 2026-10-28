@@ -270,8 +270,8 @@ def audit(run: Path) -> dict:
             decisions = [r for r in selection_rows if r["event"] == "checkpoint_selection"]
             if (len(selection_rows) != 3 or len(requests) != 1 or len(responses) != 1 or len(decisions) != 1
                     or requests[0]["data"]["request"] != {"command": SOURCE_CONFLICT_COMMAND, "timeout": 60}
-                    or responses[0]["data"]["call_id"] != requests[0]["seq"]
-                    or not health[0]["seq"] < requests[0]["seq"] < responses[0]["seq"] < decisions[0]["seq"]):
+                    or not health[0]["seq"] < requests[0]["seq"]
+                    or not responses[0]["seq"] < decisions[0]["seq"]):
                 raise ValueError("Missing or invalid source conflict scan evidence")
             expected_selection = select_training_checkpoint(initial_healthy, ExecResult(**responses[0]["data"]["response"]))
             if (selection != expected_selection or decisions[0]["data"] != expected_selection

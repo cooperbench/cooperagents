@@ -15,7 +15,7 @@ _SOURCE_SUFFIXES = ("c", "h", "cc", "cpp", "cxx", "hpp", "hxx", "go", "py", "pyi
                     "js", "jsx", "mjs", "cjs", "ts", "tsx", "mts", "cts")
 SOURCE_CONFLICT_COMMAND = (
     "git grep --no-color --no-ext-grep --untracked --exclude-standard -n -z -I -E "
-    + shlex.quote(r"^(<<<<<<<( |$)|=======$|>>>>>>>( |$))")
+    + shlex.quote("^(<<<<<<<( |\r?$)|=======\r?$|>>>>>>>( |\r?$))")
     + " -- " + " ".join(shlex.quote(f"*.{suffix}") for suffix in _SOURCE_SUFFIXES)
 )
 _SCAN_ROW = re.compile(r"([^\0]+)\0([0-9]+)\0([^\n]*)\n")
@@ -35,6 +35,7 @@ def select_training_checkpoint(initial_healthy: bool, scan: ExecResult) -> dict:
         if record is None:
             raise ValueError("Malformed source conflict evidence")
         path, number, marker = record.groups()
+        marker = marker.removesuffix("\r")
         position = record.end()
         name = PurePosixPath(path)
         if int(number) < 1 or name.is_absolute() or ".." in name.parts:
