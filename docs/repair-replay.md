@@ -151,6 +151,10 @@ exact base SIF. To relocate it, supply `base_image=Path(...)` to either
 `ApptainerEnv.from_checkpoint` or `run_repair_checkpoint`. A missing or mismatched base
 fails; there is no fallback to a different image or to a full-snapshot writer.
 Every unchanged file reused from the expanded base is also checked against its saved hash.
+Generated Apptainer definitions, labels and bootstrap history are always included in new
+payloads. Legacy local-image definitions can be reconstructed only when their original
+size and hash match exactly; other historical metadata mismatches still fail closed.
+See [relocation compatibility](PORTABLE_CHECKPOINTS.md) for details and limits.
 
 Docker records the immutable image ID and available registry digests, streams `docker export`
 into the same delta packer while the worker is paused, and always unpauses it afterwards.
