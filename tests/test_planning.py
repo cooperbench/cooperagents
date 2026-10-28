@@ -116,7 +116,7 @@ def test_finish_planning_rejects_unavailable_state(tmp_path, state):
         c.stop()
     else:
         c._finished["agent1"] = "submitted"
-    with pytest.raises(ValueError, match="requires current observed confirmations from both live workers"):
+    with pytest.raises(ValueError, match="unavailable in phase"):
         c.finish_planning(c._version)
     assert c._final_plan is None
 
@@ -128,11 +128,11 @@ def test_finish_planning_reports_version_mismatch(tmp_path, stale):
     version = c._version - 1 if stale == "request" else c._version
     if stale == "candidate":
         c._candidate_version = None
-    with pytest.raises(ValueError, match="version mismatch") as error:
+    with pytest.raises(ValueError, match="no candidate" if stale == "candidate" else "version mismatch") as error:
         c.finish_planning(version)
-    assert f"requested={version}" in str(error.value)
-    assert f"current notebook={c._version}" in str(error.value)
-    assert f"candidate={c._candidate_version}" in str(error.value)
+    if stale == "request":
+        assert f"Requested: {version}" in str(error.value)
+        assert f"Current candidate: {c._candidate_version}" in str(error.value)
     assert "missing" not in str(error.value)
     assert c.phase == "planning"
 
@@ -150,10 +150,10 @@ def test_finish_planning_reports_invalid_confirmations(tmp_path, invalid):
     else:
         c._confirmations["unexpected"] = c._version
     expected_missing = [] if invalid == "unexpected-worker" else ["agent2"]
-    with pytest.raises(ValueError, match="requires valid notebook") as error:
+    with pytest.raises(ValueError, match="missing valid confirmations") as error:
         c.finish_planning(c._version)
-    assert f"missing or wrong-version workers={expected_missing}" in str(error.value)
-    assert f"current confirmations={c._confirmations}" in str(error.value)
+    assert f"Missing or invalid: {expected_missing}" in str(error.value)
+    assert f"Current confirmations: {c._confirmations}" in str(error.value)
     assert c.phase == "planning"
 
 
@@ -163,12 +163,12 @@ def test_missing_confirmation_error_reaches_next_coordinator_observation(tmp_pat
     c.confirm_plan("agent1", {"version": c._version}, sole=True)
     c._complete = lambda _: [tool("finish_planning", version=c._version)]
     c.decide(initial=True)
-    assert "missing or wrong-version workers=['agent2']" in c._last_error
+    assert "Missing or invalid: ['agent2']" in c._last_error
     assert c.phase == "planning"
     seen = []
     c._complete = lambda prompt: seen.append(json.loads(prompt.split("OBSERVATION:\n")[1])) or []
     c.decide(initial=True)
-    assert "missing or wrong-version workers=['agent2']" in seen[0]["previous_error"]
+    assert "Missing or invalid: ['agent2']" in seen[0]["previous_error"]
     assert seen[0]["planning"]["confirmations"] == {"agent1": c._version}
 
 
@@ -289,9 +289,25 @@ def test_real_loop_planning_patch_and_request_order(tmp_path, monkeypatch, varia
     def complete(**kwargs):
         messages = kwargs["messages"]
         system = next(m["content"] for m in messages if m["role"] == "system")
-        assert "OPENING PHASE PROTOCOL" in system
-        assert "Earlier advice to continue independent edits" in system
-        assert "Mode labels in group chat do not" in system
+        if variant == "auto-prompt":
+            assert "OPENING PHASE PROTOCOL" in system
+            assert "Earlier advice to continue independent edits" in system
+            assert "Mode labels in group chat do not" in system
+        else:
+            task = messages[1]["content"]
+            assert "SYNTHETIC feature" in task
+            assert "RIGHT NOW" not in task
+            if "CURRENT PHASE — PLANNING" in system:
+                assert "clearly independent edits" not in system
+                assert "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT" not in task
+                assert "MUST include AT LEAST ONE bash" not in task
+                assert "confirm_plan(version)" in task
+            else:
+                assert "CURRENT PHASE — IMPLEMENTATION" in system
+                assert "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT" in task
+                assert "The coordinator may update the plan" in system
+                assert not any(m.get("content", "").startswith("[PLANNING MODE]") for m in messages)
+                assert any(m["role"] == "assistant" for m in messages[2:])
         requests.append(json.loads(json.dumps(kwargs, default=str)))
         assert {"bash", "send_message"} <= {t["function"]["name"] for t in kwargs["tools"]}
         assert (
@@ -431,7 +447,7 @@ def test_inflight_decision_cannot_use_new_confirmations(tmp_path):
     release.set()
     thread.join(2)
     assert c.phase == "planning" and c._planning_outcome is None
-    assert c._last_error == "finish_planning rejected: confirmations changed during this decision."
+    assert c._last_error == "finish_planning failed: confirmation state changed during this decision. Planning remains active."
     assert "missing" not in c._last_error
     assert c._confirmations == {aid: c._version for aid in c._assignments}
     c._complete = lambda _: [tool("finish_planning", version=c._version)]

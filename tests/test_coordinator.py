@@ -79,7 +79,7 @@ def test_unsupported_recipient_feedback_lists_supported_values(tmp_path, monkeyp
 def test_invalid_batch_and_failed_write_have_no_effect(tmp_path, monkeypatch):
     path = tmp_path / "notebook.md"
     c = coordinator(notebook_path=path)
-    with pytest.raises(ValueError, match="disabled"):
+    with pytest.raises(ValueError, match="Unknown or unavailable tool: update_notebook"):
         coordinator()._parse_actions([tool("update_notebook", content="disabled")])
     previous = path.read_text()
     update = tool("update_notebook", content="new content")

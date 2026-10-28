@@ -214,8 +214,10 @@ def parse_completion_tool_calls(
                 rows.append({"name": row["name"], "arguments": json.dumps(row["arguments"])})
                 continue
             function = re.fullmatch(r"<function=([\w-]+)>\s*(.*?)\s*</function>", raw, re.S)
-            if function is None or function[1] not in schemas:
-                raise ValueError("Invalid or unavailable XML tool function")
+            if function is None:
+                raise ValueError("Invalid XML tool function")
+            if function[1] not in schemas:
+                raise ValueError(f"Unknown or unavailable tool: {function[1]}. Available tools: {', '.join(schemas)}.")
             name, body = function[1], function[2]
             parameters = list(re.finditer(r"<parameter=([\w-]+)>\n?(.*?)\n?</parameter>", body, re.S))
             if re.sub(r"<parameter=([\w-]+)>\n?(.*?)\n?</parameter>", "", body, flags=re.S).strip():
@@ -230,7 +232,10 @@ def parse_completion_tool_calls(
             rows.append({"name": name, "arguments": json.dumps(args)})
     for row in rows:
         if row["name"] not in schemas:
-            raise ValueError("Tool is unavailable for this request")
-        args = json.loads(row["arguments"], object_pairs_hook=unique)
-        validate(args, schemas[row["name"]])
+            raise ValueError(f"Unknown or unavailable tool: {row['name']}. Available tools: {', '.join(schemas)}.")
+        try:
+            args = json.loads(row["arguments"], object_pairs_hook=unique)
+            validate(args, schemas[row["name"]])
+        except (ValueError, TypeError) as exc:
+            raise ValueError(f"{row['name']} failed: {exc}") from exc
     return rows
