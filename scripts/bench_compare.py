@@ -234,6 +234,7 @@ def run_team(
     checkpoint_repair: bool = False,
     stop_after_repair_checkpoint: bool = False,
     only_first_repair_checkpoint: bool = False,
+    collect_source_conflicts: bool = False,
 ) -> dict:
     feats = sorted(item.features)
     if reverse_order:
@@ -332,6 +333,7 @@ def run_team(
         checkpoint_dir=pair_dir / "checkpoints" if checkpoint_repair else None,
         stop_after_repair_checkpoint=stop_after_repair_checkpoint,
         only_first_repair_checkpoint=only_first_repair_checkpoint,
+        collect_source_conflicts=collect_source_conflicts,
     )
     img = image_name(item.repo, item.task_id)
     selector = None
@@ -485,8 +487,12 @@ def main() -> None:
                     help="stop after before-integrator1 is saved, without repair inference or official evaluation")
     ap.add_argument("--only-first-repair-checkpoint", action="store_true",
                     help="omit every checkpoint except before-integrator1; requires --stop-after-repair-checkpoint")
+    ap.add_argument("--collect-source-conflicts", action="store_true",
+                    help="training collection only: also capture source conflict blocks despite a healthy gate")
     ap.add_argument("--skip-eval", action="store_true", help="write generation artifacts without scoring")
     args = ap.parse_args()
+    if args.collect_source_conflicts and not args.stop_after_repair_checkpoint:
+        ap.error("--collect-source-conflicts requires --stop-after-repair-checkpoint")
     if args.only_first_repair_checkpoint and not args.stop_after_repair_checkpoint:
         ap.error("--only-first-repair-checkpoint requires --stop-after-repair-checkpoint")
     if args.stop_after_repair_checkpoint:
@@ -614,6 +620,7 @@ def main() -> None:
                     checkpoint_repair=args.checkpoint_repair,
                     stop_after_repair_checkpoint=args.stop_after_repair_checkpoint,
                     only_first_repair_checkpoint=args.only_first_repair_checkpoint,
+                    collect_source_conflicts=args.collect_source_conflicts,
                 )
         except Exception as e:  # noqa: BLE001 - one bad pair (e.g. missing/arch-incompatible image) must not abort the run
             print(f"  SKIP {tag}: {type(e).__name__}: {str(e)[:160]}", flush=True)

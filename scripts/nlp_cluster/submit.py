@@ -47,11 +47,15 @@ def main():
                         help="save before-integrator1 and stop; implies --collect-trajectories")
     parser.add_argument("--only-first-repair-checkpoint", action="store_true",
                         help="save only before-integrator1; requires --stop-after-repair-checkpoint")
+    parser.add_argument("--collect-source-conflicts", action="store_true",
+                        help="training collection only: capture source conflicts despite a healthy gate")
     parser.add_argument("--langfuse", action="store_true", help="export worker and coordinator traces to Langfuse")
     parser.add_argument("--repair-integrator", action="store_true")
     parser.add_argument("--repair-attempts", type=int, default=1)
     parser.add_argument("--cooperbench-dir", help="Immutable patched CooperBench checkout on the cluster")
     args = parser.parse_args()
+    if args.collect_source_conflicts and not args.stop_after_repair_checkpoint:
+        parser.error("--collect-source-conflicts requires --stop-after-repair-checkpoint")
     if args.only_first_repair_checkpoint and not args.stop_after_repair_checkpoint:
         parser.error("--only-first-repair-checkpoint requires --stop-after-repair-checkpoint")
     if args.stop_after_repair_checkpoint:
@@ -152,6 +156,7 @@ def main():
         checkpoint_repair=args.checkpoint_repair,
         stop_after_repair_checkpoint=args.stop_after_repair_checkpoint,
         only_first_repair_checkpoint=args.only_first_repair_checkpoint,
+        collect_source_conflicts=args.collect_source_conflicts,
         langfuse=args.langfuse,
         official_evaluation=not args.collect_trajectories,
         pairs=args.pairs,
@@ -199,6 +204,7 @@ def main():
                 f"checkpoint_repair = {str(args.checkpoint_repair).lower()}\n"
                 f"stop_after_repair_checkpoint = {str(args.stop_after_repair_checkpoint).lower()}\n"
                 f"only_first_repair_checkpoint = {str(args.only_first_repair_checkpoint).lower()}\n"
+                f"collect_source_conflicts = {str(args.collect_source_conflicts).lower()}\n"
             ),
             "checkpoint.json": json.dumps(
                 dict(enabled=args.checkpoint_repair, format="checkpoint-tar-delta-v1",
@@ -255,6 +261,7 @@ def main():
         COOPER_CHECKPOINT_REPAIR="1" if args.checkpoint_repair else "0",
         COOPER_STOP_AFTER_REPAIR_CHECKPOINT="1" if args.stop_after_repair_checkpoint else "0",
         COOPER_ONLY_FIRST_REPAIR_CHECKPOINT="1" if args.only_first_repair_checkpoint else "0",
+        COOPER_COLLECT_SOURCE_CONFLICTS="1" if args.collect_source_conflicts else "0",
         COOPER_LANGFUSE="1" if args.langfuse else "0",
         COOPER_CREDENTIAL_FILE=args.env_file or "",
     )

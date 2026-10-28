@@ -63,6 +63,47 @@ Worker and pre-repair snapshots are retained unless only-first mode is selected.
 this explicit collection outcome, verifies the saved input and checks that no
 repair inference occurred; it does not require a post-repair checkpoint for it.
 
+### Supplemental training selection
+
+Add `--collect-source-conflicts` to a stop-after-checkpoint command to collect
+additional **training** starting points. It requires
+`--stop-after-repair-checkpoint` (and its checkpoint/repair prerequisites), so it
+cannot enable additional repair calls or official evaluation. The NLP launcher
+accepts the same flag and records it in the immutable metadata and variant.
+The public harness option is `collect_source_conflicts=True`; a trajectory
+journal is required when running it.
+
+The original health gate still runs once. Selection then captures if that gate
+fails **or** the final source files contain a complete unresolved conflict block
+(`<<<<<<<`, `=======`, `>>>>>>>`, in order). Git scans tracked and non-ignored
+untracked files in the final working tree, not deleted patch lines or the mere
+fact that a merge conflicted. This version covers C/C++ headers and sources, Go,
+Python (`.py`/`.pyi`), Rust, JavaScript and TypeScript (including JSX/TSX and
+module suffixes). Test paths and `.cb_checks` follow the existing submission
+filters; auxiliary files such as `patch.txt`, Makefiles and documentation do
+not qualify. Binary files are excluded. Scan failure, timeout or truncated
+evidence fails collection rather than reporting a healthy skip.
+
+`metrics.repair_checkpoint.selection` records the versioned policy, original
+`initial_healthy` boolean, reason (`gate_failed`, `source_conflict` or `healthy`),
+and source paths with one-based `[opening, separator, closing]` line triples.
+The first checkpoint retains the original `metadata.healthy`, original gate
+commands/results, and the same selection under `metadata.training_selection`.
+In particular, a source-conflict capture can honestly retain `healthy: true`.
+The journal records the unmodified initial gate result, exact scan command and
+raw response, and selection before capture. Audit recomputes the selection from
+that recorded response and cross-checks the run flags, result, journal and
+manifest-covered checkpoint metadata, alongside the existing zero-repair-call
+and exact snapshot-inventory checks. Records predating the option still audit.
+
+This is candidate selection, not a new correctness label: marker text can be
+intentional source content. It does not compile additional languages, detect
+semantic failures or establish whether fallback dropped edits. Default
+collection, the evaluation repair trigger, repair prompts/budgets and official
+scoring remain unchanged. Use a new immutable collection run to opt in; existing
+healthy skips lack the complete repair handoff and are not retroactively
+promoted to checkpoints.
+
 `scripts/nlp_cluster/submit.py --mode real` accepts the same stop option and
 implies `--collect-trajectories`. It records the option in metadata and the saved
 variant, forwards it to the benchmark and runs the collection audit. In the public

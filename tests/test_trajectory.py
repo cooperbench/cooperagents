@@ -199,7 +199,8 @@ def test_concurrent_failures_and_recording_failure(tmp_path):
 @pytest.mark.parametrize("n_workers", [2, 3])
 @pytest.mark.parametrize("stop_after_capture,only_first", [(False, False), (True, False), (True, True)])
 @pytest.mark.parametrize("healthy", [False, True])
-def test_two_repair_attempts_and_collection_audit(monkeypatch, tmp_path, n_workers, stop_after_capture, only_first, healthy):
+def test_two_repair_attempts_and_collection_audit(monkeypatch, tmp_path, n_workers, stop_after_capture, only_first, healthy,
+                                                collect_conflicts=False, source_conflict=False):
     import importlib.util
     from pathlib import Path
 
@@ -221,7 +222,10 @@ def test_two_repair_attempts_and_collection_audit(monkeypatch, tmp_path, n_worke
                                 "type": "function",
                                 "function": {
                                     "name": "bash",
-                                    "arguments": json.dumps({"command": "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"}),
+                                    "arguments": json.dumps({"command": (
+                                        "mkdir -p src; printf '<<<<<<< ours\\nleft\\n=======\\nright\\n>>>>>>> theirs\\n' > src/lib.rs; "
+                                        if source_conflict else ""
+                                    ) + "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"}),
                                 },
                             }
                         ],
@@ -232,7 +236,11 @@ def test_two_repair_attempts_and_collection_audit(monkeypatch, tmp_path, n_worke
         )
 
     monkeypatch.setattr(litellm, "completion", complete)
-    monkeypatch.setattr("cooperagents.harness._tree_health", lambda env: healthy)
+    def gate(env):
+        env.execute("exit 0" if healthy else "exit 1")
+        return healthy
+
+    monkeypatch.setattr("cooperagents.harness._tree_health", gate)
     spec = TeamSpec(
         run_id="test",
         repo="demo",
@@ -253,34 +261,50 @@ def test_two_repair_attempts_and_collection_audit(monkeypatch, tmp_path, n_worke
     directory = tmp_path / "logs/real/team/demo/1/f1_f2"
     journal = Trajectory(directory / "trajectory.jsonl.gz")
     journal.emit("harness", "pair_start")
-    result = UnifiedHarness(
-        trajectory=journal, checkpoint_dir=directory / "checkpoints", stop_after_repair_checkpoint=stop_after_capture,
-        only_first_repair_checkpoint=only_first,
-    ).run(
-        spec, env_factory=lambda _: LocalEnv.fresh()
-    )
-    journal.emit("harness", "pair_end")
-    journal.close()
-    integrators = set() if healthy else {"integrator1"} if stop_after_capture else {"integrator1", "integrator2"}
+    try:
+        result = UnifiedHarness(
+            trajectory=journal, checkpoint_dir=directory / "checkpoints", stop_after_repair_checkpoint=stop_after_capture,
+            only_first_repair_checkpoint=only_first,
+            collect_source_conflicts=collect_conflicts,
+        ).run(spec, env_factory=lambda _: LocalEnv.fresh())
+        journal.emit("harness", "pair_end")
+    finally:
+        journal.close()
+    selected = not healthy or (collect_conflicts and source_conflict)
+    integrators = set() if not selected else {"integrator1"} if stop_after_capture else {"integrator1", "integrator2"}
     assert set(result.seeds) == {*(f"agent{i}" for i in range(1, n_workers + 1)), *integrators}
-    if stop_after_capture and not healthy:
+    if stop_after_capture and selected:
         from cooperagents.checkpoint import verify_checkpoint
         from cooperagents.repair import load_repair_input
 
         checkpoint = directory / "checkpoints/before-integrator1"
         assert verify_checkpoint(checkpoint)["metadata"]["attempt"] == 1
-        assert load_repair_input(checkpoint).pending_messages is not None
+        inputs = load_repair_input(checkpoint)
+        assert inputs.pending_messages is not None
+        assert ("training_selection.py" in inputs.source_hashes) is collect_conflicts
         assert result.seeds["integrator1"].status == "checkpointed"
         assert result.seeds["integrator1"].steps == 0
         assert result.seeds["integrator1"].error is None
         assert result.integrated.status == "checkpointed"
-        assert result.metrics["repair_checkpoint"] == {"outcome": "captured"}
+        assert result.metrics["repair_checkpoint"]["outcome"] == "captured"
+        state = verify_checkpoint(checkpoint)
+        if collect_conflicts:
+            selection = result.metrics["repair_checkpoint"]["selection"]
+            assert selection["initial_healthy"] is healthy
+            assert selection["reason"] == ("gate_failed" if not healthy else "source_conflict")
+            assert selection["source_conflicts"] == ([{"path": "src/lib.rs", "blocks": [[1, 3, 5]]}] if source_conflict else [])
+            assert state["metadata"]["healthy"] is healthy
+            assert state["metadata"]["training_selection"] == selection
+            assert state["metadata"]["gate_checks"][0]["exit_code"] == (0 if healthy else 1)
+        else:
+            assert result.metrics["repair_checkpoint"] == {"outcome": "captured"}
         assert not (directory / "checkpoints/post-repair").exists()
         assert not (directory / "checkpoints/before-integrator2").exists()
     write_run_outputs(result, run_name="real", logs_dir=tmp_path / "logs")
     (tmp_path / "metadata.json").write_text(json.dumps({
         "pairs": ["demo:1:1,2"], "checkpoint_repair": True, "stop_after_repair_checkpoint": stop_after_capture,
         "only_first_repair_checkpoint": only_first,
+        "collect_source_conflicts": collect_conflicts,
     }))
     module_spec = importlib.util.spec_from_file_location("audit", Path(__file__).parents[1] / "scripts/audit_trajectories.py")
     module = importlib.util.module_from_spec(module_spec)
@@ -289,7 +313,7 @@ def test_two_repair_attempts_and_collection_audit(monkeypatch, tmp_path, n_worke
     assert audited["workers"] == n_workers
     if only_first:
         checkpoint_root = directory / "checkpoints"
-        expected = set() if healthy else {"before-integrator1"}
+        expected = {"before-integrator1"} if selected else set()
         assert {p.name for p in checkpoint_root.iterdir() if p.is_dir()} == expected
         assert set(audited["entries"][0]["checkpoints"]) == expected
         unwanted = checkpoint_root / "worker-agent1"
@@ -297,14 +321,16 @@ def test_two_repair_attempts_and_collection_audit(monkeypatch, tmp_path, n_worke
         with pytest.raises(ValueError, match="inventory"):
             module.audit(tmp_path)
         unwanted.rmdir()
-    if stop_after_capture and not healthy:
+    if stop_after_capture and selected:
         with open_events(directory / "trajectory.jsonl.gz") as handle:
             events = [json.loads(row) for row in handle]
         assert not any(row["actor"].startswith("integrator") and row["event"] == "request" for row in events)
         captured_at = next(row["seq"] for row in events if row["event"] == "checkpoint_end" and row["actor"] == "integrator1")
         assert not any(row["actor"] == "merge_gate" and row["seq"] > captured_at for row in events)
-    if stop_after_capture and healthy:
-        assert result.metrics["repair_checkpoint"] == {"outcome": "skipped_healthy"}
+    if stop_after_capture and not selected:
+        assert result.metrics["repair_checkpoint"]["outcome"] == "skipped_healthy"
+        if not collect_conflicts:
+            assert result.metrics["repair_checkpoint"] == {"outcome": "skipped_healthy"}
         assert not (directory / "checkpoints/before-integrator1").exists()
 
     if n_workers == 2:
@@ -325,11 +351,20 @@ def test_two_repair_attempts_and_collection_audit(monkeypatch, tmp_path, n_worke
         reject_json_change(config_path, {**config, "stop_after_repair_checkpoint": not stop_after_capture})
         reject_json_change(metadata_path, {**metadata, "only_first_repair_checkpoint": not only_first})
         reject_json_change(config_path, {**config, "only_first_repair_checkpoint": not only_first})
+        reject_json_change(metadata_path, {**metadata, "collect_source_conflicts": not collect_conflicts})
+        reject_json_change(config_path, {**config, "collect_source_conflicts": not collect_conflicts})
+        if not collect_conflicts:
+            # Records made before the opt-in flag existed keep their original interpretation.
+            metadata_path.write_text(json.dumps({k: v for k, v in metadata.items() if k != "collect_source_conflicts"}))
+            config_path.write_text(json.dumps({k: v for k, v in config.items() if k != "collect_source_conflicts"}))
+            module.audit(tmp_path)
+            metadata_path.write_text(json.dumps(metadata))
+            config_path.write_text(json.dumps(config))
         result_path = directory / "result.json"
         serialized = json.loads(result_path.read_text())
         if stop_after_capture:
             reject_json_change(result_path, {**serialized, "metrics": {}})
-            if not healthy:
+            if selected:
                 wrong = {**serialized, "agents": {**serialized["agents"], "integrator1": {
                     **serialized["agents"]["integrator1"], "steps": 1,
                 }}}
@@ -371,7 +406,7 @@ def test_two_repair_attempts_and_collection_audit(monkeypatch, tmp_path, n_worke
                     "bytes": state_path.stat().st_size, "sha256": hashlib.sha256(state_path.read_bytes()).hexdigest(),
                 }
                 manifest_path.write_text(json.dumps(manifest))
-                with pytest.raises(ValueError, match="Healthy skip"):
+                with pytest.raises(ValueError, match="original health result" if collect_conflicts else "Healthy skip"):
                     module.audit(tmp_path)
                 state_path.write_bytes(original_state)
                 manifest_path.write_bytes(original_manifest)
@@ -387,6 +422,45 @@ def test_two_repair_attempts_and_collection_audit(monkeypatch, tmp_path, n_worke
             with pytest.raises(ValueError, match="health evidence"):
                 module.audit(tmp_path)
             journal_path.write_bytes(original)
+        if collect_conflicts:
+            reject_json_change(metadata_path, {**metadata, "official_evaluation": True})
+            wrong_selection = {**serialized["metrics"]["repair_checkpoint"]["selection"], "initial_healthy": not healthy}
+            reject_json_change(result_path, {**serialized, "metrics": {**serialized["metrics"], "repair_checkpoint": {
+                **serialized["metrics"]["repair_checkpoint"], "selection": wrong_selection,
+            }}})
+            journal_path = directory / "trajectory.jsonl.gz"
+            original_journal = journal_path.read_bytes()
+            with open_events(journal_path) as handle:
+                evidence = [json.loads(row) for row in handle]
+            scan = next(row for row in evidence if row["actor"] == "training_selection" and row["event"] == "response")
+            scan["data"]["response"]["stdout"] = ""
+            scan["data"]["response"]["exit_code"] = 124
+            with gzip.open(journal_path, "wt") as handle:
+                handle.write("".join(json.dumps(row) + "\n" for row in evidence))
+            with pytest.raises(RuntimeError, match="scan failed"):
+                module.audit(tmp_path)
+            journal_path.write_bytes(original_journal)
+            if selected:
+                checkpoint = directory / "checkpoints/before-integrator1"
+                state_path, manifest_path = checkpoint / "state.json", checkpoint / "manifest.json"
+                original_state, original_manifest = state_path.read_bytes(), manifest_path.read_bytes()
+                for field, value, message in (
+                    ("healthy", not healthy, "original health result"),
+                    ("gate_checks", [], "original gate evidence"),
+                    ("training_selection", wrong_selection, "Checkpoint training selection"),
+                ):
+                    wrong = json.loads(original_state)
+                    wrong["metadata"][field] = value
+                    state_path.write_text(json.dumps(wrong))
+                    manifest = json.loads(original_manifest)
+                    manifest["files"]["state.json"] = {
+                        "bytes": state_path.stat().st_size, "sha256": hashlib.sha256(state_path.read_bytes()).hexdigest(),
+                    }
+                    manifest_path.write_text(json.dumps(manifest))
+                    with pytest.raises(ValueError, match=message):
+                        module.audit(tmp_path)
+                    state_path.write_bytes(original_state)
+                    manifest_path.write_bytes(original_manifest)
         if not stop_after_capture and not healthy:
             # Matching stop flags still cannot certify a normal full repair as collection.
             metadata_path.write_text(json.dumps({**metadata, "stop_after_repair_checkpoint": True}))
@@ -418,3 +492,49 @@ def test_two_repair_attempts_and_collection_audit(monkeypatch, tmp_path, n_worke
     trajectory.write_text(json.dumps(damaged))
     with pytest.raises(ValueError, match="replay differs"):
         module.audit(tmp_path)
+
+
+@pytest.mark.parametrize("only_first", [False, True])
+@pytest.mark.parametrize("healthy,source_conflict", [(True, True), (False, True), (True, False), (False, False)])
+def test_training_selection_captures_without_repair_and_audits(monkeypatch, tmp_path, only_first, healthy, source_conflict):
+    test_two_repair_attempts_and_collection_audit(
+        monkeypatch, tmp_path, n_workers=2, stop_after_capture=True, only_first=only_first, healthy=healthy,
+        collect_conflicts=True, source_conflict=source_conflict,
+    )
+
+
+def test_merge_conflict_flag_alone_does_not_select_training_case(monkeypatch, tmp_path):
+    monkeypatch.setattr("cooperagents.harness._threeway_merge", lambda *args: (True, ""))
+    test_two_repair_attempts_and_collection_audit(
+        monkeypatch, tmp_path, n_workers=2, stop_after_capture=True, only_first=True, healthy=True,
+        collect_conflicts=True,
+    )
+
+
+@pytest.mark.parametrize("stop_after_capture,only_first", [(False, False), (True, False), (True, True)])
+def test_source_conflicts_do_not_change_default_eval_or_collection(monkeypatch, tmp_path, stop_after_capture, only_first):
+    test_two_repair_attempts_and_collection_audit(
+        monkeypatch, tmp_path, n_workers=2, stop_after_capture=stop_after_capture, only_first=only_first, healthy=True,
+        source_conflict=True,
+    )
+
+
+@pytest.mark.parametrize("exit_code,output", [(124, ""), (2, "fatal: scan failed"), (0, "[output truncated after 10 bytes]\n")])
+def test_failed_training_scan_never_captures_or_skips_healthy(monkeypatch, tmp_path, exit_code, output):
+    from cooperagents.env.base import ExecResult
+    from cooperagents.env.local import LocalEnv
+    from cooperagents.training_selection import SOURCE_CONFLICT_COMMAND
+
+    execute = LocalEnv.execute
+
+    def fail_scan(env, command, **kwargs):
+        return ExecResult(output, exit_code) if command == SOURCE_CONFLICT_COMMAND else execute(env, command, **kwargs)
+
+    monkeypatch.setattr(LocalEnv, "execute", fail_scan)
+    with pytest.raises(RuntimeError, match="Source conflict scan"):
+        test_two_repair_attempts_and_collection_audit(
+            monkeypatch, tmp_path, n_workers=2, stop_after_capture=True, only_first=True, healthy=True,
+            collect_conflicts=True, source_conflict=True,
+        )
+    assert not (tmp_path / "logs/real/team/demo/1/f1_f2/checkpoints/before-integrator1").exists()
+    assert not (tmp_path / "logs/real/team/demo/1/f1_f2/result.json").exists()

@@ -228,6 +228,9 @@ def audit(run: Path) -> dict:
         workers = {"agent1", "agent2"}
         stop_mode = metadata.get("stop_after_repair_checkpoint", False)
         only_first = metadata.get("only_first_repair_checkpoint", False)
+        collect_conflicts = metadata.get("collect_source_conflicts", False)
+        if collect_conflicts and (not stop_mode or metadata.get("official_evaluation", False)):
+            raise ValueError("Source conflict selection is restricted to training collection")
         if only_first and not stop_mode:
             raise ValueError("Only-first repair checkpoint requires stop mode")
         if stop_mode and not metadata.get("checkpoint_repair"):
@@ -238,6 +241,8 @@ def audit(run: Path) -> dict:
                 raise ValueError("Run and pair repair stop modes differ")
             if config.get("only_first_repair_checkpoint", False) != only_first:
                 raise ValueError("Run and pair checkpoint selections differ")
+            if config.get("collect_source_conflicts", False) != collect_conflicts:
+                raise ValueError("Run and pair source conflict selections differ")
             workers = {assignment["agent_id"] for assignment in config["assignments"]}
         if not workers <= ends.keys() or not workers <= result["agents"].keys():
             raise ValueError(f"{pair}: missing workers")
@@ -247,10 +252,31 @@ def audit(run: Path) -> dict:
         if not stop_mode and outcome is not None:
             raise ValueError("Unexpected repair checkpoint outcome outside stop mode")
         captured = outcome == "captured"
-        if only_first:
+        selection = result.get("metrics", {}).get("repair_checkpoint", {}).get("selection")
+        selection_rows = [r for r in rows if r["actor"] == "training_selection"]
+        if not collect_conflicts and (selection is not None or selection_rows):
+            raise ValueError("Unexpected training selection outside opt-in collection")
+        if only_first or collect_conflicts:
             health = [r for r in rows if r["actor"] == "merge_gate" and r["event"] == "initial_repair_health"]
-            if len(health) != 1 or health[0]["data"].get("healthy") is not (outcome == "skipped_healthy"):
+            initial_healthy = selection.get("initial_healthy") if collect_conflicts and isinstance(selection, dict) else not captured
+            if len(health) != 1 or health[0]["data"].get("healthy") is not initial_healthy:
                 raise ValueError("Initial repair health evidence differs from collection outcome")
+        if collect_conflicts:
+            from cooperagents.env.base import ExecResult
+            from cooperagents.training_selection import SOURCE_CONFLICT_COMMAND, select_training_checkpoint
+
+            requests = [r for r in selection_rows if r["event"] == "request"]
+            responses = [r for r in selection_rows if r["event"] == "response"]
+            decisions = [r for r in selection_rows if r["event"] == "checkpoint_selection"]
+            if (len(selection_rows) != 3 or len(requests) != 1 or len(responses) != 1 or len(decisions) != 1
+                    or requests[0]["data"]["request"] != {"command": SOURCE_CONFLICT_COMMAND, "timeout": 60}
+                    or not health[0]["seq"] < requests[0]["seq"]
+                    or not responses[0]["seq"] < decisions[0]["seq"]):
+                raise ValueError("Missing or invalid source conflict scan evidence")
+            expected_selection = select_training_checkpoint(initial_healthy, ExecResult(**responses[0]["data"]["response"]))
+            if (selection != expected_selection or decisions[0]["data"] != expected_selection
+                    or captured != (expected_selection["reason"] != "healthy")):
+                raise ValueError("Training selection differs from source conflict evidence")
         if captured and not (metadata.get("stop_after_repair_checkpoint") and metadata.get("checkpoint_repair")):
             raise ValueError("Unexpected repair capture termination")
         if captured and (result["agents"].get("integrator1", {}).get("status") != "checkpointed"
@@ -298,6 +324,17 @@ def audit(run: Path) -> dict:
             for name in sorted(expected):
                 saved = verify_checkpoint(root / name)
                 checkpoints[name] = saved["metadata"]["boundary"]
+                if collect_conflicts and name in {"pre-repair", "before-integrator1"}:
+                    if saved["metadata"].get("healthy") is not initial_healthy:
+                        raise ValueError("Checkpoint changed the original health result")
+                    if saved["metadata"].get("gate_checks") != health[0]["data"].get("gate_checks"):
+                        raise ValueError("Checkpoint changed the original gate evidence")
+                if collect_conflicts and name == "before-integrator1":
+                    if saved["metadata"].get("training_selection") != selection:
+                        raise ValueError("Checkpoint training selection differs from audited evidence")
+                    captures = [r for r in rows if r["actor"] == "integrator1" and r["event"] == "checkpoint_end"]
+                    if len(captures) != 1 or decisions[0]["seq"] >= captures[0]["seq"]:
+                        raise ValueError("Training selection must precede checkpoint capture")
                 if name.startswith("worker-"):
                     actor = name.removeprefix("worker-")
                     snapshot = saved["metadata"]["result"]
@@ -309,7 +346,7 @@ def audit(run: Path) -> dict:
                     ):
                         raise ValueError(f"{pair}/{actor}: checkpoint worker state mismatch")
             if stop_mode and outcome == "skipped_healthy":
-                healthy = (health[0]["data"].get("healthy") if only_first
+                healthy = (health[0]["data"].get("healthy") if only_first or collect_conflicts
                            else verify_checkpoint(root / "pre-repair")["metadata"].get("healthy"))
                 if (healthy is not True
                         or any(a.startswith("integrator") for a in result["agents"])

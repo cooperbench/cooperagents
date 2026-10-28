@@ -187,6 +187,10 @@ Replies are retained until a valid decision succeeds. The first callback runs on
 the caller thread, later callbacks serially on the monitor thread; injected
 clients must support that usage and bound their own request duration.
 
+For repair checkpoint collection, see [repair replay](docs/repair-replay.md).
+Its opt-in `--collect-source-conflicts` mode adds training candidates with
+unresolved source conflict blocks while preserving the evaluation health gate.
+
 ## Testing
 
 ```bash
