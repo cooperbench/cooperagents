@@ -114,3 +114,60 @@ def test_docker_tar_headers_and_short_end_padding_are_canonicalized(tmp_path):
     with tarfile.open(tmp_path / "restored.tar.gz") as archive:
         assert archive.extractfile("file").read() == b"hint"
         assert archive.getmember("file").mode == 0o640
+
+
+def test_legacy_apptainer_definition_restores_after_image_move(tmp_path):
+    from cooperagents.checkpoint import restore_tree
+
+    old_image = "/old storage/task.sif"
+    original = f"bootstrap: localimage\nfrom: {old_image}\n\n".encode()
+    base = tmp_path / "base"
+    (base / ".singularity.d").mkdir(parents=True)
+    definition = base / ".singularity.d/Singularity"
+    definition.write_bytes(original)
+    (base / "ordinary").write_bytes(b"unchanged")
+    target = tmp_path / "target"
+    shutil.copytree(base, target)
+    delta = tmp_path / "rootfs"
+    manifest = pack_tree(target, base, delta)  # Old producer omitted equal generated files.
+    assert not next(r for r in manifest["entries"] if r["tar"]["name"].endswith("Singularity"))["payload"]
+    definition.write_bytes(b"bootstrap: localimage\nfrom: /new/task.sif\n\n")
+    new_definition = definition.read_bytes()
+    saved = dict(backend="apptainer", image=old_image, format=manifest["format"], archive="rootfs/filesystem.json.gz")
+    restore_tree(tmp_path, saved, base, tmp_path / "restored")
+    assert (tmp_path / "restored/.singularity.d/Singularity").read_bytes() == original
+    assert definition.read_bytes() == new_definition
+    # Same base cache must also serve a different old source path without mutation.
+    second = tmp_path / "second"
+    shutil.copytree(target, second)
+    second_image = "/another/task.sif"
+    (second / ".singularity.d/Singularity").write_text(f"bootstrap: localimage\nfrom: {second_image}\n\n")
+    pack_tree(second, second, tmp_path / "second-delta")
+    assert restore(tmp_path / "second-delta", base, tmp_path / "second.tar.gz", original_apptainer_image=second_image)["verified"]
+    assert definition.read_bytes() == new_definition
+    for image in (None, "/wrong/task.sif"):
+        with pytest.raises(ValueError, match="base file"):
+            restore(delta, base, tmp_path / "failed.tar.gz", original_apptainer_image=image)
+        assert not (tmp_path / "failed.tar.gz.partial").exists()
+    (base / "ordinary").write_bytes(b"corrupted")  # Same length still requires exact hash.
+    with pytest.raises(ValueError, match="checksum mismatch"):
+        restore(delta, base, tmp_path / "bad-base.tar.gz", original_apptainer_image=old_image)
+    assert not (tmp_path / "bad-base.tar.gz.partial").exists()
+    (base / "ordinary").write_bytes(b"unchanged")
+    with gzip.open(delta / "filesystem.json.gz", "wt") as f:
+        json.dump({**manifest, "target_uncompressed_tar_sha256": "0" * 64}, f)
+    with pytest.raises(ValueError, match="exactly match"):
+        restore(delta, base, tmp_path / "bad-tar.tar.gz", original_apptainer_image=old_image)
+    assert not (tmp_path / "bad-tar.tar.gz.partial").exists()
+
+
+def test_legacy_custom_definition_is_not_replaced_by_generated_text(tmp_path):
+    base = tmp_path / "base"
+    (base / ".singularity.d").mkdir(parents=True)
+    definition = base / ".singularity.d/Singularity"
+    definition.write_bytes(b"custom definition\n")
+    pack_tree(base, base, tmp_path / "delta")
+    assert restore(tmp_path / "delta", base, tmp_path / "valid.tar.gz", original_apptainer_image="/old.sif")["verified"]
+    definition.write_bytes(b"changed definition\n")
+    with pytest.raises(ValueError, match="base file"):
+        restore(tmp_path / "delta", base, tmp_path / "invalid.tar.gz", original_apptainer_image="/old.sif")
