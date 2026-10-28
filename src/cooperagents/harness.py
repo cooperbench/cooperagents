@@ -1825,8 +1825,10 @@ def run_repair_tail(env: Environment, *, spec: TeamSpec, assignments: list[Assig
                     run_agent: Callable, check_gate: Callable[[], bool], gate_checks: list[dict],
                     checkpoint_dir: Path | None = None,
                     trace=None, first_task: str | None = None, checkpoint_bus: TeamBus | None = None,
-                    stop_after_repair_checkpoint: bool = False) -> list[dict]:
+                    stop_after_repair_checkpoint: bool = False, training_selection: dict | None = None) -> list[dict]:
     """Shared by full-team and checkpoint entrypoints; no initial health check here."""
+    if training_selection is not None and not stop_after_repair_checkpoint:
+        raise ValueError("Training selection requires stop_after_repair_checkpoint")
     attempts = []
     for attempt in range(1, max(1, spec.repair_attempts) + 1):
         task = first_task if attempt == 1 and first_task is not None else repair_brief(env, spec, assignments)
@@ -1838,15 +1840,20 @@ def run_repair_tail(env: Environment, *, spec: TeamSpec, assignments: list[Assig
         def capture(agent, task=task, actor=actor, attempt=attempt):
             nonlocal capture_seconds, capture_complete
             capture_started = time.monotonic()
-            from cooperagents.checkpoint import save_checkpoint
+            from cooperagents.checkpoint import save_checkpoint, sha256
             from cooperagents.repair import capture_repair_input
             repair_input = capture_repair_input(
                 agent, task=task, spec=spec, assignments=assignments, command_timeout=agent.env._timeout,
                 guard_git=agent.env._guard_git, time_limit_s=spec.repair_time_limit,
                 bus=checkpoint_bus,
             )
+            if training_selection is not None:
+                repair_input.source_hashes["training_selection.py"] = sha256(Path(__file__).with_name("training_selection.py"))
             save_checkpoint(env, checkpoint_dir / f"before-{actor}", metadata=dict(
-                boundary="repair_agent_start", task=task, attempt=attempt, healthy=False, gate_checks=gate_checks,
+                boundary="repair_agent_start", task=task, attempt=attempt,
+                healthy=training_selection["initial_healthy"] if training_selection is not None else False,
+                gate_checks=gate_checks,
+                **({"training_selection": training_selection} if training_selection is not None else {}),
             ), repair_input=repair_input, trace=partial(trace, actor) if trace else None)
             capture_seconds += time.monotonic() - capture_started
             capture_complete = True
@@ -1919,6 +1926,7 @@ class UnifiedHarness:
         checkpoint_dir: Path | None = None,
         stop_after_repair_checkpoint: bool = False,
         only_first_repair_checkpoint: bool = False,
+        collect_source_conflicts: bool = False,
         repair_completion: CompletionBinding | None = None,
         coordinator_completion: CompletionBinding | None = None,
         worker_completion: CompletionBinding | None = None,
@@ -1961,6 +1969,9 @@ class UnifiedHarness:
             raise ValueError("Stopping after the repair checkpoint requires checkpoint_dir")
         if only_first_repair_checkpoint and not stop_after_repair_checkpoint:
             raise ValueError("Only-first repair checkpoint requires stop_after_repair_checkpoint")
+        if collect_source_conflicts and not stop_after_repair_checkpoint:
+            raise ValueError("Source conflict collection requires stop_after_repair_checkpoint")
+        self.collect_source_conflicts = collect_source_conflicts
         self.only_first_repair_checkpoint = only_first_repair_checkpoint
         self.stop_after_repair_checkpoint = stop_after_repair_checkpoint
         self.langfuse = langfuse
@@ -2522,6 +2533,7 @@ class UnifiedHarness:
             )
 
         checkpoint_captured = False
+        training_selection = None
         # Integration. Seed mode already has the cumulative diff; no-seed must merge
         # the independent member patches in a fresh integrator container.
         if not spec.seed_prior:
@@ -2593,8 +2605,16 @@ class UnifiedHarness:
                     return _gate(GateEnv())
 
                 initial_healthy = healthy = check_gate() if spec.repair_integrator else None
-                if self.only_first_repair_checkpoint and self.trajectory is not None:
+                if (self.only_first_repair_checkpoint or self.collect_source_conflicts) and self.trajectory is not None:
                     self.trajectory.emit("merge_gate", "initial_repair_health", healthy=initial_healthy, gate_checks=gate_checks)
+                if self.collect_source_conflicts:
+                    from cooperagents.training_selection import SOURCE_CONFLICT_COMMAND, select_training_checkpoint
+                    from cooperagents.trajectory import record_call
+
+                    scan = record_call(partial(self.trajectory.emit, "training_selection"), env.execute,
+                                       command=SOURCE_CONFLICT_COMMAND, timeout=60)
+                    training_selection = select_training_checkpoint(initial_healthy, scan)
+                    self.trajectory.emit("training_selection", "checkpoint_selection", **training_selection)
                 if self.checkpoint_dir is not None and not self.only_first_repair_checkpoint:
                     from cooperagents.checkpoint import save_checkpoint
 
@@ -2606,7 +2626,8 @@ class UnifiedHarness:
                     ), trace=partial(self.trajectory.emit, "merge") if self.trajectory else None)
                 repair_started = time.monotonic()
                 attempts = []
-                if spec.repair_integrator and not healthy:
+                if spec.repair_integrator and (not healthy or (training_selection is not None
+                                                              and training_selection["reason"] == "source_conflict")):
                     def run_repair_agent(actor, task, on_start):
                         return run_on_shared(
                             env, actor, "integrator", task, None,
@@ -2620,6 +2641,7 @@ class UnifiedHarness:
                         checkpoint_dir=self.checkpoint_dir,
                         checkpoint_bus=bus,
                         stop_after_repair_checkpoint=self.stop_after_repair_checkpoint,
+                        training_selection=training_selection,
                         trace=self.trajectory.emit if self.trajectory else None,
                     )
                     checkpoint_captured = self.stop_after_repair_checkpoint and not attempts
@@ -2676,7 +2698,8 @@ class UnifiedHarness:
             integrated=integrated,
             duration_seconds=time.time() - start,
             metrics={
-                **({"repair_checkpoint": {"outcome": "captured" if checkpoint_captured else "skipped_healthy"}}
+                **({"repair_checkpoint": {"outcome": "captured" if checkpoint_captured else "skipped_healthy",
+                                          **({"selection": training_selection} if training_selection is not None else {})}}
                    if self.stop_after_repair_checkpoint else {}),
                 **coordination_metrics(bus.task_events(), final_tasks=bus.list_tasks()),
                 **({"do_no_harm_discards": gate_discards} if spec.do_no_harm else {}),
@@ -3115,6 +3138,8 @@ class UnifiedHarness:
     ) -> RunResult:
         if self.stop_after_repair_checkpoint and not spec.repair_integrator:
             raise ValueError("Stopping after the repair checkpoint requires repair_integrator")
+        if self.collect_source_conflicts and self.trajectory is None:
+            raise ValueError("Source conflict collection requires a trajectory journal")
         if self.checkpoint_dir is not None:
             from cooperagents.repair import validate_capture_spec
 
@@ -3175,6 +3200,7 @@ class UnifiedHarness:
                 spec=config, assignments=[asdict(a) for a in assignments], step_limit=self.step_limit,
                 stop_after_repair_checkpoint=self.stop_after_repair_checkpoint,
                 only_first_repair_checkpoint=self.only_first_repair_checkpoint,
+                collect_source_conflicts=self.collect_source_conflicts,
                 cost_limit=self.cost_limit, command_timeout=self.command_timeout,
                 coordination_variant=self.coordination_variant,
                 coordinator_implementation_enabled=self.coordinator_implementation_enabled,

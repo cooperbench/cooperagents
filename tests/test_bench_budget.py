@@ -122,7 +122,8 @@ def test_runners_isolate_notebooks_and_mount_workers_only(monkeypatch, tmp_path)
 
 
 @pytest.mark.parametrize("only_first", [False, True])
-def test_benchmark_checkpoint_options_reach_valid_harness(monkeypatch, tmp_path, only_first):
+@pytest.mark.parametrize("collect_conflicts", [False, True])
+def test_benchmark_checkpoint_options_reach_valid_harness(monkeypatch, tmp_path, only_first, collect_conflicts):
     from cooperagents.repair import validate_capture_spec
 
     module_spec = importlib.util.spec_from_file_location("bench_capture", Path(__file__).parents[1] / "scripts/bench_compare.py")
@@ -133,6 +134,7 @@ def test_benchmark_checkpoint_options_reach_valid_harness(monkeypatch, tmp_path,
         validate_capture_spec(team, self.bus)
         assert self.stop_after_repair_checkpoint
         assert self.only_first_repair_checkpoint is only_first
+        assert self.collect_source_conflicts is collect_conflicts
         assert team.repair_integrator
         return SimpleNamespace(duration_seconds=0, total_steps=0, helpers={}, seeds={})
 
@@ -144,11 +146,13 @@ def test_benchmark_checkpoint_options_reach_valid_harness(monkeypatch, tmp_path,
         step_limit=10, max_agents=2, seed_prior=False, coop_tools=True, repair_integrator=True,
         completion_gate=True, checkpoint_repair=True, stop_after_repair_checkpoint=True,
         only_first_repair_checkpoint=only_first,
+        collect_source_conflicts=collect_conflicts,
     )
 
 
 @pytest.mark.parametrize("only_first", [False, True])
-def test_stop_cli_skips_official_evaluation(monkeypatch, tmp_path, only_first):
+@pytest.mark.parametrize("collect_conflicts", [False, True])
+def test_stop_cli_skips_official_evaluation(monkeypatch, tmp_path, only_first, collect_conflicts):
     import sys
 
     module_spec = importlib.util.spec_from_file_location("bench_stop", Path(__file__).parents[1] / "scripts/bench_compare.py")
@@ -162,10 +166,12 @@ def test_stop_cli_skips_official_evaluation(monkeypatch, tmp_path, only_first):
         "bench_compare.py", "--pairs", "go_chi_task:26:1,2", "--team-only", "--checkpoint-repair",
         "--repair-integrator", "--stop-after-repair-checkpoint", "--log-dir", str(tmp_path),
         *(["--only-first-repair-checkpoint"] if only_first else []),
+        *(["--collect-source-conflicts"] if collect_conflicts else []),
     ])
     bench.main()
     assert len(calls) == 1 and calls[0]["stop_after_repair_checkpoint"]
     assert calls[0]["only_first_repair_checkpoint"] is only_first
+    assert calls[0]["collect_source_conflicts"] is collect_conflicts
 
 
 def test_standard_completion_gate_partial_preserves_defaults():
@@ -193,7 +199,8 @@ def test_stop_cli_requires_capture_repair_and_team(monkeypatch, missing):
 
 
 @pytest.mark.parametrize("script", ["bench_compare.py", "nlp_cluster/submit.py"])
-def test_only_first_cli_requires_stop_mode(monkeypatch, capsys, script):
+@pytest.mark.parametrize("flag", ["--only-first-repair-checkpoint", "--collect-source-conflicts"])
+def test_collection_cli_requires_stop_mode(monkeypatch, capsys, script, flag):
     import sys
 
     spec = importlib.util.spec_from_file_location("only_first_invalid", Path(__file__).parents[1] / "scripts" / script)
@@ -201,7 +208,7 @@ def test_only_first_cli_requires_stop_mode(monkeypatch, capsys, script):
     spec.loader.exec_module(module)
     if hasattr(module, "_load_env"):
         monkeypatch.setattr(module, "_load_env", lambda: None)
-    monkeypatch.setattr(sys, "argv", [script, "--only-first-repair-checkpoint"])
+    monkeypatch.setattr(sys, "argv", [script, flag])
     with pytest.raises(SystemExit):
         module.main()
     assert "requires --stop-after-repair-checkpoint" in capsys.readouterr().err
