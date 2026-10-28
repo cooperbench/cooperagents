@@ -173,6 +173,12 @@ def test_apptainer_archives_rootfs_and_external_mounts(monkeypatch, tmp_path):
     env.image.write_bytes(b"image")
     base = tmp_path / "base"
     base.mkdir()
+    generated = (".singularity.d/Singularity", ".singularity.d/labels.json", ".singularity.d/bootstrap_history/Apptainer0")
+    for name in generated:
+        for root in (base, env.root / "fs"):
+            file = root / name
+            file.parent.mkdir(parents=True, exist_ok=True)
+            file.write_bytes(b"original generated content")
     monkeypatch.setattr(ApptainerEnv, "_base_filesystem", staticmethod(lambda *args: base))
     env._checkpoint_mounts = {"/cbshared": shared}
     output = tmp_path / "snapshot"
@@ -180,7 +186,11 @@ def test_apptainer_archives_rootfs_and_external_mounts(monkeypatch, tmp_path):
     saved = env.checkpoint(output)
     assert saved["image_sha256"]
     assert saved["mounts"][0]["target"] == "/cbshared"
+    for name in generated:
+        (base / name).write_bytes(b"different path or build date")
     restore_tree(output, saved, base, tmp_path / "restored")
+    for name in generated:
+        assert (tmp_path / "restored" / name).read_bytes() == b"original generated content"
     restore_tree(output, saved["mounts"][0], base, tmp_path / "restored-mount")
     assert (tmp_path / "restored/tmp/cache").read_text() == "runtime cache"
     assert (tmp_path / "restored-mount/branch").read_text() == "worker head"
@@ -327,3 +337,12 @@ def test_apptainer_base_cache_records_registry_provenance(monkeypatch, tmp_path)
         "org.opencontainers.image.base.name": "docker://example/base:1",
         "org.opencontainers.image.base.digest": "sha256:registry",
     }
+
+
+def test_apptainer_relocated_image_still_requires_exact_hash(tmp_path):
+    from cooperagents.env.apptainer import ApptainerEnv
+
+    image = tmp_path / "relocated.sif"
+    image.write_bytes(b"corrupt image")
+    with pytest.raises(ValueError, match="different SHA256"):
+        ApptainerEnv._base_filesystem(image, tmp_path / "scratch", "0" * 64)
