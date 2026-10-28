@@ -10,6 +10,7 @@ import contextlib
 import fcntl
 import gzip
 import hashlib
+import io
 import json
 import os
 import tarfile
@@ -48,7 +49,7 @@ def cached_base(root: Path, identity: str, build) -> Path:
     return destination / "fs"
 
 
-def pack_tree(source: Path, base: Path, destination: Path) -> dict:
+def pack_tree(source: Path, base: Path, destination: Path, *, always_payload: tuple[str, ...] = ()) -> dict:
     """Stream tar metadata/content into the existing packer; never save a full tar."""
     read_fd, write_fd = os.pipe()
     errors = []
@@ -64,7 +65,7 @@ def pack_tree(source: Path, base: Path, destination: Path) -> dict:
     producer.start()
     try:
         with os.fdopen(read_fd, "rb") as stream:
-            result = pack_stream(stream, base, destination)
+            result = pack_stream(stream, base, destination, always_payload=always_payload)
     finally:
         producer.join()
     if errors:
@@ -117,7 +118,7 @@ class NullWriter:
         return len(data)
 
 
-def pack_stream(raw, base, destination, scratch=None, *, canonicalize=False):
+def pack_stream(raw, base, destination, scratch=None, *, canonicalize=False, always_payload: tuple[str, ...] = ()):
     """Save all tar metadata, but only compress bytes that differ from the base."""
     base, destination = map(Path, (base, destination))
     destination.mkdir(parents=True, exist_ok=False)
@@ -136,7 +137,9 @@ def pack_stream(raw, base, destination, scratch=None, *, canonicalize=False):
                         # A replaced absolute base symlink must not read host files.
                         path = None
                     candidate = path is not None and path.is_file() and not path.is_symlink()
-                    same = candidate and path.stat().st_size == member.size
+                    name = safe_name(member.name)
+                    forced = any(name == prefix or name.startswith(prefix + "/") for prefix in always_payload)
+                    same = candidate and not forced and path.stat().st_size == member.size
                     with contextlib.ExitStack() as stack:
                         old = stack.enter_context(path.open("rb")) if same else None
                         content = archive.extractfile(member)
@@ -195,12 +198,12 @@ def pack_stream(raw, base, destination, scratch=None, *, canonicalize=False):
     return manifest
 
 
-def restore(delta, base, output, verify_only=False):
+def restore(delta, base, output, verify_only=False, *, original_apptainer_image: str | None = None):
     """Reconstruct a full rootfs tar; absent target entries implement deletions."""
-    return _restore(delta, base, output, verify_only=verify_only)
+    return _restore(delta, base, output, verify_only=verify_only, original_apptainer_image=original_apptainer_image)
 
 
-def _restore(delta, base, output, *, verify_only, verify_tar=True):
+def _restore(delta, base, output, *, verify_only, verify_tar=True, original_apptainer_image: str | None = None):
     delta, base, output = map(Path, (delta, base, output))
     if not verify_only and output.exists():
         raise FileExistsError(output)
@@ -228,6 +231,16 @@ def _restore(delta, base, output, *, verify_only, verify_tar=True):
                                 if saved is None or metadata(saved) != metadata(member):
                                     raise ValueError("Delta entry mismatch")
                                 file = payload.extractfile(saved)
+                            elif (
+                                original_apptainer_image is not None
+                                and safe_name(member.name) == ".singularity.d/Singularity"
+                                and len(
+                                    definition := f"bootstrap: localimage\nfrom: {original_apptainer_image}\n\n".encode()
+                                ) == member.size
+                                and hashlib.sha256(definition).hexdigest() == record["sha256"]
+                            ):
+                                # Legacy deltas omitted this generated file; never alter the shared base.
+                                file = stack.enter_context(io.BytesIO(definition))
                             else:
                                 path = base_file(base, member.name)
                                 if path.is_symlink() or not path.is_file() or path.stat().st_size != member.size:

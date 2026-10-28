@@ -31,7 +31,7 @@ from cooperagents.verification import validate
 from cooperagents.workers import mini_swe_worker as worker
 
 
-def make_checkpoint(monkeypatch, tmp_path, *, gate=None, attempts=2, crlf=False, bus=None):
+def make_checkpoint(monkeypatch, tmp_path, *, gate=None, attempts=2, crlf=False, bus=None, generated_definition=False):
     """Host bash replaces only Apptainer execution; restore uses the public API."""
 
     def execute(env, command, *, timeout=60):
@@ -70,6 +70,10 @@ def make_checkpoint(monkeypatch, tmp_path, *, gate=None, attempts=2, crlf=False,
     env._base_commit = env.execute("git rev-parse HEAD").stdout.strip()
     env.image = tmp_path / "source.sif"
     env.image.write_bytes(b"fixture-image")
+    if generated_definition:
+        for root in (base, env.root / "fs"):
+            (root / ".singularity.d").mkdir()
+            (root / ".singularity.d/Singularity").write_text(f"bootstrap: localimage\nfrom: {env.image}\n\n")
     shared = tmp_path / "shared"
     shared.mkdir()
     (shared / "branch").write_text("worker head")
@@ -317,20 +321,34 @@ def test_two_restores_are_independent_and_preserve_full_state(monkeypatch, tmp_p
         right.cleanup()
 
 
-def test_delta_restore_requires_matching_base_and_allows_relocation(monkeypatch, tmp_path):
+@pytest.mark.parametrize("legacy", [False, True])
+def test_delta_restore_requires_matching_base_and_allows_relocation(monkeypatch, tmp_path, legacy):
     import shutil
 
-    checkpoint = make_checkpoint(monkeypatch, tmp_path)
+    from cooperagents import checkpoint_delta
+
+    original_pack = checkpoint_delta.pack_stream
+    with monkeypatch.context() as capture:
+        if legacy:
+            def legacy_pack(*args, **kwargs):
+                kwargs.pop("always_payload", None)
+                return original_pack(*args, **kwargs)
+            capture.setattr(checkpoint_delta, "pack_stream", legacy_pack)
+        checkpoint = make_checkpoint(monkeypatch, tmp_path, generated_definition=True)
     original = tmp_path / "source.sif"
     moved = tmp_path / "relocated.sif"
     shutil.copyfile(original, moved)
     shutil.copytree(original.with_suffix(".base"), moved.with_suffix(".base"))
+    definition = moved.with_suffix(".base") / ".singularity.d/Singularity"
+    definition.write_text(f"bootstrap: localimage\nfrom: {moved}\n\n")
     original.unlink()
     with pytest.raises(ValueError, match="base SIF"):
         ApptainerEnv.from_checkpoint(checkpoint, scratch=tmp_path / "scratch")
     env = ApptainerEnv.from_checkpoint(checkpoint, scratch=tmp_path / "scratch", base_image=moved)
     try:
         assert env.read_file("worker.py") == "feature = 2\n"
+        assert (env.root / "fs/.singularity.d/Singularity").read_text() == f"bootstrap: localimage\nfrom: {original}\n\n"
+        assert definition.read_text() == f"bootstrap: localimage\nfrom: {moved}\n\n"
     finally:
         env.cleanup()
     moved.write_bytes(b"wrong image")

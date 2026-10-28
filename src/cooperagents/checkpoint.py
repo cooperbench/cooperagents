@@ -36,10 +36,10 @@ def remove_tree(root: Path) -> None:
     shutil.rmtree(root)
 
 
-def save_tree_delta(source: Path, base: Path, destination: Path, name: str) -> dict:
+def save_tree_delta(source: Path, base: Path, destination: Path, name: str, *, always_payload: tuple[str, ...] = ()) -> dict:
     from cooperagents.checkpoint_delta import pack_tree
 
-    pack_tree(source, base, destination / name)
+    pack_tree(source, base, destination / name, always_payload=always_payload)
     return dict(format="checkpoint-tar-delta-v1", archive=f"{name}/filesystem.json.gz", payload=f"{name}/payload.tar.gz")
 
 
@@ -52,7 +52,10 @@ def restore_tree(checkpoint: Path, record: dict, base: Path, destination: Path) 
     if record.get("format") == "checkpoint-tar-delta-v1":
         with tempfile.TemporaryDirectory(dir=destination.parent, prefix=".restore-") as temporary:
             archive = Path(temporary) / "rootfs.tar.gz"
-            restore((checkpoint / record["archive"]).parent, base, archive)
+            restore(
+                (checkpoint / record["archive"]).parent, base, archive,
+                original_apptainer_image=record.get("image") if record.get("backend") == "apptainer" else None,
+            )
             extract_tree(archive, destination)
     elif "format" not in record:
         extract_tree(checkpoint / record["archive"], destination)

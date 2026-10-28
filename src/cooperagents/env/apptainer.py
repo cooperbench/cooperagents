@@ -298,7 +298,11 @@ class ApptainerEnv(Environment):
             base = self._base_filesystem(self.image, self.root.parent, image_hash)
             provenance_file = base.parent / "image.json"
             provenance = json.loads(provenance_file.read_text()) if provenance_file.is_file() else {}
-            filesystem = save_tree_delta(self.root / "fs", base, destination, "rootfs")
+            # Rebuilding the same SIF can change paths, timestamps and generated history.
+            filesystem = save_tree_delta(
+                self.root / "fs", base, destination, "rootfs",
+                always_payload=(".singularity.d/Singularity", ".singularity.d/labels.json", ".singularity.d/bootstrap_history"),
+            )
             mounts = []
             with tempfile.TemporaryDirectory(dir=self.root.parent) as temporary:
                 for i, (target, source) in enumerate(self._checkpoint_mounts.items()):
