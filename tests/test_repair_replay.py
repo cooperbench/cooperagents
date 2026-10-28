@@ -335,6 +335,12 @@ def test_delta_restore_requires_matching_base_and_allows_relocation(monkeypatch,
                 return original_pack(*args, **kwargs)
             capture.setattr(checkpoint_delta, "pack_stream", legacy_pack)
         checkpoint = make_checkpoint(monkeypatch, tmp_path, generated_definition=True)
+    import gzip
+
+    with gzip.open(checkpoint / "rootfs/filesystem.json.gz", "rt") as stream:
+        inventory = json.load(stream)
+    definition_record = next(r for r in inventory["entries"] if r["tar"]["name"] == "./.singularity.d/Singularity")
+    assert definition_record["payload"] is (not legacy)
     original = tmp_path / "source.sif"
     moved = tmp_path / "relocated.sif"
     shutil.copyfile(original, moved)
