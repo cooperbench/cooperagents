@@ -137,13 +137,15 @@ class _UnconfiguredGrader:
 
 
 def _harvest(env: StateEnv) -> Artifact:
-    # trajectory is additive: StateArtifact.text() returns answer or state
-    # (sources JSON) first, so adding the action log never changes the graded
-    # deliverable — it only makes the agent's tool history inspectable.
+    # Answer-graded: the free-text ``answer`` is the sole deliverable; the sources
+    # JSON and action log are diagnostic only (``answer_only=True``), so an
+    # answer-less agent is correctly empty (the finish veto forces a submit_answer)
+    # and the graded text() never falls back to the sources list.
     return StateArtifact(
         answer=env.answer,
         state=json.dumps(env.store.get("sources", [])),
         trajectory="\n".join(env.log),
+        answer_only=True,
     )
 
 
@@ -326,7 +328,12 @@ class LLMRubricGrader:
     def _default_complete(self, prompt: str) -> str:
         import litellm
 
-        resp = litellm.completion(model=self.model, messages=[{"role": "user", "content": prompt}], temperature=0.0)
+        from cooperagents.llm import LiteLLMClient
+
+        # Shared retry helper (transient retry, dead-socket cap, offline pause) so a
+        # SAP blip in the grader does not crash the run.
+        resp = LiteLLMClient._completion_with_retry(
+            litellm, model=self.model, messages=[{"role": "user", "content": prompt}], temperature=0.0)
         return resp["choices"][0]["message"]["content"] or ""
 
     def grade(self, question: str, answer: str, rubric: str, reference: str) -> float:

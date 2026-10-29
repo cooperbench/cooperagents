@@ -116,15 +116,16 @@ class _UnconfiguredJudge:
 
 
 def _harvest(env: StateEnv) -> Artifact:
-    # The visited-doc list stays in ``state`` so StateArtifact.text() (answer or
-    # state or trajectory) is byte-identical to before — the judge grades the same
-    # candidate. ``trajectory`` now carries the real action/observation log for
-    # inspection, which does not affect text() when answer/state are present.
+    # Answer-graded: the free-text ``answer`` is the sole deliverable. The
+    # visited-doc list and action log are diagnostic only (``answer_only=True``),
+    # so an answer-less agent is correctly empty (the finish veto forces a
+    # submit_answer) and the graded text() never falls back to the visited list.
     visited = env.store.get("visited", [])
     return StateArtifact(
         answer=env.answer,
         state="visited: " + ", ".join(visited),
         trajectory="\n".join(env.log),
+        answer_only=True,
     )
 
 
@@ -349,7 +350,12 @@ class LLMJudge:
     def _default_complete(self, prompt: str) -> str:
         import litellm
 
-        resp = litellm.completion(model=self.model, messages=[{"role": "user", "content": prompt}], temperature=0.0)
+        from cooperagents.llm import LiteLLMClient
+
+        # Route through the shared retry helper (transient-error retry, dead-socket
+        # hard cap, offline pause) so a SAP blip in the judge does not crash the run.
+        resp = LiteLLMClient._completion_with_retry(
+            litellm, model=self.model, messages=[{"role": "user", "content": prompt}], temperature=0.0)
         return resp["choices"][0]["message"]["content"] or ""
 
     def judge(self, question: str, answer: str, gold: str) -> bool:

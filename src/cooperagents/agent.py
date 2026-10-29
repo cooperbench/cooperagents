@@ -65,6 +65,7 @@ class Agent:
         keep_recent: int = 24,
         max_actions_per_turn: int = 12,
         finish_nudges: int = 3,
+        format_retries: int = 3,
         toolset: ToolSet | None = None,
     ) -> None:
         self.agent_id = agent_id
@@ -82,6 +83,7 @@ class Agent:
         self.keep_recent = keep_recent
         self.max_actions_per_turn = max_actions_per_turn
         self.finish_nudges = finish_nudges
+        self.format_retries = format_retries
         self.toolset = toolset
         self.messages: list[dict[str, Any]] = []
         self.cost = 0.0
@@ -210,6 +212,19 @@ class Agent:
                     self.cost += action.cost
                     if action.thought:
                         self._add("assistant", action.thought)
+                    # Prose lapse: an unparseable reply was coerced to 'finish'.
+                    # A model mid-task often narrates its next step in prose
+                    # ("I will now parse ...") rather than emitting JSON; treating
+                    # that as a deliberate finish kills the run before it answers.
+                    # Re-prompt for the required format a bounded number of times
+                    # (still terminates: budget + step_limit both cap the loop).
+                    if action.tool == "finish" and action.args.get("_unparsed") and self.format_retries > 0:
+                        self.format_retries -= 1
+                        self._add("user",
+                                  "Your last reply was prose, not an action. Respond with EXACTLY one "
+                                  'JSON object: {"thought": "...", "tool": "<tool-name>", "args": {...}}. '
+                                  "Call a tool to continue, or the submit tool to finish — do not answer in prose.")
+                        continue
                     observation, finished = self._dispatch(action)
                     self._add("user", self._truncate(observation))
                     if finished:
@@ -228,20 +243,6 @@ class Agent:
         except Exception as e:  # noqa: BLE001 - surface any failure as a result
             status = "error"
             error = str(e)
-
-        # Fallback: a model that answers in prose terminates via a parsed
-        # 'finish' action rather than a submit tool, leaving a state env's
-        # free-text ``answer`` empty. Capture the last assistant message so the
-        # answer is not lost. No-op for code envs (no ``answer`` attribute) and
-        # when an answer was already submitted.
-        if getattr(self.env, "answer", None) == "":
-            last = next(
-                (m["content"] for m in reversed(self.messages)
-                 if m.get("role") == "assistant" and str(m.get("content", "")).strip()),
-                "",
-            )
-            if last:
-                self.env.answer = last
 
         contribution = self.env.contribution()
         return AgentResult(

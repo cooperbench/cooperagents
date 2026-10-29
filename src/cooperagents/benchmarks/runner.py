@@ -88,6 +88,7 @@ def _agent_breakdown(res: Any) -> list[dict]:
                 "agent_id": aid,
                 "role": getattr(a, "role", ""),
                 "status": getattr(a, "status", ""),
+                "error": getattr(a, "error", None),  # surface the swallowed exception, if any
                 "steps": int(getattr(a, "steps", 0) or 0),
                 "cost": round(float(getattr(a, "cost", 0.0) or 0.0), 6),
                 "submission_chars": len(text),

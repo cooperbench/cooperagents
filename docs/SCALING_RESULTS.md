@@ -38,6 +38,54 @@ WorkBench per-domain:
 Run dirs: `runs/scaling/sweep_plancraft`, `runs/scaling/sweep_browsecomp`, and the
 six `runs/scaling/sweep_workbench*` directories. All arms ran to completion; exit 0.
 
+## Post loop-fix re-run (2026-10-26/27)
+
+Fixes landed in the shared state loop and the answer-graded path:
+- **Format-retry**: a model that lapses into prose mid-task used to be coerced to a
+  `finish` and terminate before answering; it is now re-prompted for the required
+  JSON (bounded).
+- **Connectivity-aware pause**: the retry helper waits out local network loss
+  (laptop sleep / no wifi) instead of burning tasks as `steps=0` failures;
+  `JSONDecodeError` treated as transient; both answer-graded judges (`LLMJudge`,
+  `LLMRubricGrader`) routed through the retry helper.
+- **`answer_only` artifact (team-reducer fix)**: answer-graded benchmarks
+  (BrowseComp, Finance) now mark the free-text `answer` as the sole deliverable, so
+  an answer-less agent is correctly empty (the finish-veto forces a `submit_answer`)
+  and `text()` never falls back to the `state` field (visited-docs / sources).
+- `_agent_breakdown` now records each agent's `error` (was dropped).
+
+PlanCraft re-run `*_v2` (loop fix); BrowseComp/Finance re-run `*_v3` (loop fix +
+answer_only). All clean, zero-step tasks = 0. WorkBench 690 re-run in progress.
+
+| Benchmark | arm | pre-fix | post-fix | note |
+| --- | --- | --- | --- | --- |
+| PlanCraft (val.small, 110) | solo | 0.155 | 0.155 | |
+| | solo-iso | 0.191 | 0.200 | |
+| | team | 0.164 | **0.191** | loop fix lifts team (+23.5% vs solo) |
+| BrowseComp (test, 100) | solo | 0.010 | **0.110** | loop fix + answer veto: agents now answer |
+| | solo-iso | 0.010 | **0.140** | |
+| | team | 0.020 | **0.090** | reducer fix: 0.000 (bug) → 0.090 real passes |
+| Finance (open-50) | solo | — | 0.000 | keyless ddg search |
+| | solo-iso | — | 0.000 | |
+| | team | — | **0.040** | only scoring arm (2/50) |
+
+### Team-reducer bug on answer-graded benchmarks (fixed 2026-10-27)
+
+The team arm of answer-graded benchmarks submitted the **visited-document list, not
+an answer**: `StateArtifact.text()` returned `answer or state`, team members rarely
+called `submit_answer` (the finish-veto never fired because `state` was always
+non-empty), so the reduced artifact had an empty `answer` and `text()` fell back to
+the `state` field — judged NO → BrowseComp team 0.000. Root causes (workflow-mapped):
+`_harvest` unconditionally populated `state`; `is_empty()`/`text()` let `state` stand
+in for a missing answer; `lead_synthesis` then fed visited-doc lists to the lead as
+if they were answers. Fix: `StateArtifact(answer_only=True)` for BrowseComp/Finance
+makes `answer` the sole deliverable — emptiness and graded text depend on `answer`
+alone, the veto forces a `submit_answer`, and answer-less members filter out of the
+reducer. Verified live: BrowseComp team **0.000 → 0.090**. State-graded benchmarks
+(WorkBench/PlanCraft, scored on `state`) are unaffected (they do not set
+`answer_only`). Residual: gemini-flash still often fails to submit on Finance even
+with the veto (team 0.040) — a model-capability limit, not plumbing.
+
 ## Findings
 
 ### WorkBench — team gain concentrated in the email domain

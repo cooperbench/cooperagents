@@ -69,8 +69,10 @@ def parse_actions(text: str, *, cost: float = 0.0) -> list[Action]:
         # An unparseable (prose) reply becomes a single ``finish`` so the agent
         # always terminates. Keep the full text (capped) rather than a 200-char
         # slice: for state benchmarks it carries the model's final answer, which
-        # the agent loop harvests when no submit tool was called.
-        return [Action(tool="finish", thought=text[:4000], cost=cost)]
+        # the agent loop harvests when no submit tool was called. Tag it
+        # ``_unparsed`` so the loop can re-prompt for proper JSON (a prose lapse
+        # mid-task) instead of treating it as a deliberate finish.
+        return [Action(tool="finish", args={"_unparsed": True}, thought=text[:4000], cost=cost)]
     return actions
 
 
@@ -176,18 +178,44 @@ class LiteLLMClient:
         abandoned and a ``Timeout`` is raised into the retry, which reissues on a
         fresh connection. Mirrors the mini-swe worker's guard. Only transient
         classes retry; 4xx/auth errors raise immediately.
+
+        Local connectivity loss (laptop asleep, no wifi, moved out of range) is
+        handled separately: when a transient error coincides with the box being
+        OFFLINE, the call PAUSES — polling for the network to return — instead of
+        spending the retry budget and failing the task. The run simply stalls on
+        the in-flight call and continues on reconnect, so a sleep/disconnect does
+        not record spurious ``steps=0`` failures. A genuine provider outage (box
+        online, API erroring) still fails fast via the normal attempt budget. A
+        generous offline cap bounds a box that never comes back.
         """
         import queue as _q
+        import socket
         import threading as _t
         import time
 
         hard_cap_s = float(kwargs.pop("_hard_cap_s", 240.0))
+        offline_cap_s = float(kwargs.pop("_offline_cap_s", 6 * 3600.0))
         names = ("ServiceUnavailableError", "RateLimitError", "APIConnectionError", "Timeout", "InternalServerError")
         retryable = tuple(
             c for c in (getattr(litellm.exceptions, n, None) for n in names)
             if isinstance(c, type) and issubclass(c, BaseException)
         )
-        transient: tuple[type[BaseException], ...] = (*retryable, TimeoutError)
+        # json.JSONDecodeError: the SAP provider's deployment-discovery / response
+        # parsing transiently returns an empty body ("Expecting value: line 1
+        # column 1"); a reissue on a fresh connection clears it. Treat as transient.
+        transient: tuple[type[BaseException], ...] = (*retryable, TimeoutError, json.JSONDecodeError)
+
+        def _online() -> bool:
+            # The box has a route to the internet if a quick TCP connect to any
+            # well-known endpoint succeeds. Distinguishes "no local network"
+            # (sleep/no-wifi) from "provider erroring while we are online".
+            for host, port in (("1.1.1.1", 443), ("8.8.8.8", 53)):
+                try:
+                    socket.create_connection((host, port), timeout=3).close()
+                    return True
+                except OSError:
+                    continue
+            return False
 
         def _call_once() -> Any:
             box: _q.Queue = _q.Queue(maxsize=1)
@@ -207,14 +235,26 @@ class LiteLLMClient:
                 raise val
             return val
 
-        for attempt in range(6):
+        attempt = 0
+        while True:
             try:
                 return _call_once()
             except transient:
-                if attempt == 5:
+                # Offline (laptop asleep / no wifi / moved): pause and wait for the
+                # network, WITHOUT consuming the retry budget, so the run resumes on
+                # reconnect instead of failing the task. Bounded by offline_cap_s.
+                if not _online():
+                    waited = 0.0
+                    while not _online():
+                        if waited >= offline_cap_s:
+                            raise
+                        time.sleep(15)
+                        waited += 15
+                    continue  # network back — retry without counting this attempt
+                attempt += 1
+                if attempt >= 6:
                     raise
-                time.sleep(min(2 ** attempt * 2, 60))  # 2,4,8,16,32s
-        raise RuntimeError("unreachable")  # pragma: no cover
+                time.sleep(min(2 ** (attempt - 1) * 2, 60))  # 2,4,8,16,32s
 
     def decide(self, *, agent_id: str, role: str, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> Action:
         text, cost = self._complete(messages, tools)

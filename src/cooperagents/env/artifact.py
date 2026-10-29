@@ -76,20 +76,38 @@ class StateArtifact(Artifact):
     Holds whichever task-native deliverable a benchmark grades: a short
     ``answer`` string (BrowseComp / Finance), a serialized final ``state``
     (WorkBench DB snapshot), and/or an action ``trajectory`` (PlanCraft).
+
+    ``answer_only`` marks an ANSWER-graded benchmark: the ``answer`` is the sole
+    deliverable, and ``state`` / ``trajectory`` are diagnostic only. Without it,
+    an answer-less agent's ``state`` (e.g. a ``"visited: ..."`` doc list) both
+    defeats the empty-finish veto (``is_empty`` never True) and leaks into the
+    graded ``text()``. With it, emptiness and the graded text depend on ``answer``
+    alone, so the veto forces a ``submit_answer`` and the grader sees the answer.
     """
 
     answer: str = ""
     state: str = ""
     trajectory: str = ""
+    answer_only: bool = False
 
     def is_empty(self) -> bool:
+        if self.answer_only:
+            return not self.answer.strip()
         return not (self.answer.strip() or self.state.strip() or self.trajectory.strip())
 
     def text(self) -> str:
+        if self.answer_only:
+            return self.answer
         return self.answer or self.state or self.trajectory
 
     @property
     def empty_hint(self) -> str:
+        if self.answer_only:
+            return (
+                "You have NOT recorded an answer yet. You MUST call the submit_answer tool with "
+                "your final answer (args: {answer, sources}) before finishing — a prose reply or a "
+                "finish without submit_answer does not count as an answer."
+            )
         return "You have not submitted an answer yet. Produce your result, then finish."
 
 
