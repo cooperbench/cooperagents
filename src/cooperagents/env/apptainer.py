@@ -19,6 +19,8 @@ from cooperagents.env.limited_process import run_limited
 
 
 class ApptainerEnv(Environment):
+    restore_metrics: dict
+
     def __init__(
         self,
         image: str,

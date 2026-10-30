@@ -112,14 +112,14 @@ class ImageBase:
         values = [((os.environ if environment is None else environment).get(k)) for k in _HANDOFF_KEYS]
         if all(v is None for v in values):
             return None
-        if any(v is None for v in values):
+        descriptor_text, filename, checksum = values
+        if descriptor_text is None or filename is None or checksum is None:
             raise ValueError("incomplete shared image capability; no fallback")
-        descriptor, filename, checksum = values
         proof_file = Path(filename)
         if proof_file.is_symlink() or proof_file.stat().st_mode & 0o222 or sha256(proof_file) != checksum:
             raise ValueError("shared image proof identity mismatch")
         proof = json.loads(proof_file.read_bytes())
-        descriptor = int(descriptor)
+        descriptor = int(descriptor_text)
         _verify_handoff(descriptor, proof, expected_image)
         return cls(os.dup(descriptor), proof)
 
