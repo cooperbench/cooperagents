@@ -5,21 +5,12 @@ import json
 from pathlib import Path
 
 root = Path(__file__).resolve().parents[1] / "src/cooperagents"
-names = [
-    "checkpoint.py",
-    "checkpoint_metadata.py",
-    "patching.py",
-    "env/apptainer.py",
-    "env/published_capture.py",
-    "env/capture_archives.py",
-    "env/capture_audit.py",
-    "env/capture_layers.py",
-    "env/capture_risks.py",
-    "env/published_audit.py",
-    "env/published_layers.py",
-    "env/published_holder.py",
-    "env/image_base.py",
-]
+# JSON qualifications are excluded to avoid a self-referential hash. All source
+# code contributing to capture, audit, provenance, and repair admission is bound.
+names = sorted(
+    p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file() and p.suffix in {".py", ".yaml"} and "__pycache__" not in p.parts
+)
+
 capture = ["harness.py", "workers/mini_swe_worker.py", "vendor/mini_swe/models/litellm_model.py"]
 
 

@@ -173,7 +173,12 @@ def test_capture_failure_removes_staging_and_never_publishes(tmp_path, monkeypat
     env = SimpleNamespace(root=root, _lock=threading.RLock(), _closed=False)
     destination = tmp_path / "checkpoint"
     with pytest.raises(ValueError, match="source changed"):
-        published_capture.save(env, destination, metadata={"boundary": "repair_agent_start"}, repair_input=object())
+        published_capture.save(
+            env,
+            destination,
+            metadata={"boundary": "repair_agent_start", "attempt": 1, "task": "repair"},
+            repair_input=SimpleNamespace(original_task="repair", pending_messages={"integrator1": []}),
+        )
     assert not (destination / "manifest.json").exists()
     assert not list((tmp_path / "publications").iterdir())
     assert json.loads((destination / "capture-failure.json").read_text())["complete"] is False
@@ -200,3 +205,22 @@ def test_direct_profile_checks_training_selection_hash():
     sources = {**direct_qualification()["capture_sources"], "training_selection.py": "0" * 64}
     with pytest.raises(PublicationError, match="transitive source difference"):
         validate_capture(sources, "captured-direct-v3-v1")
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"boundary": "repair_agent_start", "task": "repair"},
+        {"boundary": "repair_agent_start", "attempt": 2, "task": "repair"},
+        {"boundary": "repair_agent_start", "attempt": 1, "task": "different"},
+    ],
+)
+def test_capture_rejects_inputs_the_repair_api_cannot_consume(tmp_path, metadata):
+    from types import SimpleNamespace
+
+    from cooperagents.env.published_capture import save
+
+    inputs = SimpleNamespace(original_task="repair", pending_messages={"integrator1": []})
+    with pytest.raises(ValueError, match="first-repair task metadata"):
+        save(SimpleNamespace(), tmp_path / "snapshot", metadata=metadata, repair_input=inputs)
+    assert not (tmp_path / "snapshot").exists()

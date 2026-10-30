@@ -109,7 +109,7 @@ def main():
 
                 os.environ["COOPER_REPAIR_BASE_CHANNEL"] = str(channel.path)
                 probe_official_repair.COMMAND = REPAIR
-                execute(reference, args.scratch, args.output / "official.json")
+                execute(reference, args.scratch, args.output / "official.json", source=destination)
         result = env.execute(REPAIR, timeout=180)
         (args.output / "live-command.json").write_text(json.dumps({"stdout": result.stdout, "exit_code": result.exit_code}, indent=2))
         if result.exit_code:

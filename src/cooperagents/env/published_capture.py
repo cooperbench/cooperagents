@@ -155,6 +155,10 @@ def save(env, destination: Path, *, metadata: dict, repair_input, trace=None) ->
     validate_reader()
     if metadata.get("boundary") != "repair_agent_start" or repair_input is None:
         raise ValueError("direct V3 requires repair_agent_start and embedded repair input")
+    if metadata.get("attempt") != 1 or metadata.get("task") != repair_input.original_task:
+        raise ValueError("direct V3 requires matching first-repair task metadata")
+    if repair_input.pending_messages is None or "integrator1" not in repair_input.pending_messages:
+        raise ValueError("direct V3 requires saved repair inboxes")
     if getattr(env, "_restore_cleanup", None) is not None:
         raise ValueError("capture of resumed overlay environments is not yet supported")
     with env._lock:
@@ -198,6 +202,9 @@ def _save(env, destination, metadata, repair_input, trace, staging):
     if {k: v["stdout"] for k, v in git.items()} != {k: v["stdout"] for k, v in git_state(env).items()}:
         raise ValueError("Git state changed during capture")
     patch = _metadata(env, bundle / "checkpoint", destination, metadata, repair_input, git, layers.pop("runtime_mounts"), image_hash)
+    from cooperagents.repair import load_repair_input
+
+    load_repair_input(bundle / "checkpoint")
     key = sha256(bundle / "checkpoint/manifest.json")
     from cooperagents.env.capture_risks import assess
 

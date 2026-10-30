@@ -11,6 +11,8 @@ export COOPER_PUBLICATION_ROOT="${COOPER_PUBLICATION_ROOT:-/scr/$USER/cooperagen
 export APPTAINER_CACHEDIR="$COOPER_SCRATCH/cache"
 export APPTAINER_TMPDIR="$COOPER_SCRATCH/build"
 mkdir -p "$COOPER_SCRATCH" "$APPTAINER_TMPDIR"
+chgrp "$(id -g)" "$COOPER_SCRATCH"
+chmod 700 "$COOPER_SCRATCH"
 cd "$COOPER_CODE"
 python3 -m venv "$COOPER_SCRATCH/venv"
 "$COOPER_SCRATCH/venv/bin/pip" install -q 'litellm==1.99.0' 'openai==2.54.0' rich tenacity jinja2 pydantic pyyaml modal redis python-dotenv platformdirs docker
