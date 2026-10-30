@@ -16,7 +16,7 @@ from pathlib import Path
 
 
 class ImageChannel:
-    def __init__(self, descriptor: int, proof: dict, directory: Path) -> None:
+    def __init__(self, descriptor: int, proof: dict[str, object], directory: Path) -> None:
         self._proof = json.dumps(proof).encode()
         if len(self._proof) > 1024 * 1024:
             raise ValueError("image proof exceeds bounded transfer size")

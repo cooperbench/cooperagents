@@ -19,7 +19,7 @@ from cooperagents.checkpoint import remove_tree, sha256
 class ImageBase:
     """Own a sealed descriptor, not a cached writable checkpoint or container."""
 
-    def __init__(self, descriptor: int, proof: dict) -> None:
+    def __init__(self, descriptor: int, proof: dict[str, object]) -> None:
         self.descriptor, self.proof = descriptor, proof
 
     @classmethod
@@ -209,7 +209,7 @@ class ImageHandoff:
 _HANDOFF_KEYS = ("COOPER_REPAIR_BASE_FD", "COOPER_REPAIR_BASE_PROOF", "COOPER_REPAIR_BASE_PROOF_SHA256")
 
 
-def _verify_handoff(descriptor: int, proof: dict, expected_image: str) -> None:
+def _verify_handoff(descriptor: int, proof: dict[str, object], expected_image: str) -> None:
     from cooperagents.published_profiles import qualification_identity
 
     st = os.fstat(descriptor)

@@ -36,6 +36,22 @@ def execute(row, scratch, output):
     calls = []
 
     def complete(request):
+        with output.with_suffix(".requests.jsonl").open("a") as stream:
+            stream.write(json.dumps(dict(purpose=request.purpose, messages=request.messages[-2:]), default=str) + "\n")
+        if request.purpose == "summary":
+            return ModelResponse(
+                choices=[
+                    dict(
+                        index=0,
+                        finish_reason="stop",
+                        message=dict(
+                            role="assistant",
+                            content="Continue the repair from the captured repository state. Resolve merge conflicts, commit the result, then submit.",
+                        ),
+                    )
+                ],
+                usage=dict(prompt_tokens=100, completion_tokens=20, total_tokens=120),
+            )
         if len(calls) >= 3:
             raise RuntimeError("scripted policy exceeded bounded smoke; inspect gate output")
         command = COMMAND if not calls else "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
