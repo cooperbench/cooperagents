@@ -24,12 +24,35 @@ from cooperagents.env.image_channel import ImageChannel
 from cooperagents.published import load_publications
 from cooperagents.repair import run_repair_checkpoint
 
-COMMAND = (
-    "set -e; set -o pipefail; git diff --name-only --diff-filter=U -z | "
-    "xargs -0 -r git checkout --ours --; git add -A && "
-    "git -c user.name=qualification -c user.email=qualification@example.invalid "
-    "commit --allow-empty -qm 'resolve checkpoint conflicts' && git status --porcelain"
-)
+COMMAND = r"""set -e
+python3 - <<'REPAIR'
+import os, re, subprocess
+from pathlib import Path
+pattern = re.compile(rb"^<<<<<<<[^\n]*\n(.*?)^=======[^\n]*\n.*?^>>>>>>>[^\n]*(?:\n|$)", re.M | re.S)
+count = 0
+for name in subprocess.check_output(["git", "ls-files", "-z"]).split(b"\0"):
+    if not name:
+        continue
+    path = Path(os.fsdecode(name))
+    if path.is_symlink() or not path.is_file():
+        continue
+    original = path.read_bytes()
+    if b"\0" in original:
+        continue
+    replaced, hits = pattern.subn(lambda m: re.split(rb"^\|{7}[^\n]*\n", m[1], flags=re.M)[0], original)
+    if hits:
+        if re.search(rb"^(?:<{7}|>{7}|={7})(?: |$)", replaced, re.M):
+            raise RuntimeError("unsupported remaining conflict in " + str(path))
+        path.write_bytes(replaced)
+        count += hits
+print("CONFLICTS_RESOLVED", count)
+REPAIR
+python3 -m compileall -q .
+git diff --check
+git add -A
+git -c user.name=qualification -c user.email=qualification@example.invalid commit --allow-empty -qm 'resolve checkpoint conflicts'
+git status --porcelain
+"""
 
 
 def execute(row, scratch, output):
