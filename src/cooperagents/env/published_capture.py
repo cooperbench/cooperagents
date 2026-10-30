@@ -267,6 +267,10 @@ def _save(env, destination, metadata, repair_input, trace, staging):
 
         restored = restore_environment(reference, candidate / "checkpoint", scratch=env.root.parent, image_base=base)
         restored.cleanup()
+        # Close owned resources before publishing the completion marker.
+        if owned:
+            owned = False
+            base.close()
         final = output / key
         if final.exists():
             raise FileExistsError("capture publication already exists")

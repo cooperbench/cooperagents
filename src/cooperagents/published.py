@@ -253,6 +253,8 @@ def captured_publication(checkpoint: Path) -> PublishedCheckpoint:
     This is identity admission only. Full payload authentication happens at restore.
     """
     from cooperagents.checkpoint_metadata import checkpoint_metadata
+    if (checkpoint / "capture-failure.json").exists():
+        raise PublicationError("failed capture cannot be admitted")
     locator = checkpoint.with_name(checkpoint.name + '.publication.json')
     if locator.is_symlink():
         raise PublicationError('capture locator is a symlink')

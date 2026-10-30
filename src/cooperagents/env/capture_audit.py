@@ -22,8 +22,6 @@ def compare(expected: dict, actual: dict) -> None:
             a, b = row.get(key), observed.get(key)
             if key == "xattrs":
                 b = {k: v for k, v in b.items() if not k.startswith("user.overlay.")}
-            if key == "mtime_ns" and abs(a - b) < 1000:
-                continue
             if a != b:
                 raise PublicationError(f"capture composition mismatch: {name}: {key}")
 

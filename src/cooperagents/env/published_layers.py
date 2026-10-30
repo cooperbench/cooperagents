@@ -52,8 +52,12 @@ def extract_layer(archive: Path, destination: Path, *, preserve_link_mtime: bool
             for key, value in member.pax_headers.items():
                 if key.startswith("SCHILY.xattr."):
                     os.setxattr(path, key.removeprefix("SCHILY.xattr."), value.encode("utf-8", "surrogateescape"), follow_symlinks=False)
-            if preserve_link_mtime and member.issym():
-                os.utime(path, ns=(int(float(member.mtime) * 1_000_000_000),) * 2, follow_symlinks=False)
+            if preserve_link_mtime:
+                try:
+                    stamp = int(member.pax_headers["COOPER.mtime_ns"])
+                except (KeyError, ValueError) as exc:
+                    raise PublicationError("direct layer requires exact mtime") from exc
+                os.utime(path, ns=(stamp, stamp), follow_symlinks=False)
 
 
 def private_links(upper: Path, groups: list, repo: str) -> None:

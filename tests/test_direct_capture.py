@@ -224,3 +224,33 @@ def test_capture_rejects_inputs_the_repair_api_cannot_consume(tmp_path, metadata
     with pytest.raises(ValueError, match="first-repair task metadata"):
         save(SimpleNamespace(), tmp_path / "snapshot", metadata=metadata, repair_input=inputs)
     assert not (tmp_path / "snapshot").exists()
+
+
+def test_capture_preserves_exact_file_and_link_mtime(tmp_path, monkeypatch):
+    import os
+
+    from cooperagents.env.capture_archives import archive
+    from cooperagents.env.published_audit import inventory
+    from cooperagents.env.published_layers import extract_layer
+
+    if not hasattr(os, "listxattr"):
+        monkeypatch.setattr("cooperagents.env.published_audit._xattrs", lambda _: {})
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "input.py").write_text("value=1\n")
+    (source / "alias").symlink_to("input.py")
+    stamp = 1712345678123456789
+    for path in [source, source / "input.py", source / "alias"]:
+        os.utime(path, ns=(stamp, stamp), follow_symlinks=False)
+    archive(source, tmp_path / "layer.tar", inventory(source))
+    extract_layer(tmp_path / "layer.tar", tmp_path / "restored", preserve_link_mtime=True)
+    for name in [".", "input.py", "alias"]:
+        assert (tmp_path / "restored" / name).lstat().st_mtime_ns == stamp
+
+
+def test_failed_capture_is_never_admitted(tmp_path):
+    from cooperagents.published import PublicationError, captured_publication
+
+    (tmp_path / "capture-failure.json").write_text('{"complete": false}')
+    with pytest.raises(PublicationError, match="failed capture"):
+        captured_publication(tmp_path)

@@ -47,6 +47,7 @@ def archive(source: Path, destination: Path, index: dict, names: set[str] | None
         for name, row in rows.items():
             path = source / name
             member = stream.gettarinfo(str(path), arcname=name)
+            member.pax_headers["COOPER.mtime_ns"] = str(row["mtime_ns"])
             member.pax_headers.update(
                 {"SCHILY.xattr." + k: bytes.fromhex(v).decode("utf-8", "surrogateescape") for k, v in row["xattrs"].items()}
             )
