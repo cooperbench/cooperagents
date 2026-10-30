@@ -197,6 +197,7 @@ def run_eval(
     force: bool = False,
     use_uv: bool = True,
     dry_run: bool = False,
+    shared_image: tuple[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str] | list[str]:
     """Invoke CooperBench's evaluator on previously-written outputs.
 
@@ -204,11 +205,25 @@ def run_eval(
     by default, so its own environment/deps are used).  ``dry_run`` returns
     the argv without executing — used by tests that have no Docker.
     """
+    if shared_image is not None and backend != "apptainer":
+        raise ValueError("shared image capability requires the Apptainer evaluator")
     cb = find_cooperbench(str(cooperbench_dir) if cooperbench_dir else None)
     if backend == "apptainer":
-        cmd = [sys.executable, "-m", "cooperagents.eval.apptainer", "--run", run_name,
-               "--logs", str(Path(logs_dir).resolve()), "--dataset", str(cb / "dataset"),
-               "--concurrency", str(concurrency)]
+        cmd = [
+            sys.executable,
+            "-m",
+            "cooperagents.eval.apptainer",
+            "--run",
+            run_name,
+            "--logs",
+            str(Path(logs_dir).resolve()),
+            "--dataset",
+            str(cb / "dataset"),
+            "--concurrency",
+            str(concurrency),
+        ]
+        if shared_image is not None:
+            cmd += ["--shared-image-path", shared_image[0], "--shared-image-sha256", shared_image[1]]
         if dry_run:
             return cmd
         return subprocess.run(cmd, capture_output=True, text=True)

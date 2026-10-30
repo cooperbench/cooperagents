@@ -50,6 +50,16 @@ def read_ready(descriptor: int, timeout: float) -> dict:
 
 class MountHolder:
     def __init__(self, reference: PublishedCheckpoint, scratch: Path, base: ImageBase) -> None:
+        self._initialize(dict(reference=reference.model_dump()), scratch, base, reference.id)
+
+    @classmethod
+    def for_image(cls, image: Path, checksum: str, scratch: Path, base: ImageBase) -> MountHolder:
+        base.validate(checksum)
+        holder = cls.__new__(cls)
+        holder._initialize(dict(operation="clean-image", image=str(image), image_sha256=checksum), scratch, base, checksum)
+        return holder
+
+    def _initialize(self, config: dict, scratch: Path, base: ImageBase, identity: str) -> None:
         scratch.mkdir(parents=True, exist_ok=True)
         self.root = Path(tempfile.mkdtemp(prefix="ca-overlay-", dir=scratch))
         os.chown(self.root, -1, os.getgid())
@@ -59,9 +69,7 @@ class MountHolder:
         self._stderr = (self.root / "holder.stderr").open("wb")
         self.process: subprocess.Popen | None = None
         control = self.root / "holder.json"
-        control.write_text(
-            json.dumps(dict(reference=reference.model_dump(), root=str(self.root), base_fd=base.descriptor, base_proof=base.proof))
-        )
+        control.write_text(json.dumps({**config, "root": str(self.root), "base_fd": base.descriptor, "base_proof": base.proof}))
         control.chmod(0o600)
         try:
             args = [sys.executable, "-m", MODULE, "--launch", str(os.getpid()), str(control)]
@@ -83,7 +91,7 @@ class MountHolder:
             failures.mkdir(mode=0o700, exist_ok=True)
             detail = (self.root / "holder.stderr").read_text(errors="replace")[-4000:]
             (failures / (self.root.name + ".json")).write_text(
-                json.dumps(dict(checkpoint_id=reference.id, error_type=type(exc).__name__, error=str(exc), stderr=detail))
+                json.dumps(dict(checkpoint_id=identity, error_type=type(exc).__name__, error=str(exc), stderr=detail))
             )
             remove_tree(self.root)
             raise
@@ -204,6 +212,9 @@ def _hold(control: Path) -> None:
     if config.get("operation") == "audit-base":
         _audit_base(config)
         return
+    if config.get("operation") == "clean-image":
+        _hold_image(config)
+        return
     reference = PublishedCheckpoint.from_dict(config["reference"])
     publication = reference.verify(purpose="difficulty")
     root = Path(config["root"])
@@ -237,6 +248,38 @@ def _hold(control: Path) -> None:
             helper.wait()
     # Exiting PID init and releasing the parent's namespace FDs tears down all
     # mounts. No fragile chain of umount calls can skip later cleanup.
+
+
+def _hold_image(config: dict) -> None:
+    """Mount the pristine authenticated image, never a repair checkpoint layer."""
+    root = Path(config["root"])
+    if root.is_symlink() or root.stat().st_uid != os.getuid() or root.stat().st_mode & 0o077:
+        raise PublicationError("invalid private evaluator root")
+    base = ImageBase(config["base_fd"], config["base_proof"])
+    base.validate(config["image_sha256"])
+    helper = _base_mount(root, base.descriptor, base.proof, config["image_sha256"])
+    try:
+        workspace = root / "protected-base/workspace"
+        if workspace.is_symlink() or not workspace.is_dir():
+            raise PublicationError("evaluator requires a real image workspace")
+        (root / "lower").mkdir()
+        (root / "upper").mkdir()
+        _command(["cp", "-a", str(workspace), str(root / "upper/workspace")])
+        _mount_overlay(root)
+        for name in ["home/agent", "tmp", "var/tmp", "patches", "cbshared"]:
+            path = root / "fs" / name
+            if path.is_symlink() or not path.resolve().is_relative_to(root / "fs"):
+                raise PublicationError("evaluator runtime path escapes image")
+            path.mkdir(parents=True, exist_ok=True)
+        print(json.dumps(dict(status="ready", operation="clean-image")), flush=True)
+        sys.stdin.buffer.read(1)
+    finally:
+        helper.terminate()
+        try:
+            helper.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            helper.kill()
+            helper.wait()
 
 
 def main() -> int:

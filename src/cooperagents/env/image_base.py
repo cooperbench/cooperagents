@@ -84,6 +84,13 @@ class ImageBase:
         finally:
             remove_tree(work)
 
+    def validate(self, expected_image: str) -> None:
+        """Validate a live borrowed capability before a fresh image mount."""
+        from cooperagents.published_profiles import validate_reader
+
+        validate_reader()
+        _verify_handoff(self.descriptor, self.proof, expected_image)
+
     def handoff(self, directory: Path) -> ImageHandoff:
         if self.descriptor < 0:
             raise ValueError("image base already closed")
@@ -159,7 +166,7 @@ def _pack_image(image: Path, work: Path) -> Path:
     fs, packed = work / "fs", work / "base.sqfs"
     subprocess.run(["apptainer", "build", "--fix-perms", "--sandbox", str(fs), str(image)], capture_output=True, check=True, timeout=1800)
     subprocess.run(
-        ["mksquashfs", str(fs), str(packed), "-noappend", "-processors", "2", "-quiet", "-comp", "zstd"],
+        ["mksquashfs", str(fs), str(packed), "-noappend", "-processors", "2", "-quiet", "-comp", "zstd", "-mem", "256M"],
         capture_output=True,
         check=True,
         timeout=1800,

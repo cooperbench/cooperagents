@@ -106,12 +106,18 @@ def _qualification() -> dict:
 
 
 def validate_runtime(profile: str) -> None:
+    qualification = _qualification()
+    if profile not in qualification["admitted_capture_profiles"]:
+        raise PublicationError("captured source profile not qualified for this reader")
+    validate_reader()
+
+
+def validate_reader() -> None:
+    """Check the reviewed code identity independently of checkpoint capture."""
     import cooperagents
 
     root = Path(cooperagents.__file__).parent
     qualification = _qualification()
-    if profile not in qualification["admitted_capture_profiles"]:
-        raise PublicationError("captured source profile not qualified for this reader")
     actual = {
         p.relative_to(root).as_posix(): file_hash(p)
         for p in root.rglob("*")
