@@ -40,3 +40,11 @@ def test_restored_constructor_reuses_execute_prefix_and_owns_lifetime(tmp_path, 
 def test_invalid_restored_metadata_cannot_install_command_prefix(tmp_path):
     with pytest.raises(ValueError):
         ApptainerEnv.from_filesystem(tmp_path, {**state(), "repo_path": "../escape"}, exec_prefix=())
+
+
+def test_overlay_environment_cannot_capture_empty_host_mountpoint(tmp_path):
+    env = ApptainerEnv.__new__(ApptainerEnv)
+    env._restore_cleanup = lambda: None
+    with pytest.raises(ValueError, match='capture'):
+        env.checkpoint(tmp_path/'invalid-checkpoint')
+    assert not (tmp_path/'invalid-checkpoint').exists()

@@ -20,7 +20,8 @@ value = dict(
     sources=sources,
     reference_revision="a434e66",
     runtime_base_revision="9d5f302",
-    qualification_note="repair-tail capture-only training_selection branch is not invoked during replay; worker matches recorded POST bytes; require regression evidence before release",
+    qualification_note=("repair-tail capture-only training_selection branch is not invoked during replay; "
+                        "worker matches recorded POST bytes; require regression evidence before release"),
 )
 (root / "reader_qualification.json").write_text(json.dumps(value, indent=2) + "\n")
 print("frozen", len(sources), "reader source files; this command does not certify checkpoints or train")

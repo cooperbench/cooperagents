@@ -58,7 +58,7 @@ def restore_environment(
         )
         try:
             probe = MiniSweEnvAdapter(env, timeout=300).execute(
-                {"command": "python3 -c \"from pathlib import Path; assert Path('.git').exists(); print('QUALIFIED_READY')\""}
+                {"command": "test -e .git && printf 'QUALIFIED_READY\\n'"}
             )
             if probe["returncode"] != 0 or "QUALIFIED_READY" not in probe["output"]:
                 raise PublicationError("published repair command probe failed")

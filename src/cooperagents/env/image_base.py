@@ -74,6 +74,7 @@ class ImageBase:
                 )
             )
             proof["audit"] = _audit_base(config, descriptor)
+            proof["preparation_seconds"] = time.monotonic() - started
             return cls(descriptor, proof)
         except BaseException:
             if descriptor >= 0:
@@ -109,6 +110,20 @@ class ImageBase:
 
     @classmethod
     def from_environment(cls, expected_image: str, environment: Mapping[str, str] | None = None) -> ImageBase | None:
+        settings = os.environ if environment is None else environment
+        channel = settings.get("COOPER_REPAIR_BASE_CHANNEL")
+        if channel is not None:
+            if any(settings.get(key) is not None for key in _HANDOFF_KEYS):
+                raise ValueError("ambiguous image capability transport")
+            from cooperagents.env.image_channel import receive_image
+
+            descriptor, proof = receive_image(channel)
+            try:
+                _verify_handoff(descriptor, proof, expected_image)
+                return cls(descriptor, proof)
+            except BaseException:
+                os.close(descriptor)
+                raise
         values = [((os.environ if environment is None else environment).get(k)) for k in _HANDOFF_KEYS]
         if all(v is None for v in values):
             return None

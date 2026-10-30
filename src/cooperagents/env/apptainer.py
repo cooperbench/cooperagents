@@ -359,6 +359,8 @@ class ApptainerEnv(Environment):
         return cached_base(scratch / ".checkpoint-bases", expected_hash, build)
 
     def checkpoint(self, destination: Path) -> dict:
+        if getattr(self, "_restore_cleanup", None) is not None:
+            raise ValueError("Overlay restore environments do not support capture")
         from cooperagents.checkpoint import save_tree_delta, sha256
 
         with self._lock:
