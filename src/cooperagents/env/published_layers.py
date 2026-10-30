@@ -129,7 +129,7 @@ def prepare_mounts(publication: VerifiedPublication, root: Path) -> None:
     if len(records) != len(mounts):
         raise PublicationError("prepared mount count mismatch")
     for i, (record, mount) in enumerate(zip(records, mounts, strict=True)):
-        _prepared_mount(publication.root, root, i, record, mount)
+        _prepared_mount(publication.root, root, i, record, mount, direct=publication.receipt.get("producer") == "direct-capture-v1")
 
 
 def _mount_targets(mounts: list) -> None:
@@ -142,7 +142,7 @@ def _mount_targets(mounts: list) -> None:
         raise PublicationError("unsupported mount base/access")
 
 
-def _prepared_mount(bundle: Path, root: Path, i: int, row: dict, mount: dict) -> None:
+def _prepared_mount(bundle: Path, root: Path, i: int, row: dict, mount: dict, *, direct: bool = False) -> None:
     keys = {"target", "readonly", "archive", "archive_sha256", "archive_bytes", "tree", "tree_sha256"}
     if set(row) != keys or row["target"] != mount["target"] or type(row["readonly"]) is not bool or row["readonly"] != mount["readonly"]:
         raise PublicationError("prepared mount identity mismatch")
@@ -154,4 +154,4 @@ def _prepared_mount(bundle: Path, root: Path, i: int, row: dict, mount: dict) ->
     archive = private_archive(source, root / f"prepared-mount-{i}.tar", row["archive_sha256"])
     if sha256(bundle / row["tree"]) != row["tree_sha256"]:
         raise PublicationError("prepared mount tree identity mismatch")
-    extract_layer(archive, root / f"mount-{i}")
+    (extract_layer if direct else extract_tree)(archive, root / f"mount-{i}")

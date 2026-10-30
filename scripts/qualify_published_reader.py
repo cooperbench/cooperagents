@@ -11,7 +11,7 @@ root = Path(__file__).resolve().parents[1] / "src/cooperagents"
 sources = {
     p.relative_to(root).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
     for p in sorted(root.rglob("*"))
-    if p.is_file() and p.suffix in {".py", ".yaml"} and "__pycache__" not in p.parts
+    if p.is_file() and (p.suffix in {".py", ".yaml"} or p.name == "direct_capture_qualification.json") and "__pycache__" not in p.parts
 }
 value = dict(
     schema=1,

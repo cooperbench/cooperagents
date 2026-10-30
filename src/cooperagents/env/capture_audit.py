@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -33,7 +34,11 @@ def hold(config: dict) -> None:
 
     root = Path(config["root"])
     bundle = Path(config["bundle"])
+    if root.is_symlink() or root.stat().st_uid != os.getuid() or root.stat().st_mode & 0o077:
+        raise PublicationError("invalid private capture audit root")
     receipt = json.loads((bundle / "receipt.json").read_bytes())
+    if config["base_proof"].get("runtime_qualification") != receipt["runtime_qualification"]:
+        raise PublicationError("capture base runtime qualification mismatch")
     state = json.loads((bundle / "checkpoint/state.json").read_bytes())
     from cooperagents.env.published_capture import _reference
 

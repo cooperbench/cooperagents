@@ -79,7 +79,13 @@ def test_repair_capture_dispatch_preserves_worker_capture(tmp_path):
             return "patch"
 
     assert (
-        save_checkpoint(DirectEnvironment(), tmp_path / "capture", metadata={"boundary": "repair_agent_start"}, repair_input="input")
+        save_checkpoint(
+            DirectEnvironment(),
+            tmp_path / "capture",
+            metadata={"boundary": "repair_agent_start"},
+            repair_input="input",
+            capture_format="v3",
+        )
         == "patch"
     )
     with pytest.raises(ValueError, match="mutate"):
@@ -88,6 +94,7 @@ def test_repair_capture_dispatch_preserves_worker_capture(tmp_path):
             tmp_path / "capture",
             metadata={"boundary": "repair_agent_start"},
             repair_input="input",
+            capture_format="v3",
             collect_patch=lambda: None,
         )
 
@@ -138,3 +145,28 @@ def test_composition_audit_detects_semantic_changes(tmp_path):
     changed["entries"]["file"]["mode"] = 0
     with pytest.raises(PublicationError, match="mode"):
         compare(expected, changed)
+
+
+def test_capture_failure_removes_staging_and_never_publishes(tmp_path, monkeypatch):
+    import threading
+    from types import SimpleNamespace
+
+    from cooperagents.env import published_capture
+
+    monkeypatch.setattr(published_capture, "validate_reader", lambda: None)
+
+    def fail(env, destination, metadata, repair_input, trace, staging):
+        (staging / "partial.tar").write_bytes(b"partial")
+        staging.chmod(0o500)
+        raise ValueError("source changed")
+
+    monkeypatch.setattr(published_capture, "_save", fail)
+    root = tmp_path / "sandbox"
+    root.mkdir()
+    env = SimpleNamespace(root=root, _lock=threading.RLock(), _closed=False)
+    destination = tmp_path / "checkpoint"
+    with pytest.raises(ValueError, match="source changed"):
+        published_capture.save(env, destination, metadata={"boundary": "repair_agent_start"}, repair_input=object())
+    assert not (destination / "manifest.json").exists()
+    assert not list((tmp_path / "publications").iterdir())
+    assert json.loads((destination / "capture-failure.json").read_text())["complete"] is False

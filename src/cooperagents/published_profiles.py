@@ -72,7 +72,7 @@ CAPTURED = {
 
 def validate_producer(receipt: dict, fmt: str) -> None:
     if receipt.get("producer") == "direct-capture-v1":
-        if fmt != "repair-overlay-v3" or receipt.get("producer_identity") != direct_qualification()["producer_identity"]:
+        if fmt != "repair-overlay-v3" or not any(receipt.get("producer_identity") == entry["producer_identity"] for entry in direct_identities()):
             raise PublicationError("unknown direct capture producer identity")
         return
     expected = PRODUCERS.get(fmt)
@@ -84,7 +84,10 @@ def validate_capture(captured: dict[str, str], profile: str) -> None:
     import cooperagents
 
     root = Path(cooperagents.__file__).parent
-    expected = (direct_qualification()["capture_sources"] if profile == "captured-direct-v3-v1" else CAPTURED.get(profile))
+    expected = CAPTURED.get(profile)
+    if profile == "captured-direct-v3-v1":
+        expected = next((entry["capture_sources"] for entry in direct_identities()
+                         if all(captured.get(n) == h for n, h in entry["capture_sources"].items())), None)
     if expected is None or any(captured.get(n) != h for n, h in expected.items()):
         raise PublicationError("unknown captured source profile")
     validate_runtime(profile)
@@ -125,15 +128,15 @@ def validate_reader() -> None:
     actual = {
         p.relative_to(root).as_posix(): file_hash(p)
         for p in root.rglob("*")
-        if p.is_file() and p.suffix in {".py", ".yaml"} and "__pycache__" not in p.parts
+        if p.is_file() and (p.suffix in {".py", ".yaml"} or p.name == "direct_capture_qualification.json") and "__pycache__" not in p.parts
     }
     if actual != qualification["sources"]:
         raise PublicationError("unqualified repair runtime source identity")
 
 
 def identify_capture(captured: dict[str, str]) -> str:
-    profiles = {**CAPTURED, "captured-direct-v3-v1": direct_qualification()["capture_sources"]}
-    for profile, expected in profiles.items():
+    profiles = list(CAPTURED.items()) + [("captured-direct-v3-v1", e["capture_sources"]) for e in direct_identities()]
+    for profile, expected in profiles:
         if all(captured.get(name) == checksum for name, checksum in expected.items()):
             validate_capture(captured, profile)
             return profile
@@ -150,3 +153,23 @@ def direct_qualification() -> dict:
     if value.get("schema") != 1 or value.get("producer") != "direct-capture-v1":
         raise PublicationError("unknown direct capture qualification")
     return value
+
+
+def direct_identities() -> list[dict]:
+    current = direct_qualification()
+    return [current, *current.get("admitted", [])]
+
+
+def validate_direct_pair(receipt: dict, captured: dict) -> None:
+    if not any(receipt.get("producer_identity") == entry["producer_identity"]
+               and all(captured.get(n) == h for n, h in entry["capture_sources"].items())
+               for entry in direct_identities()):
+        raise PublicationError("direct producer/capture identity pair not reviewed")
+
+
+def validate_direct_writer() -> dict:
+    qualification = direct_qualification()
+    root = Path(__file__).parent
+    if any(file_hash(root / name) != checksum for name, checksum in qualification["producer_identity"].items()):
+        raise PublicationError("unqualified direct capture writer")
+    return qualification

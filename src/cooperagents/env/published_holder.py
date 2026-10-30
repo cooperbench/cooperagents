@@ -218,6 +218,8 @@ def _mount_overlay(root: Path) -> None:
 def _hold(control: Path) -> None:
     config = json.loads(control.read_bytes())
     if config.get("operation") == "audit-capture":
+        if Path(config["root"]) != control.parent:
+            raise PublicationError("invalid private capture control path")
         from cooperagents.env.capture_audit import hold
         hold(config)
         return

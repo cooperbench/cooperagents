@@ -28,4 +28,11 @@ def identity(names):
 
 
 value = dict(schema=1, producer="direct-capture-v1", producer_identity=identity(names), capture_sources=identity(capture))
-(root / "direct_capture_qualification.json").write_text(json.dumps(value, indent=2) + "\n")
+path = root / "direct_capture_qualification.json"
+if path.exists():
+    previous = json.loads(path.read_bytes())
+    admitted = previous.pop("admitted", [])
+    if previous != value and previous not in admitted:
+        admitted.append(previous)
+    value["admitted"] = admitted
+path.write_text(json.dumps(value, indent=2) + "\n")

@@ -129,13 +129,17 @@ def preview_patch(env: Environment) -> str:
     return result.stdout
 
 
-def save_checkpoint(env, destination: Path, *, metadata: dict, collect_patch=None, trace=None, repair_input=None) -> str:
+def save_checkpoint(env, destination: Path, *, metadata: dict, collect_patch=None, trace=None, repair_input=None, capture_format="legacy") -> str:
     """Write manifest last; a failed or partial capture never appears complete.
 
     Worker captures precede collect_patch, which may stage files or pop stashes.
     Repair captures use a temporary Git index to leave the handoff unchanged.
     """
-    if metadata.get("boundary") == "repair_agent_start" and hasattr(env, "capture_repair_checkpoint"):
+    if capture_format not in {"legacy", "v3"}:
+        raise ValueError("capture format must be legacy or v3")
+    if capture_format == "v3":
+        if metadata.get("boundary") != "repair_agent_start" or not hasattr(env, "capture_repair_checkpoint"):
+            raise ValueError("V3 capture requires an Apptainer repair boundary")
         if collect_patch is not None:
             raise ValueError("repair capture cannot mutate the working tree via collect_patch")
         return env.capture_repair_checkpoint(destination, metadata=metadata, repair_input=repair_input, trace=trace)

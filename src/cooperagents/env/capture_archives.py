@@ -11,10 +11,11 @@ import tarfile
 from pathlib import Path
 
 from cooperagents.env.published_audit import inventory
+from cooperagents.trajectory import _json_default
 
 
 def write_json(path: Path, value: dict) -> None:
-    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+    path.write_text(json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False, default=_json_default) + "\n")
 
 
 def write_index(path: Path, value: dict) -> None:

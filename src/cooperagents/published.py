@@ -200,7 +200,11 @@ def verify_publication(reference: PublishedCheckpoint) -> VerifiedPublication:
         raise PublicationError("capture provenance and metadata version disagree")
     if state["runtime"]["image_sha256"] != reference.image_sha256:
         raise PublicationError("original checkpoint image mismatch")
-    validate_capture(read_object(checkpoint / "repair-input.json")["source_hashes"], receipt["profile"])
+    captured = read_object(checkpoint / "repair-input.json")["source_hashes"]
+    if direct:
+        from cooperagents.published_profiles import validate_direct_pair
+        validate_direct_pair(receipt, captured)
+    validate_capture(captured, receipt["profile"])
     risks = read_object(root / "risks.json")
     if file_hash(root / "risks.json") != receipt["risk_sha256"] or risks.get("training_eligible") is not False:
         raise PublicationError("risk identity mismatch")

@@ -1854,7 +1854,8 @@ def run_repair_tail(env: Environment, *, spec: TeamSpec, assignments: list[Assig
                 healthy=training_selection["initial_healthy"] if training_selection is not None else False,
                 gate_checks=gate_checks,
                 **({"training_selection": training_selection} if training_selection is not None else {}),
-            ), repair_input=repair_input, trace=partial(trace, actor) if trace else None)
+            ), repair_input=repair_input, trace=partial(trace, actor) if trace else None,
+                capture_format="v3" if stop_after_repair_checkpoint and hasattr(env, "capture_repair_checkpoint") else "legacy")
             capture_seconds += time.monotonic() - capture_started
             capture_complete = True
             if stop_after_repair_checkpoint and attempt == 1:

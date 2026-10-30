@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import json
 import os
 import shutil
 import socket
@@ -160,19 +161,26 @@ def save(env, destination: Path, *, metadata: dict, repair_input, trace=None) ->
         if env._closed:
             raise RuntimeError("capture environment is closed")
         destination.mkdir(parents=True, mode=0o700, exist_ok=False)
+        output = env.root.parent / "publications"
+        output.mkdir(mode=0o700, exist_ok=True)
+        staging = Path(tempfile.mkdtemp(prefix=".capture-", dir=output))
+        os.chown(staging, -1, os.getgid())
+        staging.chmod(0o700)
         try:
-            return _save(env, destination, metadata, repair_input, trace)
+            return _save(env, destination, metadata, repair_input, trace, staging)
         except BaseException as error:
             write_json(destination / "capture-failure.json", dict(error_type=type(error).__name__, error=str(error), complete=False))
             raise
+        finally:
+            remove_tree(staging)
 
 
-def _save(env, destination, metadata, repair_input, trace):
+def _save(env, destination, metadata, repair_input, trace, staging):
     started = time.monotonic()
     image_hash = sha256(env.image)
-    from cooperagents.published_profiles import direct_qualification, validate_capture
+    from cooperagents.published_profiles import validate_capture, validate_direct_writer
 
-    qualification = direct_qualification()
+    qualification = validate_direct_writer()
     validate_capture(repair_input.source_hashes, "captured-direct-v3-v1")
     if trace:
         trace("checkpoint_start", path=str(destination), boundary=metadata["boundary"])
@@ -181,9 +189,6 @@ def _save(env, destination, metadata, repair_input, trace):
     before = {name: signatures(root) for name, root in roots.items()}
     output = env.root.parent / "publications"
     output.mkdir(mode=0o700, exist_ok=True)
-    staging = Path(tempfile.mkdtemp(prefix=".capture-", dir=output))
-    os.chown(staging, -1, os.getgid())
-    staging.chmod(0o700)
     bundle = staging / "bundle"
     bundle.mkdir()
     base_path = env._base_filesystem(env.image, env.root.parent, image_hash)
@@ -216,13 +221,16 @@ def _save(env, destination, metadata, repair_input, trace):
     if base is None:
         base = ImageBase.prepare(env.image, image_hash, env.root.parent)
         owned = True
+    published = None
     try:
         audit = MountHolder.audit_capture(bundle, env.root.parent, base)
         try:
             receipt["composition_audit"] = audit.ready
         finally:
-            audit.close()
-            remove_tree(audit.root)
+            try:
+                audit.close()
+            finally:
+                remove_tree(audit.root)
         receipt["capture_seconds_before_publication"] = time.monotonic() - started
         write_json(bundle / "receipt.json", receipt)
         write_json(
@@ -254,7 +262,12 @@ def _save(env, destination, metadata, repair_input, trace):
         final = output / key
         if final.exists():
             raise FileExistsError("capture publication already exists")
+        # Moving a directory across parents requires write permission for its .. entry.
+        # No locator is visible yet; payload files remain read-only throughout.
+        candidate.chmod(0o700)
         candidate.rename(final)
+        published = final
+        final.chmod(0o500)
         reference = _reference(final, key, env.image, image_hash)
         # Publish only small persistent metadata after the full snapshot is certified.
         for path in (final / "checkpoint").iterdir():
@@ -271,12 +284,15 @@ def _save(env, destination, metadata, repair_input, trace):
                 "checkpoint_end",
                 path=str(destination),
                 boundary=metadata["boundary"],
-                files=files(destination),
+                files=json.loads((destination / "manifest.json").read_bytes())["files"],
                 patch_source="working_tree",
             )
         return patch
     finally:
-        if owned:
-            base.close()
-        if staging.exists() and not any(staging.iterdir()):
-            staging.rmdir()
+        try:
+            if owned:
+                base.close()
+        finally:
+            if published is not None and not (destination / "manifest.json").exists():
+                remove_tree(published)
+                destination.with_name(destination.name + ".publication.json").unlink(missing_ok=True)

@@ -32,7 +32,10 @@ from cooperagents.workers import mini_swe_worker as worker
 
 
 def make_checkpoint(monkeypatch, tmp_path, *, gate=None, attempts=2, crlf=False, bus=None, generated_definition=False):
-    """Host bash replaces only Apptainer execution; restore uses the public API."""
+    """Generate legacy fixtures; host bash replaces Apptainer execution only."""
+    # These tests exercise the historical reader. Direct V3 needs a real Linux
+    # mount namespace and has its own production capture/restore probe.
+    monkeypatch.delattr(ApptainerEnv, "capture_repair_checkpoint", raising=False)
 
     def execute(env, command, *, timeout=60):
         # Preserve the runtime lock while replacing container execution with host bash.

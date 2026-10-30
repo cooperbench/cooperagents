@@ -27,6 +27,7 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     args.output.mkdir(parents=True)
+    print(json.dumps({"stage": "native_prepare"}), flush=True)
     env = ApptainerEnv.from_checkpoint(args.checkpoint, scratch=args.scratch)
     try:
         inputs = load_repair_input(args.checkpoint)
@@ -35,9 +36,15 @@ def main():
         # A new capture under the reviewed current runtime, with the historical task inputs.
         start = time.monotonic()
         destination = args.output / "before-integrator1"
+        print(json.dumps({"stage": "direct_capture"}), flush=True)
         save_checkpoint(
-            env, destination, metadata={"boundary": "repair_agent_start", "qualification": "native-reconstructed-live"}, repair_input=inputs
+            env,
+            destination,
+            metadata={"boundary": "repair_agent_start", "qualification": "native-reconstructed-live"},
+            repair_input=inputs,
+            capture_format="v3",
         )
+        print(json.dumps({"stage": "capture_complete"}), flush=True)
         elapsed = time.monotonic() - start
         reference = captured_publication(destination)
         (args.output / "capture.json").write_text(json.dumps({"capture_seconds": elapsed, "publication": reference.model_dump()}, indent=2))
