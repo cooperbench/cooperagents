@@ -12,6 +12,7 @@ import tempfile
 import time
 from collections.abc import Mapping
 from pathlib import Path
+from typing import cast
 
 from cooperagents.checkpoint import remove_tree, sha256
 
@@ -93,7 +94,7 @@ class ImageBase:
         if directory.is_symlink() or directory.stat().st_uid != os.getuid() or directory.stat().st_mode & 0o077:
             raise ValueError("image handoff requires a private owned directory")
         data = json.dumps(self.proof, sort_keys=True).encode()
-        target = directory / f"base-{self.proof['image_sha256']}-{self.proof['fd_identity'][1]}.json"
+        target = directory / f"base-{self.proof['image_sha256']}-{cast(list[int], self.proof['fd_identity'])[1]}.json"
         with tempfile.NamedTemporaryFile(dir=directory, delete=False) as stream:
             partial = Path(stream.name)
             stream.write(data)
@@ -220,5 +221,6 @@ def _verify_handoff(descriptor: int, proof: dict[str, object], expected_image: s
         raise ValueError("shared image capability is writable")
     if proof.get("reader_qualification_sha256") != qualification_identity() or proof.get("runtime_qualification") != _runtime():
         raise ValueError("shared image capability uses an unqualified reader/runtime")
-    if not proof.get("audit", {}).get("paths"):
+    audit = proof.get("audit")
+    if not isinstance(audit, dict) or not audit.get("paths"):
         raise ValueError("shared image capability lacks native filesystem qualification")
