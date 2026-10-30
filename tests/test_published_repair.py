@@ -50,7 +50,8 @@ def source(monkeypatch, tmp_path, version):
 
 
 @pytest.mark.parametrize("version", ["legacy", "v3"])
-def test_official_published_repair_commits_exports_patch_preserves_budget_and_cleans(monkeypatch, tmp_path, version):
+@pytest.mark.parametrize("require_commit", [False, True])
+def test_official_published_repair_commits_exports_patch_preserves_budget_and_cleans(monkeypatch, tmp_path, version, require_commit):
     cp, ref = source(monkeypatch, tmp_path, version)
     opened = []
     commands = []
@@ -75,7 +76,10 @@ def test_official_published_repair_commits_exports_patch_preserves_budget_and_cl
         ]
     )
 
-    def query(*args, **kwargs):
+    def query(request):
+        from cooperagents.repair_commit import COMMIT_INSTRUCTION
+
+        assert any(COMMIT_INSTRUCTION in str(message) for message in request.messages) == require_commit
         command = next(actions)
         commands.append(command)
         return completion(command)
@@ -83,7 +87,15 @@ def test_official_published_repair_commits_exports_patch_preserves_budget_and_cl
     settings = CompletionSettings(model="fixture-policy", revision="recorded", generation={"max_tokens": 4096}, timeout=30.0)
     binding = CompletionBinding(query, settings, lambda request: pytest.fail("unexpected summary"), settings)
     monkeypatch.setattr(worker.LitellmModel, "_query_inner", lambda *a, **k: pytest.fail("external model call"))
-    result = run_repair_checkpoint(cp, published=ref, purpose="difficulty", scratch=tmp_path / "scratch", run_id="test", completion=binding)
+    result = run_repair_checkpoint(
+        cp,
+        published=ref,
+        purpose="difficulty",
+        scratch=tmp_path / "scratch",
+        run_id="test",
+        completion=binding,
+        require_commit=require_commit,
+    )
     assert "fixed = 1" in result.integrated.patch
     assert result.metrics["restore_mode"] == version
     assert result.metrics["publication_sha256"] == ref.publication.sha256
@@ -91,6 +103,13 @@ def test_official_published_repair_commits_exports_patch_preserves_budget_and_cl
     assert result.metrics["budget_truncated"] is False
     assert len(commands) == 2 and not opened[0].root.exists()
     assert sha256(cp / "manifest.json") == ref.manifest_sha256
+    assert result.metrics["repair_commit_required"] is require_commit
+    if require_commit:
+        evidence = result.metrics["repair_commit_evidence"]
+        assert evidence["committed"] is True and evidence["clean"] is True
+        assert evidence["initial_head"] != evidence["final_head"]
+    else:
+        assert result.metrics["repair_commit_evidence"] is None
 
 
 def test_publication_mismatch_or_training_purpose_never_starts_agent(monkeypatch, tmp_path):
@@ -101,3 +120,30 @@ def test_publication_mismatch_or_training_purpose_never_starts_agent(monkeypatch
             run_repair_checkpoint(cp, published=ref, scratch=tmp_path / "scratch", run_id="bad", **kwargs)
     with pytest.raises(ValueError):
         run_repair_checkpoint(cp.parent, published=ref, purpose="difficulty", scratch=tmp_path / "scratch", run_id="bad")
+
+
+@pytest.mark.parametrize("version", ["legacy", "v3"])
+def test_uncommitted_patch_is_reported_separately_from_task_score(monkeypatch, tmp_path, version):
+    cp, ref = source(monkeypatch, tmp_path, version)
+    monkeypatch.setattr(
+        "cooperagents.published_restore.restore_environment",
+        lambda reference, checkpoint, **kwargs: ApptainerEnv.from_checkpoint(cp, scratch=kwargs["scratch"]),
+    )
+    settings = CompletionSettings(model="fixture", revision="fixed", generation={"max_tokens": 4096}, timeout=30.0)
+
+    def query(request):
+        return completion("printf 'fixed = 1\\n' > a.py; echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT")
+
+    result = run_repair_checkpoint(
+        cp,
+        published=ref,
+        purpose="difficulty",
+        scratch=tmp_path / "scratch",
+        run_id="no-commit",
+        require_commit=True,
+        completion=CompletionBinding(query, settings, query, settings),
+    )
+    assert "fixed = 1" in result.integrated.patch
+    assert result.metrics["repair_commit_evidence"]["committed"] is False
+    assert result.metrics["repair_commit_evidence"]["new_commit"] is False
+    assert sha256(cp / "manifest.json") == ref.manifest_sha256

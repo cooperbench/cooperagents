@@ -19,9 +19,9 @@ from cooperagents.env.base import Environment, ExecResult
 from cooperagents.types import AgentResult, Assignment, RunResult, TeamSpec
 
 if TYPE_CHECKING:
-    from cooperagents.trajectory import Trajectory
-    from cooperagents.published import PublishedCheckpoint
     from cooperagents.env.image_base import ImageBase
+    from cooperagents.published import PublishedCheckpoint
+    from cooperagents.trajectory import Trajectory
     from cooperagents.vendor.mini_swe.agents.default import DefaultAgent
 
 
@@ -342,6 +342,7 @@ def run_repair_checkpoint(
     published: PublishedCheckpoint | None = None,
     purpose: Literal["difficulty"] | None = None,
     image_base: ImageBase | None = None,
+    require_commit: bool = False,
 ) -> RunResult:
     """Restore one independent sandbox and run only new integrator attempts.
 
@@ -355,6 +356,10 @@ def run_repair_checkpoint(
     from cooperagents.harness import _tree_health, _tree_health_behavioral, run_repair_tail
     from cooperagents.patching import strip_test_sections
     from cooperagents.workers.mini_swe_worker import BusComm, run_mini_swe_agent
+
+    if type(require_commit) is not bool:
+        raise ValueError("require_commit must be an explicit boolean")
+    from cooperagents.repair_commit import COMMIT_INSTRUCTION, evidence, head
 
     restore_requested = time.monotonic()
     if published is not None:
@@ -389,6 +394,9 @@ def run_repair_checkpoint(
     checks = []
     started = time.monotonic()
     try:
+        initial_head = head(env, trajectory) if require_commit else None
+        if require_commit and trajectory is not None:
+            trajectory.emit("controller", "repair_commit_protocol", version=1, instruction=COMMIT_INSTRUCTION)
 
         class GateEnv:
             def execute(self, command, *, timeout=60):
@@ -402,7 +410,7 @@ def run_repair_checkpoint(
         def run_agent(actor, task, on_start):
             return run_mini_swe_agent(
                 env,
-                task=prefix_task(spec, task),
+                task=prefix_task(spec, task + "\n\n" + COMMIT_INSTRUCTION if require_commit else task),
                 agent_id=actor,
                 role="integrator",
                 model_name=spec.model,
@@ -431,6 +439,7 @@ def run_repair_checkpoint(
             gate_checks=checks,
             first_task=inputs.original_task,
         )
+        commit_evidence = evidence(env, initial_head, trajectory) if initial_head is not None else None
         raw_patch = env.git_diff()
         complete_output(ExecResult(raw_patch, 0), "Export repair patch")
         integrated = AgentResult(
@@ -451,6 +460,8 @@ def run_repair_checkpoint(
             duration_seconds=time.monotonic() - started,
             metrics=dict(
                 repair_attempts=attempts,
+                repair_commit_required=require_commit,
+                repair_commit_evidence=commit_evidence,
                 repair_gate_checks=checks,
                 checkpoint_manifest_sha256=sha256(checkpoint / "manifest.json"),
                 saved_attempt_limit=inputs.settings.attempts,

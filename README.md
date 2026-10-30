@@ -463,3 +463,15 @@ Focused offline coverage lives in `tests/test_planning_feedback.py`, `tests/test
 and `tests/test_human_phase_prompts.py`. These tests cover pre/post-execution rejection,
 recovery into implementation, active-tool validation, handoff wording, and observation tracing.
 They do not replace live rollout evaluation or concurrent stress testing.
+
+### Repair difficulty commit protocol
+
+`run_repair_checkpoint(..., require_commit=True)` explicitly asks the repair agent to validate
+and commit its final private-workspace patch before submission. The default preserves the saved
+prompt. This opt-in requirement does not change the saved step/attempt budgets, verification gate,
+patch export, or official score. It never commits for the agent. `repair_commit_evidence` records
+initial/final HEAD, ancestry and porcelain status before cleanup; `committed` requires a new
+descendant commit and a clean workspace, and is reported independently of task correctness.
+All probes are read-only; their original output/exit codes are traced when a trajectory is supplied.
+The reader qualification pins the complete changed runtime while keeping historical producer
+and admitted capture identities unchanged.
