@@ -13,6 +13,7 @@ import gzip
 import json
 import os
 import select
+import shutil
 import signal
 import subprocess
 import sys
@@ -167,8 +168,8 @@ def _launch(parent: int, control: Path) -> None:
     os.execvp(args[0], args)
 
 
-def _command(args: list[str]) -> None:
-    subprocess.run(args, capture_output=True, text=True, check=True, timeout=120)
+def _command(args: list[str], *, timeout: int = 120) -> None:
+    subprocess.run(args, capture_output=True, text=True, check=True, timeout=timeout)
 
 
 def _base_mount(root: Path, descriptor: int, proof: dict, expected_image: str) -> subprocess.Popen:
@@ -213,6 +214,8 @@ def _hold(control: Path) -> None:
         _audit_base(config)
         return
     if config.get("operation") == "clean-image":
+        if Path(config["root"]) != control.parent:
+            raise PublicationError("invalid private evaluator control path")
         _hold_image(config)
         return
     reference = PublishedCheckpoint.from_dict(config["reference"])
@@ -264,7 +267,12 @@ def _hold_image(config: dict) -> None:
             raise PublicationError("evaluator requires a real image workspace")
         (root / "lower").mkdir()
         (root / "upper").mkdir()
-        _command(["cp", "-a", str(workspace), str(root / "upper/workspace")])
+        _command(["cp", "-a", str(workspace), str(root / "upper/workspace")], timeout=1800)
+        os.setxattr(root / "upper/workspace", "user.overlay.opaque", b"y")
+        source_root = root / "protected-base"
+        info = source_root.stat()
+        os.chown(root / "upper", info.st_uid, info.st_gid)
+        shutil.copystat(source_root, root / "upper", follow_symlinks=False)
         _mount_overlay(root)
         for name in ["home/agent", "tmp", "var/tmp", "patches", "cbshared"]:
             path = root / "fs" / name

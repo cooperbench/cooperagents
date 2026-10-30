@@ -388,11 +388,12 @@ class ApptainerEnv(Environment):
             self._closed = True
             closer = getattr(self, "_restore_cleanup", None)
             self._restore_cleanup = None
-            if closer is not None:
-                closer()
-            if not self.root.exists():
-                return
-            remove_tree(self.root)
+            try:
+                if closer is not None:
+                    closer()
+            finally:
+                if self.root.exists():
+                    remove_tree(self.root)
 
     @staticmethod
     def _base_filesystem(image: Path, scratch: Path, expected_hash: str) -> Path:

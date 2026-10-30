@@ -84,3 +84,23 @@ def test_invalid_workdir_cannot_create_holder(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="working directory"):
         ApptainerEnv.from_image_base(Path("/image.sif"), "a" * 64, scratch=tmp_path, base=Mock(), workdir="/workspace/../tmp")
     factory.assert_not_called()
+
+
+@pytest.mark.parametrize("code,output", [(127, "bash unavailable"), (0, ""), (1, "EVALUATOR_BASE_OK")])
+def test_shared_command_failure_of_base_is_infrastructure_error(code, output):
+    from cooperagents.eval.apptainer import EvalSandbox
+
+    env = Mock()
+    env.execute.side_effect = [Mock(exit_code=1, stdout="test failed"), Mock(exit_code=code, stdout=output)]
+    sandbox = EvalSandbox(env, 30, check_base=True)
+    with pytest.raises(RuntimeError, match="image base"):
+        sandbox.exec("pytest")
+
+
+def test_shared_valid_test_failure_remains_test_failure():
+    from cooperagents.eval.apptainer import EvalSandbox
+
+    env = Mock()
+    env.execute.side_effect = [Mock(exit_code=1, stdout="assertion"), Mock(exit_code=0, stdout="EVALUATOR_BASE_OK")]
+    result = EvalSandbox(env, 30, check_base=True).exec("pytest")
+    assert result.returncode == 1 and result.output == "assertion"

@@ -25,11 +25,16 @@ class EvalResult:
 
 
 class EvalSandbox:
-    def __init__(self, env: ApptainerEnv, timeout: int) -> None:
+    def __init__(self, env: ApptainerEnv, timeout: int, *, check_base: bool = False) -> None:
         self.env, self.timeout = env, timeout
+        self.check_base = check_base
 
     def exec(self, *args: str) -> EvalResult:
         result = self.env.execute(shlex.join(args), timeout=self.timeout)
+        if self.check_base:
+            health = self.env.execute("printf EVALUATOR_BASE_OK", timeout=30)
+            if health.exit_code != 0 or health.stdout != "EVALUATOR_BASE_OK":
+                raise RuntimeError("evaluator image base unavailable after command")
         return EvalResult(result.exit_code, result.stdout)
 
     def terminate(self) -> None:
@@ -42,9 +47,7 @@ class ApptainerEvalBackend:
     ) -> None:
         if (image_base is None) != (shared_image is None):
             raise ValueError("shared evaluator requires image identity and capability together")
-        if shared_image is not None and (
-            not Path(shared_image[0]).is_absolute() or not re.fullmatch(r"[0-9a-f]{64}", shared_image[1])
-        ):
+        if shared_image is not None and (not Path(shared_image[0]).is_absolute() or not re.fullmatch(r"[0-9a-f]{64}", shared_image[1])):
             raise ValueError("invalid shared evaluator image identity")
         self.images, self.scratch = images, scratch
         self.image_base, self.shared_image = image_base, shared_image
@@ -60,7 +63,7 @@ class ApptainerEvalBackend:
             if path.resolve() != Path(expected_path).resolve():
                 raise ValueError("evaluator requested a different image from shared base")
             env = ApptainerEnv.from_image_base(path, checksum, scratch=Path(self.scratch), base=self.image_base, workdir=workdir)
-        return EvalSandbox(env, timeout)
+        return EvalSandbox(env, timeout, check_base=self.image_base is not None)
 
 
 def main() -> None:
@@ -80,6 +83,8 @@ def main() -> None:
     parser.add_argument("--shared-image-path")
     parser.add_argument("--shared-image-sha256")
     args = parser.parse_args()
+    if os.environ.get("COOPER_REPAIR_BASE_FD"):
+        raise ValueError("shared evaluator requires channel transport, not inherited descriptors")
     runs = discover_runs(run_name=args.run, logs_dir=args.logs, dataset_dir=args.dataset)
     if not runs:
         raise RuntimeError("Official evaluator discovered no runs")
