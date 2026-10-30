@@ -222,6 +222,7 @@ def _save(env, destination, metadata, repair_input, trace, staging):
         base = ImageBase.prepare(env.image, image_hash, env.root.parent)
         owned = True
     published = None
+    complete = False
     try:
         audit = MountHolder.audit_capture(bundle, env.root.parent, base)
         try:
@@ -287,12 +288,14 @@ def _save(env, destination, metadata, repair_input, trace, staging):
                 files=json.loads((destination / "manifest.json").read_bytes())["files"],
                 patch_source="working_tree",
             )
+        complete = True
         return patch
     finally:
         try:
             if owned:
                 base.close()
         finally:
-            if published is not None and not (destination / "manifest.json").exists():
+            if published is not None and not complete:
+                (destination / "manifest.json").unlink(missing_ok=True)
                 remove_tree(published)
                 destination.with_name(destination.name + ".publication.json").unlink(missing_ok=True)
