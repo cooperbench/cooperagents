@@ -10,19 +10,26 @@ import argparse
 import hashlib
 import json
 import os
+import signal
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+from litellm import ModelResponse
 
 from cooperagents.completion import CompletionBinding, CompletionSettings
 from cooperagents.env.image_base import ImageBase
 from cooperagents.env.image_channel import ImageChannel
 from cooperagents.published import load_publications
 from cooperagents.repair import run_repair_checkpoint
-from litellm import ModelResponse
 
-COMMAND = "git diff --name-only --diff-filter=U -z | xargs -0 -r git checkout --ours --; git add -A && git -c user.name=qualification -c user.email=qualification@example.invalid commit --allow-empty -qm 'resolve checkpoint conflicts' && git status --porcelain"
+COMMAND = (
+    "set -e; set -o pipefail; git diff --name-only --diff-filter=U -z | "
+    "xargs -0 -r git checkout --ours --; git add -A && "
+    "git -c user.name=qualification -c user.email=qualification@example.invalid "
+    "commit --allow-empty -qm 'resolve checkpoint conflicts' && git status --porcelain"
+)
 
 
 def execute(row, scratch, output):
@@ -91,6 +98,9 @@ def execute(row, scratch, output):
 
 
 def main():
+    if os.environ.get("SLURM_JOB_NUM_NODES", "1") != "1":
+        raise ValueError("prepared image requires a single-node allocation")
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
     p = argparse.ArgumentParser()
     p.add_argument("--catalog", type=Path, required=True)
     p.add_argument("--sha256", required=True)

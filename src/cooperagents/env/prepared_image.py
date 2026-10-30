@@ -10,7 +10,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import signal
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -19,6 +21,9 @@ from cooperagents.env.image_channel import ImageChannel
 
 
 def main() -> int:
+    if os.environ.get("SLURM_JOB_NUM_NODES", "1") != "1":
+        raise ValueError("prepared image requires a single-node allocation")
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image", required=True, type=Path)
     parser.add_argument("--sha256", required=True)

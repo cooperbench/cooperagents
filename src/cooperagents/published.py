@@ -48,8 +48,7 @@ class Locator(BaseModel):
 
     @model_validator(mode="after")
     def absolute(self):
-        if not Path(self.path).is_absolute() or ".." in Path(self.path).parts:
-            raise ValueError("publication path must be absolute")
+        _absolute_path(self.path, "publication")
         return self
 
 
@@ -79,8 +78,7 @@ class PublishedCheckpoint(BaseModel):
     def identities(self):
         if self.format != FORMATS[self.version]:
             raise ValueError("version and format disagree")
-        if not Path(self.image).is_absolute() or ".." in Path(self.image).parts:
-            raise ValueError("image path must be absolute")
+        _absolute_path(self.image, "image")
         return self
 
     @property
@@ -166,11 +164,7 @@ def _receipt(root: Path, metadata: dict, reference: PublishedCheckpoint) -> dict
         raise PublicationError("publication/receipt execution profile differs")
     if file_hash(root / "target-index.json.gz") != receipt["target_inventory_sha256"]:
         raise PublicationError("target inventory identity mismatch")
-    if reference.format == V3:
-        if any(p.lstat().st_mode & 0o222 for p in [root, *root.rglob("*")]):
-            raise PublicationError("V3 publication is not sealed read-only")
-        if file_hash(root / "legacy-publication.json") != receipt["legacy_publication_sha256"]:
-            raise PublicationError("historical publication provenance mismatch")
+    _v3_receipt(root, receipt, reference)
     checks = {
         "legacy_manifest_sha256": reference.manifest_sha256,
         "image_sha256": reference.image_sha256,
@@ -184,9 +178,7 @@ def _receipt(root: Path, metadata: dict, reference: PublishedCheckpoint) -> dict
         raise PublicationError("receipt checkpoint/image identity mismatch")
     if receipt.get("training_eligible") is not False:
         raise PublicationError("unsupported publication qualification")
-    for name in ["delta", "repo"]:
-        if file_hash(root / (name + ".tar")) != receipt[name + "_sha256"]:
-            raise PublicationError("private layer identity mismatch")
+    _private_layers(root, receipt)
     return receipt
 
 
@@ -221,3 +213,22 @@ def runtime_qualification() -> dict:
         gid=os.getgid(),
         apptainer=subprocess.check_output(["apptainer", "--version"], text=True).strip(),
     )
+
+
+def _absolute_path(value: str, name: str) -> None:
+    if not Path(value).is_absolute() or ".." in Path(value).parts:
+        raise ValueError(f"{name} path must be absolute")
+
+
+def _v3_receipt(root: Path, receipt: dict, reference: PublishedCheckpoint) -> None:
+    if reference.format == V3:
+        if any(p.lstat().st_mode & 0o222 for p in [root, *root.rglob("*")]):
+            raise PublicationError("V3 publication is not sealed read-only")
+        if file_hash(root / "legacy-publication.json") != receipt["legacy_publication_sha256"]:
+            raise PublicationError("historical publication provenance mismatch")
+
+
+def _private_layers(root: Path, receipt: dict) -> None:
+    for name in ("delta", "repo"):
+        if file_hash(root / (name + ".tar")) != receipt[name + "_sha256"]:
+            raise PublicationError("private layer identity mismatch")

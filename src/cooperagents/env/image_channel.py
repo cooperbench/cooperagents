@@ -100,20 +100,29 @@ def receive_image(path: str) -> tuple[int, dict]:
             connection.settimeout(10)
             connection.connect(path)
             marker, ancillary, flags, _ = connection.recvmsg(1, socket.CMSG_SPACE(descriptors.itemsize))
-            for level, kind, data in ancillary:
-                if (level, kind) == (socket.SOL_SOCKET, socket.SCM_RIGHTS):
-                    descriptors.frombytes(data[: len(data) - len(data) % descriptors.itemsize])
-            if marker != b"I" or flags & socket.MSG_CTRUNC or len(descriptors) != 1:
-                raise ValueError("invalid image descriptor transfer")
-            os.set_inheritable(descriptors[0], False)
-            size = int.from_bytes(_read(connection, 4), "big")
-            if not 0 < size <= 1024 * 1024:
-                raise ValueError("invalid image proof length")
-            proof = json.loads(_read(connection, size))
-            if not isinstance(proof, dict):
-                raise ValueError("invalid image proof")
+            _accept_descriptor(marker, ancillary, flags, descriptors)
+            proof = _receive_proof(connection)
             return descriptors[0], proof
     except BaseException:
         for descriptor in descriptors:
             os.close(descriptor)
         raise
+
+
+def _accept_descriptor(marker, ancillary, flags, descriptors) -> None:
+    for level, kind, data in ancillary:
+        if (level, kind) == (socket.SOL_SOCKET, socket.SCM_RIGHTS):
+            descriptors.frombytes(data[: len(data) - len(data) % descriptors.itemsize])
+    if marker != b"I" or flags & socket.MSG_CTRUNC or len(descriptors) != 1:
+        raise ValueError("invalid image descriptor transfer")
+    os.set_inheritable(descriptors[0], False)
+
+
+def _receive_proof(connection: socket.socket) -> dict:
+    size = int.from_bytes(_read(connection, 4), "big")
+    if not 0 < size <= 1024 * 1024:
+        raise ValueError("invalid image proof length")
+    proof = json.loads(_read(connection, size))
+    if not isinstance(proof, dict):
+        raise ValueError("invalid image proof")
+    return proof

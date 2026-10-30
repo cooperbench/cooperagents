@@ -124,7 +124,11 @@ class ImageBase:
             except BaseException:
                 os.close(descriptor)
                 raise
-        values = [((os.environ if environment is None else environment).get(k)) for k in _HANDOFF_KEYS]
+        return cls._from_inherited(expected_image, settings)
+
+    @classmethod
+    def _from_inherited(cls, expected_image: str, settings: Mapping[str, str]) -> ImageBase | None:
+        values = [settings.get(k) for k in _HANDOFF_KEYS]
         if all(v is None for v in values):
             return None
         descriptor_text, filename, checksum = values

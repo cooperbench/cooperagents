@@ -38,10 +38,17 @@ def restore_environment(
     started = requested if requested is not None else time.monotonic()
     owned = image_base is None
     base = image_base or ImageBase.prepare(base_image or Path(reference.image), reference.image_sha256, scratch)
-    if base.proof["image_sha256"] != reference.image_sha256:
+    try:
+        if base.proof["image_sha256"] != reference.image_sha256:
+            raise PublicationError("shared image capability belongs to a different SIF")
+        return _restore_with_base(reference, checkpoint, scratch, base, started, owned)
+    except BaseException:
         if owned:
             base.close()
-        raise PublicationError("shared image capability belongs to a different SIF")
+        raise
+
+
+def _restore_with_base(reference, checkpoint, scratch, base, started, owned) -> ApptainerEnv:
     holder = None
     try:
         holder = MountHolder(reference, scratch, base)
@@ -57,11 +64,7 @@ def restore_environment(
             holder.root, holder.ready["state"], exec_prefix=holder.exec_prefix(), cleanup=close, checkpoint=checkpoint
         )
         try:
-            probe = MiniSweEnvAdapter(env, timeout=300).execute(
-                {"command": "test -e .git && printf 'QUALIFIED_READY\\n'"}
-            )
-            if probe["returncode"] != 0 or "QUALIFIED_READY" not in probe["output"]:
-                raise PublicationError("published repair command probe failed")
+            probe = _probe(env)
             env.restore_metrics = _metrics(reference, holder, base, started, owned, probe)
             return env
         except BaseException:
@@ -95,3 +98,10 @@ def _metrics(reference, holder, base, started, owned, probe) -> dict:
         training_eligible=False,
         repair_validated=False,
     )
+
+
+def _probe(env: ApptainerEnv) -> dict:
+    probe = MiniSweEnvAdapter(env, timeout=300).execute({"command": "test -e .git && printf 'QUALIFIED_READY\\n'"})
+    if probe["returncode"] != 0 or "QUALIFIED_READY" not in probe["output"]:
+        raise PublicationError("published repair command probe failed")
+    return probe
