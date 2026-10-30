@@ -72,7 +72,9 @@ CAPTURED = {
 
 def validate_producer(receipt: dict, fmt: str) -> None:
     if receipt.get("producer") == "direct-capture-v1":
-        if fmt != "repair-overlay-v3" or not any(receipt.get("producer_identity") == entry["producer_identity"] for entry in direct_identities()):
+        if fmt != "repair-overlay-v3" or not any(
+            receipt.get("producer_identity") == entry["producer_identity"] for entry in direct_identities()
+        ):
             raise PublicationError("unknown direct capture producer identity")
         return
     expected = PRODUCERS.get(fmt)

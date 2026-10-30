@@ -129,7 +129,9 @@ def preview_patch(env: Environment) -> str:
     return result.stdout
 
 
-def save_checkpoint(env, destination: Path, *, metadata: dict, collect_patch=None, trace=None, repair_input=None, capture_format="legacy") -> str:
+def save_checkpoint(
+    env, destination: Path, *, metadata: dict, collect_patch=None, trace=None, repair_input=None, capture_format="legacy"
+) -> str:
     """Write manifest last; a failed or partial capture never appears complete.
 
     Worker captures precede collect_patch, which may stage files or pop stashes.
