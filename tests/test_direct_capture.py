@@ -155,6 +155,13 @@ def test_capture_failure_removes_staging_and_never_publishes(tmp_path, monkeypat
 
     monkeypatch.setattr(published_capture, "validate_reader", lambda: None)
 
+    def local_root(scratch):
+        root = scratch / "publications"
+        root.mkdir()
+        return root
+
+    monkeypatch.setattr(published_capture, "publication_root", local_root)
+
     def fail(env, destination, metadata, repair_input, trace, staging):
         (staging / "partial.tar").write_bytes(b"partial")
         staging.chmod(0o500)
@@ -170,3 +177,26 @@ def test_capture_failure_removes_staging_and_never_publishes(tmp_path, monkeypat
     assert not (destination / "manifest.json").exists()
     assert not list((tmp_path / "publications").iterdir())
     assert json.loads((destination / "capture-failure.json").read_text())["complete"] is False
+
+
+def test_publication_root_rejects_disposable_and_shared_storage(tmp_path, monkeypatch):
+    from cooperagents.env.capture_archives import publication_root
+
+    monkeypatch.setenv("SLURM_TMPDIR", str(tmp_path))
+    monkeypatch.delenv("COOPER_PUBLICATION_ROOT", raising=False)
+    with pytest.raises(ValueError, match="disposable"):
+        publication_root(tmp_path)
+    monkeypatch.delenv("SLURM_TMPDIR")
+    monkeypatch.setattr("subprocess.check_output", lambda *args, **kwargs: "nfs4\n")
+    with pytest.raises(ValueError, match="node-local"):
+        publication_root(tmp_path)
+    assert not (tmp_path / "publications").exists()
+
+
+def test_direct_profile_checks_training_selection_hash():
+    from cooperagents.published import PublicationError
+    from cooperagents.published_profiles import direct_qualification, validate_capture
+
+    sources = {**direct_qualification()["capture_sources"], "training_selection.py": "0" * 64}
+    with pytest.raises(PublicationError, match="transitive source difference"):
+        validate_capture(sources, "captured-direct-v3-v1")

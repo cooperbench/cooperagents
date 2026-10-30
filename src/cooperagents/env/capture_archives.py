@@ -88,3 +88,26 @@ def prepared_mounts(mounts: dict[str, Path], bundle: Path) -> tuple[list, list]:
         )
         runtime.append(dict(target=target, readonly=target == "/coordination", base="empty"))
     return records, runtime
+
+
+def publication_root(scratch: Path) -> Path:
+    """Keep payloads off shared storage and out of scheduler-owned disposable scratch."""
+    import subprocess
+
+    configured = os.environ.get("COOPER_PUBLICATION_ROOT")
+    root = Path(configured) if configured else scratch / "publications"
+    if not root.is_absolute():
+        raise ValueError("publication root must be absolute")
+    temporary = os.environ.get("SLURM_TMPDIR")
+    if temporary and root.resolve().is_relative_to(Path(temporary).resolve()):
+        raise ValueError("set COOPER_PUBLICATION_ROOT outside disposable SLURM_TMPDIR")
+    existing = root
+    while not existing.exists():
+        existing = existing.parent
+    filesystem = subprocess.check_output(["findmnt", "-n", "-o", "FSTYPE", "-T", str(existing)], text=True).strip()
+    if filesystem not in {"ext4", "xfs", "btrfs", "tmpfs"}:
+        raise ValueError("publication root requires qualified node-local storage: " + filesystem)
+    root.mkdir(parents=True, mode=0o700, exist_ok=True)
+    if root.is_symlink() or root.stat().st_uid != os.getuid() or root.stat().st_mode & 0o077:
+        raise ValueError("publication root must be a private owned directory")
+    return root

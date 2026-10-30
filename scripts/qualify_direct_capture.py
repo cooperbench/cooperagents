@@ -32,7 +32,5 @@ path = root / "direct_capture_qualification.json"
 if path.exists():
     previous = json.loads(path.read_bytes())
     admitted = previous.pop("admitted", [])
-    if previous != value and previous not in admitted:
-        admitted.append(previous)
     value["admitted"] = admitted
 path.write_text(json.dumps(value, indent=2) + "\n")

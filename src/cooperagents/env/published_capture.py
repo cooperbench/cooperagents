@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from cooperagents.checkpoint import complete_output, preview_patch, remove_tree, sha256
-from cooperagents.env.capture_archives import archive, check_xattrs, prepared_mounts, signatures, write_index, write_json
+from cooperagents.env.capture_archives import archive, check_xattrs, prepared_mounts, publication_root, signatures, write_index, write_json
 from cooperagents.env.capture_layers import select_layer
 from cooperagents.env.image_base import ImageBase
 from cooperagents.env.published_audit import inventory
@@ -161,18 +161,19 @@ def save(env, destination: Path, *, metadata: dict, repair_input, trace=None) ->
         if env._closed:
             raise RuntimeError("capture environment is closed")
         destination.mkdir(parents=True, mode=0o700, exist_ok=False)
-        output = env.root.parent / "publications"
-        output.mkdir(mode=0o700, exist_ok=True)
-        staging = Path(tempfile.mkdtemp(prefix=".capture-", dir=output))
-        os.chown(staging, -1, os.getgid())
-        staging.chmod(0o700)
+        staging = None
         try:
+            output = publication_root(env.root.parent)
+            staging = Path(tempfile.mkdtemp(prefix=".capture-", dir=output))
+            os.chown(staging, -1, os.getgid())
+            staging.chmod(0o700)
             return _save(env, destination, metadata, repair_input, trace, staging)
         except BaseException as error:
             write_json(destination / "capture-failure.json", dict(error_type=type(error).__name__, error=str(error), complete=False))
             raise
         finally:
-            remove_tree(staging)
+            if staging is not None:
+                remove_tree(staging)
 
 
 def _save(env, destination, metadata, repair_input, trace, staging):
@@ -187,8 +188,7 @@ def _save(env, destination, metadata, repair_input, trace, staging):
     roots = _roots(env)
     git = git_state(env)
     before = {name: signatures(root) for name, root in roots.items()}
-    output = env.root.parent / "publications"
-    output.mkdir(mode=0o700, exist_ok=True)
+    output = staging.parent
     bundle = staging / "bundle"
     bundle.mkdir()
     base_path = env._base_filesystem(env.image, env.root.parent, image_hash)

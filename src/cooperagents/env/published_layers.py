@@ -43,7 +43,7 @@ def private_archive(source: Path, destination: Path, expected: str) -> Path:
     return destination
 
 
-def extract_layer(archive: Path, destination: Path) -> None:
+def extract_layer(archive: Path, destination: Path, *, preserve_link_mtime: bool = False) -> None:
     # Reuse upstream path/link/special-file validation before any layer is mounted.
     extract_tree(archive, destination)
     with tarfile.open(archive) as stream:
@@ -52,7 +52,7 @@ def extract_layer(archive: Path, destination: Path) -> None:
             for key, value in member.pax_headers.items():
                 if key.startswith("SCHILY.xattr."):
                     os.setxattr(path, key.removeprefix("SCHILY.xattr."), value.encode("utf-8", "surrogateescape"), follow_symlinks=False)
-            if member.issym():
+            if preserve_link_mtime and member.issym():
                 os.utime(path, ns=(int(float(member.mtime) * 1_000_000_000),) * 2, follow_symlinks=False)
 
 
@@ -94,10 +94,11 @@ def prepare_layers(publication: VerifiedPublication, root: Path) -> None:
     (root / "upper").mkdir()
     delta = private_archive(bundle / "delta.tar", root / "delta.tar", receipt["delta_sha256"])
     repo_tar = private_archive(bundle / "repo.tar", root / "repo.tar", receipt["repo_sha256"])
-    extract_layer(delta, root / "lower")
+    direct = receipt.get("producer") == "direct-capture-v1"
+    extract_layer(delta, root / "lower", preserve_link_mtime=direct)
     private = root / "upper" / repo
     private.parent.mkdir(parents=True, exist_ok=True)
-    extract_layer(repo_tar, private)
+    extract_layer(repo_tar, private, preserve_link_mtime=direct)
     os.setxattr(private, "user.overlay.opaque", b"y")
     _parents(root / "upper", receipt["repo_parent_metadata"])
     private_links(root / "upper", receipt.get("private_link_groups", []), str(repo))
@@ -154,4 +155,7 @@ def _prepared_mount(bundle: Path, root: Path, i: int, row: dict, mount: dict, *,
     archive = private_archive(source, root / f"prepared-mount-{i}.tar", row["archive_sha256"])
     if sha256(bundle / row["tree"]) != row["tree_sha256"]:
         raise PublicationError("prepared mount tree identity mismatch")
-    (extract_layer if direct else extract_tree)(archive, root / f"mount-{i}")
+    if direct:
+        extract_layer(archive, root / f"mount-{i}", preserve_link_mtime=True)
+    else:
+        extract_tree(archive, root / f"mount-{i}")

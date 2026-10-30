@@ -483,8 +483,10 @@ does not reconstruct a complete rootfs archive.
 
 The existing checkpoint directory holds small authenticated metadata. Its sibling
 `<checkpoint-name>.publication.json` locates the read-only node-local payload
-under the environment's scratch directory. Supply **node-local scratch**, retain
-it after collection, and schedule restores on the recorded node. Scratch is not
+under `COOPER_PUBLICATION_ROOT` (or stable environment scratch when unset).
+The NLP launcher sets a stable `/scr/$USER/cooperagents/publications` root.
+Disposable `SLURM_TMPDIR` and unqualified/shared filesystems are rejected. Retain
+the node-local payload after collection, and schedule restores on the recorded node. Scratch is not
 durable storage. `run_repair_checkpoint(checkpoint, purpose="difficulty", ...)`
 resolves direct locators; callers may also pass the authenticated publication
 explicitly. Existing Legacy and converted V3 references retain their reader paths.
@@ -501,5 +503,11 @@ preserves repo operations independently of other rollouts.
 Failure never publishes the persistent manifest. Temporary payloads are removed;
 `capture-failure.json` records the failure. Do not silently fall back to a different
 capture format. Retry into a new destination after resolving the cause. Maintainer
-qualification scripts freeze reviewed identities and preserve admitted earlier
-writers; they are never a runtime bypass for a mismatched checkpoint.
+qualification scripts freeze the current identity and preserve explicitly admitted
+earlier writers. Updating the current identity does not automatically admit the
+previous development build; add only reviewed releases with regression evidence
+to the allowlist in a separate reviewed change. These scripts they are never a runtime bypass for a mismatched checkpoint.
+
+A hard kill can leave orphaned node-local staging directories. Consumers require
+the completed persistent manifest plus locator and never scan staging for inputs.
+Reclaim such orphans only after confirming that their writer job has terminated.
