@@ -11,6 +11,7 @@ import subprocess
 import tempfile
 import threading
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 
 from cooperagents.env.base import Environment, ExecResult
@@ -140,6 +141,67 @@ class ApptainerEnv(Environment):
         return complete_output(result, "Export integrated patch")
 
     @classmethod
+    def from_filesystem(
+        cls, root: Path, state: dict, *, exec_prefix: tuple[str, ...] = (),
+        cleanup: Callable[[], None] | None = None, checkpoint: Path | None = None,
+    ) -> ApptainerEnv:
+        """Own an authenticated restored root and its namespace lifetime.
+
+        Authentication precedes this seam. Execution and patch operations use the
+        existing implementation; the prefix only enters the holder's namespaces.
+        """
+        repo = Path(state['repo_path'])
+        if not repo.is_absolute() or '..' in repo.parts or not re.fullmatch(r'[0-9a-f]{40}', state['base_commit']):
+            raise ValueError('Invalid restored repository/base identity')
+        if root.is_symlink() or not root.is_dir():
+            raise ValueError('Restored root must be an owned directory')
+        mounts = state['runtime'].get('mounts', [])
+        targets = [m['target'] for m in mounts]
+        if len(set(targets)) != len(targets) or any(t not in {'/cbshared', '/coordination'} for t in targets):
+            raise ValueError('Unsupported restored mount targets')
+        if any(type(m['readonly']) is not bool or m['readonly'] != (m['target'] == '/coordination') for m in mounts):
+            raise ValueError('Unsupported restored mount access')
+        env = cls.__new__(cls)
+        env.root, env.repo_path = root, str(repo)
+        env.image = Path(state['runtime']['image'])
+        env._image_sha256 = state['runtime']['image_sha256']
+        env._base_commit = state['base_commit']
+        env._checkpoint_mounts = {m['target']: root / f'mount-{i}' for i, m in enumerate(mounts)}
+        env._lock, env._closed = threading.RLock(), False
+        env._restore_cleanup = cleanup
+        env._host_env = {k: v for k, v in os.environ.items() if k in (
+            'PATH', 'LANG', 'LC_ALL', 'TMPDIR', 'APPTAINER_TMPDIR', 'APPTAINER_CACHEDIR')}
+        env._host_env['HOME'] = str(root / 'host-home')
+        try:
+            (root / 'host-home').mkdir()
+            env._argv = [*exec_prefix, 'apptainer', 'exec', '--userns', '--writable',
+                         '--containall', '--cleanenv', '--no-mount', 'hostfs,bind-paths',
+                         '--bind', '/etc/resolv.conf:/etc/resolv.conf:ro']
+            for directory, target in [('home/agent', '/home/agent'), ('tmp', '/tmp'), ('var/tmp', '/var/tmp')]:
+                env._argv += ['--home' if target == '/home/agent' else '--bind', f'{root}/fs/{directory}:{target}']
+            for target, source in env._checkpoint_mounts.items():
+                env._argv += ['--bind', f'{source}:{target}' + (':ro' if target == '/coordination' else '')]
+            env._argv += ['--pwd', '/', str(root / 'fs')]
+            env._validate_restored(state, checkpoint)
+            return env
+        except BaseException:
+            env.cleanup()
+            raise
+
+    def _validate_restored(self, state: dict, checkpoint: Path | None) -> None:
+        from cooperagents.checkpoint import complete_output, preview_patch
+        from cooperagents.env.checkpoint_checks import refresh_index
+
+        self.restore_index_refresh = refresh_index(self)
+        complete_output(self.execute(f'git cat-file -e {self._base_commit}^{{commit}}'), 'Validate original base')
+        for name, command in [('head', 'git rev-parse HEAD'), ('status', 'git status --porcelain=v1 --untracked-files=all'),
+                              ('stashes', 'git stash list')]:
+            if complete_output(self.execute('GIT_OPTIONAL_LOCKS=0 ' + command), 'Restore Git ' + name) != state['git'][name]['stdout']:
+                raise ValueError('Restored Git ' + name + ' differs from checkpoint')
+        if checkpoint is not None and preview_patch(self).encode() != (checkpoint / 'raw.patch').read_bytes():
+            raise ValueError('Restored patch differs from checkpoint')
+
+    @classmethod
     def from_checkpoint(cls, checkpoint: Path, *, scratch: Path, base_image: Path | None = None) -> ApptainerEnv:
         """Verify and restore into a fresh owned sandbox, without rebuilding a SIF."""
         from cooperagents.checkpoint import complete_output, preview_patch, restore_tree, verify_checkpoint
@@ -221,6 +283,8 @@ class ApptainerEnv(Environment):
                 env._checkpoint_mounts[mount["target"]] = source
                 env._argv += ["--bind", f"{source}:{mount['target']}" + (":ro" if mount["readonly"] else "")]
             env._argv += ["--pwd", "/", str(env.root / "fs")]
+            from cooperagents.env.checkpoint_checks import refresh_index
+            env.restore_index_refresh = refresh_index(env)
             complete_output(env.execute(f"git cat-file -e {env._base_commit}^{{commit}}"), "Validate original base")
             for name, command in (
                 ("head", "git rev-parse HEAD"),
@@ -254,6 +318,10 @@ class ApptainerEnv(Environment):
 
         with self._lock:
             self._closed = True
+            closer = getattr(self, '_restore_cleanup', None)
+            self._restore_cleanup = None
+            if closer is not None:
+                closer()
             if not self.root.exists():
                 return
             remove_tree(self.root)
