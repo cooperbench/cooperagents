@@ -195,6 +195,9 @@ def verify_publication(reference: PublishedCheckpoint) -> VerifiedPublication:
     if file_hash(checkpoint / "manifest.json") != reference.manifest_sha256:
         raise PublicationError("original checkpoint manifest mismatch")
     state = verify_checkpoint(checkpoint)
+    direct = receipt.get("producer") == "direct-capture-v1"
+    if direct != (state["version"] == 3):
+        raise PublicationError("capture provenance and metadata version disagree")
     if state["runtime"]["image_sha256"] != reference.image_sha256:
         raise PublicationError("original checkpoint image mismatch")
     validate_capture(read_object(checkpoint / "repair-input.json")["source_hashes"], receipt["profile"])
@@ -224,6 +227,12 @@ def _v3_receipt(root: Path, receipt: dict, reference: PublishedCheckpoint) -> No
     if reference.format == V3:
         if any(p.lstat().st_mode & 0o222 for p in [root, *root.rglob("*")]):
             raise PublicationError("V3 publication is not sealed read-only")
+        if receipt.get("producer") == "direct-capture-v1":
+            if "legacy_publication_sha256" in receipt or (root / "legacy-publication.json").exists():
+                raise PublicationError("direct capture cannot claim historical provenance")
+            if receipt.get("profile") != "captured-direct-v3-v1":
+                raise PublicationError("direct capture source profile mismatch")
+            return
         if file_hash(root / "legacy-publication.json") != receipt["legacy_publication_sha256"]:
             raise PublicationError("historical publication provenance mismatch")
 
@@ -232,3 +241,19 @@ def _private_layers(root: Path, receipt: dict) -> None:
     for name in ("delta", "repo"):
         if file_hash(root / (name + ".tar")) != receipt[name + "_sha256"]:
             raise PublicationError("private layer identity mismatch")
+
+
+def captured_publication(checkpoint: Path) -> PublishedCheckpoint:
+    """Resolve a direct capture's locator and bind it to its persistent metadata copy.
+
+    This is identity admission only. Full payload authentication happens at restore.
+    """
+    from cooperagents.checkpoint_metadata import checkpoint_metadata
+    locator = checkpoint.with_name(checkpoint.name + '.publication.json')
+    if locator.is_symlink():
+        raise PublicationError('capture locator is a symlink')
+    reference = PublishedCheckpoint.from_dict(read_object(locator))
+    state = checkpoint_metadata(checkpoint, expected_manifest_sha256=reference.manifest_sha256)
+    if state['version'] != 3 or reference.format != V3:
+        raise PublicationError('capture locator requires direct V3 metadata')
+    return reference

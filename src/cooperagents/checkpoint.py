@@ -135,6 +135,10 @@ def save_checkpoint(env, destination: Path, *, metadata: dict, collect_patch=Non
     Worker captures precede collect_patch, which may stage files or pop stashes.
     Repair captures use a temporary Git index to leave the handoff unchanged.
     """
+    if metadata.get("boundary") == "repair_agent_start" and hasattr(env, "capture_repair_checkpoint"):
+        if collect_patch is not None:
+            raise ValueError("repair capture cannot mutate the working tree via collect_patch")
+        return env.capture_repair_checkpoint(destination, metadata=metadata, repair_input=repair_input, trace=trace)
     destination.mkdir(parents=True, mode=0o700, exist_ok=False)
     run_config = destination.parent / "run.json"
     if run_config.exists():
@@ -184,7 +188,7 @@ def save_checkpoint(env, destination: Path, *, metadata: dict, collect_patch=Non
 def verify_checkpoint(path: Path) -> dict:
     manifest = json.loads((path / "manifest.json").read_text())
     if (
-        manifest["version"] not in {1, 2}
+        manifest["version"] not in {1, 2, 3}
         or not {"state.json", "raw.patch", "integration.patch", "submission.patch"} <= manifest["files"].keys()
     ):
         raise ValueError("Incomplete or unsupported checkpoint manifest")
@@ -209,6 +213,12 @@ def verify_checkpoint(path: Path) -> dict:
         for record in records
     ):
         raise ValueError("New checkpoints require filesystem deltas")
+    if state["version"] == 3 and (
+        state["runtime"].get("format") != "repair-overlay-v3"
+        or state["runtime"].get("backend") != "apptainer"
+        or any("archive" in record or "payload" in record for record in records)
+    ):
+        raise ValueError("Invalid direct V3 checkpoint metadata")
     return state
 
 

@@ -71,6 +71,10 @@ CAPTURED = {
 
 
 def validate_producer(receipt: dict, fmt: str) -> None:
+    if receipt.get("producer") == "direct-capture-v1":
+        if fmt != "repair-overlay-v3" or receipt.get("producer_identity") != direct_qualification()["producer_identity"]:
+            raise PublicationError("unknown direct capture producer identity")
+        return
     expected = PRODUCERS.get(fmt)
     if expected is None or any(receipt.get(k) != v for k, v in expected.items()):
         raise PublicationError("unknown producer/source identity")
@@ -80,7 +84,7 @@ def validate_capture(captured: dict[str, str], profile: str) -> None:
     import cooperagents
 
     root = Path(cooperagents.__file__).parent
-    expected = CAPTURED.get(profile)
+    expected = (direct_qualification()["capture_sources"] if profile == "captured-direct-v3-v1" else CAPTURED.get(profile))
     if expected is None or any(captured.get(n) != h for n, h in expected.items()):
         raise PublicationError("unknown captured source profile")
     validate_runtime(profile)
@@ -128,7 +132,8 @@ def validate_reader() -> None:
 
 
 def identify_capture(captured: dict[str, str]) -> str:
-    for profile, expected in CAPTURED.items():
+    profiles = {**CAPTURED, "captured-direct-v3-v1": direct_qualification()["capture_sources"]}
+    for profile, expected in profiles.items():
         if all(captured.get(name) == checksum for name, checksum in expected.items()):
             validate_capture(captured, profile)
             return profile
@@ -137,3 +142,11 @@ def identify_capture(captured: dict[str, str]) -> str:
 
 def qualification_identity() -> str:
     return file_hash(Path(__file__).with_name("reader_qualification.json"))
+
+
+def direct_qualification() -> dict:
+    """Reviewed allowlist, generated at release time rather than learned from a checkpoint."""
+    value = json.loads(Path(__file__).with_name("direct_capture_qualification.json").read_bytes())
+    if value.get("schema") != 1 or value.get("producer") != "direct-capture-v1":
+        raise PublicationError("unknown direct capture qualification")
+    return value

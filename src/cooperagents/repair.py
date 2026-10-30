@@ -357,6 +357,12 @@ def run_repair_checkpoint(
     from cooperagents.workers.mini_swe_worker import BusComm, run_mini_swe_agent
 
     restore_requested = time.monotonic()
+    if published is None and json.loads((checkpoint / "manifest.json").read_bytes()).get("version") == 3:
+        from cooperagents.published import captured_publication
+        if purpose != "difficulty":
+            raise ValueError("Direct V3 capture requires explicit difficulty purpose")
+        published = captured_publication(checkpoint)
+        checkpoint = Path(published.publication.path) / "checkpoint"
     if published is not None:
         from cooperagents.published_restore import validate_checkpoint
         if repair_input is not None:

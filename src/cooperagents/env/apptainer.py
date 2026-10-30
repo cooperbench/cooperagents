@@ -274,6 +274,8 @@ class ApptainerEnv(Environment):
         from cooperagents.checkpoint import complete_output, preview_patch, restore_tree, verify_checkpoint
 
         state = verify_checkpoint(checkpoint)
+        if state["version"] == 3:
+            raise ValueError("Direct V3 requires run_repair_checkpoint with difficulty purpose")
         runtime = state["runtime"]
         repo = Path(state["repo_path"])
         if runtime["backend"] != "apptainer" or not repo.is_absolute() or ".." in repo.parts:
@@ -424,6 +426,10 @@ class ApptainerEnv(Environment):
             (destination.parent / "image.json").write_text(json.dumps(provenance))
 
         return cached_base(scratch / ".checkpoint-bases", expected_hash, build)
+
+    def capture_repair_checkpoint(self, destination: Path, *, metadata: dict, repair_input, trace=None) -> str:
+        from cooperagents.env.published_capture import save
+        return save(self, destination, metadata=metadata, repair_input=repair_input, trace=trace)
 
     def checkpoint(self, destination: Path) -> dict:
         if getattr(self, "_restore_cleanup", None) is not None:

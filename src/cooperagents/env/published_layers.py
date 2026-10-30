@@ -52,6 +52,8 @@ def extract_layer(archive: Path, destination: Path) -> None:
             for key, value in member.pax_headers.items():
                 if key.startswith("SCHILY.xattr."):
                     os.setxattr(path, key.removeprefix("SCHILY.xattr."), value.encode("utf-8", "surrogateescape"), follow_symlinks=False)
+            if member.issym():
+                os.utime(path, ns=(int(float(member.mtime) * 1_000_000_000),) * 2, follow_symlinks=False)
 
 
 def private_links(upper: Path, groups: list, repo: str) -> None:
@@ -152,4 +154,4 @@ def _prepared_mount(bundle: Path, root: Path, i: int, row: dict, mount: dict) ->
     archive = private_archive(source, root / f"prepared-mount-{i}.tar", row["archive_sha256"])
     if sha256(bundle / row["tree"]) != row["tree_sha256"]:
         raise PublicationError("prepared mount tree identity mismatch")
-    extract_tree(archive, root / f"mount-{i}")
+    extract_layer(archive, root / f"mount-{i}")
