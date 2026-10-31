@@ -22,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 LEGACY = "repair-overlay-filesystem-candidate-v1"
 V3 = "repair-overlay-v3"
 FORMATS = {"legacy": LEGACY, "v3": V3}
+SUPPORTED_PURPOSES = frozenset({"difficulty", "training"})
 
 
 class PublicationError(ValueError):
@@ -53,7 +54,10 @@ class Locator(BaseModel):
 
 
 class PublishedCheckpoint(BaseModel):
-    """Evaluation-only publication; acquiring it never upgrades repair qualification."""
+    """Authenticated task state with immutable producer qualification flags.
+
+    Explicit training use does not certify historical completeness or feature correctness.
+    """
 
     model_config = ConfigDict(frozen=True, extra="ignore", strict=True)
     id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -92,11 +96,14 @@ class PublishedCheckpoint(BaseModel):
         except ValidationError as exc:
             raise PublicationError(str(exc)) from exc
 
-    def verify(self, *, purpose: str) -> VerifiedPublication:
-        if purpose != "difficulty":
-            raise PublicationError("unvalidated publications require explicit difficulty purpose")
+    def validate_execution(self, *, purpose: str | None) -> None:
+        if purpose not in SUPPORTED_PURPOSES:
+            raise PublicationError("published checkpoints require explicit difficulty or training purpose")
         if socket.gethostname().split(".")[0] != self.node.split(".")[0]:
             raise PublicationError("publication requires its recorded compute node")
+
+    def verify(self, *, purpose: str) -> VerifiedPublication:
+        self.validate_execution(purpose=purpose)
         return verify_publication(self)
 
 

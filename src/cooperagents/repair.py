@@ -19,9 +19,9 @@ from cooperagents.env.base import Environment, ExecResult
 from cooperagents.types import AgentResult, Assignment, RunResult, TeamSpec
 
 if TYPE_CHECKING:
-    from cooperagents.trajectory import Trajectory
-    from cooperagents.published import PublishedCheckpoint
     from cooperagents.env.image_base import ImageBase
+    from cooperagents.published import PublishedCheckpoint
+    from cooperagents.trajectory import Trajectory
     from cooperagents.vendor.mini_swe.agents.default import DefaultAgent
 
 
@@ -340,13 +340,14 @@ def run_repair_checkpoint(
     max_attempts: int | None = None,
     base_image: Path | None = None,
     published: PublishedCheckpoint | None = None,
-    purpose: Literal["difficulty"] | None = None,
+    purpose: Literal["difficulty", "training"] | None = None,
     image_base: ImageBase | None = None,
 ) -> RunResult:
     """Restore one independent sandbox and run only new integrator attempts.
 
-    Published legacy/V3 inputs are evaluation-only and require explicit difficulty
-    purpose. The checkpoint remains the authenticated embedded native checkpoint.
+    Published legacy/V3 inputs require explicit difficulty or training purpose.
+    Training use preserves the original producer qualification flags and all checks.
+    The checkpoint remains the authenticated embedded native checkpoint.
     Reuse image_base across rollouts to exclude first image initialization from
     each checkpoint load. No writable checkpoint state or container is reused.
     """
@@ -359,8 +360,8 @@ def run_repair_checkpoint(
     restore_requested = time.monotonic()
     if published is None and json.loads((checkpoint / "manifest.json").read_bytes()).get("version") == 3:
         from cooperagents.published import captured_publication
-        if purpose != "difficulty":
-            raise ValueError("Direct V3 capture requires explicit difficulty purpose")
+        if purpose not in {"difficulty", "training"}:
+            raise ValueError("Direct V3 capture requires explicit difficulty or training purpose")
         published = captured_publication(checkpoint)
         checkpoint = Path(published.publication.path) / "checkpoint"
     if published is not None:
@@ -390,7 +391,7 @@ def run_repair_checkpoint(
     else:
         from cooperagents.published_restore import restore_environment
         env = restore_environment(published, checkpoint, scratch=scratch, base_image=base_image,
-                                  image_base=image_base, requested=restore_requested)
+                                  image_base=image_base, requested=restore_requested, purpose=purpose)
     seeds = {}
     checks = []
     started = time.monotonic()

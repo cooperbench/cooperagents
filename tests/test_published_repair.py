@@ -50,16 +50,18 @@ def source(monkeypatch, tmp_path, version):
 
 
 @pytest.mark.parametrize("version", ["legacy", "v3"])
-def test_official_published_repair_commits_exports_patch_preserves_budget_and_cleans(monkeypatch, tmp_path, version):
+@pytest.mark.parametrize("purpose", ["difficulty", "training"])
+def test_official_published_repair_commits_exports_patch_preserves_budget_and_cleans(monkeypatch, tmp_path, version, purpose):
     cp, ref = source(monkeypatch, tmp_path, version)
     opened = []
     commands = []
 
     def restore(reference, checkpoint, **kwargs):
-        assert reference == ref and checkpoint == cp
+        assert reference == ref and checkpoint == cp and kwargs["purpose"] == purpose
         env = ApptainerEnv.from_checkpoint(cp, scratch=kwargs["scratch"])
         env.restore_metrics = dict(
-            restore_mode=version, publication_sha256=ref.publication.sha256, training_eligible=False, repair_validated=False
+            execution_purpose=purpose, restore_mode=version, publication_sha256=ref.publication.sha256,
+            training_eligible=False, repair_validated=False
         )
         opened.append(env)
         return env
@@ -83,8 +85,10 @@ def test_official_published_repair_commits_exports_patch_preserves_budget_and_cl
     settings = CompletionSettings(model="fixture-policy", revision="recorded", generation={"max_tokens": 4096}, timeout=30.0)
     binding = CompletionBinding(query, settings, lambda request: pytest.fail("unexpected summary"), settings)
     monkeypatch.setattr(worker.LitellmModel, "_query_inner", lambda *a, **k: pytest.fail("external model call"))
-    result = run_repair_checkpoint(cp, published=ref, purpose="difficulty", scratch=tmp_path / "scratch", run_id="test", completion=binding)
+    result = run_repair_checkpoint(cp, published=ref, purpose=purpose, scratch=tmp_path / "scratch", run_id="test", completion=binding)
     assert "fixed = 1" in result.integrated.patch
+    assert result.metrics["execution_purpose"] == purpose
+    assert result.metrics["training_eligible"] is result.metrics["repair_validated"] is False
     assert result.metrics["restore_mode"] == version
     assert result.metrics["publication_sha256"] == ref.publication.sha256
     assert result.metrics["saved_attempt_limit"] == result.metrics["effective_attempt_limit"] == 1
@@ -93,11 +97,36 @@ def test_official_published_repair_commits_exports_patch_preserves_budget_and_cl
     assert sha256(cp / "manifest.json") == ref.manifest_sha256
 
 
-def test_publication_mismatch_or_training_purpose_never_starts_agent(monkeypatch, tmp_path):
+def test_publication_mismatch_or_missing_purpose_never_starts_agent(monkeypatch, tmp_path):
     cp, ref = source(monkeypatch, tmp_path, "v3")
     monkeypatch.setattr(worker.LitellmModel, "query", lambda *a, **k: pytest.fail("must not call model"))
-    for kwargs in [{"purpose": "training"}, {"purpose": "difficulty", "repair_input": cp / "repair-input.json"}]:
+    for kwargs in [{}, {"purpose": "unknown"}, {"purpose": "difficulty", "repair_input": cp / "repair-input.json"}]:
         with pytest.raises(ValueError):
             run_repair_checkpoint(cp, published=ref, scratch=tmp_path / "scratch", run_id="bad", **kwargs)
     with pytest.raises(ValueError):
         run_repair_checkpoint(cp.parent, published=ref, purpose="difficulty", scratch=tmp_path / "scratch", run_id="bad")
+
+
+@pytest.mark.parametrize("purpose", ["difficulty", "training"])
+def test_public_restore_forwards_purpose_and_rejects_tampered_metadata(monkeypatch, tmp_path, purpose):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from cooperagents.env.image_base import ImageBase
+    from cooperagents.published import PublicationError
+    from cooperagents.published_restore import restore_environment
+
+    cp, ref = source(monkeypatch, tmp_path, "v3")
+    base = SimpleNamespace(proof={"image_sha256": ref.image_sha256}, close=Mock())
+    prepared = Mock(return_value=base)
+    restored = Mock(return_value=object())
+    monkeypatch.setattr(ImageBase, "prepare", prepared)
+    monkeypatch.setattr("cooperagents.published_restore._restore_with_base", restored)
+    assert restore_environment(ref, cp, scratch=tmp_path, purpose=purpose) is restored.return_value
+    assert restored.call_args.args[-1] == purpose
+    base.close.assert_not_called()
+    prepared.reset_mock()
+    (cp / "manifest.json").write_text("tampered")
+    with pytest.raises(PublicationError, match="identity mismatch"):
+        restore_environment(ref, cp, scratch=tmp_path, purpose=purpose)
+    prepared.assert_not_called()
