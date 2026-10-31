@@ -14,6 +14,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 from litellm import ModelResponse
@@ -55,12 +56,20 @@ git status --porcelain
 """
 
 
-def execute(row, scratch, output):
+def execute(row, scratch, output, *, source=None):
     calls = []
+    started = time.monotonic()
+    first_command_returned = None
 
     def complete(request):
+        nonlocal first_command_returned
         with output.with_suffix(".requests.jsonl").open("a") as stream:
-            stream.write(json.dumps(dict(purpose=request.purpose, messages=request.messages[-2:]), default=str) + "\n")
+            stream.write(
+                json.dumps(
+                    dict(purpose=request.purpose, elapsed_seconds=time.monotonic() - started, messages=request.messages[-2:]), default=str
+                )
+                + "\n"
+            )
         if request.purpose == "summary":
             return ModelResponse(
                 choices=[
@@ -69,12 +78,17 @@ def execute(row, scratch, output):
                         finish_reason="stop",
                         message=dict(
                             role="assistant",
-                            content="Continue the repair from the captured repository state. Resolve merge conflicts, commit the result, then submit.",
+                            content=(
+                                "Continue the repair from the captured repository state. "
+                                "Resolve merge conflicts, commit the result, then submit."
+                            ),
                         ),
                     )
                 ],
                 usage=dict(prompt_tokens=100, completion_tokens=20, total_tokens=120),
             )
+        if len(calls) == 1 and first_command_returned is None:
+            first_command_returned = time.monotonic() - started
         if len(calls) >= 3:
             raise RuntimeError("scripted policy exceeded bounded smoke; inspect gate output")
         command = COMMAND if not calls else "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
@@ -105,8 +119,8 @@ def execute(row, scratch, output):
     )
     with ImageBase.from_environment(row.image_sha256) as base:
         result = run_repair_checkpoint(
-            Path(row.publication.path) / "checkpoint",
-            published=row,
+            source or Path(row.publication.path) / "checkpoint",
+            published=None if source is not None else row,
             purpose="difficulty",
             image_base=base,
             scratch=scratch,
@@ -122,6 +136,7 @@ def execute(row, scratch, output):
                 id=row.id,
                 version=row.version,
                 calls=calls,
+                first_command_roundtrip_seconds=first_command_returned,
                 metrics=result.metrics,
                 patch_sha256=hashlib.sha256(patch.encode()).hexdigest(),
                 patch_bytes=len(patch),

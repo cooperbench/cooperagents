@@ -463,3 +463,51 @@ Focused offline coverage lives in `tests/test_planning_feedback.py`, `tests/test
 and `tests/test_human_phase_prompts.py`. These tests cover pre/post-execution rejection,
 recovery into implementation, active-tool validation, handoff wording, and observation tracing.
 They do not replace live rollout evaluation or concurrent stress testing.
+
+### Direct V3 repair capture
+
+Apptainer `stop_after_repair_checkpoint` collection now writes V3 directly at the
+first repair boundary. Ordinary team/worker checkpoints continue using the native
+legacy writer. The explicit API is `save_checkpoint(..., capture_format="v3")`;
+it requires `repair_agent_start` and the captured repair input. Only Legacy and V3
+publication formats are supported. Metadata version 3 identifies direct V3; it
+is not a third filesystem format.
+
+Capture scans the quiescent source and image base, writes only changed files plus
+a complete private repo and captured mount archives, and audits the entire
+composed tree against the live source inventory. It then performs the normal
+restore, Git index refresh, HEAD/status/stash/patch checks and first-command
+probe before publishing. Capture is consequently not constant-time: full scans,
+first image preparation, and verification belong to its reported cost. Restore
+does not reconstruct a complete rootfs archive.
+
+The existing checkpoint directory holds small authenticated metadata. Its sibling
+`<checkpoint-name>.publication.json` locates the read-only node-local payload
+under `COOPER_PUBLICATION_ROOT` (or stable environment scratch when unset).
+The NLP launcher sets a stable `/scr/$USER/cooperagents/publications` root.
+Disposable `SLURM_TMPDIR` and unqualified/shared filesystems are rejected. Retain
+the node-local payload after collection, and schedule restores on the recorded node. Scratch is not
+durable storage. `run_repair_checkpoint(checkpoint, purpose="difficulty", ...)`
+resolves direct locators; callers may also pass the authenticated publication
+explicitly. Existing Legacy and converted V3 references retain their reader paths.
+No capture is marked training-eligible or fully repair-validated automatically.
+
+Unsupported special files, outside-repo deletions, foreign ownership, unsupported
+xattrs, cross-mount hardlinks, changing source trees, and unknown source identities
+fail closed. Process/open-file state is not captured. Dependency risk records flag
+dangling links and missing executable interpreters; absence of flags does not prove
+that no external service or resource was required. Lower-directory rename and
+lower hardlink copy-up retain the documented OverlayFS limits. A full private repo
+preserves repo operations independently of other rollouts.
+
+Failure never publishes the persistent manifest. Temporary payloads are removed;
+`capture-failure.json` records the failure. Do not silently fall back to a different
+capture format. Retry into a new destination after resolving the cause. Maintainer
+qualification scripts freeze the current identity and preserve explicitly admitted
+earlier writers. Updating the current identity does not automatically admit the
+previous development build; add only reviewed releases with regression evidence
+to the allowlist in a separate reviewed change. These scripts they are never a runtime bypass for a mismatched checkpoint.
+
+A hard kill can leave orphaned node-local staging directories. Consumers require
+the completed persistent manifest plus locator and never scan staging for inputs.
+Reclaim such orphans only after confirming that their writer job has terminated.

@@ -43,7 +43,7 @@ def private_archive(source: Path, destination: Path, expected: str) -> Path:
     return destination
 
 
-def extract_layer(archive: Path, destination: Path) -> None:
+def extract_layer(archive: Path, destination: Path, *, preserve_link_mtime: bool = False) -> None:
     # Reuse upstream path/link/special-file validation before any layer is mounted.
     extract_tree(archive, destination)
     with tarfile.open(archive) as stream:
@@ -52,6 +52,12 @@ def extract_layer(archive: Path, destination: Path) -> None:
             for key, value in member.pax_headers.items():
                 if key.startswith("SCHILY.xattr."):
                     os.setxattr(path, key.removeprefix("SCHILY.xattr."), value.encode("utf-8", "surrogateescape"), follow_symlinks=False)
+            if preserve_link_mtime:
+                try:
+                    stamp = int(member.pax_headers["COOPER.mtime_ns"])
+                except (KeyError, ValueError) as exc:
+                    raise PublicationError("direct layer requires exact mtime") from exc
+                os.utime(path, ns=(stamp, stamp), follow_symlinks=False)
 
 
 def private_links(upper: Path, groups: list, repo: str) -> None:
@@ -92,10 +98,11 @@ def prepare_layers(publication: VerifiedPublication, root: Path) -> None:
     (root / "upper").mkdir()
     delta = private_archive(bundle / "delta.tar", root / "delta.tar", receipt["delta_sha256"])
     repo_tar = private_archive(bundle / "repo.tar", root / "repo.tar", receipt["repo_sha256"])
-    extract_layer(delta, root / "lower")
+    direct = receipt.get("producer") == "direct-capture-v1"
+    extract_layer(delta, root / "lower", preserve_link_mtime=direct)
     private = root / "upper" / repo
     private.parent.mkdir(parents=True, exist_ok=True)
-    extract_layer(repo_tar, private)
+    extract_layer(repo_tar, private, preserve_link_mtime=direct)
     os.setxattr(private, "user.overlay.opaque", b"y")
     _parents(root / "upper", receipt["repo_parent_metadata"])
     private_links(root / "upper", receipt.get("private_link_groups", []), str(repo))
@@ -127,7 +134,7 @@ def prepare_mounts(publication: VerifiedPublication, root: Path) -> None:
     if len(records) != len(mounts):
         raise PublicationError("prepared mount count mismatch")
     for i, (record, mount) in enumerate(zip(records, mounts, strict=True)):
-        _prepared_mount(publication.root, root, i, record, mount)
+        _prepared_mount(publication.root, root, i, record, mount, direct=publication.receipt.get("producer") == "direct-capture-v1")
 
 
 def _mount_targets(mounts: list) -> None:
@@ -140,7 +147,7 @@ def _mount_targets(mounts: list) -> None:
         raise PublicationError("unsupported mount base/access")
 
 
-def _prepared_mount(bundle: Path, root: Path, i: int, row: dict, mount: dict) -> None:
+def _prepared_mount(bundle: Path, root: Path, i: int, row: dict, mount: dict, *, direct: bool = False) -> None:
     keys = {"target", "readonly", "archive", "archive_sha256", "archive_bytes", "tree", "tree_sha256"}
     if set(row) != keys or row["target"] != mount["target"] or type(row["readonly"]) is not bool or row["readonly"] != mount["readonly"]:
         raise PublicationError("prepared mount identity mismatch")
@@ -152,4 +159,7 @@ def _prepared_mount(bundle: Path, root: Path, i: int, row: dict, mount: dict) ->
     archive = private_archive(source, root / f"prepared-mount-{i}.tar", row["archive_sha256"])
     if sha256(bundle / row["tree"]) != row["tree_sha256"]:
         raise PublicationError("prepared mount tree identity mismatch")
-    extract_tree(archive, root / f"mount-{i}")
+    if direct:
+        extract_layer(archive, root / f"mount-{i}", preserve_link_mtime=True)
+    else:
+        extract_tree(archive, root / f"mount-{i}")

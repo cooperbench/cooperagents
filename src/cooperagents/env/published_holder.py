@@ -60,6 +60,13 @@ class MountHolder:
         holder._initialize(dict(operation="clean-image", image=str(image), image_sha256=checksum), scratch, base, checksum)
         return holder
 
+    @classmethod
+    def audit_capture(cls, bundle: Path, scratch: Path, base: ImageBase) -> MountHolder:
+        base.validate(str(base.proof["image_sha256"]))
+        holder = cls.__new__(cls)
+        holder._initialize(dict(operation="audit-capture", bundle=str(bundle)), scratch, base, "capture-audit")
+        return holder
+
     def _initialize(self, config: dict, scratch: Path, base: ImageBase, identity: str) -> None:
         scratch.mkdir(parents=True, exist_ok=True)
         self.root = Path(tempfile.mkdtemp(prefix="ca-overlay-", dir=scratch))
@@ -210,6 +217,12 @@ def _mount_overlay(root: Path) -> None:
 
 def _hold(control: Path) -> None:
     config = json.loads(control.read_bytes())
+    if config.get("operation") == "audit-capture":
+        if Path(config["root"]) != control.parent:
+            raise PublicationError("invalid private capture control path")
+        from cooperagents.env.capture_audit import hold
+        hold(config)
+        return
     if config.get("operation") == "audit-base":
         _audit_base(config)
         return
