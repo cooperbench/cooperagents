@@ -20,6 +20,8 @@ from cooperagents.types import AgentResult, Assignment, RunResult, TeamSpec
 
 if TYPE_CHECKING:
     from cooperagents.trajectory import Trajectory
+    from cooperagents.published import PublishedCheckpoint
+    from cooperagents.env.image_base import ImageBase
     from cooperagents.vendor.mini_swe.agents.default import DefaultAgent
 
 
@@ -287,8 +289,22 @@ def capture_repair_input(
     )
 
 
+def load_repair_input_metadata(checkpoint: Path, *, expected_manifest_sha256: str) -> RepairInput:
+    """Read hash-authenticated admission metadata, without reading rootfs payloads.
+
+    Execution still calls load_repair_input and performs complete checkpoint and
+    publication authentication before model actions. This is not a ready receipt.
+    """
+    from cooperagents.checkpoint_metadata import checkpoint_metadata
+    state = checkpoint_metadata(checkpoint, expected_manifest_sha256=expected_manifest_sha256)
+    return _repair_input_document(checkpoint, state, None)
+
+
 def load_repair_input(checkpoint: Path, sidecar: Path | None = None) -> RepairInput:
-    state = verify_checkpoint(checkpoint)
+    return _repair_input_document(checkpoint, verify_checkpoint(checkpoint), sidecar)
+
+
+def _repair_input_document(checkpoint: Path, state: dict, sidecar: Path | None) -> RepairInput:
     if state["metadata"].get("boundary") != "repair_agent_start" or state["metadata"].get("attempt") != 1:
         raise ValueError("Repair rollout requires before-integrator1")
     manifest = json.loads((checkpoint / "manifest.json").read_text())
@@ -323,14 +339,31 @@ def run_repair_checkpoint(
     trajectory: Trajectory | None = None,
     max_attempts: int | None = None,
     base_image: Path | None = None,
+    published: PublishedCheckpoint | None = None,
+    purpose: Literal["difficulty"] | None = None,
+    image_base: ImageBase | None = None,
 ) -> RunResult:
-    """Restore one independent sandbox and run only new integrator attempts."""
+    """Restore one independent sandbox and run only new integrator attempts.
+
+    Published legacy/V3 inputs are evaluation-only and require explicit difficulty
+    purpose. The checkpoint remains the authenticated embedded native checkpoint.
+    Reuse image_base across rollouts to exclude first image initialization from
+    each checkpoint load. No writable checkpoint state or container is reused.
+    """
     from cooperagents.bus.memory import InMemoryBus
     from cooperagents.env.apptainer import ApptainerEnv
     from cooperagents.harness import _tree_health, _tree_health_behavioral, run_repair_tail
     from cooperagents.patching import strip_test_sections
     from cooperagents.workers.mini_swe_worker import BusComm, run_mini_swe_agent
 
+    restore_requested = time.monotonic()
+    if published is not None:
+        from cooperagents.published_restore import validate_checkpoint
+        if repair_input is not None:
+            raise ValueError("Published repair requires its embedded authenticated repair input")
+        validate_checkpoint(published, checkpoint, purpose)
+    elif image_base is not None:
+        raise ValueError("Shared immutable image capability requires a publication")
     inputs = load_repair_input(checkpoint, repair_input)
     spec = inputs.settings.team_spec(run_id, str(inputs.model_config_data["model_name"]))
     if max_attempts is not None:
@@ -346,7 +379,12 @@ def run_repair_checkpoint(
         )
     bus = InMemoryBus(run_id)
     bus.restore_inboxes({actor: [m.model_dump(by_alias=True) for m in inputs.pending_messages[actor]] for actor in actors})
-    env = ApptainerEnv.from_checkpoint(checkpoint, scratch=scratch, **({"base_image": base_image} if base_image is not None else {}))
+    if published is None:
+        env = ApptainerEnv.from_checkpoint(checkpoint, scratch=scratch, **({"base_image": base_image} if base_image is not None else {}))
+    else:
+        from cooperagents.published_restore import restore_environment
+        env = restore_environment(published, checkpoint, scratch=scratch, base_image=base_image,
+                                  image_base=image_base, requested=restore_requested)
     seeds = {}
     checks = []
     started = time.monotonic()
@@ -417,6 +455,8 @@ def run_repair_checkpoint(
                 checkpoint_manifest_sha256=sha256(checkpoint / "manifest.json"),
                 saved_attempt_limit=inputs.settings.attempts,
                 effective_attempt_limit=spec.repair_attempts,
+                budget_truncated=spec.repair_attempts < inputs.settings.attempts,
+                **getattr(env, "restore_metrics", {"restore_mode": "native"}),
             ),
         )
     finally:
