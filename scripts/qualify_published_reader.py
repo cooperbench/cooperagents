@@ -20,8 +20,8 @@ value = dict(
     sources=sources,
     reference_revision="1b5139d017e9c3ccfdbb1c5b1f0604df28c54e43",
     runtime_base_revision="1b5139d017e9c3ccfdbb1c5b1f0604df28c54e43",
-    qualification_note=("direct V3 is selected only at repair-only capture; legacy replay retains its source profile; "
-                        "worker matches recorded POST bytes; require regression evidence before release"),
+    qualification_note=("V3 installed-asset restore and no-repack image audit; historical producer profiles retained; "
+                        "source identity only; deployment qualification requires independent evidence"),
 )
 (root / "reader_qualification.json").write_text(json.dumps(value, indent=2) + "\n")
 print("frozen", len(sources), "reader source files; this command does not certify checkpoints or train")

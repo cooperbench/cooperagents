@@ -11,6 +11,7 @@ import shutil
 import tarfile
 from copy import copy
 from datetime import UTC, datetime
+from cooperagents import installed_artifacts
 from pathlib import Path
 
 from cooperagents.env.base import Environment, ExecResult
@@ -192,6 +193,11 @@ def save_checkpoint(
 
 
 def verify_checkpoint(path: Path) -> dict:
+    with installed_artifacts.admission(path):
+        return _verify_checkpoint(path)
+
+
+def _verify_checkpoint(path: Path) -> dict:
     manifest = json.loads((path / "manifest.json").read_text())
     if (
         manifest["version"] not in {1, 2, 3}
@@ -204,7 +210,7 @@ def verify_checkpoint(path: Path) -> dict:
         file = path / name
         if file.is_symlink() or not file.resolve().is_relative_to(path.resolve()):
             raise ValueError("Checkpoint file escapes snapshot")
-        if file.stat().st_size != record["bytes"] or sha256(file) != record["sha256"]:
+        if file.stat().st_size != record["bytes"] or installed_artifacts.measured(file, sha256) != record["sha256"]:
             raise ValueError(f"Checkpoint checksum mismatch: {name}")
     state = json.loads((path / "state.json").read_text())
     records = [state["runtime"], *state["runtime"].get("mounts", [])]

@@ -14,6 +14,7 @@ import socket
 import subprocess
 from collections.abc import Mapping
 from dataclasses import dataclass
+from cooperagents import installed_artifacts
 from pathlib import Path
 from typing import Literal
 
@@ -30,6 +31,10 @@ class PublicationError(ValueError):
 
 
 def file_hash(path: Path) -> str:
+    return installed_artifacts.measured(path, _file_hash)
+
+
+def _file_hash(path: Path) -> str:
     with path.open("rb") as stream:
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
@@ -190,6 +195,13 @@ def _receipt(root: Path, metadata: dict, reference: PublishedCheckpoint) -> dict
 
 
 def verify_publication(reference: PublishedCheckpoint) -> VerifiedPublication:
+    with installed_artifacts.admission(Path(reference.publication.path)) as installed:
+        if installed is not None and (reference.format != V3 or installed.root.name != reference.publication.sha256):
+            raise PublicationError("installed publication format/identity mismatch")
+        return _verify_publication(reference)
+
+
+def _verify_publication(reference: PublishedCheckpoint) -> VerifiedPublication:
     from cooperagents.checkpoint import verify_checkpoint
     from cooperagents.published_profiles import validate_capture
 
