@@ -37,6 +37,11 @@ class ImageBase:
         descriptor = -1
         try:
             packed = _pack_image(image, work)
+            from cooperagents.env.published_audit import inventory
+
+            native_inventory = work / "native-index.json.gz"
+            with gzip.open(native_inventory, "wt") as stream:
+                json.dump(inventory(work / "fs"), stream)
             descriptor = os.memfd_create("cooperagents-verified-base", os.MFD_ALLOW_SEALING)
             _copy_descriptor(packed, descriptor)
             seals = fcntl.F_SEAL_SEAL | fcntl.F_SEAL_WRITE | fcntl.F_SEAL_GROW | fcntl.F_SEAL_SHRINK
@@ -44,7 +49,33 @@ class ImageBase:
             checksum = sha256(packed)
             if sha256(Path(f"/proc/self/fd/{descriptor}")) != checksum:
                 raise ValueError("Immutable image base copy mismatch")
-            proof = cls._qualify_native(expected_sha256, descriptor, work, checksum, started, seals)
+            stat = os.fstat(descriptor)
+            proof = dict(
+                image_sha256=expected_sha256,
+                base_sha256=checksum,
+                seals=seals,
+                fd_identity=[stat.st_dev, stat.st_ino, stat.st_size],
+                preparation_seconds=time.monotonic() - started,
+            )
+            from cooperagents.published_profiles import qualification_identity
+
+            proof["runtime_qualification"] = _runtime()
+            proof["reader_qualification_sha256"] = qualification_identity()
+            config = work / "base-audit.json"
+            config.write_text(
+                json.dumps(
+                    dict(
+                        operation="audit-base",
+                        root=str(work),
+                        base_fd=descriptor,
+                        base_proof=proof,
+                        native_inventory=str(native_inventory),
+                        native_inventory_sha256=sha256(native_inventory),
+                    )
+                )
+            )
+            proof["audit"] = _audit_base(config, descriptor)
+            proof["preparation_seconds"] = time.monotonic() - started
             return cls(descriptor, proof)
         except BaseException:
             if descriptor >= 0:
@@ -52,60 +83,6 @@ class ImageBase:
             raise
         finally:
             remove_tree(work)
-
-    @classmethod
-    def qualify(cls, image: Path, expected_sha256: str, descriptor: int, scratch: Path) -> dict:
-        """Audit existing sealed SQFS against the native SIF without repacking; caller owns FD."""
-        started = time.monotonic()
-        seals = fcntl.F_SEAL_SEAL | fcntl.F_SEAL_WRITE | fcntl.F_SEAL_GROW | fcntl.F_SEAL_SHRINK
-        if fcntl.fcntl(descriptor, fcntl.F_GET_SEALS) & seals != seals:
-            raise ValueError("qualification requires a fully sealed descriptor")
-        if image.is_symlink() or not image.is_file() or sha256(image) != expected_sha256:
-            raise ValueError("Base SIF identity mismatch")
-        scratch.mkdir(parents=True, exist_ok=True)
-        work = Path(tempfile.mkdtemp(prefix="ca-qualify-", dir=scratch))
-        try:
-            _native_image(image, work / "fs")
-            checksum = sha256(Path(f"/proc/self/fd/{descriptor}"))
-            return cls._qualify_native(expected_sha256, descriptor, work, checksum, started, seals)
-        finally:
-            remove_tree(work)
-
-    @staticmethod
-    def _qualify_native(expected_sha256, descriptor, work, checksum, started, seals):
-        from cooperagents.env.published_audit import inventory
-
-        native_inventory = work / "native-index.json.gz"
-        with gzip.open(native_inventory, "wt") as stream:
-            json.dump(inventory(work / "fs"), stream)
-        stat = os.fstat(descriptor)
-        proof = dict(
-            image_sha256=expected_sha256,
-            base_sha256=checksum,
-            seals=seals,
-            fd_identity=[stat.st_dev, stat.st_ino, stat.st_size],
-            preparation_seconds=time.monotonic() - started,
-        )
-        from cooperagents.published_profiles import qualification_identity
-
-        proof["runtime_qualification"] = _runtime()
-        proof["reader_qualification_sha256"] = qualification_identity()
-        config = work / "base-audit.json"
-        config.write_text(
-            json.dumps(
-                dict(
-                    operation="audit-base",
-                    root=str(work),
-                    base_fd=descriptor,
-                    base_proof=proof,
-                    native_inventory=str(native_inventory),
-                    native_inventory_sha256=sha256(native_inventory),
-                )
-            )
-        )
-        proof["audit"] = _audit_base(config, descriptor)
-        proof["preparation_seconds"] = time.monotonic() - started
-        return proof
 
     def validate(self, expected_image: str) -> None:
         """Validate a live borrowed capability before a fresh image mount."""
@@ -185,13 +162,9 @@ class ImageBase:
         self.close()
 
 
-def _native_image(image: Path, fs: Path) -> None:
-    subprocess.run(["apptainer", "build", "--fix-perms", "--sandbox", str(fs), str(image)], capture_output=True, check=True, timeout=1800)
-
-
 def _pack_image(image: Path, work: Path) -> Path:
     fs, packed = work / "fs", work / "base.sqfs"
-    _native_image(image, fs)
+    subprocess.run(["apptainer", "build", "--fix-perms", "--sandbox", str(fs), str(image)], capture_output=True, check=True, timeout=1800)
     subprocess.run(
         ["mksquashfs", str(fs), str(packed), "-noappend", "-processors", "2", "-quiet", "-comp", "zstd", "-mem", "256M"],
         capture_output=True,

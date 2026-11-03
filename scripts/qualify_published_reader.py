@@ -20,7 +20,7 @@ value = dict(
     sources=sources,
     reference_revision="1b5139d017e9c3ccfdbb1c5b1f0604df28c54e43",
     runtime_base_revision="1b5139d017e9c3ccfdbb1c5b1f0604df28c54e43",
-    qualification_note=("V3 installed-asset restore and no-repack image audit; historical producer profiles retained; "
+    qualification_note=("V3 installed-asset restore with unchanged image preparation; historical producer profiles retained; "
                         "source identity only; deployment qualification requires independent evidence"),
 )
 (root / "reader_qualification.json").write_text(json.dumps(value, indent=2) + "\n")
