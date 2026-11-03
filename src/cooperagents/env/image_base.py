@@ -44,7 +44,7 @@ class ImageBase:
             checksum = sha256(packed)
             if sha256(Path(f"/proc/self/fd/{descriptor}")) != checksum:
                 raise ValueError("Immutable image base copy mismatch")
-            proof = cls._qualify_native(expected_sha256, descriptor, work, checksum, started)
+            proof = cls._qualify_native(expected_sha256, descriptor, work, checksum, started, seals)
             return cls(descriptor, proof)
         except BaseException:
             if descriptor >= 0:
@@ -67,13 +67,12 @@ class ImageBase:
         try:
             _native_image(image, work / "fs")
             checksum = sha256(Path(f"/proc/self/fd/{descriptor}"))
-            return cls._qualify_native(expected_sha256, descriptor, work, checksum, started)
+            return cls._qualify_native(expected_sha256, descriptor, work, checksum, started, seals)
         finally:
             remove_tree(work)
 
     @staticmethod
-    def _qualify_native(expected_sha256, descriptor, work, checksum, started):
-        seals = fcntl.fcntl(descriptor, fcntl.F_GET_SEALS)
+    def _qualify_native(expected_sha256, descriptor, work, checksum, started, seals):
         from cooperagents.env.published_audit import inventory
 
         native_inventory = work / "native-index.json.gz"

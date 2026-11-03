@@ -39,7 +39,7 @@ def private_archive(source: Path, destination: Path, expected: str) -> Path:
     if source.is_symlink() or not source.is_file():
         raise PublicationError("layer must be a regular file")
     if source.is_relative_to(installed_artifacts.STORE):
-        if installed_artifacts.measured(source, sha256) != expected:
+        if sha256(source) != expected:
             raise PublicationError("installed archive identity mismatch")
         return source
     shutil.copyfile(source, destination)
@@ -162,7 +162,7 @@ def _prepared_mount(bundle: Path, root: Path, i: int, row: dict, mount: dict, *,
     if type(row["archive_bytes"]) is not int or source.stat().st_size != row["archive_bytes"]:
         raise PublicationError("prepared mount size mismatch")
     archive = private_archive(source, root / f"prepared-mount-{i}.tar", row["archive_sha256"])
-    if installed_artifacts.measured(bundle / row["tree"], sha256) != row["tree_sha256"]:
+    if sha256(bundle / row["tree"]) != row["tree_sha256"]:
         raise PublicationError("prepared mount tree identity mismatch")
     if direct:
         extract_layer(archive, root / f"mount-{i}", preserve_link_mtime=True)

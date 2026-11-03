@@ -69,6 +69,10 @@ def restore_tree(checkpoint: Path, record: dict, base: Path, destination: Path) 
 
 
 def sha256(path: Path) -> str:
+    return installed_artifacts.measured(path, _sha256)
+
+
+def _sha256(path: Path) -> str:
     with path.open("rb") as handle:
         return hashlib.file_digest(handle, "sha256").hexdigest()
 
@@ -210,7 +214,7 @@ def _verify_checkpoint(path: Path) -> dict:
         file = path / name
         if file.is_symlink() or not file.resolve().is_relative_to(path.resolve()):
             raise ValueError("Checkpoint file escapes snapshot")
-        if file.stat().st_size != record["bytes"] or installed_artifacts.measured(file, sha256) != record["sha256"]:
+        if file.stat().st_size != record["bytes"] or sha256(file) != record["sha256"]:
             raise ValueError(f"Checkpoint checksum mismatch: {name}")
     state = json.loads((path / "state.json").read_text())
     records = [state["runtime"], *state["runtime"].get("mounts", [])]
