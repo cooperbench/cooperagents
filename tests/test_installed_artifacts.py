@@ -74,11 +74,14 @@ def test_holder_receipt_cannot_change_after_parent_admission(tmp_path, monkeypat
 
 
 def test_verified_v3_and_prepared_mount_hash_only_source_anchors(tmp_path, monkeypatch):
+    import gzip
     import io
     import json
+    import os
+    import shutil
     import tarfile
 
-    from cooperagents.env.published_layers import _prepared_mount
+    from cooperagents.env.published_layers import prepare_layers
     from cooperagents.published import PublishedCheckpoint, _inventory
     from test_publication_integrity import publication
 
@@ -94,12 +97,34 @@ def test_verified_v3_and_prepared_mount_hash_only_source_anchors(tmp_path, monke
         tar.addfile(member, io.BytesIO(payload))
     tree = mounts / "mount-0.tree.json.gz"
     tree.write_bytes(b"tree metadata")
-    row = dict(target="/coordination", readonly=True, archive="mounts/mount-0.tar", tree="mounts/mount-0.tree.json.gz",
+    row = dict(target="/cbshared", readonly=False, archive="mounts/mount-0.tar", tree="mounts/mount-0.tree.json.gz",
                archive_bytes=archive.stat().st_size, archive_sha256=hashlib.sha256(archive.read_bytes()).hexdigest(),
                tree_sha256=hashlib.sha256(tree.read_bytes()).hexdigest())
+    # Construct genuine delta/repo archives, not just dummy hashable files.
+    for name in ("delta.tar", "repo.tar"):
+        path = root / name
+        path.chmod(0o644)
+        with tarfile.open(path, "w") as tar:
+            content = name.encode()
+            entry = tarfile.TarInfo("file")
+            entry.size = len(content)
+            tar.addfile(entry, io.BytesIO(content))
+    digest = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
+    index = root / "target-index.json.gz"
+    index.chmod(0o644)
+    meta = dict(uid=os.getuid(), gid=os.getgid(), type="directory", mode=0o755, mtime_ns=10**9)
+    index.write_bytes(gzip.compress(json.dumps({"root_metadata": meta}).encode()))
+    receipt_path = root / "receipt.json"
+    receipt_path.chmod(0o644)
+    receipt_doc = json.loads(receipt_path.read_text()) | dict(repo="workspace/repo", repo_parent_metadata={},
+        prepared_mounts=[row], repo_sha256=digest(root / "repo.tar"), delta_sha256=digest(root / "delta.tar"),
+        target_inventory_sha256=digest(index))
+    receipt_path.write_text(json.dumps(receipt_doc))
     header = root / "publication.json"
     header.chmod(0o644)
-    header.write_text(json.dumps(json.loads(header.read_text()) | {"files": _inventory(root)}))
+    header_doc = json.loads(header.read_text())
+    header_doc["metadata"]["receipt_sha256"] = digest(receipt_path)
+    header.write_text(json.dumps(header_doc | {"files": _inventory(root)}))
     pin = hashlib.sha256(header.read_bytes()).hexdigest()
     store = tmp_path / "store"
     installed_root = store / "pub" / pin
@@ -126,6 +151,20 @@ def test_verified_v3_and_prepared_mount_hash_only_source_anchors(tmp_path, monke
     with ia.admission(moved):
         checked = ref.verify(purpose="training")
         assert checked.root == moved
-        _prepared_mount(moved, scratch, 0, row, dict(target="/coordination", readonly=True))
+        before = {name: (moved / name).stat() for name in ("repo.tar", "delta.tar", row["archive"])}
+        if not hasattr(os, "setxattr"):
+            # macOS Python lacks this Linux syscall; assert the original opaque-marker call.
+            def opaque(path, name, value):
+                assert path == scratch / "upper/workspace/repo" and (name, value) == ("user.overlay.opaque", b"y")
+            monkeypatch.setattr(os, "setxattr", opaque, raising=False)
+        prepare_layers(checked, scratch)
+    assert (scratch / "lower/file").read_bytes() == b"delta.tar"
+    assert (scratch / "upper/workspace/repo/file").read_bytes() == b"repo.tar"
     assert (scratch / "mount-0/workspace").read_bytes() == payload
+    shutil.rmtree(scratch)
+    for name, info in before.items():
+        observed = (moved / name).stat()
+        assert (observed.st_dev, observed.st_ino, observed.st_size, observed.st_mtime_ns) == (
+            info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
+        assert digest(moved / name) == files[f"{moved.name}/{name}"]["sha256"]
     assert {p.name for p, n in seen if p.is_relative_to(store) and n > 0} == {"publication.json", "manifest.json"}

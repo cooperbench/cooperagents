@@ -91,3 +91,18 @@ def test_sqfs_manifest_must_match_measurement(store, wrong):
     (stage / "base.sqfs").write_bytes(payload)
     with pytest.raises(ValueError, match="inventory"):
         installer.install("prepared-sqfs", digest(data), stage, Path("manifest.json"))
+
+
+def test_install_uses_actual_v3_inventory_schema(store, tmp_path, monkeypatch):
+    import shutil
+    from test_publication_integrity import publication
+
+    store_root, stage = store
+    source, reference, _ = publication(tmp_path, monkeypatch, "v3")
+    key, pin = source.name, reference.publication.sha256
+    shutil.copytree(source, stage / key)
+    installer.install("pub", pin, stage, Path(key) / "publication.json")
+    target = store_root / "pub" / pin
+    measured = json.loads((target / ".measured.json").read_bytes())["files"]
+    document = json.loads((target / key / "publication.json").read_bytes())
+    assert {name: measured[f"{key}/{name}"] for name in document["files"]} == document["files"]
