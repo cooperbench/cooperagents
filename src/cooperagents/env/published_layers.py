@@ -8,6 +8,7 @@ import os
 import shutil
 import stat
 import tarfile
+from cooperagents import installed_artifacts
 from pathlib import Path, PurePosixPath
 
 from cooperagents.checkpoint import extract_tree, restore_tree, sha256
@@ -37,6 +38,10 @@ def metadata(path: Path, row: dict) -> None:
 def private_archive(source: Path, destination: Path, expected: str) -> Path:
     if source.is_symlink() or not source.is_file():
         raise PublicationError("layer must be a regular file")
+    if source.is_relative_to(installed_artifacts.STORE):
+        if sha256(source) != expected:
+            raise PublicationError("installed archive identity mismatch")
+        return source
     shutil.copyfile(source, destination)
     if sha256(destination) != expected:
         raise PublicationError("private layer copy identity mismatch")
