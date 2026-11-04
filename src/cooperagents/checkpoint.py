@@ -11,6 +11,7 @@ import shutil
 import tarfile
 from copy import copy
 from datetime import UTC, datetime
+from cooperagents import installed_artifacts
 from pathlib import Path
 
 from cooperagents.env.base import Environment, ExecResult
@@ -68,6 +69,10 @@ def restore_tree(checkpoint: Path, record: dict, base: Path, destination: Path) 
 
 
 def sha256(path: Path) -> str:
+    return installed_artifacts.measured(path, _sha256)
+
+
+def _sha256(path: Path) -> str:
     with path.open("rb") as handle:
         return hashlib.file_digest(handle, "sha256").hexdigest()
 
@@ -192,6 +197,11 @@ def save_checkpoint(
 
 
 def verify_checkpoint(path: Path) -> dict:
+    with installed_artifacts.admission(path):
+        return _verify_checkpoint(path)
+
+
+def _verify_checkpoint(path: Path) -> dict:
     manifest = json.loads((path / "manifest.json").read_text())
     if (
         manifest["version"] not in {1, 2, 3}
