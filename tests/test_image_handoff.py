@@ -1,7 +1,6 @@
 import fcntl
 import os
 import sys
-from pathlib import Path
 
 import pytest
 
@@ -9,7 +8,8 @@ from cooperagents.env.image_base import ImageBase
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="Linux sealed image descriptor")
-def test_handoff_borrows_independent_sealed_descriptor_and_rejects_bad_proof(tmp_path, monkeypatch):
+@pytest.mark.parametrize("reader", ["reader", "90db555845889be5ba02e7d17b198b48c2b0b7e605aaf3b3c77d50af0a9f1be7"])
+def test_handoff_borrows_independent_sealed_descriptor_and_rejects_bad_proof(tmp_path, monkeypatch, reader):
     from cooperagents.env import image_base
 
     monkeypatch.setattr(image_base, "_runtime", lambda: {"kernel": "test"})
@@ -24,7 +24,7 @@ def test_handoff_borrows_independent_sealed_descriptor_and_rejects_bad_proof(tmp
         dict(
             image_sha256="a" * 64,
             fd_identity=[st.st_dev, st.st_ino, st.st_size],
-            reader_qualification_sha256="reader",
+            reader_qualification_sha256=reader,
             runtime_qualification={"kernel": "test"},
             audit={"paths": 1},
         ),
@@ -42,6 +42,14 @@ def test_handoff_borrows_independent_sealed_descriptor_and_rejects_bad_proof(tmp
         assert base.handoff(tmp_path / "private").checksum == handoff.checksum
         with pytest.raises(ValueError, match="different|identity"):
             ImageBase.from_environment("b" * 64, handoff.environment)
+        for change in (
+            {"reader_qualification_sha256": "0" * 64},
+            {"runtime_qualification": {"kernel": "different"}},
+            {"audit": {"paths": 0}},
+        ):
+            with ImageBase(os.dup(fd), {**base.proof, **change}) as invalid:
+                with pytest.raises(ValueError, match="unqualified|qualification"):
+                    invalid.validate("a" * 64)
         handoff.proof_file.chmod(0o600)
         with pytest.raises(ValueError, match="proof"):
             ImageBase.from_environment("a" * 64, handoff.environment)

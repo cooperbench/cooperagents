@@ -218,7 +218,7 @@ _HANDOFF_KEYS = ("COOPER_REPAIR_BASE_FD", "COOPER_REPAIR_BASE_PROOF", "COOPER_RE
 
 
 def _verify_handoff(descriptor: int, proof: dict[str, object], expected_image: str) -> None:
-    from cooperagents.published_profiles import qualification_identity
+    from cooperagents.published_profiles import validate_image_reader
 
     st = os.fstat(descriptor)
     seals = fcntl.F_SEAL_SEAL | fcntl.F_SEAL_WRITE | fcntl.F_SEAL_GROW | fcntl.F_SEAL_SHRINK
@@ -226,7 +226,8 @@ def _verify_handoff(descriptor: int, proof: dict[str, object], expected_image: s
         raise ValueError("shared image capability identity mismatch")
     if fcntl.fcntl(descriptor, fcntl.F_GET_SEALS) & seals != seals:
         raise ValueError("shared image capability is writable")
-    if proof.get("reader_qualification_sha256") != qualification_identity() or proof.get("runtime_qualification") != _runtime():
+    validate_image_reader(proof.get("reader_qualification_sha256"))
+    if proof.get("runtime_qualification") != _runtime():
         raise ValueError("shared image capability uses an unqualified reader/runtime")
     audit = proof.get("audit")
     if not isinstance(audit, dict) or not audit.get("paths"):

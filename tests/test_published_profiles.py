@@ -92,3 +92,14 @@ def test_producer_allowlist_is_bound_to_reader_qualification(tmp_path, monkeypat
     allowlist.write_bytes(allowlist.read_bytes() + b"\n")
     with pytest.raises(PublicationError, match="unqualified repair runtime source"):
         validate_reader()
+
+
+def test_image_reader_accepts_current_and_exact_reviewed_offline_builder():
+    from cooperagents.published_profiles import qualification_identity, validate_image_reader
+
+    validate_reader()
+    validate_image_reader(qualification_identity())
+    validate_image_reader("90db555845889be5ba02e7d17b198b48c2b0b7e605aaf3b3c77d50af0a9f1be7")
+    for identity in (None, "0" * 64, "91794ac63843f091c24bb8601c0d0fbbcd452496c8185388fee3db3d5df86720"):
+        with pytest.raises(ValueError, match="unqualified image reader"):
+            validate_image_reader(identity)
