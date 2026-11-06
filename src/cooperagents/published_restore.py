@@ -14,8 +14,7 @@ from cooperagents.workers.mini_swe_worker import MiniSweEnvAdapter
 
 
 def validate_checkpoint(reference: PublishedCheckpoint, checkpoint: Path, purpose: str | None) -> None:
-    if purpose != "difficulty":
-        raise PublicationError("published repair requires explicit difficulty purpose")
+    reference.validate_execution(purpose=purpose)
     root = Path(reference.publication.path)
     header = _manifest(root, reference)
     if checkpoint.resolve() != (root / "checkpoint").resolve() or checkpoint.is_symlink():
@@ -34,24 +33,26 @@ def restore_environment(
     base_image: Path | None = None,
     image_base: ImageBase | None = None,
     requested: float | None = None,
+    purpose: str = "difficulty",
 ) -> ApptainerEnv:
+    validate_checkpoint(reference, checkpoint, purpose)
     started = requested if requested is not None else time.monotonic()
     owned = image_base is None
     base = image_base or ImageBase.prepare(base_image or Path(reference.image), reference.image_sha256, scratch)
     try:
         if base.proof["image_sha256"] != reference.image_sha256:
             raise PublicationError("shared image capability belongs to a different SIF")
-        return _restore_with_base(reference, checkpoint, scratch, base, started, owned)
+        return _restore_with_base(reference, checkpoint, scratch, base, started, owned, purpose)
     except BaseException:
         if owned:
             base.close()
         raise
 
 
-def _restore_with_base(reference, checkpoint, scratch, base, started, owned) -> ApptainerEnv:
+def _restore_with_base(reference, checkpoint, scratch, base, started, owned, purpose) -> ApptainerEnv:
     holder = None
     try:
-        holder = MountHolder(reference, scratch, base)
+        holder = MountHolder(reference, scratch, base, purpose=purpose)
 
         def close() -> None:
             try:
@@ -65,7 +66,7 @@ def _restore_with_base(reference, checkpoint, scratch, base, started, owned) -> 
         )
         try:
             probe = _probe(env)
-            env.restore_metrics = _metrics(reference, holder, base, started, owned, probe)
+            env.restore_metrics = _metrics(reference, holder, base, started, owned, probe, purpose)
             return env
         except BaseException:
             env.cleanup()
@@ -80,11 +81,12 @@ def _restore_with_base(reference, checkpoint, scratch, base, started, owned) -> 
         raise
 
 
-def _metrics(reference, holder, base, started, owned, probe) -> dict:
+def _metrics(reference, holder, base, started, owned, probe, purpose) -> dict:
     from cooperagents.published_profiles import reader_identity
 
     duration = time.monotonic() - started
     return dict(
+        execution_purpose=purpose,
         restore_mode=reference.version,
         publication_format=reference.format,
         publication_sha256=reference.publication.sha256,

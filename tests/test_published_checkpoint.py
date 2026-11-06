@@ -67,8 +67,70 @@ def test_reference_requires_explicit_two_version_identity_and_false_eligibility(
             PublishedCheckpoint.from_dict({**row(tmp_path), **changed})
 
 
-def test_difficulty_ref_is_not_a_qualification_upgrade(tmp_path):
-    ref = PublishedCheckpoint.from_dict(row(tmp_path))
+@pytest.mark.parametrize("purpose", ["difficulty", "training"])
+def test_explicit_purpose_runs_same_verifier_without_qualification_upgrade(tmp_path, monkeypatch, purpose):
+    import socket
+    from unittest.mock import Mock
+
+    ref = PublishedCheckpoint.from_dict({**row(tmp_path), "node": socket.gethostname()})
+    verifier = Mock(return_value=object())
+    monkeypatch.setattr("cooperagents.published.verify_publication", verifier)
+    before = ref.model_dump()
+    assert ref.verify(purpose=purpose) is verifier.return_value
+    verifier.assert_called_once_with(ref)
+    assert ref.model_dump() == before
     assert ref.training_eligible is False and ref.repair_validated is False
-    with pytest.raises(PublicationError, match="difficulty"):
+
+
+@pytest.mark.parametrize("purpose", ["", "unknown"])
+def test_unknown_purpose_never_reads_payload(tmp_path, monkeypatch, purpose):
+    from unittest.mock import Mock
+
+    verifier = Mock()
+    monkeypatch.setattr("cooperagents.published.verify_publication", verifier)
+    with pytest.raises(PublicationError, match="explicit"):
+        PublishedCheckpoint.from_dict(row(tmp_path)).verify(purpose=purpose)
+    verifier.assert_not_called()
+
+
+def test_training_still_requires_recorded_node_and_authentic_manifest(tmp_path, monkeypatch):
+    import socket
+
+    ref = PublishedCheckpoint.from_dict({**row(tmp_path), "node": "definitely-another-node"})
+    with pytest.raises(PublicationError, match="recorded compute node"):
         ref.verify(purpose="training")
+    ref = PublishedCheckpoint.from_dict({**row(tmp_path), "node": socket.gethostname()})
+    with pytest.raises(PublicationError, match="missing"):
+        ref.verify(purpose="training")
+
+
+@pytest.mark.parametrize("purpose", ["difficulty", "training"])
+def test_holder_serializes_explicit_execution_purpose(tmp_path, monkeypatch, purpose):
+    from cooperagents.env.published_holder import MountHolder
+
+    ref = PublishedCheckpoint.from_dict(row(tmp_path))
+    calls = []
+    monkeypatch.setattr(MountHolder, "_initialize", lambda self, *args: calls.append(args))
+    MountHolder(ref, tmp_path, None, purpose=purpose)
+    assert calls[0][0] == {"reference": ref.model_dump(), "purpose": purpose}
+    with pytest.raises(PublicationError, match="explicit"):
+        MountHolder(ref, tmp_path, None, purpose="unknown")
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("purpose", ["difficulty", "training"])
+def test_holder_child_uses_serialized_purpose_before_mounting(tmp_path, monkeypatch, purpose):
+    from cooperagents.env.published_holder import _hold
+
+    seen = []
+
+    def verify(self, *, purpose):
+        seen.append(purpose)
+        raise PublicationError("stop before namespace or payload work")
+
+    monkeypatch.setattr(PublishedCheckpoint, "verify", verify)
+    control = tmp_path / "holder.json"
+    control.write_text(json.dumps({"reference": row(tmp_path), "purpose": purpose}))
+    with pytest.raises(PublicationError, match="stop before"):
+        _hold(control)
+    assert seen == [purpose]

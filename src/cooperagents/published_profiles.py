@@ -149,6 +149,12 @@ def qualification_identity() -> str:
     return file_hash(Path(__file__).with_name("reader_qualification.json"))
 
 
+def validate_image_reader(identity: object) -> None:
+    """Admit only the current reader or explicitly reviewed immutable-image audits."""
+    if identity != qualification_identity() and identity not in _qualification().get("admitted_image_readers", []):
+        raise ValueError("unqualified image reader")
+
+
 def direct_qualification() -> dict:
     """Reviewed allowlist, generated at release time rather than learned from a checkpoint."""
     value = json.loads(Path(__file__).with_name("direct_capture_qualification.json").read_bytes())

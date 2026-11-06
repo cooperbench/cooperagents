@@ -19,12 +19,13 @@ import subprocess
 import sys
 import tempfile
 import time
+from cooperagents import installed_artifacts
 from pathlib import Path
 
 from cooperagents.checkpoint import remove_tree
 from cooperagents.env.image_base import ImageBase
 from cooperagents.env.published_layers import prepare_layers
-from cooperagents.published import PublicationError, PublishedCheckpoint
+from cooperagents.published import SUPPORTED_PURPOSES, PublicationError, PublishedCheckpoint
 
 MODULE = "cooperagents.env.published_holder"
 MAX_READY_BYTES = 2 * 1024 * 1024
@@ -50,8 +51,14 @@ def read_ready(descriptor: int, timeout: float) -> dict:
 
 
 class MountHolder:
-    def __init__(self, reference: PublishedCheckpoint, scratch: Path, base: ImageBase) -> None:
-        self._initialize(dict(reference=reference.model_dump()), scratch, base, reference.id)
+    def __init__(self, reference: PublishedCheckpoint, scratch: Path, base: ImageBase, *, purpose: str = "difficulty") -> None:
+        if purpose not in SUPPORTED_PURPOSES:
+            raise PublicationError("published holder requires explicit difficulty or training purpose")
+        installed = installed_artifacts.publication(Path(reference.publication.path))
+        config = dict(reference=reference.model_dump(), purpose=purpose)
+        if installed is not None:
+            config["installed"] = installed.binding
+        self._initialize(config, scratch, base, reference.id)
 
     @classmethod
     def for_image(cls, image: Path, checksum: str, scratch: Path, base: ImageBase) -> MountHolder:
@@ -232,7 +239,12 @@ def _hold(control: Path) -> None:
         _hold_image(config)
         return
     reference = PublishedCheckpoint.from_dict(config["reference"])
-    publication = reference.verify(purpose="difficulty")
+    with installed_artifacts.admission(Path(reference.publication.path), config.get("installed")):
+        _hold_publication(control, config, reference)
+
+
+def _hold_publication(control, config, reference):
+    publication = reference.verify(purpose=config["purpose"])
     root = Path(config["root"])
     if root != control.parent or root.is_symlink() or root.stat().st_uid != os.getuid():
         raise PublicationError("invalid private holder root")

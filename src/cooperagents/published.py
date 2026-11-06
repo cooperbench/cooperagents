@@ -14,6 +14,7 @@ import socket
 import subprocess
 from collections.abc import Mapping
 from dataclasses import dataclass
+from cooperagents import installed_artifacts
 from pathlib import Path
 from typing import Literal
 
@@ -22,6 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 LEGACY = "repair-overlay-filesystem-candidate-v1"
 V3 = "repair-overlay-v3"
 FORMATS = {"legacy": LEGACY, "v3": V3}
+SUPPORTED_PURPOSES = frozenset({"difficulty", "training"})
 
 
 class PublicationError(ValueError):
@@ -29,6 +31,10 @@ class PublicationError(ValueError):
 
 
 def file_hash(path: Path) -> str:
+    return installed_artifacts.measured(path, _file_hash)
+
+
+def _file_hash(path: Path) -> str:
     with path.open("rb") as stream:
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
@@ -53,7 +59,10 @@ class Locator(BaseModel):
 
 
 class PublishedCheckpoint(BaseModel):
-    """Evaluation-only publication; acquiring it never upgrades repair qualification."""
+    """Authenticated task state with immutable producer qualification flags.
+
+    Explicit training use does not certify historical completeness or feature correctness.
+    """
 
     model_config = ConfigDict(frozen=True, extra="ignore", strict=True)
     id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -92,11 +101,14 @@ class PublishedCheckpoint(BaseModel):
         except ValidationError as exc:
             raise PublicationError(str(exc)) from exc
 
-    def verify(self, *, purpose: str) -> VerifiedPublication:
-        if purpose != "difficulty":
-            raise PublicationError("unvalidated publications require explicit difficulty purpose")
+    def validate_execution(self, *, purpose: str | None) -> None:
+        if purpose not in SUPPORTED_PURPOSES:
+            raise PublicationError("published checkpoints require explicit difficulty or training purpose")
         if socket.gethostname().split(".")[0] != self.node.split(".")[0]:
             raise PublicationError("publication requires its recorded compute node")
+
+    def verify(self, *, purpose: str) -> VerifiedPublication:
+        self.validate_execution(purpose=purpose)
         return verify_publication(self)
 
 
@@ -183,6 +195,13 @@ def _receipt(root: Path, metadata: dict, reference: PublishedCheckpoint) -> dict
 
 
 def verify_publication(reference: PublishedCheckpoint) -> VerifiedPublication:
+    with installed_artifacts.admission(Path(reference.publication.path)) as installed:
+        if installed is not None and (reference.format != V3 or installed.root.name != reference.publication.sha256):
+            raise PublicationError("installed publication format/identity mismatch")
+        return _verify_publication(reference)
+
+
+def _verify_publication(reference: PublishedCheckpoint) -> VerifiedPublication:
     from cooperagents.checkpoint import verify_checkpoint
     from cooperagents.published_profiles import validate_capture
 
