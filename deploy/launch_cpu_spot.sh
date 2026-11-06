@@ -12,32 +12,41 @@
 # group allowing outbound 443 (and SSH in if you want to inspect).
 set -u
 
-# ---- CONFIG (fill these in) -------------------------------------------------
+# ---- CONFIG (filled 2026-11-03) ---------------------------------------------
 INSTANCE_TYPE="m6id.4xlarge"          # 16 vCPU / 64 GiB / local NVMe; use *.metal if you need KVM for TB qemu tasks
 KEY_NAME="cooperbench-key"
-IAM_PROFILE="__IAM_INSTANCE_PROFILE__"  # instance profile NAME
-S3_BUCKET="__S3_BUCKET__"
-S3_PREFIX="cooperagents/remote1"
+IAM_PROFILE="cooperagents-bench-profile"
+S3_BUCKET="cooperagents-bench-361202841353"
+S3_PREFIX="cooperagents/remote2"
 BENCH="all"                           # swebench | terminalbench | all
-AICORE_HOST="__AICORE_HOST__"         # e.g. api.ai.prod.eu-central-1.aws.ml.hana.ondemand.com
+AICORE_HOST="api.ai.internalprod.eu-central-1.aws.ml.hana.ondemand.com"
 SSM_AICORE="/cooperagents/aicore_json"
 SSM_ENV="/cooperagents/dotenv"
-REPO_S3="s3://__S3_BUCKET__/cooperagents/repo.tar.gz"
-DATA_S3="s3://__S3_BUCKET__/cooperagents/data/"
-SWEB_INSTANCES=""                     # space-separated ids; empty = all 500
-TB_TASKS=""                           # comma-separated TB tasks; empty = light subset
+REPO_S3="s3://cooperagents-bench-361202841353/cooperagents/repo.tar.gz"
+DATA_S3="s3://cooperagents-bench-361202841353/cooperagents/data/"
+# Validation scope (the 6 known SWE instances + TB light default). For FULL,
+# set SWEB_INSTANCES="" (all 500) and TB_TASKS to a wider list.
+SWEB_INSTANCES="pylint-dev__pylint-4551 pallets__flask-5014 sympy__sympy-22914 django__django-16082 pytest-dev__pytest-6202 sphinx-doc__sphinx-8621"
+TB_TASKS=""                           # empty = curated light subset
 ROOT_GB=200                           # EBS root; Docker lives on the NVMe
 
-# region  security-group       subnet            az            (eu-central first: co-located w/ endpoint)
+# region  security-group       subnet            az            (eu-central: co-located w/ endpoint)
 TARGETS=(
-  "eu-central-1 __SG_EUC1__ __SUBNET_EUC1A__ eu-central-1a"
-  "eu-central-1 __SG_EUC1__ __SUBNET_EUC1B__ eu-central-1b"
-  "eu-central-1 __SG_EUC1__ __SUBNET_EUC1C__ eu-central-1c"
+  "eu-central-1 sg-0101daa883e636c90 subnet-15a2397e eu-central-1a"
+  "eu-central-1 sg-0101daa883e636c90 subnet-83df0dfe eu-central-1b"
+  "eu-central-1 sg-0101daa883e636c90 subnet-fd8306b0 eu-central-1c"
 )
 # -----------------------------------------------------------------------------
 
 UBUNTU_SSM="/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id"
-MARKET='{"MarketType":"spot","SpotOptions":{"SpotInstanceType":"persistent","InstanceInterruptionBehavior":"stop"}}'
+# LIFECYCLE=spot (cheap, interruptible — restarts resume via run_benchmarks) or
+# ondemand (no interruption; use for a short run that must finish once).
+LIFECYCLE="${LIFECYCLE:-spot}"
+if [ "$LIFECYCLE" = "ondemand" ]; then
+  MARKET_ARG=()
+else
+  MARKET_ARG=(--instance-market-options '{"MarketType":"spot","SpotOptions":{"SpotInstanceType":"persistent","InstanceInterruptionBehavior":"stop"}}')
+fi
 TAGS='ResourceType=instance,Tags=[{Key=Name,Value=cooperagents-bench-job}]'
 
 SRC="$(cd "$(dirname "$0")" && pwd)/user-data.sh"
@@ -78,7 +87,7 @@ for target in "${TARGETS[@]}"; do
     --iam-instance-profile "Name=$IAM_PROFILE" \
     --security-group-ids "$sg" \
     --subnet-id "$subnet" \
-    --instance-market-options "$MARKET" \
+    "${MARKET_ARG[@]}" \
     --block-device-mappings "$VOLUME" \
     --user-data "file://$UD" \
     --tag-specifications "$TAGS" \

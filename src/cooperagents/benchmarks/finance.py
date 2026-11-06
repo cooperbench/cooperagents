@@ -165,23 +165,33 @@ class FinanceToolSet(ToolSet):
     def dispatch(self, env: Environment, action: Action) -> tuple[str, bool] | None:
         assert isinstance(env, StateEnv)
         a = action.args
-        obs: str | None = None
-        if action.tool == "google_search":
-            obs = self._b.google_search(str(a.get("query", "")))
-        elif action.tool == "edgar_search":
-            obs = self._b.edgar_search(str(a.get("query", "")), str(a.get("form_type", "")), str(a.get("cik", "")))
-        elif action.tool == "parse_html":
-            obs = self._b.parse_html(str(a.get("url", "")))
-        elif action.tool == "retrieve_information":
-            obs = self._b.retrieve_information(str(a.get("query", "")))
-        elif action.tool == "submit_answer":
+        if action.tool == "submit_answer":
             env.answer = str(a.get("answer", ""))
             sources = a.get("sources", [])
             env.store["sources"] = sources if isinstance(sources, list) else [str(sources)]
             env.record(f"submit_answer -> {env.answer[:200]!r} sources={len(env.store['sources'])}")
             return "answer recorded", True
-        else:
+        if action.tool not in ("google_search", "edgar_search", "parse_html", "retrieve_information"):
             return None
+        # A tool's HTTP/parse failure (e.g. an upstream 403/timeout) must NOT kill
+        # the agent — surface it as an observation so the agent can try another
+        # source or submit with what it has. Previously an uncaught 403 from SEC
+        # EDGAR / parse_html crashed ~78% of Finance agents (status=error) before
+        # they ever reached submit_answer.
+        try:
+            if action.tool == "google_search":
+                obs = self._b.google_search(str(a.get("query", "")))
+            elif action.tool == "edgar_search":
+                obs = self._b.edgar_search(str(a.get("query", "")), str(a.get("form_type", "")), str(a.get("cik", "")))
+            elif action.tool == "parse_html":
+                obs = self._b.parse_html(str(a.get("url", "")))
+            else:
+                obs = self._b.retrieve_information(str(a.get("query", "")))
+        except NotImplementedError:
+            raise  # unconfigured backend is an operator/config error — surface it, don't mask it
+        except Exception as e:  # noqa: BLE001 - runtime tool failure becomes a recoverable observation
+            obs = (f"[tool error: {type(e).__name__}: {e}] — that source failed; try a "
+                   "different query/tool, or call submit_answer with what you have.")
         env.record(f"{action.tool}({dict(a)}) -> {str(obs)[:200]!r}")
         return obs, False
 
@@ -280,7 +290,10 @@ class LiveFinanceBackend:
             return self._http_get(url)
         import urllib.request
 
-        req = urllib.request.Request(url, headers={"User-Agent": "cooperagents/0.1"})
+        # SEC EDGAR (and others) 403 a generic User-Agent; SEC's fair-access policy
+        # requires a descriptive UA with contact info. Override via FINANCE_HTTP_UA.
+        ua = os.getenv("FINANCE_HTTP_UA", "cooperagents-research cooperagents@example.com")
+        req = urllib.request.Request(url, headers={"User-Agent": ua, "Accept-Encoding": "identity"})
         with urllib.request.urlopen(req, timeout=30) as r:  # noqa: S310 - explicit https URLs
             return r.read().decode("utf-8", "replace")
 

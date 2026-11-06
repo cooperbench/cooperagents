@@ -225,7 +225,18 @@ class Agent:
                                   'JSON object: {"thought": "...", "tool": "<tool-name>", "args": {...}}. '
                                   "Call a tool to continue, or the submit tool to finish — do not answer in prose.")
                         continue
-                    observation, finished = self._dispatch(action)
+                    # A tool / bus failure (bad task-board status, unknown task_id,
+                    # a benchmark tool raising) must NOT kill the agent — surface it
+                    # as a recoverable observation so the agent can correct and
+                    # continue. Previously such errors propagated to the run-level
+                    # handler and ended the agent (status=error), losing all its work
+                    # and silently shrinking team arms.
+                    try:
+                        observation, finished = self._dispatch(action)
+                    except Exception as e:  # noqa: BLE001 - tool error becomes an observation
+                        observation, finished = (
+                            f"[tool error: {type(e).__name__}: {e}] — that action failed; "
+                            "fix the arguments and try again, or finish.", False)
                     self._add("user", self._truncate(observation))
                     if finished:
                         break

@@ -16,9 +16,19 @@ means the same agent/harness code runs three ways:
 from __future__ import annotations
 
 import json
+import os
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
+
+# Process-wide cap on concurrent in-flight LLM calls. Team arms + benchmark
+# parallelism otherwise fire many simultaneous requests at a capacity-limited SAP
+# deployment, which causes queue-timeouts and a self-amplifying retry storm.
+# Tune with COOPER_LLM_MAX_CONCURRENCY (default 4; raise once the deployment is
+# scaled, lower if the endpoint is congested).
+_LLM_MAX_CONCURRENCY = max(1, int(os.getenv("COOPER_LLM_MAX_CONCURRENCY", "4")))
+_LLM_SEM = threading.Semaphore(_LLM_MAX_CONCURRENCY)
 
 
 @dataclass
@@ -193,8 +203,13 @@ class LiteLLMClient:
         import threading as _t
         import time
 
-        hard_cap_s = float(kwargs.pop("_hard_cap_s", 240.0))
+        # Shorter hard cap (was 240s) so a hung call wastes ~2 min not ~4, and
+        # fewer attempts (was 6) so we don't hammer a struggling endpoint. Both
+        # tunable via env. The concurrency semaphore below is the main anti-storm
+        # lever: it bounds how many calls hit the deployment at once.
+        hard_cap_s = float(kwargs.pop("_hard_cap_s", None) or os.getenv("COOPER_LLM_HARD_CAP_S", "120"))
         offline_cap_s = float(kwargs.pop("_offline_cap_s", 6 * 3600.0))
+        max_attempts = max(1, int(os.getenv("COOPER_LLM_MAX_RETRIES", "4")))
         names = ("ServiceUnavailableError", "RateLimitError", "APIConnectionError", "Timeout", "InternalServerError")
         retryable = tuple(
             c for c in (getattr(litellm.exceptions, n, None) for n in names)
@@ -238,7 +253,10 @@ class LiteLLMClient:
         attempt = 0
         while True:
             try:
-                return _call_once()
+                # Bound concurrent in-flight calls process-wide so parallel agents
+                # don't saturate a capacity-limited deployment.
+                with _LLM_SEM:
+                    return _call_once()
             except transient:
                 # Offline (laptop asleep / no wifi / moved): pause and wait for the
                 # network, WITHOUT consuming the retry budget, so the run resumes on
@@ -252,7 +270,7 @@ class LiteLLMClient:
                         waited += 15
                     continue  # network back — retry without counting this attempt
                 attempt += 1
-                if attempt >= 6:
+                if attempt >= max_attempts:
                     raise
                 time.sleep(min(2 ** (attempt - 1) * 2, 60))  # 2,4,8,16,32s
 

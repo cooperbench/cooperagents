@@ -18,6 +18,16 @@ IID=$(curl -sS -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/late
 REGION=$(curl -sS -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/placement/region)
 export AWS_DEFAULT_REGION="$REGION"
 
+# Stream logs to S3 every 60s so a stall/hang is debuggable without SSH.
+LOGBASE="s3://$S3_BUCKET/${S3_PREFIX:-cooperagents}/logs"
+( while true; do
+    aws s3 cp /var/log/cooperagents-boot.log "$LOGBASE/boot.log" --only-show-errors 2>/dev/null || true
+    aws s3 cp "$LOG" "$LOGBASE/job.log" --only-show-errors 2>/dev/null || true
+    sleep 60
+  done ) &
+LOGSYNC_PID=$!
+trap 'kill $LOGSYNC_PID 2>/dev/null; aws s3 cp "$LOG" "$LOGBASE/job.log" --only-show-errors 2>/dev/null || true' EXIT
+
 # Reachability check: a 401 proves the AI Core endpoint is reachable + auth-gated
 # (not network-gated). Abort the boot run if it is unreachable (e.g. no route).
 code=$(curl -sS -o /dev/null -m 15 -w '%{http_code}' "https://${AICORE_HOST}/v2/lm/deployments" 2>/dev/null || echo 000)
@@ -26,6 +36,27 @@ if [ "$code" = "000" ]; then
   echo "AI Core NOT reachable from this box — leaving instance up for inspection."
   exit 1
 fi
+
+# SAP model smoke: one AUTHED completion, isolated from Docker. Tells us
+# immediately (in the S3-streamed log) whether calling the endpoint works from
+# this box, separate from any SWE-bench image-pull issue.
+echo "=== SAP model smoke (one authed call) ==="
+uv run python - <<'PY' 2>&1 | tail -4
+import sys, time
+sys.path.insert(0, "src")
+try:
+    from dotenv import load_dotenv; load_dotenv(".env", override=False)
+except Exception:
+    pass
+try:
+    from cooperagents.llm import LiteLLMClient
+    t0 = time.time()
+    a = LiteLLMClient("sap/gemini-2.5-flash", system_prompt="reply with one word").decide(
+        agent_id="smoke", role="solo", messages=[{"role": "user", "content": "Say OK"}], tools=[])
+    print(f"SAP_SMOKE_OK {time.time()-t0:.1f}s tool={a.tool}")
+except Exception as e:
+    print(f"SAP_SMOKE_FAIL {type(e).__name__}: {str(e)[:200]}")
+PY
 
 bash deploy/run_benchmarks.sh
 rc=$?

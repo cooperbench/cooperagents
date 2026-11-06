@@ -19,6 +19,13 @@ mkdir -p "$RUNS"
 
 sync_s3() { [ -n "${S3_BUCKET:-}" ] && aws s3 sync "$RUNS" "s3://$S3_BUCKET/${S3_PREFIX:-cooperagents}/runs/" --only-show-errors || true; }
 
+# Resume: restore any prior progress from S3 so a restart (reboot / spot stop)
+# continues instead of redoing the whole set. Each arm is then skipped below if
+# its predictions already exist.
+if [ -n "${S3_BUCKET:-}" ]; then
+  aws s3 sync "s3://$S3_BUCKET/${S3_PREFIX:-cooperagents}/runs/" "$RUNS/" --only-show-errors 2>/dev/null || true
+fi
+
 run_swebench() {
   export COOPER_BENCHMARK=swebench
   export SWEBENCH_DATA=data/swebench_verified.jsonl
@@ -33,11 +40,19 @@ run_swebench() {
   local n=0
   for id in $ids; do
     n=$((n+1)); echo "===== [$n] SWE $id ====="
-    uv run python scripts/bench_programbench.py --instance "$id" --arm solo --rep remote \
-      --step-limit "${STEP_LIMIT:-80}" --agent-time-limit 1800 --env-brief --runs-dir "$RUNS/sweb" || echo "SOLO $id failed"
-    uv run python scripts/bench_programbench.py --instance "$id" --arm coopgitc2 --rep remote --team-size 3 \
-      --repair --completion-gate --env-brief --presub-merge \
-      --step-limit "${STEP_LIMIT:-80}" --agent-time-limit 2400 --runs-dir "$RUNS/sweb" || echo "TEAM $id failed"
+    if [ -s "$RUNS/sweb/pb-solo-remote/$id/predictions.jsonl" ]; then
+      echo "  solo cached — skip"
+    else
+      uv run python scripts/bench_programbench.py --instance "$id" --arm solo --rep remote \
+        --step-limit "${STEP_LIMIT:-80}" --agent-time-limit 1800 --env-brief --runs-dir "$RUNS/sweb" || echo "SOLO $id failed"
+    fi
+    if [ -s "$RUNS/sweb/pb-coopgitc2-remote/$id/predictions.jsonl" ]; then
+      echo "  team cached — skip"
+    else
+      uv run python scripts/bench_programbench.py --instance "$id" --arm coopgitc2 --rep remote --team-size 3 \
+        --repair --completion-gate --env-brief --presub-merge \
+        --step-limit "${STEP_LIMIT:-80}" --agent-time-limit 2400 --runs-dir "$RUNS/sweb" || echo "TEAM $id failed"
+    fi
     sync_s3
   done
   cat "$RUNS"/sweb/pb-solo-remote/*/predictions.jsonl > "$RUNS/sweb/solo_predictions.jsonl" 2>/dev/null || true
@@ -55,9 +70,12 @@ run_terminalbench() {
   # subset by default; set TB_TASKS to a comma-separated list to override.
   local extra=""
   [ -n "${TB_TASKS:-}" ] && extra="--tasks ${TB_TASKS}"
+  # Resume the TB subset if a prior dir was restored (reuses finished patches).
+  local dirflag="--out-dir $RUNS/tbcore"
+  [ -f "$RUNS/tbcore/run_config.json" ] && dirflag="--resume $RUNS/tbcore"
   uv run python scripts/tb_core_box.py --model "$MODEL" --team-size 3 \
     --step-limit "${STEP_LIMIT:-50}" --agent-time-limit 900 \
-    --out-dir "$RUNS/tbcore" $extra || echo "TB failed"
+    $dirflag $extra || echo "TB failed"
 }
 
 case "${BENCH:-swebench}" in

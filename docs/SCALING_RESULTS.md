@@ -55,7 +55,9 @@ Fixes landed in the shared state loop and the answer-graded path:
 - `_agent_breakdown` now records each agent's `error` (was dropped).
 
 PlanCraft re-run `*_v2` (loop fix); BrowseComp/Finance re-run `*_v3` (loop fix +
-answer_only). All clean, zero-step tasks = 0. WorkBench 690 re-run in progress.
+answer_only); WorkBench 690 re-run `wb_*_v2` (loop fix), complete 2026-10-30. All
+clean, zero-step tasks = 0 (the offline-pause rode out laptop sleeps without
+corrupting any task).
 
 | Benchmark | arm | pre-fix | post-fix | note |
 | --- | --- | --- | --- | --- |
@@ -65,9 +67,22 @@ answer_only). All clean, zero-step tasks = 0. WorkBench 690 re-run in progress.
 | BrowseComp (test, 100) | solo | 0.010 | **0.110** | loop fix + answer veto: agents now answer |
 | | solo-iso | 0.010 | **0.140** | |
 | | team | 0.020 | **0.090** | reducer fix: 0.000 (bug) → 0.090 real passes |
-| Finance (open-50) | solo | — | 0.000 | keyless ddg search |
-| | solo-iso | — | 0.000 | |
-| | team | — | **0.040** | only scoring arm (2/50) |
+| Finance (open-50) | solo | — | **0.100** | keyless ddg; after tool-crash fix (v4) |
+| | solo-iso | — | **0.080** | |
+| | team | — | **0.080** | 403/coordination crashes fixed; was 0.000 (tool bug) |
+| WorkBench (pooled, 690) | solo | 0.488 | 0.506 | |
+| | solo-iso | 0.483 | 0.507 | |
+| | team | 0.542 | **0.596** | team benefit **+11.0% → +17.8%** vs solo |
+
+WorkBench per-domain team (pre → post): email 0.722 → **0.833**; calendar 0.755 →
+**0.818**; analytics 0.592 → 0.575 (flat); project_management 0.425 → **0.500**
+(−8.1% → **+8.1%** vs solo); customer_relationship_manager 0.463 → **0.512** (−9.8%
+→ **+5.1%**); multi_domain 0.400 → **0.457** (−3.4% → **+5.5%**). The format-retry
+disproportionately helps the TEAM arm — it **flipped three previously-negative
+domains positive** (pm, CRM, multi_domain) and lifted pooled team benefit from
++11.0% to +17.8%. Agents that used to die on a prose lapse now recover and finish,
+and a team of three loses more work to that failure mode than a solo agent, so the
+fix helps team more.
 
 ### Team-reducer bug on answer-graded benchmarks (fixed 2026-10-27)
 
