@@ -173,3 +173,16 @@ def test_repair_generation_restricts_new_sampling_fields():
                    {"reasoning_effort": 1.0}, {"reasoning_effort": "other"}, {"reasoning_effort": float("nan")}):
         with pytest.raises(ValueError):
             safe_generation(fields)
+
+
+def test_non_capture_json_omits_capture_profile(monkeypatch, tmp_path):
+    import json
+
+    from cooperagents.repair import load_repair_input
+
+    checkpoint = make_checkpoint(monkeypatch, tmp_path)
+    raw = (checkpoint / "repair-input.json").read_text()
+    saved = load_repair_input(checkpoint)
+    assert saved.capture_profile is None
+    assert "capture_profile" not in json.loads(raw)
+    assert raw == saved.model_dump_json(indent=2)

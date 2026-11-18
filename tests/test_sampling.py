@@ -44,7 +44,13 @@ def test_worker_coordinator_profile_parity(monkeypatch, shared_tokens, worker_to
     client = openai.OpenAI(
         api_key="test-only", base_url="https://example.test/v1", http_client=httpx.Client(transport=httpx.MockTransport(respond))
     )
-    monkeypatch.setattr(openai, "OpenAI", lambda **_: client)
+    real_openai = openai.OpenAI
+    def openai_client(**kwargs):
+        if "http_client" not in kwargs:
+            return client
+        kwargs["http_client"]._transport = httpx.MockTransport(respond)
+        return real_openai(**kwargs)
+    monkeypatch.setattr(openai, "OpenAI", openai_client)
     coordinator = _default_planner_complete("qwen/qwen3.5-9b", None, None)
     assert coordinator is not None
     assert coordinator("stalled") == "Try another command."
@@ -56,9 +62,9 @@ def test_worker_coordinator_profile_parity(monkeypatch, shared_tokens, worker_to
         kwargs.pop("api_key", None)
         kwargs.pop("drop_params", None)
         kwargs.pop("timeout", None)
-        kwargs.pop("client", None)
+        worker_client = kwargs.pop("client")
         kwargs["model"] = kwargs["model"].removeprefix("openai/")
-        return client.chat.completions.create(**kwargs)
+        return worker_client.chat.completions.create(**kwargs)
 
     monkeypatch.setattr("litellm.completion", worker_completion)
     worker._query_inner([{"role": "user", "content": "work"}])
@@ -391,3 +397,20 @@ def test_missing_sampling_field_fails_before_network(monkeypatch):
     monkeypatch.setattr(litellm, "completion", lose_effort)
     with pytest.raises(Exception, match="reasoning_effort"):
         build_model("tinker-model")._query_inner([{"role": "user", "content": "work"}], _tools=None)
+
+
+def test_configured_sampling_rejects_unverified_transport(monkeypatch):
+    import litellm
+
+    from cooperagents.vendor.mini_swe.models.litellm_model import SamplingTransportError
+
+    for key in list(os.environ):
+        if key.startswith("COOPER_"):
+            monkeypatch.delenv(key)
+    monkeypatch.setenv("COOPER_REASONING_EFFORT", "high")
+    monkeypatch.setenv("OPENAI_API_KEY", "test")
+    monkeypatch.setattr(litellm, "completion", lambda **kwargs: {"successful_but_unverified": True})
+    with pytest.raises(SamplingTransportError, match="request was not verified at the HTTP boundary"):
+        build_model("test")._query_inner([{"role": "user", "content": "work"}])
+    monkeypatch.delenv("COOPER_REASONING_EFFORT")
+    assert build_model("test")._query_inner([{"role": "user", "content": "work"}]) == {"successful_but_unverified": True}

@@ -222,6 +222,7 @@ class LitellmModel:
         if "reasoning_effort" in merged:
             merged["allowed_openai_params"] = sorted(set(merged.get("allowed_openai_params", [])) | {"reasoning_effort"})
         http_client = None
+        verified = False
         rejected = []
         if strict and not self.config.model_name.startswith("openai/"):
             raise ValueError("Cannot verify configured sampling fields for this provider")
@@ -230,6 +231,7 @@ class LitellmModel:
             from openai import OpenAI
 
             def verify_body(request):
+                nonlocal verified
                 body = json.loads(request.content)
                 missing = [name for name, value in expected.items() if name not in body or body[name] != value]
                 if missing:
@@ -241,6 +243,7 @@ class LitellmModel:
                 trace = self.trace if _trace is None else _trace
                 if trace is not None:
                     trace("wire_request", request=body)
+                verified = True
 
             http_client = httpx.Client(event_hooks={"request": [verify_body]})
             client = OpenAI(api_key=merged.get("api_key") or os.getenv("OPENAI_API_KEY") or "missing",
@@ -254,13 +257,16 @@ class LitellmModel:
             return litellm.completion(**request)
 
         try:
-            return record_call(
+            result = record_call(
                 self.trace if _trace is None else _trace, completion,
                 model=self.config.model_name,
                 messages=messages,
                 tools=tools,
                 **merged,
             )
+            if strict and not verified:
+                raise SamplingTransportError("request was not verified at the HTTP boundary")
+            return result
         except Exception as e:
             if rejected:
                 raise SamplingTransportError("Configured sampling fields missing, changed, or conflicting: " + ", ".join(rejected)) from e

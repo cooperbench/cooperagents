@@ -10,7 +10,7 @@ from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_serializer, model_validator
 
 from cooperagents.bus.base import TeamBus
 from cooperagents.checkpoint import complete_output, sha256, verify_checkpoint
@@ -170,6 +170,13 @@ class RepairInput(BaseModel):
     source_hashes: dict[str, str]
     evidence_hashes: dict[str, str] = Field(default_factory=dict)
     legacy_event_sequences: dict[str, int] = Field(default_factory=dict)
+
+    @model_serializer(mode="wrap")
+    def serialize(self, handler):
+        data = handler(self)
+        if self.capture_profile is None:
+            data.pop("capture_profile", None)
+        return data
 
     @model_validator(mode="after")
     def validate_effective_input(self) -> RepairInput:
