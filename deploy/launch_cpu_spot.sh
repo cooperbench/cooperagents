@@ -17,8 +17,8 @@ INSTANCE_TYPE="m6id.4xlarge"          # 16 vCPU / 64 GiB / local NVMe; use *.met
 KEY_NAME="cooperbench-key"
 IAM_PROFILE="cooperagents-bench-profile"
 S3_BUCKET="cooperagents-bench-361202841353"
-S3_PREFIX="cooperagents/remote2"
-BENCH="all"                           # swebench | terminalbench | all
+S3_PREFIX="cooperagents/tb_full"
+BENCH="terminalbench"                 # swebench | terminalbench | all
 AICORE_HOST="api.ai.internalprod.eu-central-1.aws.ml.hana.ondemand.com"
 SSM_AICORE="/cooperagents/aicore_json"
 SSM_ENV="/cooperagents/dotenv"
@@ -27,7 +27,7 @@ DATA_S3="s3://cooperagents-bench-361202841353/cooperagents/data/"
 # Validation scope (the 6 known SWE instances + TB light default). For FULL,
 # set SWEB_INSTANCES="" (all 500) and TB_TASKS to a wider list.
 SWEB_INSTANCES="pylint-dev__pylint-4551 pallets__flask-5014 sympy__sympy-22914 django__django-16082 pytest-dev__pytest-6202 sphinx-doc__sphinx-8621"
-TB_TASKS=""                           # empty = curated light subset
+TB_TASKS="blind-maze-explorer-5x5,blind-maze-explorer-algorithm,blind-maze-explorer-algorithm.easy,blind-maze-explorer-algorithm.hard,chess-best-move,configure-git-webserver,create-bucket,crack-7z-hash,crack-7z-hash.easy,crack-7z-hash.hard,cron-broken-network,csv-to-parquet,decommissioning-service-with-sensitive-data,fibonacci-server,fix-pandas-version,fix-permissions,git-multibranch,git-workflow-hack,grid-pattern-transform,hello-world,heterogeneous-dates,intrusion-detection,jupyter-notebook-server,modernize-fortran-build,new-encrypt-command,nginx-request-logging,openssl-selfsigned-cert,organization-json-generator,password-recovery,play-zork,polyglot-c-py,polyglot-rust-c,processing-pipeline,prove-plus-comm,sanitize-git-repo,sanitize-git-repo.hard,sqlite-db-truncate,sqlite-with-gcov,swe-bench-astropy-1,swe-bench-astropy-2,swe-bench-fsspec,swe-bench-langcodes,vim-terminal-task,write-compressor"  # 44 CPU-feasible TB-core tasks
 ROOT_GB=200                           # EBS root; Docker lives on the NVMe
 
 # region  security-group       subnet            az            (eu-central: co-located w/ endpoint)
