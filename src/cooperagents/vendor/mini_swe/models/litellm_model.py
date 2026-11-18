@@ -197,6 +197,8 @@ class LitellmModel:
         from cooperagents.trajectory import record_call
 
         merged = self.config.model_kwargs | kwargs
+        if "max_tokens" in merged and "max_completion_tokens" in merged:
+            raise ValueError("max_tokens and max_completion_tokens are mutually exclusive")
         tools = merged.pop("_tools", self._tools)  # _tools=None: plain call (summarizer)
         try:
             return record_call(
@@ -241,7 +243,12 @@ class LitellmModel:
         self._heartbeat(time.time() - _t0)
         cost_output = self._calculate_cost(response)
         GLOBAL_MODEL_STATS.add(cost_output["cost"])
-        message = response.choices[0].message.model_dump()
+        response_message = response.choices[0].message
+        message = response_message.model_dump()
+        # Some provider adapters expose reasoning as an attribute outside their dump.
+        reasoning = getattr(response_message, "reasoning_content", None)
+        if reasoning is not None:
+            message["reasoning_content"] = reasoning
         message["extra"] = {
             "actions": self._parse_actions(response),
             "response": response.model_dump(),

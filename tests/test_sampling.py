@@ -276,3 +276,59 @@ def test_injected_coordinator_uses_separate_endpoint_and_records_once(monkeypatc
     assert sum(row["event"] == "response" for row in rows) == 1
     assert {"decision", "nudge", "delivery"} <= {row["event"] for row in rows}
     assert not replay(journal.path)["pending_calls"]
+
+
+def test_tinker_request_exact_json(monkeypatch):
+    import json
+
+    for key in list(os.environ):
+        if key.startswith("COOPER_"):
+            monkeypatch.delenv(key)
+    for key, value in {
+        "COOPER_SEND_EXTRA_BODY": "false",
+        "COOPER_MAX_COMPLETION_TOKENS": "32768",
+        "COOPER_WORKER_MAX_COMPLETION_TOKENS": "4096",
+        "COOPER_REASONING_EFFORT": "high",
+        "COOPER_TEMPERATURE_FORCE": "1",
+        "COOPER_TOP_P": "1",
+    }.items():
+        monkeypatch.setenv(key, value)
+    seen = []
+    def respond(request):
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": "done"}}]})
+    with openai.OpenAI(
+        api_key="test", base_url="https://example.test/v1", http_client=httpx.Client(transport=httpx.MockTransport(respond))
+    ) as client:
+        def complete(**kwargs):
+            for key in ("tools", "api_base", "api_key", "drop_params", "timeout"):
+                kwargs.pop(key, None)
+            return client.chat.completions.create(**kwargs)
+        monkeypatch.setattr("litellm.completion", complete)
+        build_model("tinker-model")._query_inner([{"role": "user", "content": "work"}], _tools=None)
+    assert seen == [{"model": "openai/tinker-model", "messages": [{"role": "user", "content": "work"}],
+                     "max_completion_tokens": 4096, "reasoning_effort": "high", "temperature": 1, "top_p": 1}]
+    monkeypatch.setenv("COOPER_MAX_TOKENS", "20")
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        sampling_kwargs()
+    monkeypatch.delenv("COOPER_MAX_TOKENS")
+    monkeypatch.setenv("COOPER_TOP_K", "20")
+    with pytest.raises(ValueError, match="COOPER_SEND_EXTRA_BODY.*COOPER_TOP_K"):
+        sampling_kwargs()
+
+
+@pytest.mark.parametrize("send_extra", [None, "true", "1", "false", "0"])
+def test_extra_body_three_states(monkeypatch, send_extra):
+    for key in list(os.environ):
+        if key.startswith("COOPER_"):
+            monkeypatch.delenv(key)
+    if send_extra is not None:
+        monkeypatch.setenv("COOPER_SEND_EXTRA_BODY", send_extra)
+    assert "extra_body" not in sampling_kwargs()
+    monkeypatch.setenv("COOPER_TOP_K", "20")
+    monkeypatch.setenv("COOPER_CHAT_TEMPLATE_ENABLE_THINKING", "false")
+    if send_extra in ("false", "0"):
+        with pytest.raises(ValueError, match="COOPER_CHAT_TEMPLATE_ENABLE_THINKING.*COOPER_TOP_K"):
+            sampling_kwargs()
+    else:
+        assert sampling_kwargs()["extra_body"] == {"top_k": 20, "chat_template_kwargs": {"enable_thinking": False}}

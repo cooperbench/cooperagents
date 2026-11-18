@@ -284,7 +284,7 @@ def test_mine_conventions_injected_into_prompt():
     assert "mine conventions" in joined
 
 
-def test_no_seed_independent_plus_merge():
+def test_no_seed_independent_plus_merge(tmp_path):
     # no-seed: agents work independently (own container, base only); a mechanical
     # merge combines their patches → integrated has both features' work.
     spec = TeamSpec(
@@ -303,6 +303,11 @@ def test_no_seed_independent_plus_merge():
     assert res.integrated is not None
     assert "NOTES_agent1.md" in res.integrated.patch
     assert "NOTES_agent2.md" in res.integrated.patch
+    from cooperagents.eval.cooperbench import write_run_outputs
+    path = write_run_outputs(res, run_name="test", logs_dir=tmp_path)
+    for actor in ("agent1", "agent2"):
+        assert f"NOTES_{actor}.md" in (path / f"{actor}.raw.patch").read_text()
+        assert f"NOTES_{actor}.md" in (path / f"{actor}.stripped.patch").read_text()
 
 
 def test_best_of_n_runs_n_attempts_and_selects():
@@ -1134,3 +1139,46 @@ def test_injected_coordinator_no_intervention_returns_normally(monkeypatch):
     result = UnifiedHarness(coordinator_complete=lambda _: []).run(spec, env_factory=env_factory)
     assert result.metrics["coordinator_events"] == []
     assert sorted(cleaned) == ["agent1", "agent2", "merge"]
+
+
+def test_capture_merged_state_health_cases(monkeypatch, tmp_path):
+    import pytest
+
+    from cooperagents.checkpoint import RepairCheckpointCaptured
+    from cooperagents.types import AgentResult
+
+    for healthy in (True, False):
+        captured = []
+        monkeypatch.setattr("cooperagents.harness._tree_health", lambda env, healthy=healthy: healthy)
+        def fake_worker(env, *, agent_id, role, on_start=None, **kwargs):
+            if on_start:
+                from types import SimpleNamespace
+                agent = SimpleNamespace(env=SimpleNamespace(_timeout=60, _guard_git=False))
+                try:
+                    on_start(agent)
+                except RepairCheckpointCaptured:
+                    return AgentResult(agent_id=agent_id, role=role, status="checkpointed")
+                pytest.fail("capture must stop before inference")
+            env.write_file(f"{agent_id}.py", "x = 1\n")
+            return AgentResult(agent_id=agent_id, role=role, status="submitted")
+        def save(env, path, *, metadata, repair_input, trace, capture_format, captured=captured):
+            captured.append((metadata, capture_format))
+            path.mkdir()
+            (path / "integration.patch").write_text(env.git_diff())
+        monkeypatch.setattr("cooperagents.workers.mini_swe_worker.run_mini_swe_agent", fake_worker)
+        monkeypatch.setattr("cooperagents.checkpoint.save_checkpoint", save)
+        monkeypatch.setattr("cooperagents.repair.capture_repair_input", lambda *a, **k: object())
+        monkeypatch.setattr("cooperagents.repair.load_repair_input", lambda *a, **k: None)
+        def factory(_id):
+            env = LocalEnv.fresh()
+            env.capture_repair_checkpoint = lambda *a, **k: None
+            return env
+        spec = TeamSpec(run_id=f"health-{healthy}", repo="demo", task_id=1, features=[1, 2],
+                        assignments=[Assignment("agent1", "one", feature_id=1), Assignment("agent2", "two", feature_id=2)],
+                        shared_workspace=True, seed_prior=False, worker="mini_swe")
+        checkpoint_dir = tmp_path / str(healthy)
+        result = UnifiedHarness(checkpoint_dir=checkpoint_dir, capture_merged_state=True).run(spec, env_factory=factory)
+        assert result.integrated.status == "checkpointed"
+        assert (checkpoint_dir / "before-integrator1" / "integration.patch").is_file()
+        assert captured[0][0]["healthy"] is healthy
+        assert captured[0][1] == "v3"

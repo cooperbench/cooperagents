@@ -233,6 +233,7 @@ def run_team(
     record_trajectory: bool = False,
     checkpoint_repair: bool = False,
     stop_after_repair_checkpoint: bool = False,
+    capture_merged_state: bool = False,
     only_first_repair_checkpoint: bool = False,
     collect_source_conflicts: bool = False,
 ) -> dict:
@@ -316,7 +317,7 @@ def run_team(
     pair_dir = logs_dir / run_name / "team" / item.repo / str(item.task_id) / "_".join(f"f{f}" for f in sorted(feats))
     notebook_path = (pair_dir / "coordination" / run_id / "notebook.md").resolve() if coordinator and coordinator_notebook else None
     harness = UnifiedHarness(
-        bus=None if checkpoint_repair else InMemoryBus(run_id),
+        bus=None if checkpoint_repair or capture_merged_state else InMemoryBus(run_id),
         step_limit=step_limit,
         command_timeout=300,
         coordinator_notebook_path=notebook_path,
@@ -330,7 +331,8 @@ def run_team(
         planning_step_limit=planning_step_limit,
         planning_time_limit_s=planning_time_limit,
         worker_reminder_interval=worker_reminder_interval,
-        checkpoint_dir=pair_dir / "checkpoints" if checkpoint_repair else None,
+        checkpoint_dir=pair_dir / "checkpoints" if checkpoint_repair or capture_merged_state else None,
+        capture_merged_state=capture_merged_state,
         stop_after_repair_checkpoint=stop_after_repair_checkpoint,
         only_first_repair_checkpoint=only_first_repair_checkpoint,
         collect_source_conflicts=collect_source_conflicts,
@@ -345,8 +347,8 @@ def run_team(
 
     trajectory = None
     if record_trajectory or checkpoint_repair:
-        if best_of_n != 1 or decompose or adaptive or not coop_tools:
-            raise ValueError("Trajectory collection requires a single coop-tools team")
+        if best_of_n != 1 or decompose or adaptive or (not coop_tools and not capture_merged_state):
+            raise ValueError("Trajectory collection requires a single coop-tools team or merged-state capture")
         trajectory = Trajectory(pair_dir / "trajectory.jsonl.gz")
         harness.trajectory = trajectory
         trajectory.emit(
@@ -482,6 +484,7 @@ def main() -> None:
     ap.add_argument("--resume", action="store_true", help="skip pairs that already have a result.json on disk")
     ap.add_argument("--langfuse", action="store_true", help="export worker and coordinator traces to Langfuse (default: off)")
     ap.add_argument("--record-trajectory", action="store_true", help="append complete agent/coordinator I/O for replay")
+    ap.add_argument("--capture-merged-state", action="store_true", help="capture the merged tree and stop before evaluation")
     ap.add_argument("--checkpoint-repair", action="store_true", help="save worker and repair filesystems and full I/O for replay")
     ap.add_argument("--stop-after-repair-checkpoint", action="store_true",
                     help="stop after before-integrator1 is saved, without repair inference or official evaluation")
@@ -491,6 +494,12 @@ def main() -> None:
                     help="training collection only: also capture source conflict blocks despite a healthy gate")
     ap.add_argument("--skip-eval", action="store_true", help="write generation artifacts without scoring")
     args = ap.parse_args()
+    if args.capture_merged_state:
+        if (not args.team_only or args.solo_only or not args.no_seed or args.repair_integrator
+            or args.focused_repair or args.verify_fix or args.completeness_review or args.checkpoint_repair
+            or args.stop_after_repair_checkpoint or args.only_first_repair_checkpoint or args.collect_source_conflicts):
+            ap.error("--capture-merged-state requires a no-seed team and excludes repair flags")
+        args.skip_eval = True
     if args.collect_source_conflicts and not args.stop_after_repair_checkpoint:
         ap.error("--collect-source-conflicts requires --stop-after-repair-checkpoint")
     if args.only_first_repair_checkpoint and not args.stop_after_repair_checkpoint:
@@ -618,6 +627,7 @@ def main() -> None:
                     repair_attempts=args.repair_attempts,
                     record_trajectory=args.record_trajectory,
                     checkpoint_repair=args.checkpoint_repair,
+                    capture_merged_state=args.capture_merged_state,
                     stop_after_repair_checkpoint=args.stop_after_repair_checkpoint,
                     only_first_repair_checkpoint=args.only_first_repair_checkpoint,
                     collect_source_conflicts=args.collect_source_conflicts,
