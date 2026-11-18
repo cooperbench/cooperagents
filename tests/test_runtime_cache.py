@@ -376,6 +376,119 @@ def test_real_linux_consumer_cannot_write_sealed_layer(artifact):
             os.ftruncate(cache.descriptor, 0)
 
 
+def test_eval_cache_and_repair_use_same_mount_plan(artifact, fake_seals, fake_mount_host, tmp_path, monkeypatch):
+    patch_inputs(monkeypatch, artifact.identity)
+    commands = []
+    helper = Mock()
+    monkeypatch.setattr("cooperagents.env.runtime_cache_mount.subprocess.Popen", Mock(return_value=helper))
+    monkeypatch.setattr("cooperagents.env.runtime_cache_mount.os.path.ismount", lambda _: True)
+    monkeypatch.setattr("cooperagents.env.runtime_cache_mount.subprocess.run", lambda args, **kw: commands.append(args))
+    with artifact.open() as cache:
+        training_root, eval_root = tmp_path / "training", tmp_path / "eval"
+        publication = episode(training_root, artifact.identity)
+        episode(eval_root, artifact.identity)
+        training, _ = prepare_cache(cache.transport(), training_root, publication)
+        evaluation, _ = prepare_cache(cache.transport(), eval_root, task=("demo", 1), image="b" * 64)
+        assert training == evaluation
+        assert str(training_root) not in " ".join(commands[1])
+        assert str(eval_root) not in " ".join(commands[0])
+        assert commands[0][-2].replace(str(training_root), "ROOT") == commands[1][-2].replace(str(eval_root), "ROOT")
+
+
+@pytest.mark.parametrize("shared", [True, False])
+def test_eval_backend_forwards_capability_and_reuses_admitted_base(artifact, fake_seals, tmp_path, monkeypatch, shared):
+    from cooperagents.eval.apptainer import ApptainerEvalBackend
+    from cooperagents.eval.dataset import image_name
+
+    base = Mock()
+    env = Mock(runtime_cache_receipt={"status": "hit"})
+    shared_factory = Mock(return_value=env)
+    prepare = Mock(return_value=base)
+    cold = Mock(side_effect=AssertionError("cold constructor forbidden for cache hit"))
+    monkeypatch.setattr("cooperagents.eval.apptainer.ApptainerEnv", cold)
+    monkeypatch.setattr(cold, "from_image_base", shared_factory, raising=False)
+    monkeypatch.setattr("cooperagents.eval.apptainer.ImageBase.prepare", prepare)
+    monkeypatch.setattr("cooperagents.eval.apptainer.sha256", lambda _: pytest.fail("per-sandbox SIF hash forbidden"))
+    with artifact.open() as cache:
+        image = image_name("demo", 1)
+        backend = ApptainerEvalBackend({image: "/image.sif"}, str(tmp_path), runtime_caches={image: cache},
+                                      **({"image_base": base, "shared_image": ("/image.sif", "b" * 64)} if shared else {}))
+        sandbox = backend.create_sandbox(image)
+        assert shared_factory.call_args.kwargs["runtime_cache"] is cache
+        assert shared_factory.call_args.kwargs["cache_task"] == ("demo", 1)
+        assert prepare.call_count == (0 if shared else 1)
+        assert sandbox.check_base
+        sandbox.terminate()
+        env.cleanup.assert_called_once()
+        base.close.assert_not_called()
+        assert cache.descriptor >= 0
+        # A second sandbox borrows the already-admitted base without rehashing.
+        second = backend.create_sandbox(image)
+        assert prepare.call_count == (0 if shared else 1)
+        second.terminate()
+        backend.close()
+        backend.close()
+        assert base.close.call_count == (0 if shared else 1)
+
+
+@pytest.mark.parametrize("reason", ["missing", "task", "image", "manifest", "mount"])
+def test_eval_cache_failure_returns_original_constructor(artifact, fake_seals, tmp_path, monkeypatch, reason):
+    from cooperagents.eval.apptainer import ApptainerEvalBackend
+    from cooperagents.eval.dataset import image_name
+
+    with artifact.open() as cache:
+        image = image_name("demo", 1)
+        cold_env = Mock()
+        native = Mock(return_value=cold_env)
+        warm_env = Mock(runtime_cache_receipt={"status": "fallback", "reason": "mount failed"})
+        shared_factory = Mock(return_value=warm_env)
+        base = Mock()
+        monkeypatch.setattr("cooperagents.eval.apptainer.ApptainerEnv", native)
+        monkeypatch.setattr(native, "from_image_base", shared_factory, raising=False)
+        prepare = Mock(side_effect=ValueError("SIF identity mismatch")) if reason == "image" else Mock(return_value=base)
+        monkeypatch.setattr("cooperagents.eval.apptainer.ImageBase.prepare", prepare)
+        if reason == "missing":
+            cache.close()
+        if reason == "task":
+            image = image_name("demo", 999)
+        backend = ApptainerEvalBackend({image: "/image.sif"}, str(tmp_path), runtime_caches={image: cache},
+                                      image_manifest_sha256="a" * 64 if reason == "manifest" else None)
+        sandbox = backend.create_sandbox(image)
+        native.assert_called_once_with("/image.sif", scratch=str(tmp_path))
+        assert cold_env.repo_path == "/workspace"
+        record = cold_env._record_runtime_cache.call_args.args[0]
+        assert record["status"] == "fallback" and record["reason"]
+        if reason == "mount":
+            warm_env.cleanup.assert_called_once()
+        else:
+            shared_factory.assert_not_called()
+        sandbox.terminate()
+
+
+def test_eval_holder_records_receipt_and_keeps_borrowed_base(tmp_path, monkeypatch):
+    from cooperagents.env.base import ExecResult
+    from cooperagents.env.published_holder import MountHolder
+
+    root = tmp_path / "eval"
+    root.mkdir()
+    holder = SimpleNamespace(root=root, ready={"runtime_cache": {"status": "hit", "key": "a" * 64}},
+                             exec_prefix=lambda: (), close=Mock())
+    factory = Mock(return_value=holder)
+    monkeypatch.setattr(MountHolder, "for_image", factory)
+    monkeypatch.setattr(ApptainerEnv, "execute", lambda _, cmd: ExecResult("a" * 40 if cmd.startswith("git ") else "EVALUATOR_READY", 0))
+    base = Mock()
+    cache = RuntimeCache(-1, {})
+    env = ApptainerEnv.from_image_base(Path("/image.sif"), "b" * 64, scratch=tmp_path, base=base,
+                                      runtime_cache=cache, cache_task=("demo", 1))
+    assert factory.call_args.kwargs == {"runtime_cache": cache, "cache_task": ("demo", 1)}
+    assert json.loads((root / "receipts.json").read_text())["runtime_cache"]["status"] == "hit"
+    assert env._argv.count("--env") == 1
+    env.cleanup()
+    holder.close.assert_called_once()
+    base.close.assert_not_called()
+    assert not root.exists()
+
+
 @pytest.mark.parametrize("failure", [None, "uid", "helper_exists", "squashfuse_mount", "overlay_mount",
                                      "private-write", "leak", "fallback"])
 def test_preflight_requires_real_mount_checks_and_private_upper(artifact, fake_seals, tmp_path, monkeypatch, failure):
