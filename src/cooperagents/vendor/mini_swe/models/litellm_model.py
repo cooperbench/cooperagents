@@ -25,6 +25,10 @@ from cooperagents.vendor.mini_swe.models.utils.retry import retry
 logger = logging.getLogger("litellm_model")
 
 
+class SamplingTransportError(ValueError):
+    """An explicitly configured request parameter would not reach the endpoint."""
+
+
 
 def _toolcalls_from_xml(content: str) -> list:
     """Fallback: parse Qwen-style <tool_call> XML out of raw content.
@@ -102,6 +106,7 @@ class LitellmModel:
     _validate_active_tools = False
 
     abort_exceptions: list[type[BaseException]] = [
+        SamplingTransportError,
         litellm.exceptions.UnsupportedParamsError,
         litellm.exceptions.NotFoundError,
         litellm.exceptions.PermissionDeniedError,
@@ -200,17 +205,71 @@ class LitellmModel:
         if "max_tokens" in merged and "max_completion_tokens" in merged:
             raise ValueError("max_tokens and max_completion_tokens are mutually exclusive")
         tools = merged.pop("_tools", self._tools)  # _tools=None: plain call (summarizer)
+        # LiteLLM can silently drop unsupported parameters when drop_params is set.
+        # Verify the serialized body at the HTTP boundary before it is sent.
+        from cooperagents.sampling import sampling_kwargs
+
+        expected = sampling_kwargs(temperature=merged.get("temperature"), worker=True)
+        expected_extra = expected.pop("extra_body", {})
+        expected.update(expected_extra)
+        strict = any(os.getenv(key) is not None for key in (
+            "COOPER_MAX_COMPLETION_TOKENS", "COOPER_WORKER_MAX_COMPLETION_TOKENS",
+            "COOPER_REASONING_EFFORT", "COOPER_SEND_EXTRA_BODY", "COOPER_TEMPERATURE", "COOPER_TEMPERATURE_FORCE",
+            "COOPER_TOP_P", "COOPER_PRESENCE_PENALTY", "COOPER_TOP_K", "COOPER_MIN_P", "COOPER_REPETITION_PENALTY",
+            "COOPER_MAX_TOKENS", "COOPER_WORKER_MAX_TOKENS", "COOPER_REASONING_ENABLED", "COOPER_REQUIRE_PARAMETERS",
+            "COOPER_CHAT_TEMPLATE_ENABLE_THINKING", "COOPER_WORKER_CHAT_TEMPLATE_ENABLE_THINKING", "COOPER_PROVIDER_ONLY",
+        ))
+        if "reasoning_effort" in merged:
+            merged["allowed_openai_params"] = sorted(set(merged.get("allowed_openai_params", [])) | {"reasoning_effort"})
+        http_client = None
+        rejected = []
+        if strict and not self.config.model_name.startswith("openai/"):
+            raise ValueError("Cannot verify configured sampling fields for this provider")
+        if strict:
+            import httpx
+            from openai import OpenAI
+
+            def verify_body(request):
+                body = json.loads(request.content)
+                missing = [name for name, value in expected.items() if name not in body or body[name] != value]
+                if missing:
+                    rejected.extend(missing)
+                    raise SamplingTransportError("Configured sampling fields missing or changed in outgoing request: " + ", ".join(missing))
+                if "max_completion_tokens" in expected and "max_tokens" in body:
+                    rejected.append("max_tokens")
+                    raise SamplingTransportError("Outgoing request contains both token limit fields")
+                trace = self.trace if _trace is None else _trace
+                if trace is not None:
+                    trace("wire_request", request=body)
+
+            http_client = httpx.Client(event_hooks={"request": [verify_body]})
+            client = OpenAI(api_key=merged.get("api_key") or os.getenv("OPENAI_API_KEY") or "missing",
+                            base_url=merged.get("api_base"), http_client=http_client, max_retries=0)
+        else:
+            client = None
+
+        def completion(**request):
+            if client is not None:
+                request["client"] = client
+            return litellm.completion(**request)
+
         try:
             return record_call(
-                self.trace if _trace is None else _trace, litellm.completion,
+                self.trace if _trace is None else _trace, completion,
                 model=self.config.model_name,
                 messages=messages,
                 tools=tools,
                 **merged,
             )
-        except litellm.exceptions.AuthenticationError as e:
-            e.message += " You can permanently set your API key with `mini-extra config set KEY VALUE`."
-            raise e
+        except Exception as e:
+            if rejected:
+                raise SamplingTransportError("Configured sampling fields missing, changed, or conflicting: " + ", ".join(rejected)) from e
+            if isinstance(e, litellm.exceptions.AuthenticationError):
+                e.message += " You can permanently set your API key with `mini-extra config set KEY VALUE`."
+            raise
+        finally:
+            if http_client is not None:
+                http_client.close()
 
     def _prepare_messages_for_api(self, messages: list[dict]) -> list[dict]:
         prepared = [{k: v for k, v in msg.items() if k != "extra" and (v is not None or k == "content")} for msg in messages]

@@ -18,6 +18,7 @@ def sampling_kwargs(temperature: float | None = None, *, worker: bool = False) -
     result: dict[str, Any] = {}
     extra: dict[str, Any] = {}
     extra_sources: set[str] = set()
+    token_sources: dict[str, str] = {}
     for name, lower, upper in (
         ("temperature", 0, 2), ("top_p", 0, 1), ("presence_penalty", -2, 2),
         ("top_k", 1, math.inf), ("min_p", 0, 1), ("repetition_penalty", 0, 2),
@@ -41,13 +42,17 @@ def sampling_kwargs(temperature: float | None = None, *, worker: bool = False) -
             raise ValueError(f"{key} must be finite and between {lower} and {upper}")
         target = extra if name in ("top_k", "min_p", "repetition_penalty") else result
         target[name] = value
+        if name in ("max_tokens", "max_completion_tokens"):
+            token_sources[name] = key
         if target is extra:
             extra_sources.add(key)
 
     if "max_tokens" in result and "max_completion_tokens" in result:
-        raise ValueError("max_tokens and max_completion_tokens are mutually exclusive")
+        raise ValueError(f"{token_sources['max_tokens']} and {token_sources['max_completion_tokens']} are mutually exclusive")
     effort = os.getenv("COOPER_REASONING_EFFORT")
-    if effort:
+    if effort and effort.lower() in ("true", "false"):
+        result["reasoning_effort"] = effort.lower() == "true"
+    elif effort:
         try:
             number = float(effort)
         except ValueError:

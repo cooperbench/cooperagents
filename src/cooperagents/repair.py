@@ -155,6 +155,7 @@ class RepairInput(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     version: Literal[1, 2]
     original_task: str
+    capture_profile: Literal["merged_state_v1"] | None = None
     effective_task: str
     initial_messages: list[InitialMessage]
     pending_messages: dict[str, list[PendingMessage]] | None = None
@@ -197,7 +198,9 @@ class RepairInput(BaseModel):
         if model.litellm_model_registry is not None or model.multimodal_regex or model.set_cache_control is not None:
             raise ValueError("Unsupported repair model formatting configuration")
         safe_generation(model.model_kwargs)
-        if self.tools != [BASH_TOOL, SEND_MESSAGE_TOOL]:
+        if self.tools != [BASH_TOOL, SEND_MESSAGE_TOOL] and not (
+            self.capture_profile == "merged_state_v1" and self.tools == [BASH_TOOL]
+        ):
             raise ValueError("Repair requires the exact bash/send_message tool schemas")
         if [m.role for m in self.initial_messages] != ["system", "user"]:
             raise ValueError("Repair requires the initial system/user pair")
@@ -232,6 +235,7 @@ def capture_repair_input(
     guard_git: bool,
     time_limit_s: int | None,
     bus: TeamBus | None,
+    capture_profile: Literal["merged_state_v1"] | None = None,
 ) -> RepairInput:
     from cooperagents.bus.memory import InMemoryBus
 
@@ -257,6 +261,7 @@ def capture_repair_input(
     return RepairInput(
         version=2,
         original_task=task,
+        capture_profile=capture_profile,
         effective_task=agent.extra_template_vars["task"],
         initial_messages=agent.model._prepare_messages_for_api(agent.messages),
         pending_messages={

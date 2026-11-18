@@ -495,10 +495,10 @@ def main() -> None:
     ap.add_argument("--skip-eval", action="store_true", help="write generation artifacts without scoring")
     args = ap.parse_args()
     if args.capture_merged_state:
-        if (not args.team_only or args.solo_only or not args.no_seed or args.repair_integrator
+        if (not args.team_only or args.solo_only or not args.no_seed or not args.record_trajectory or args.repair_integrator
             or args.focused_repair or args.verify_fix or args.completeness_review or args.checkpoint_repair
             or args.stop_after_repair_checkpoint or args.only_first_repair_checkpoint or args.collect_source_conflicts):
-            ap.error("--capture-merged-state requires a no-seed team and excludes repair flags")
+            ap.error("--capture-merged-state requires a no-seed team, --record-trajectory, and excludes repair flags")
         args.skip_eval = True
     if args.collect_source_conflicts and not args.stop_after_repair_checkpoint:
         ap.error("--collect-source-conflicts requires --stop-after-repair-checkpoint")

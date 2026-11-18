@@ -1847,6 +1847,7 @@ def run_repair_tail(env: Environment, *, spec: TeamSpec, assignments: list[Assig
                 agent, task=task, spec=spec, assignments=assignments, command_timeout=agent.env._timeout,
                 guard_git=agent.env._guard_git, time_limit_s=spec.repair_time_limit,
                 bus=checkpoint_bus,
+                capture_profile="merged_state_v1" if merged_metadata is not None else None,
             )
             if training_selection is not None:
                 repair_input.source_hashes["training_selection.py"] = sha256(Path(__file__).with_name("training_selection.py"))
@@ -2323,7 +2324,8 @@ class UnifiedHarness:
                 def collect_diff(env, aid: str, result: AgentResult) -> str:
                     if self.checkpoint_dir is None or self.only_first_repair_checkpoint:
                         raw = collect_raw_diff(env, aid)[0]
-                        raw_worker_patches[aid] = raw
+                        if self.capture_merged_state or (coordinator is not None and coordinator._planning):
+                            raw_worker_patches[aid] = raw
                         if coordinator is not None and coordinator._planning:
                             result.patch = raw
                         return strip_test_sections(raw)
@@ -2334,7 +2336,8 @@ class UnifiedHarness:
 
                         def capture_raw():
                             raw, source = collect_raw_diff(env, aid)
-                            raw_worker_patches[aid] = raw
+                            if self.capture_merged_state or (coordinator is not None and coordinator._planning):
+                                raw_worker_patches[aid] = raw
                             if coordinator is not None and coordinator._planning:
                                 result.patch = raw
                             return raw, source
@@ -2510,7 +2513,7 @@ class UnifiedHarness:
                 seeds[a.agent_id] = run_on_shared(env, a.agent_id, a.role, task, a.feature_id,
                                                   time_limit_s=spec.agent_time_limit)
                 raw = env.git_diff()
-                if not spec.seed_prior:
+                if not spec.seed_prior and self.capture_merged_state:
                     raw_worker_patches[a.agent_id] = raw
                 diff = strip_test_sections(raw)
                 if spec.do_no_harm and pre_healthy and not _tree_health(env):
@@ -2637,8 +2640,6 @@ class UnifiedHarness:
                     ), trace=partial(self.trajectory.emit, "merge") if self.trajectory else None)
                 repair_started = time.monotonic()
                 attempts = []
-                if self.capture_merged_state and not hasattr(env, "capture_repair_checkpoint"):
-                    raise ValueError("Merged-state capture requires a V3-capable environment")
                 if self.capture_merged_state or (spec.repair_integrator and (not healthy or (training_selection is not None
                                                               and training_selection["reason"] == "source_conflict"))):
                     def run_repair_agent(actor, task, on_start):
@@ -2716,7 +2717,10 @@ class UnifiedHarness:
                 **({"repair_checkpoint": {"outcome": "captured" if checkpoint_captured else "skipped_healthy",
                                           **({"selection": training_selection} if training_selection is not None else {})}}
                    if self.stop_after_repair_checkpoint else {}),
-                "raw_worker_patches": raw_worker_patches,
+                **({"raw_worker_patches": raw_worker_patches, "merged_state_capture": {
+                    "outcome": "captured", "healthy": initial_healthy,
+                    "merge_mode": "apply_chain" if conflict else "3way_clean",
+                }} if self.capture_merged_state else {}),
                 **coordination_metrics(bus.task_events(), final_tasks=bus.list_tasks()),
                 **({"do_no_harm_discards": gate_discards} if spec.do_no_harm else {}),
                 **(
@@ -3163,6 +3167,13 @@ class UnifiedHarness:
             or spec.select_integration is not None or spec.allow_spawn_tool
         ):
             raise ValueError("Merged-state capture requires a no-seed mechanical merge without repair")
+        if self.capture_merged_state:
+            probe = env_factory("merge")
+            try:
+                if not callable(getattr(probe, "capture_repair_checkpoint", None)):
+                    raise ValueError("Merged-state capture requires a V3-capable environment")
+            finally:
+                probe.cleanup()
         if self.checkpoint_dir is not None:
             from cooperagents.repair import validate_capture_spec
 

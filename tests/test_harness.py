@@ -303,11 +303,15 @@ def test_no_seed_independent_plus_merge(tmp_path):
     assert res.integrated is not None
     assert "NOTES_agent1.md" in res.integrated.patch
     assert "NOTES_agent2.md" in res.integrated.patch
+    import json
+
     from cooperagents.eval.cooperbench import write_run_outputs
+    from cooperagents.metrics import coordination_metrics
+
     path = write_run_outputs(res, run_name="test", logs_dir=tmp_path)
-    for actor in ("agent1", "agent2"):
-        assert f"NOTES_{actor}.md" in (path / f"{actor}.raw.patch").read_text()
-        assert f"NOTES_{actor}.md" in (path / f"{actor}.stripped.patch").read_text()
+    metrics = json.loads((path / "result.json").read_text())["metrics"]
+    assert set(metrics) == set(coordination_metrics([], final_tasks=[]))
+    assert not list(path.glob("*.raw.patch"))
 
 
 def test_best_of_n_runs_n_attempts_and_selects():
@@ -1142,43 +1146,83 @@ def test_injected_coordinator_no_intervention_returns_normally(monkeypatch):
 
 
 def test_capture_merged_state_health_cases(monkeypatch, tmp_path):
+    import json
+    import os
+
     import pytest
 
-    from cooperagents.checkpoint import RepairCheckpointCaptured
+    from cooperagents.env.published_capture import _metadata
+    from cooperagents.eval.cooperbench import write_run_outputs
+    from cooperagents.published_profiles import identify_capture, validate_runtime
+    from cooperagents.repair import RepairInput, load_repair_input
     from cooperagents.types import AgentResult
+    from cooperagents.vendor.mini_swe.models.utils.actions_toolcall import SEND_MESSAGE_TOOL
+    from cooperagents.workers import mini_swe_worker
 
+    for key in list(os.environ):
+        if key.startswith("COOPER_"):
+            monkeypatch.delenv(key)
+    monkeypatch.setenv("COOPER_MAX_COMPLETION_TOKENS", "32768")
+    monkeypatch.setenv("COOPER_REASONING_EFFORT", "high")
+    monkeypatch.setenv("COOPER_SEND_EXTRA_BODY", "false")
+    original_worker = mini_swe_worker.run_mini_swe_agent
+
+    def worker(env, *, agent_id, role, **kwargs):
+        if role == "integrator":
+            return original_worker(env, agent_id=agent_id, role=role, **kwargs)
+        env.write_file(f"{agent_id}.py", "x = 1\n")
+        return AgentResult(agent_id=agent_id, role=role, status="submitted")
+
+    monkeypatch.setattr(mini_swe_worker, "run_mini_swe_agent", worker)
     for healthy in (True, False):
-        captured = []
         monkeypatch.setattr("cooperagents.harness._tree_health", lambda env, healthy=healthy: healthy)
-        def fake_worker(env, *, agent_id, role, on_start=None, **kwargs):
-            if on_start:
-                from types import SimpleNamespace
-                agent = SimpleNamespace(env=SimpleNamespace(_timeout=60, _guard_git=False))
-                try:
-                    on_start(agent)
-                except RepairCheckpointCaptured:
-                    return AgentResult(agent_id=agent_id, role=role, status="checkpointed")
-                pytest.fail("capture must stop before inference")
-            env.write_file(f"{agent_id}.py", "x = 1\n")
-            return AgentResult(agent_id=agent_id, role=role, status="submitted")
-        def save(env, path, *, metadata, repair_input, trace, capture_format, captured=captured):
-            captured.append((metadata, capture_format))
-            path.mkdir()
-            (path / "integration.patch").write_text(env.git_diff())
-        monkeypatch.setattr("cooperagents.workers.mini_swe_worker.run_mini_swe_agent", fake_worker)
-        monkeypatch.setattr("cooperagents.checkpoint.save_checkpoint", save)
-        monkeypatch.setattr("cooperagents.repair.capture_repair_input", lambda *a, **k: object())
-        monkeypatch.setattr("cooperagents.repair.load_repair_input", lambda *a, **k: None)
+
         def factory(_id):
             env = LocalEnv.fresh()
-            env.capture_repair_checkpoint = lambda *a, **k: None
+            env.image = tmp_path / "fixture.sif"
+
+            def capture(destination, *, metadata, repair_input, trace=None):
+                assert identify_capture(repair_input.source_hashes) == "captured-direct-v3-v1"
+                validate_runtime("captured-direct-v3-v1")
+                return _metadata(env, destination, destination, metadata, repair_input, {}, [], "0" * 64)
+
+            env.capture_repair_checkpoint = capture
             return env
+
         spec = TeamSpec(run_id=f"health-{healthy}", repo="demo", task_id=1, features=[1, 2],
                         assignments=[Assignment("agent1", "one", feature_id=1), Assignment("agent2", "two", feature_id=2)],
-                        shared_workspace=True, seed_prior=False, worker="mini_swe")
+                        shared_workspace=True, seed_prior=False, worker="mini_swe", model="test")
         checkpoint_dir = tmp_path / str(healthy)
         result = UnifiedHarness(checkpoint_dir=checkpoint_dir, capture_merged_state=True).run(spec, env_factory=factory)
+        checkpoint = checkpoint_dir / "before-integrator1"
+        saved = load_repair_input(checkpoint)
+        assert saved.capture_profile == "merged_state_v1"
+        assert saved.model_config_data["model_kwargs"]["max_completion_tokens"] == 32768
+        assert saved.model_config_data["model_kwargs"]["reasoning_effort"] == "high"
+        assert identify_capture(saved.source_hashes) == "captured-direct-v3-v1"
         assert result.integrated.status == "checkpointed"
-        assert (checkpoint_dir / "before-integrator1" / "integration.patch").is_file()
-        assert captured[0][0]["healthy"] is healthy
-        assert captured[0][1] == "v3"
+        assert result.metrics["merged_state_capture"]["healthy"] is healthy
+        payload = json.loads((checkpoint / "repair-input.json").read_text())
+        payload.pop("capture_profile")
+        with pytest.raises(ValueError, match="bash/send_message"):
+            RepairInput.model_validate(payload)
+        payload["tools"].append(SEND_MESSAGE_TOOL)
+        assert RepairInput.model_validate(payload).capture_profile is None
+        output = write_run_outputs(result, run_name=str(healthy), logs_dir=tmp_path)
+        for actor in ("agent1", "agent2"):
+            assert f"{actor}.py" in (output / f"{actor}.raw.patch").read_text()
+            assert f"{actor}.py" in (output / f"{actor}.stripped.patch").read_text()
+
+def test_capture_rejects_non_v3_before_any_worker(tmp_path):
+    import pytest
+
+    spec = TeamSpec(run_id="probe", repo="demo", task_id=1, features=[1, 2],
+                    assignments=[Assignment("agent1", "one", feature_id=1), Assignment("agent2", "two", feature_id=2)],
+                    shared_workspace=True, seed_prior=False, worker="mini_swe")
+    called = []
+    def factory(actor):
+        called.append(actor)
+        return LocalEnv.fresh()
+    with pytest.raises(ValueError, match="V3-capable"):
+        UnifiedHarness(checkpoint_dir=tmp_path / "cp", capture_merged_state=True).run(spec, env_factory=factory)
+    assert called == ["merge"]

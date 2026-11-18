@@ -224,10 +224,13 @@ def test_merged_state_cli_and_harness_wiring(monkeypatch, tmp_path):
     monkeypatch.setattr(bench, "run_eval", lambda *a, **k: pytest.fail("capture must not evaluate"))
     calls = []
     monkeypatch.setattr(bench, "run_team", lambda *a, **k: calls.append(k) or {"duration": 0, "steps": 0})
-    flags = ["--pairs", "go_chi_task:26:1,2", "--team-only", "--no-seed", "--capture-merged-state"]
+    flags = ["--pairs", "go_chi_task:26:1,2", "--team-only", "--no-seed", "--record-trajectory", "--capture-merged-state"]
     monkeypatch.setattr(sys, "argv", ["bench_compare.py", *flags, "--log-dir", str(tmp_path)])
     bench.main()
     assert calls[0]["capture_merged_state"]
+    monkeypatch.setattr(sys, "argv", ["bench_compare.py", *[flag for flag in flags if flag != "--record-trajectory"]])
+    with pytest.raises(SystemExit):
+        bench.main()
     for forbidden in ("--repair-integrator", "--focused-repair", "--verify-fix", "--completeness-review", "--checkpoint-repair"):
         monkeypatch.setattr(sys, "argv", ["bench_compare.py", *flags, forbidden])
         with pytest.raises(SystemExit):
