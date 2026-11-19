@@ -77,24 +77,33 @@ The prior direct-capture writer identity remains explicitly archived.
 
 ## Evaluation consumer
 
-`ApptainerEvalBackend(..., runtime_caches={canonical_image_name: runtime_cache})`
-forwards the same capability into `ApptainerEnv.from_image_base` and the clean-image
-holder. Canonical image names come from `cooperagents.eval.dataset.image_name`;
-a different task's image name cannot select the cache even if it shares SIF bytes.
-The CLI also accepts `--runtime-cache-catalog PATH`, a JSON mapping of canonical
-image names to the pinned `RuntimeCacheArtifact` JSON values. It verifies the
-current `COOPER_IMAGE_MANIFEST` hash against each cache's original manifest hash.
-No CooperBench or dataset-runner changes are needed.
+Pass `EvalRuntimeCache(channel, locator, receipts)` to `run_eval` with the
+Apptainer backend, or pass `--runtime-cache-channel`, `--runtime-cache-locator`
+and `--runtime-cache-receipts` together to the evaluator CLI. The channel
+supplies a descriptor for the cache the controller already copied into a sealed
+memfd. The grader reads the bounded locator and pinned `receipt.json`, verifies
+the channel proof, descriptor identity, seals and size, and matches the cache
+to the active `COOPER_IMAGE_MANIFEST`. A shared base also requires the same
+image checksum. The grader borrows the pooled bytes without reopening the
+artifact or reading `uv.sqfs` from disk.
 
-With an existing shared `ImageBase`, eval borrows it. Without one, the backend
-admits an owned audited image base once per pinned image and uses the existing
-clean-image holder. Concurrent sandboxes borrow that sealed admission: the full
-SIF is verified once by `ImageBase.prepare`, never rehashed per sandbox. Call
-`backend.close()` after all sandboxes terminate; the CLI arranges this with its
-existing `ExitStack`. The backend never closes an externally supplied base. A failed cache admission/mount returns to the
-original cold constructor and original argv. Cache dependency hashes are checked
-against the pristine image before evaluator commands apply the candidate patch.
-Patches changing dependency files therefore produce private cache misses.
+Library callers can still pass
+`ApptainerEvalBackend(..., runtime_caches={canonical_image_name: runtime_cache})`.
+The cache capability is scoped to the repository and task in its receipt,
+including when multiple tasks share identical SIF bytes. With a shared
+`ImageBase`, the backend borrows it. Otherwise, it admits one audited base per
+pinned SIF and reuses it across concurrent sandboxes. The holder verifies the
+pristine dependency hashes before running evaluator commands. Each sandbox has
+its own writable overlay over the sealed cache, so dependency installations
+after a candidate patch write only into that sandbox's cache.
+
+The CLI writes one hit or fallback receipt per created sandbox to a new JSON
+file with mode 0600, even when evaluation raises. Sandboxes terminate before
+`backend.close()` releases its owned image bases, then the CLI closes its
+borrowed cache descriptor. The controller retains ownership of its channel and
+descriptor. A borrow or mount failure uses cold evaluation and records the
+reason. To disable the evaluator cache, omit all three flags or leave
+`runtime_cache` unset in `run_eval`.
 
 ## Receipts and cleanup
 

@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -23,6 +24,13 @@ from cooperagents.patching import strip_for_submission
 from cooperagents.types import RunResult
 
 DEFAULT_SETTING = "team"
+
+
+@dataclass(frozen=True)
+class EvalRuntimeCache:
+    channel: str
+    locator: Path
+    receipts: Path
 
 
 def write_run_outputs(
@@ -198,6 +206,7 @@ def run_eval(
     use_uv: bool = True,
     dry_run: bool = False,
     shared_image: tuple[str, str] | None = None,
+    runtime_cache: EvalRuntimeCache | None = None,
 ) -> subprocess.CompletedProcess[str] | list[str]:
     """Invoke CooperBench's evaluator on previously-written outputs.
 
@@ -207,6 +216,8 @@ def run_eval(
     """
     if shared_image is not None and backend != "apptainer":
         raise ValueError("shared image capability requires the Apptainer evaluator")
+    if runtime_cache is not None and backend != "apptainer":
+        raise ValueError("runtime cache capability requires the Apptainer evaluator")
     cb = find_cooperbench(str(cooperbench_dir) if cooperbench_dir else None)
     if backend == "apptainer":
         cmd = [
@@ -224,6 +235,12 @@ def run_eval(
         ]
         if shared_image is not None:
             cmd += ["--shared-image-path", shared_image[0], "--shared-image-sha256", shared_image[1]]
+        if runtime_cache is not None:
+            cmd += [
+                "--runtime-cache-channel", runtime_cache.channel,
+                "--runtime-cache-locator", str(runtime_cache.locator),
+                "--runtime-cache-receipts", str(runtime_cache.receipts),
+            ]
         if dry_run:
             return cmd
         return subprocess.run(cmd, capture_output=True, text=True)
@@ -235,4 +252,4 @@ def run_eval(
     return subprocess.run(cmd, cwd=str(cb), capture_output=True, text=True)
 
 
-__all__ = ["write_run_outputs", "build_eval_command", "run_eval", "DEFAULT_SETTING"]
+__all__ = ["write_run_outputs", "build_eval_command", "run_eval", "DEFAULT_SETTING", "EvalRuntimeCache"]

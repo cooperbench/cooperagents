@@ -8,9 +8,13 @@ from cooperagents.published import LEGACY, V3, PublicationError
 from cooperagents.published_profiles import (
     CAPTURED,
     PRODUCERS,
+    _qualification,
     direct_identities,
+    qualification_identity,
     validate_capture,
     validate_direct_pair,
+    validate_direct_writer,
+    validate_image_reader,
     validate_producer,
     validate_reader,
 )
@@ -95,11 +99,25 @@ def test_producer_allowlist_is_bound_to_reader_qualification(tmp_path, monkeypat
 
 
 def test_image_reader_accepts_current_and_exact_reviewed_offline_builder():
-    from cooperagents.published_profiles import qualification_identity, validate_image_reader
-
     validate_reader()
     validate_image_reader(qualification_identity())
     validate_image_reader("90db555845889be5ba02e7d17b198b48c2b0b7e605aaf3b3c77d50af0a9f1be7")
     for identity in (None, "0" * 64, "91794ac63843f091c24bb8601c0d0fbbcd452496c8185388fee3db3d5df86720"):
         with pytest.raises(ValueError, match="unqualified image reader"):
             validate_image_reader(identity)
+
+
+def test_evaluator_qualification_preserves_prepared_image_readers():
+    validate_reader()
+    validate_direct_writer()
+    readers_at_8f0f5e1 = {
+        "90db555845889be5ba02e7d17b198b48c2b0b7e605aaf3b3c77d50af0a9f1be7",
+        "ba52a0bd7fad7e4bdcb7616c6664308582bf26a84c47e824dce20fd778d4d811",
+        "7448524b027831464a339028ffa967a17f3726443ad027781c5dcac460e0ace5",
+        "0eb9a4fa30a6281718199e00b64a4bb419787277b82717a75f768a1e42f62742",
+    }
+    assert readers_at_8f0f5e1 <= set(_qualification()["admitted_image_readers"])
+
+    # Reader digest from the archived offline SQFS index (train96-shared.image-bases.json).
+    prepared_sqfs_entry = {"reader_qualification_sha256": "ba52a0bd7fad7e4bdcb7616c6664308582bf26a84c47e824dce20fd778d4d811"}
+    validate_image_reader(prepared_sqfs_entry["reader_qualification_sha256"])
