@@ -1929,6 +1929,7 @@ class UnifiedHarness:
         checkpoint_dir: Path | None = None,
         stop_after_repair_checkpoint: bool = False,
         capture_merged_state: bool = False,
+        persist_worker_patches: bool = False,
         only_first_repair_checkpoint: bool = False,
         collect_source_conflicts: bool = False,
         repair_completion: CompletionBinding | None = None,
@@ -1979,7 +1980,10 @@ class UnifiedHarness:
             checkpoint_dir is None or stop_after_repair_checkpoint or only_first_repair_checkpoint or collect_source_conflicts
         ):
             raise ValueError("Merged-state capture requires its own checkpoint directory and cannot use repair capture flags")
+        if capture_merged_state and persist_worker_patches:
+            raise ValueError("persist_worker_patches and capture_merged_state are mutually exclusive")
         self.capture_merged_state = capture_merged_state
+        self.persist_worker_patches = persist_worker_patches
         self.collect_source_conflicts = collect_source_conflicts
         self.only_first_repair_checkpoint = only_first_repair_checkpoint
         self.stop_after_repair_checkpoint = stop_after_repair_checkpoint
@@ -2131,6 +2135,7 @@ class UnifiedHarness:
         start = time.time()
         integrated_patch = ""  # cumulative diff across the team so far (seed mode)
         raw_worker_patches: dict[str, str] = {}
+        merged_state = None
         member_patches: list[str] = []  # each agent's own diff (no-seed mode)
         team_lead_patch: str | None = None  # team_roles: lead's merged tree is the submission
         prior: list[str] = []
@@ -2324,7 +2329,7 @@ class UnifiedHarness:
                 def collect_diff(env, aid: str, result: AgentResult) -> str:
                     if self.checkpoint_dir is None or self.only_first_repair_checkpoint:
                         raw = collect_raw_diff(env, aid)[0]
-                        if self.capture_merged_state or (coordinator is not None and coordinator._planning):
+                        if self.capture_merged_state or self.persist_worker_patches or (coordinator is not None and coordinator._planning):
                             raw_worker_patches[aid] = raw
                         if coordinator is not None and coordinator._planning:
                             result.patch = raw
@@ -2336,7 +2341,8 @@ class UnifiedHarness:
 
                         def capture_raw():
                             raw, source = collect_raw_diff(env, aid)
-                            if self.capture_merged_state or (coordinator is not None and coordinator._planning):
+                            if (self.capture_merged_state or self.persist_worker_patches
+                                    or (coordinator is not None and coordinator._planning)):
                                 raw_worker_patches[aid] = raw
                             if coordinator is not None and coordinator._planning:
                                 result.patch = raw
@@ -2513,7 +2519,7 @@ class UnifiedHarness:
                 seeds[a.agent_id] = run_on_shared(env, a.agent_id, a.role, task, a.feature_id,
                                                   time_limit_s=spec.agent_time_limit)
                 raw = env.git_diff()
-                if not spec.seed_prior and self.capture_merged_state:
+                if not spec.seed_prior and (self.capture_merged_state or self.persist_worker_patches):
                     raw_worker_patches[a.agent_id] = raw
                 diff = strip_test_sections(raw)
                 if spec.do_no_harm and pre_healthy and not _tree_health(env):
@@ -2598,6 +2604,7 @@ class UnifiedHarness:
                     env.execute(f"git checkout -q -B _fb {merge_base}" if merge_base else "true")
                     for p in member_patches:
                         seed_prior(env, p)
+                merged_state = {"conflict": conflict, "merge_mode": "apply_chain" if conflict else "3way_clean"}
                 # Merge hygiene: apply-fallback artifacts (.rej/.orig) are not part
                 # of any feature — without this they ship inside the integrated
                 # diff (observed on qwen14-q4: 7/14 pairs polluted).
@@ -2717,7 +2724,11 @@ class UnifiedHarness:
                 **({"repair_checkpoint": {"outcome": "captured" if checkpoint_captured else "skipped_healthy",
                                           **({"selection": training_selection} if training_selection is not None else {})}}
                    if self.stop_after_repair_checkpoint else {}),
-                **({"raw_worker_patches": raw_worker_patches, "merged_state_capture": {
+                **({"raw_worker_patches": raw_worker_patches}
+                   if self.capture_merged_state or self.persist_worker_patches else {}),
+                **({"merged_state": merged_state}
+                   if (self.capture_merged_state or self.persist_worker_patches) and merged_state is not None else {}),
+                **({"merged_state_capture": {
                     "outcome": "captured", "healthy": initial_healthy,
                     "merge_mode": "apply_chain" if conflict else "3way_clean",
                 }} if self.capture_merged_state else {}),
@@ -3160,6 +3171,10 @@ class UnifiedHarness:
             raise ValueError("Stopping after the repair checkpoint requires repair_integrator")
         if self.collect_source_conflicts and self.trajectory is None:
             raise ValueError("Source conflict collection requires a trajectory journal")
+        if self.persist_worker_patches and (
+            spec.seed_prior or not spec.shared_workspace or spec.adaptive or spec.decompose or spec.best_of_n != 1
+        ):
+            raise ValueError("persist_worker_patches requires a single no-seed team")
         if self.capture_merged_state and (
             spec.repair_integrator or spec.focused_repair or spec.verify_fix or spec.completeness_review
             or not spec.shared_workspace or spec.seed_prior or spec.worker != "mini_swe"

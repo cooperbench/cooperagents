@@ -234,6 +234,7 @@ def run_team(
     checkpoint_repair: bool = False,
     stop_after_repair_checkpoint: bool = False,
     capture_merged_state: bool = False,
+    persist_worker_patches: bool = False,
     only_first_repair_checkpoint: bool = False,
     collect_source_conflicts: bool = False,
 ) -> dict:
@@ -333,6 +334,7 @@ def run_team(
         worker_reminder_interval=worker_reminder_interval,
         checkpoint_dir=pair_dir / "checkpoints" if checkpoint_repair or capture_merged_state else None,
         capture_merged_state=capture_merged_state,
+        persist_worker_patches=persist_worker_patches,
         stop_after_repair_checkpoint=stop_after_repair_checkpoint,
         only_first_repair_checkpoint=only_first_repair_checkpoint,
         collect_source_conflicts=collect_source_conflicts,
@@ -484,6 +486,7 @@ def main() -> None:
     ap.add_argument("--resume", action="store_true", help="skip pairs that already have a result.json on disk")
     ap.add_argument("--langfuse", action="store_true", help="export worker and coordinator traces to Langfuse (default: off)")
     ap.add_argument("--record-trajectory", action="store_true", help="append complete agent/coordinator I/O for replay")
+    ap.add_argument("--persist-worker-patches", action="store_true", help="save each worker patch and merge state")
     ap.add_argument("--capture-merged-state", action="store_true", help="capture the merged tree and stop before evaluation")
     ap.add_argument("--checkpoint-repair", action="store_true", help="save worker and repair filesystems and full I/O for replay")
     ap.add_argument("--stop-after-repair-checkpoint", action="store_true",
@@ -494,6 +497,8 @@ def main() -> None:
                     help="training collection only: also capture source conflict blocks despite a healthy gate")
     ap.add_argument("--skip-eval", action="store_true", help="write generation artifacts without scoring")
     args = ap.parse_args()
+    if args.persist_worker_patches and (not args.team_only or args.solo_only or not args.no_seed or args.capture_merged_state):
+        ap.error("--persist-worker-patches requires --team-only --no-seed and excludes --capture-merged-state")
     if args.capture_merged_state:
         if (not args.team_only or args.solo_only or not args.no_seed or not args.record_trajectory or args.repair_integrator
             or args.focused_repair or args.verify_fix or args.completeness_review or args.checkpoint_repair
@@ -628,6 +633,7 @@ def main() -> None:
                     record_trajectory=args.record_trajectory,
                     checkpoint_repair=args.checkpoint_repair,
                     capture_merged_state=args.capture_merged_state,
+                    persist_worker_patches=args.persist_worker_patches,
                     stop_after_repair_checkpoint=args.stop_after_repair_checkpoint,
                     only_first_repair_checkpoint=args.only_first_repair_checkpoint,
                     collect_source_conflicts=args.collect_source_conflicts,
