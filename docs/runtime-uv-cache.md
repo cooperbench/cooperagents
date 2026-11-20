@@ -1,6 +1,6 @@
 # Optional per-task uv cache
 
-The repair API accepts an optional `RuntimeCache` capability.
+The repair and Apptainer evaluation APIs accept the same `RuntimeCache` capability.
 It contains a sealed, authenticated SQFS descriptor, reused by a pool of episodes
 for exactly one `(repo, task_id)` environment. Every sandbox gets its own overlay
 upper/work and sees the merged cache at `/home/agent/.cache/uv`. Dependency edits
@@ -75,13 +75,43 @@ qualification refresh admits the exact prior image-reader digest because image
 packing, native inventory comparison and image audit semantics are unchanged.
 The prior direct-capture writer identity remains explicitly archived.
 
+## Evaluation consumer
+
+Pass `EvalRuntimeCache(channel, locator, receipts)` to `run_eval` with the
+Apptainer backend, or pass `--runtime-cache-channel`, `--runtime-cache-locator`
+and `--runtime-cache-receipts` together to the evaluator CLI. The channel
+supplies a descriptor for the cache the controller already copied into a sealed
+memfd. The grader reads the bounded locator and pinned `receipt.json`, verifies
+the channel proof, descriptor identity, seals and size, and matches the cache
+to the active `COOPER_IMAGE_MANIFEST`. A shared base also requires the same
+image checksum. The grader borrows the pooled bytes without reopening the
+artifact or reading `uv.sqfs` from disk.
+
+Library callers can still pass
+`ApptainerEvalBackend(..., runtime_caches={canonical_image_name: runtime_cache})`.
+The cache capability is scoped to the repository and task in its receipt,
+including when multiple tasks share identical SIF bytes. With a shared
+`ImageBase`, the backend borrows it. Otherwise, it admits one audited base per
+pinned SIF and reuses it across concurrent sandboxes. The holder verifies the
+pristine dependency hashes before running evaluator commands. Each sandbox has
+its own writable overlay over the sealed cache, so dependency installations
+after a candidate patch write only into that sandbox's cache.
+
+The CLI writes one hit or fallback receipt per created sandbox to a new JSON
+file with mode 0600, even when evaluation raises. Sandboxes terminate before
+`backend.close()` releases its owned image bases, then the CLI closes its
+borrowed cache descriptor. The controller retains ownership of its channel and
+descriptor. A borrow or mount failure uses cold evaluation and records the
+reason. To disable the evaluator cache, omit all three flags or leave
+`runtime_cache` unset in `run_eval`.
+
 ## Receipts and cleanup
 
 For an explicitly requested cache, `<env.root>/receipts.json` records
 `runtime_cache.status` (`hit` or `fallback`). A hit includes the key, repo/task,
 image/manifest/dependency SHA256 values, SQFS SHA256, creation time, packed size
 in bytes, and warm-up seconds. A fallback records its reason. Repair copies the
-same record into result restore metrics.
+same record into result restore metrics; eval exposes `env.runtime_cache_receipt`.
 Receipts in the ephemeral sandbox disappear with cleanup, so persist result
 metrics or copy receipts before termination when gathering evidence.
 
@@ -122,11 +152,12 @@ that merely succeeds through cold fallback.
 Offline tests use fake Apptainer/FUSE/overlay operations, plus a real sealed-fd
 write rejection on Linux. They cover default-off byte identity against a frozen
 method from `094a8bb`, key scope, atomic concurrent publication, admission and
-mount failures, private writes, repair receipts and owned/borrowed cleanup.
+mount failures, private writes, both consumers, receipts and owned/borrowed cleanup.
 Simulated overlay tests establish the mount plan and private paths; they do not
 certify real overlayfs, package availability or performance.
 
-Before deployment, qualify real Apptainer/FUSE/overlay behavior in repair. Compare identical pre-patch images/dependencies and candidate patches with
+Before deployment, qualify real Apptainer/FUSE/overlay behavior in both repair and
+eval. Compare identical pre-patch images/dependencies and candidate patches with
 cache off/on (including a patch that changes each dependency file): identical
 commands, exit status and scoring, no cache poisoning across sandboxes, and
 complete upper/work release. Keep cold fallback valid and report its count.
@@ -152,6 +183,6 @@ config must pin this cooperagents revision and admit the 12 cache capabilities;
 external driver wiring and exact submission remain a manager action. Do not
 substitute invented flags or run it as part of offline verification.
 
-Rollback: omit `runtime_cache`.
+Rollback: omit `runtime_cache`/`runtime_caches` and the optional eval catalog flag.
 Existing qualified SIFs/checkpoints remain unchanged; artifacts can be retained
 for later inspection or removed after all borrowed descriptors are closed.

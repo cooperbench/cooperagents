@@ -25,6 +25,8 @@ value = dict(
         "ba52a0bd7fad7e4bdcb7616c6664308582bf26a84c47e824dce20fd778d4d811",
         # c9a3c47: splitting consumers leaves strict image audit unchanged.
         "7448524b027831464a339028ffa967a17f3726443ad027781c5dcac460e0ace5",
+        # 83d227a: training-only predecessor; eval consumer leaves image audit unchanged.
+        "0eb9a4fa30a6281718199e00b64a4bb419787277b82717a75f768a1e42f62742",
     ],
     reference_revision="094a8bbd4f3ff321fb1decd39bf337f768668f06",
     runtime_base_revision="094a8bbd4f3ff321fb1decd39bf337f768668f06",
