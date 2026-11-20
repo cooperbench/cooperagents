@@ -1,0 +1,42 @@
+    @classmethod
+    def _configure_filesystem(
+        cls, root: Path, state: dict, exec_prefix: tuple[str, ...], cleanup: Callable[[], None] | None
+    ) -> ApptainerEnv:
+        repo = Path(state["repo_path"])
+        mounts = state["runtime"].get("mounts", [])
+        env = cls.__new__(cls)
+        env.root, env.repo_path = root, str(repo)
+        env.image = Path(state["runtime"]["image"])
+        env._image_sha256 = state["runtime"]["image_sha256"]
+        env._base_commit = state["base_commit"]
+        env._checkpoint_mounts = {m["target"]: root / f"mount-{i}" for i, m in enumerate(mounts)}
+        env._lock, env._closed = threading.RLock(), False
+        env._restore_cleanup = cleanup
+        env._host_env = {
+            k: v for k, v in os.environ.items() if k in ("PATH", "LANG", "LC_ALL", "TMPDIR", "APPTAINER_TMPDIR", "APPTAINER_CACHEDIR")
+        }
+        env._host_env["HOME"] = str(root / "host-home")
+        try:
+            (root / "host-home").mkdir()
+            env._argv = [
+                *exec_prefix,
+                "apptainer",
+                "exec",
+                "--userns",
+                "--writable",
+                "--containall",
+                "--cleanenv",
+                "--no-mount",
+                "hostfs,bind-paths",
+                "--bind",
+                "/etc/resolv.conf:/etc/resolv.conf:ro",
+            ]
+            for directory, target in [("home/agent", "/home/agent"), ("tmp", "/tmp"), ("var/tmp", "/var/tmp")]:
+                env._argv += ["--home" if target == "/home/agent" else "--bind", f"{root}/fs/{directory}:{target}"]
+            for target, source in env._checkpoint_mounts.items():
+                env._argv += ["--bind", f"{source}:{target}" + (":ro" if target == "/coordination" else "")]
+            env._argv += ["--pwd", "/", str(root / "fs")]
+            return env
+        except BaseException:
+            env.cleanup()
+            raise

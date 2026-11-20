@@ -23,9 +23,9 @@
     "cli.py": "c83aba0eea56dcefaf3edb7bb62e6574c16090d333e1d48c0f2bd39396933b0d",
     "completion.py": "df81cda8e86b3999207f3feed4669ca333f197817c41e3ed01c821e45191fdc1",
     "coordination_prompts.py": "14135b514b0c77f80bcb5aa1b28e825427e14583634f91d6b537a6b3f8212881",
-    "direct_capture_qualification.json": "b7a9d255698b08f35e24a4cc0462918ee5f2419c3381d60429232442e53bca58",
+    "direct_capture_qualification.json": "7be3c15f08cd0949f71e584569c4745a1f0fcfa8ee512877517f68567852c653",
     "env/__init__.py": "ab71a3dfdd14c5f357d682acdf3939f1d7148e9a1112cd54b414c3bad7494a71",
-    "env/apptainer.py": "0b9bc2dcf5d5a9e3a14e094c6b725adb417a7121c427a33318addbdd1d5c126d",
+    "env/apptainer.py": "d687e488372efaaf1b44d1a5f35e5d70265da2ce55e65a98dcfb11c235dcb772",
     "env/base.py": "652576a16fa6993babc5dceedcbed4dd94885ece602cf5381165fc65fd83dc00",
     "env/capture_archives.py": "da4ee304e402840d7bbb5a5262c4fc5bacaccbdba343e3a7ad0ddee6d213bf89",
     "env/capture_audit.py": "f43b8c27377487d43ddc017640ef8aeedbd70a5bbdbb097021019daf52bc0f78",
@@ -40,9 +40,12 @@
     "env/prepared_image.py": "f8c2bf5834fd87e655e32c1b9beee7abd737965bc4c165eafac313b8ebcfc31b",
     "env/published_audit.py": "6562510f4db6ad324e782fe4840878e2dcb4566fc9f45ae9835fbeb7aafaea59",
     "env/published_capture.py": "b59501362fc19a3238eeb8721d1adb42a899b7378f812fb07afe2d88d271687d",
-    "env/published_holder.py": "6799cc0b5018a4aec5f2515295d1c90bbb1bfa2adf9910380ff7497fd6efa72e",
+    "env/published_holder.py": "8bfa5300afac8759262457cb753a9694940570604651079cfbab82b43d200b9a",
     "env/published_layers.py": "7250adc4f705221edd4cb6a86ec6b4afc062fae98d4b4e6237fe13d2056cee90",
     "env/runtime.py": "2244c883094d86e7c83c7e8436000b7996b8379ae1576950201e03e1c85bd806",
+    "env/runtime_cache.py": "c5587f6aea18ea2d4ea29ca203a4f5499ecea628282a504b6070a0c0f0d8711b",
+    "env/runtime_cache_mount.py": "895224c26557f9fe2f7ad14f534fb1d8160df00efc66bf966b467f16a336e06e",
+    "env/runtime_cache_preflight.py": "2dba66c690fc7953904d738e23cdd3506a2b3fa16babed82bd7a9e49d884eed5",
     "eval/__init__.py": "558e84705bbd0fd10bb926904200705d31994ca83b7292391cd292d1a1706389",
     "eval/analyst.py": "c1ca57b67b371c481a0214e7a3b7e25332e4e05baaf91450e9dfd9ed16af7dba",
     "eval/apptainer.py": "f4ad39026c24e976920ef3124fa4b34a6facfedefbcb5a4c231d998cce64850d",
@@ -67,8 +70,8 @@
     "policies.py": "388ea75da818247bf9fd7fb51ca42bce29af2c0ebf59691faf9c26cb14c9032f",
     "published.py": "29166689121faff988e7a2e923954f4f9f79ddc8f20aafb7ab0f3c08ad74de9c",
     "published_profiles.py": "7aea79a07b6cd031fcff50896876e5cbb47167f29db82c3273ae3c0afbc25872",
-    "published_restore.py": "44f880de0d2fe7cdccba97a4abfa65fff2aa3bb73106bb629db4ea80c54f8f28",
-    "repair.py": "4ad9bc6883132b379a33785979aaa093bc5bc8fb08f15e418ce82f861799de3d",
+    "published_restore.py": "ce9c688dffea5fbe9588f349c327532e38fb30bc662c3115acdad1ac24baa12c",
+    "repair.py": "ec2831803d24ee400edab8f3a79bf9ca3eb974931fd2b51488ba87b0b0edd2d1",
     "sampling.py": "865edb0a5b7b27783dff4c892d366ee9c64e4b1343ce68a85b70ff86ca092ba5",
     "training_selection.py": "079e5ac939e288bb8574c9a96cd54edfc3b7190e1a9d1454550ba192ff78d221",
     "trajectory.py": "498940468a9d02ecf1c623f0d1bfa8affbe0509bcc745619ccbeb87d0e6e74fd",
@@ -98,9 +101,11 @@
     "workers/mini_swe_worker.py": "9508c3aed51a82c4391ed8fbf108e8be0c5bd7f52d66e3c6956ce39c3ac94950"
   },
   "admitted_image_readers": [
-    "90db555845889be5ba02e7d17b198b48c2b0b7e605aaf3b3c77d50af0a9f1be7"
+    "90db555845889be5ba02e7d17b198b48c2b0b7e605aaf3b3c77d50af0a9f1be7",
+    "ba52a0bd7fad7e4bdcb7616c6664308582bf26a84c47e824dce20fd778d4d811",
+    "7448524b027831464a339028ffa967a17f3726443ad027781c5dcac460e0ace5"
   ],
-  "reference_revision": "1b5139d017e9c3ccfdbb1c5b1f0604df28c54e43",
-  "runtime_base_revision": "1b5139d017e9c3ccfdbb1c5b1f0604df28c54e43",
-  "qualification_note": "V3 installed-asset restore, archived held-out producer and exact historical image audit admission; source identity only; deployment qualification requires independent evidence"
+  "reference_revision": "094a8bbd4f3ff321fb1decd39bf337f768668f06",
+  "runtime_base_revision": "094a8bbd4f3ff321fb1decd39bf337f768668f06",
+  "qualification_note": "Optional per-task uv runtime layer after unchanged strict image audit; archived direct producers and exact historical image readers remain admitted; source identity only; deployment qualification requires independent evidence"
 }

@@ -20,6 +20,7 @@ from cooperagents.types import AgentResult, Assignment, RunResult, TeamSpec
 
 if TYPE_CHECKING:
     from cooperagents.env.image_base import ImageBase
+    from cooperagents.env.runtime_cache import RuntimeCache
     from cooperagents.published import PublishedCheckpoint
     from cooperagents.trajectory import Trajectory
     from cooperagents.vendor.mini_swe.agents.default import DefaultAgent
@@ -342,6 +343,7 @@ def run_repair_checkpoint(
     published: PublishedCheckpoint | None = None,
     purpose: Literal["difficulty", "training"] | None = None,
     image_base: ImageBase | None = None,
+    runtime_cache: RuntimeCache | None = None,
 ) -> RunResult:
     """Restore one independent sandbox and run only new integrator attempts.
 
@@ -387,11 +389,16 @@ def run_repair_checkpoint(
     bus = InMemoryBus(run_id)
     bus.restore_inboxes({actor: [m.model_dump(by_alias=True) for m in inputs.pending_messages[actor]] for actor in actors})
     if published is None:
+        if runtime_cache is not None:
+            import logging
+
+            logging.getLogger(__name__).warning("uv runtime cache fallback: native checkpoint has no published holder")
         env = ApptainerEnv.from_checkpoint(checkpoint, scratch=scratch, **({"base_image": base_image} if base_image is not None else {}))
     else:
         from cooperagents.published_restore import restore_environment
         env = restore_environment(published, checkpoint, scratch=scratch, base_image=base_image,
-                                  image_base=image_base, requested=restore_requested, purpose=purpose)
+                                  image_base=image_base, requested=restore_requested, purpose=purpose,
+                                  **({"runtime_cache": runtime_cache} if runtime_cache is not None else {}))
     seeds = {}
     checks = []
     started = time.monotonic()
