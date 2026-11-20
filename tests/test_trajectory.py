@@ -538,3 +538,26 @@ def test_failed_training_scan_never_captures_or_skips_healthy(monkeypatch, tmp_p
         )
     assert not (tmp_path / "logs/real/team/demo/1/f1_f2/checkpoints/before-integrator1").exists()
     assert not (tmp_path / "logs/real/team/demo/1/f1_f2/result.json").exists()
+
+
+def test_reasoning_and_cached_usage_round_trip(monkeypatch, tmp_path):
+    seen = []
+    def complete(**kwargs):
+        seen.append(kwargs)
+        return litellm.ModelResponse(choices=[{"message": {"role": "assistant", "content": "answer", "reasoning_content": "thinking",
+                                                     "tool_calls": [{"id": "c1", "type": "function",
+                                                                     "function": {"name": "bash",
+                                                                                  "arguments": '{"command": "true"}'}}]}}],
+                                    usage={"prompt_tokens": 12, "completion_tokens": 3, "total_tokens": 15,
+                                           "prompt_tokens_details": {"cached_tokens": 8}})
+    monkeypatch.setattr(litellm, "completion", complete)
+    journal = Trajectory(tmp_path / "trace.jsonl")
+    model = LitellmModel(model_name="openai/test", cost_tracking="ignore_errors", model_kwargs={"reasoning_effort": "high"})
+    model.trace = partial(journal.emit, "worker")
+    first = model.query([{"role": "user", "content": "go"}])
+    model.query([{"role": "user", "content": "go"}, first])
+    journal.close()
+    assert seen[1]["messages"][1]["reasoning_content"] == "thinking"
+    rows = [json.loads(line) for line in journal.path.read_text().splitlines()]
+    assert rows[0]["data"]["request"]["reasoning_effort"] == "high"
+    assert rows[1]["data"]["response"]["usage"]["prompt_tokens_details"]["cached_tokens"] == 8

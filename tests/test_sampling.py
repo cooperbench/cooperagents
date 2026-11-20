@@ -44,7 +44,13 @@ def test_worker_coordinator_profile_parity(monkeypatch, shared_tokens, worker_to
     client = openai.OpenAI(
         api_key="test-only", base_url="https://example.test/v1", http_client=httpx.Client(transport=httpx.MockTransport(respond))
     )
-    monkeypatch.setattr(openai, "OpenAI", lambda **_: client)
+    real_openai = openai.OpenAI
+    def openai_client(**kwargs):
+        if "http_client" not in kwargs:
+            return client
+        kwargs["http_client"]._transport = httpx.MockTransport(respond)
+        return real_openai(**kwargs)
+    monkeypatch.setattr(openai, "OpenAI", openai_client)
     coordinator = _default_planner_complete("qwen/qwen3.5-9b", None, None)
     assert coordinator is not None
     assert coordinator("stalled") == "Try another command."
@@ -56,8 +62,9 @@ def test_worker_coordinator_profile_parity(monkeypatch, shared_tokens, worker_to
         kwargs.pop("api_key", None)
         kwargs.pop("drop_params", None)
         kwargs.pop("timeout", None)
+        worker_client = kwargs.pop("client")
         kwargs["model"] = kwargs["model"].removeprefix("openai/")
-        return client.chat.completions.create(**kwargs)
+        return worker_client.chat.completions.create(**kwargs)
 
     monkeypatch.setattr("litellm.completion", worker_completion)
     worker._query_inner([{"role": "user", "content": "work"}])
@@ -256,6 +263,7 @@ def test_injected_coordinator_uses_separate_endpoint_and_records_once(monkeypatc
             kwargs.pop("tools", None)
             kwargs.pop("drop_params", None)
             kwargs.pop("timeout", None)
+            kwargs.pop("client", None)
             return workers.chat.completions.create(**kwargs)
 
         monkeypatch.setattr("litellm.completion", worker_completion)
@@ -276,3 +284,133 @@ def test_injected_coordinator_uses_separate_endpoint_and_records_once(monkeypatc
     assert sum(row["event"] == "response" for row in rows) == 1
     assert {"decision", "nudge", "delivery"} <= {row["event"] for row in rows}
     assert not replay(journal.path)["pending_calls"]
+
+
+def test_tinker_request_exact_json(monkeypatch, tmp_path):
+    import json
+
+    for key in list(os.environ):
+        if key.startswith("COOPER_"):
+            monkeypatch.delenv(key)
+    for key, value in {
+        "COOPER_SEND_EXTRA_BODY": "false",
+        "COOPER_MAX_COMPLETION_TOKENS": "32768",
+        "COOPER_WORKER_MAX_COMPLETION_TOKENS": "4096",
+        "COOPER_REASONING_EFFORT": "high",
+        "COOPER_TEMPERATURE_FORCE": "1",
+        "COOPER_TOP_P": "1",
+    }.items():
+        monkeypatch.setenv(key, value)
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    seen = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            seen.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
+            response = json.dumps({"id": "test", "object": "chat.completion", "created": 0, "model": "tinker-model",
+                                   "choices": [{"index": 0, "finish_reason": "stop",
+                                                "message": {"role": "assistant", "content": "done"}}]}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(response)))
+            self.end_headers()
+            self.wfile.write(response)
+
+        def log_message(self, *args):
+            pass
+
+    from functools import partial
+
+    from cooperagents.trajectory import Trajectory
+
+    journal = Trajectory(tmp_path / "wire.jsonl")
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    monkeypatch.delenv("AZURE_OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("AZURE_OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_BASE_URL", f"http://127.0.0.1:{server.server_port}/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "test")
+    try:
+        model = build_model("tinker-model")
+        assert model.config.model_kwargs["drop_params"] is True
+        model.trace = partial(journal.emit, "worker")
+        model._query_inner([{"role": "user", "content": "work"}], _tools=None)
+    finally:
+        server.shutdown()
+        thread.join()
+        server.server_close()
+        journal.close()
+    assert seen == [{"model": "tinker-model", "messages": [{"role": "user", "content": "work"}],
+                     "max_completion_tokens": 4096, "reasoning_effort": "high", "temperature": 1, "top_p": 1}]
+    assert seen[0]["reasoning_effort"] == "high" and "max_tokens" not in seen[0]
+    wire = [json.loads(line) for line in journal.path.read_text().splitlines() if json.loads(line)["event"] == "wire_request"]
+    assert wire[0]["data"]["request"] == seen[0]
+    monkeypatch.setenv("COOPER_MAX_TOKENS", "20")
+    with pytest.raises(ValueError, match="COOPER_MAX_TOKENS.*COOPER_MAX_COMPLETION_TOKENS"):
+        sampling_kwargs()
+    monkeypatch.delenv("COOPER_MAX_TOKENS")
+    monkeypatch.setenv("COOPER_TOP_K", "20")
+    with pytest.raises(ValueError, match="COOPER_SEND_EXTRA_BODY.*COOPER_TOP_K"):
+        sampling_kwargs()
+
+
+@pytest.mark.parametrize("send_extra", [None, "true", "1", "false", "0"])
+def test_extra_body_three_states(monkeypatch, send_extra):
+    for key in list(os.environ):
+        if key.startswith("COOPER_"):
+            monkeypatch.delenv(key)
+    if send_extra is not None:
+        monkeypatch.setenv("COOPER_SEND_EXTRA_BODY", send_extra)
+    assert "extra_body" not in sampling_kwargs()
+    monkeypatch.setenv("COOPER_TOP_K", "20")
+    monkeypatch.setenv("COOPER_CHAT_TEMPLATE_ENABLE_THINKING", "false")
+    if send_extra in ("false", "0"):
+        with pytest.raises(ValueError, match="COOPER_CHAT_TEMPLATE_ENABLE_THINKING.*COOPER_TOP_K"):
+            sampling_kwargs()
+    else:
+        assert sampling_kwargs()["extra_body"] == {"top_k": 20, "chat_template_kwargs": {"enable_thinking": False}}
+
+
+@pytest.mark.parametrize("raw, expected", [("true", True), ("FALSE", False), ("0.9", 0.9), ("high", "high")])
+def test_reasoning_effort_types(monkeypatch, raw, expected):
+    monkeypatch.setenv("COOPER_REASONING_EFFORT", raw)
+    assert sampling_kwargs()["reasoning_effort"] == expected
+
+
+def test_missing_sampling_field_fails_before_network(monkeypatch):
+    import litellm
+
+    for key in list(os.environ):
+        if key.startswith("COOPER_"):
+            monkeypatch.delenv(key)
+    monkeypatch.setenv("COOPER_REASONING_EFFORT", "high")
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://127.0.0.1:1/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "test")
+    monkeypatch.delenv("AZURE_OPENAI_BASE_URL", raising=False)
+    real_completion = litellm.completion
+    def lose_effort(**kwargs):
+        kwargs.pop("reasoning_effort")
+        return real_completion(**kwargs)
+    monkeypatch.setattr(litellm, "completion", lose_effort)
+    with pytest.raises(Exception, match="reasoning_effort"):
+        build_model("tinker-model")._query_inner([{"role": "user", "content": "work"}], _tools=None)
+
+
+def test_configured_sampling_rejects_unverified_transport(monkeypatch):
+    import litellm
+
+    from cooperagents.vendor.mini_swe.models.litellm_model import SamplingTransportError
+
+    for key in list(os.environ):
+        if key.startswith("COOPER_"):
+            monkeypatch.delenv(key)
+    monkeypatch.setenv("COOPER_REASONING_EFFORT", "high")
+    monkeypatch.setenv("OPENAI_API_KEY", "test")
+    monkeypatch.setattr(litellm, "completion", lambda **kwargs: {"successful_but_unverified": True})
+    with pytest.raises(SamplingTransportError, match="request was not verified at the HTTP boundary"):
+        build_model("test")._query_inner([{"role": "user", "content": "work"}])
+    monkeypatch.delenv("COOPER_REASONING_EFFORT")
+    assert build_model("test")._query_inner([{"role": "user", "content": "work"}]) == {"successful_but_unverified": True}

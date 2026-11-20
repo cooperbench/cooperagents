@@ -160,3 +160,29 @@ def test_summary_context_failure_does_not_trigger_emergency_truncation(monkeypat
         agent.query()
     assert len(calls) == 1 and calls[0].purpose == "summary"
     assert len(agent.messages) == 3 and agent.n_calls == 0
+
+
+def test_repair_generation_restricts_new_sampling_fields():
+    import pytest
+
+    from cooperagents.completion import safe_generation
+
+    for effort in (True, False, 0.9, "HIGH", "none"):
+        assert safe_generation({"max_completion_tokens": 4096, "reasoning_effort": effort})["reasoning_effort"] == effort
+    for fields in ({"max_tokens": 1, "max_completion_tokens": 1}, {"max_completion_tokens": 1.5},
+                   {"reasoning_effort": 1.0}, {"reasoning_effort": "other"}, {"reasoning_effort": float("nan")}):
+        with pytest.raises(ValueError):
+            safe_generation(fields)
+
+
+def test_non_capture_json_omits_capture_profile(monkeypatch, tmp_path):
+    import json
+
+    from cooperagents.repair import load_repair_input
+
+    checkpoint = make_checkpoint(monkeypatch, tmp_path)
+    raw = (checkpoint / "repair-input.json").read_text()
+    saved = load_repair_input(checkpoint)
+    assert saved.capture_profile is None
+    assert "capture_profile" not in json.loads(raw)
+    assert raw == saved.model_dump_json(indent=2)
