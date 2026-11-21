@@ -100,6 +100,44 @@ def test_planning_cli_bindings_use_verified_wire_transport(compare, monkeypatch,
     assert "fixture-key" not in json.dumps(rows)
 
 
+@pytest.mark.parametrize("send_tool_choice", [None, "false"])
+def test_planning_tool_choice_env_controls_coordinator_and_worker(compare, monkeypatch, send_tool_choice):
+    import httpx
+
+    from cooperagents.vendor.mini_swe.models.utils.actions_toolcall import BASH_TOOL
+
+    for key in list(os.environ):
+        if key.startswith("COOPER_") or key.startswith("AZURE_OPENAI_"):
+            monkeypatch.delenv(key)
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://tinker.invalid/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "fixture-key")
+    if send_tool_choice is not None:
+        monkeypatch.setenv("COOPER_SEND_TOOL_CHOICE", send_tool_choice)
+    received = []
+
+    def respond(request):
+        received.append(json.loads(request.content))
+        return httpx.Response(200, json={
+            "id": "test", "object": "chat.completion", "created": 0, "model": "tinker-model",
+            "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "done"}}],
+        })
+
+    transport = httpx.MockTransport(respond)
+    monkeypatch.setattr(httpx.Client, "_transport_for_url", lambda self, url: transport)
+    for worker in (False, True):
+        compare._planning_completion("tinker-model", worker=worker).complete(
+            messages=[{"role": "user", "content": "work"}], tools=[BASH_TOOL],
+            actor_id="worker" if worker else "coordinator", call_id=1,
+        )
+
+    assert len(received) == 2
+    assert all(body["tools"] == [BASH_TOOL] for body in received)
+    if send_tool_choice is None:
+        assert all(body["tool_choice"] == "auto" for body in received)
+    else:
+        assert all("tool_choice" not in body for body in received)
+
+
 def test_budget_reaches_solo_and_team(monkeypatch, tmp_path):
     spec = importlib.util.spec_from_file_location("bench_compare", Path(__file__).parents[1] / "scripts/bench_compare.py")
     bench = importlib.util.module_from_spec(spec)

@@ -205,7 +205,7 @@ def _planning_completion(model_name: str, *, worker: bool):
             worker_sampling=worker,
             verify_wire=True,
             timeout=request.settings.timeout,
-            **({"tool_choice": request.tool_choice} if request.tool_choice else {}),
+            **({"tool_choice": request.tool_choice} if request.tool_choice and os.getenv("COOPER_SEND_TOOL_CHOICE", "true").lower() != "false" else {}),
             **request.settings.generation,
         )
 
