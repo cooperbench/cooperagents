@@ -332,6 +332,13 @@ class TeamSpec:
     (or a mechanical merge) combines their patches — the classic isolated-coop
     design. Both satisfy the own-container hard constraint."""
 
+    deterministic_coordinator: bool = False
+    """Monitor workers for repeated commands, errors, and overlapping edits."""
+
+    def __post_init__(self) -> None:
+        if self.coordinator and self.deterministic_coordinator:
+            raise ValueError("Coordinator families are mutually exclusive")
+
     def seed_count(self) -> int:
         return len(self.assignments) if self.assignments else self.team_size
 

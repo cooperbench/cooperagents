@@ -154,7 +154,7 @@ class LitellmModel:
             try:
                 return self.completion.complete(
                     messages=messages, tools=kwargs.pop("_tools", self._tools),
-                    actor_id=self.actor_id, call_id=self.completion_calls,
+                    actor_id=self.actor_id, call_id=self.completion_calls, trace=self.trace,
                 )
             except Exception as exc:
                 # Do not let DefaultAgent's legacy context-error retries truncate
@@ -198,7 +198,7 @@ class LitellmModel:
 
     trace = None
 
-    def _query_inner(self, messages: list[dict[str, str]], *, _trace=None, **kwargs):
+    def _query_inner(self, messages: list[dict[str, str]], *, _trace=None, worker_sampling=True, verify_wire=False, **kwargs):
         from cooperagents.trajectory import record_call
 
         merged = self.config.model_kwargs | kwargs
@@ -209,10 +209,14 @@ class LitellmModel:
         # Verify the serialized body at the HTTP boundary before it is sent.
         from cooperagents.sampling import sampling_kwargs
 
-        expected = sampling_kwargs(temperature=merged.get("temperature"), worker=True)
+        expected = sampling_kwargs(temperature=merged.get("temperature"), worker=worker_sampling)
         expected_extra = expected.pop("extra_body", {})
         expected.update(expected_extra)
-        strict = any(os.getenv(key) is not None for key in (
+        if verify_wire:
+            for name in ("max_tokens", "max_completion_tokens"):
+                if name in merged:
+                    expected.setdefault(name, merged[name])
+        strict = verify_wire or any(os.getenv(key) is not None for key in (
             "COOPER_MAX_COMPLETION_TOKENS", "COOPER_WORKER_MAX_COMPLETION_TOKENS",
             "COOPER_REASONING_EFFORT", "COOPER_SEND_EXTRA_BODY", "COOPER_TEMPERATURE", "COOPER_TEMPERATURE_FORCE",
             "COOPER_TOP_P", "COOPER_PRESENCE_PENALTY", "COOPER_TOP_K", "COOPER_MIN_P", "COOPER_REPETITION_PENALTY",

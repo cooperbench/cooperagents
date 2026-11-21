@@ -85,7 +85,7 @@ class CompletionSettings(BaseModel):
         safe_generation(self.generation)
         if "timeout" in self.generation or "drop_params" in self.generation:
             raise ValueError("transport timeout is separate; injected settings cannot drop parameters")
-        if "max_tokens" not in self.generation:
+        if not self.generation.keys() & {"max_tokens", "max_completion_tokens"}:
             raise ValueError("injected completion requires an explicit token budget")
         return self
 
@@ -98,6 +98,7 @@ class MiniSweCompletionRequest:
     actor_id: str
     call_id: int
     purpose: Literal["action", "summary"]
+    trace: Callable[..., int] | None = None
 
     @property
     def tool_choice(self) -> Literal["auto"] | None:
@@ -118,6 +119,7 @@ class MiniSweCompletionRequest:
         actor_id: str,
         call_id: int,
         purpose: Literal["action", "summary"],
+        trace: Callable[..., int] | None = None,
     ) -> MiniSweCompletionRequest:
         if not isinstance(messages, list) or not messages or call_id < 1 or not actor_id:
             raise ValueError("invalid completion identity/history")
@@ -135,6 +137,7 @@ class MiniSweCompletionRequest:
             actor_id,
             call_id,
             purpose,
+            trace,
         )
 
 
@@ -148,7 +151,9 @@ class CompletionBinding:
     summary: Completion
     summary_settings: CompletionSettings
 
-    def complete(self, *, messages: object, tools: object, actor_id: str, call_id: int) -> ModelResponse:
+    def complete(
+        self, *, messages: object, tools: object, actor_id: str, call_id: int, trace: Callable[..., int] | None = None,
+    ) -> ModelResponse:
         summary = tools is None
         request = MiniSweCompletionRequest.build(
             messages=messages,
@@ -157,6 +162,7 @@ class CompletionBinding:
             actor_id=actor_id,
             call_id=call_id,
             purpose="summary" if summary else "action",
+            trace=trace,
         )
         response = (self.summary if summary else self.action)(request)
         if not isinstance(response, ModelResponse) or not response.choices:

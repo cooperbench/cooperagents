@@ -7,8 +7,11 @@ import re
 # Files the grader supplies itself.  An agent-authored copy collides with the
 # grader's test patch ("already exists") and frequently won't compile, so these
 # sections are stripped from any submitted diff — across all settings, so solo
-# and team are treated identically.
-_TEST_PATH = re.compile(r"(_test\.[A-Za-z0-9]+$)|((^|/)test_[^/]*$)|((^|/)tests?/)|((^|/)conftest\.py$)")
+# and team are treated identically. Root patch.txt is the worker's submission
+# artifact and would conflict if merged as an implementation file.
+_TEST_OR_SUBMISSION_PATH = re.compile(
+    r"(_test\.[A-Za-z0-9]+$)|((^|/)test_[^/]*$)|((^|/)tests?/)|((^|/)conftest\.py$)|(^patch\.txt$)"
+)
 
 
 # Scratch dir agents use to publish per-feature regression checks to teammates
@@ -33,14 +36,13 @@ def _strip(patch: str, pat: re.Pattern[str]) -> str:
 
 
 def strip_test_sections(patch: str) -> str:
-    """Drop whole-file sections that touch test files from a unified diff."""
-    return _strip(patch, _TEST_PATH)
+    """Drop test files and the worker submission artifact from a unified diff."""
+    return _strip(patch, _TEST_OR_SUBMISSION_PATH)
 
 
 def strip_for_submission(patch: str) -> str:
-    """Final cleanup at the eval boundary: drop test files AND scratch checks
-    (.cb_checks/), which agents share between themselves but the grader must not see."""
-    return _strip(_strip(patch, _TEST_PATH), _SCRATCH)
+    """Strip tests, the submission artifact, and teammates' scratch checks."""
+    return _strip(strip_test_sections(patch), _SCRATCH)
 
 
 __all__ = ["strip_test_sections", "strip_for_submission"]

@@ -30,6 +30,7 @@ import copy
 import hashlib
 import json
 import os
+import subprocess
 import tempfile
 import threading
 import time
@@ -1452,7 +1453,7 @@ class _Coordinator:
                 response = self.completion.complete(
                     messages=[*([{"role": "system", "content": system}] if system else []), {"role": "user", "content": prompt}],
                     tools=self._tools,
-                    actor_id="coordinator", call_id=self._coordinator_calls,
+                    actor_id="coordinator", call_id=self._coordinator_calls, trace=self.trace,
                 )
             elif self._injected:
                 response = self._complete(system + "\n" + prompt if system else prompt)
@@ -1578,6 +1579,151 @@ class _Coordinator:
             raise RuntimeError("Coordinator still running; episode is incomplete")
         if self.error is not None and not self.planning_only:
             raise RuntimeError("Coordinator failed; episode is incomplete") from self.error
+
+
+class _DeterministicCoordinator:
+    """Send private advice based on live worker history and dirty paths."""
+
+    _PREFIX = "[coordinator] "
+    _FALLBACK = {
+        "LOOP": "You appear to be repeating near-identical commands without progress. Step back: state "
+        "your goal in one sentence, then take a DIFFERENT approach (e.g. rewrite the whole file "
+        "instead of patching it line by line).",
+        "STALL": "Your last several commands returned the same error. Do not retry it again — read the "
+        "error carefully and fix its CAUSE, or route around it another way.",
+        "COLLISION": "You and your teammate are editing the same file(s): {files}. Confine your edits to "
+        "clearly separate regions and reuse their public names, or your merged work will conflict.",
+    }
+
+    def __init__(self, envs: dict[str, Environment], *, interval: float, complete: Callable[[str], object] | None) -> None:
+        self._envs = envs
+        self._interval = interval
+        self._complete = complete
+        self._agents: dict[str, Any] = {}
+        self._queues: dict[str, list[tuple[str, str]]] = {aid: [] for aid in envs}
+        self._sent: Counter[str] = Counter()
+        self._events: list[dict] = []
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+
+    def register(self, aid: str, agent: Any) -> None:
+        with self._lock:
+            self._agents[aid] = agent
+
+    def mark_finished(self, aid: str) -> None:
+        with self._lock:
+            self._agents.pop(aid, None)
+
+    def drain(self, aid: str) -> list[str]:
+        with self._lock:
+            queue = self._queues[aid]
+            self._events.extend({"agent": aid, "kind": kind} for kind, _ in queue)
+            messages = [text for _, text in queue]
+            queue.clear()
+            return messages
+
+    def events(self) -> list[dict]:
+        with self._lock:
+            return list(self._events)
+
+    @staticmethod
+    def _history(messages: list[dict]) -> tuple[list[str], list[tuple[str, bool]]]:
+        commands: list[str] = []
+        outputs: list[tuple[str, bool]] = []
+        for message in reversed(messages):
+            extra = message.get("extra", {})
+            if message["role"] == "assistant" and len(commands) < 6:
+                for action in reversed(extra.get("actions", [])):
+                    if action.get("tool_name") == "bash" and action.get("command"):
+                        commands.append(action["command"])
+                        if len(commands) == 6:
+                            break
+            elif message["role"] == "tool" and len(outputs) < 4:
+                if "raw_output" in extra and extra.get("exception_info") != "action was not executed":
+                    raw = extra["raw_output"]
+                    outputs.append((raw[:120], bool(extra.get("returncode")) or "error" in raw.lower()))
+            if len(commands) == 6 and len(outputs) == 4:
+                break
+        return commands[::-1], outputs
+
+    @staticmethod
+    def _behavior(commands: list[str], outputs: list[tuple[str, bool]]) -> str | None:
+        if len(commands) == 6:
+            heads = Counter(tuple(command.split()[:2]) for command in commands)
+            if heads.most_common(1)[0][1] >= 4:
+                return "LOOP"
+        if len(outputs) == 4 and outputs[0][1] and len(set(outputs)) == 1:
+            return "STALL"
+        return None
+
+    @staticmethod
+    def _last_message(agent: Any) -> dict | None:
+        tail = agent.messages[-1:] if agent is not None else []
+        return tail[0] if tail else None
+
+    @classmethod
+    def _dirty_files(cls, env: Environment, agent: Any) -> set[str]:
+        # DefaultAgent appends the assistant message before executing the tool
+        # batch. Observe after its tool results arrive so one shell edit that
+        # writes multiple files is not reported midway through the command.
+        marker = cls._last_message(agent)
+        if marker and marker["role"] == "assistant" and marker.get("extra", {}).get("actions"):
+            return set()
+        try:
+            result = env.execute("git status --porcelain=v1 -z --no-renames --untracked-files=all", timeout=5)
+        except Exception:
+            return set()
+        if result.exit_code or cls._last_message(agent) is not marker:
+            return set()
+        return {
+            entry[3:] for entry in result.stdout.split("\0")
+            if len(entry) > 3 and not entry[3:].startswith(".cb_checks") and entry[3:] != "patch.txt"
+        }
+
+    def _compose(self, kind: str, commands: list[str], paths: str) -> str:
+        if self._complete is not None:
+            try:
+                tail = "\n".join(commands[-5:])[:1200]
+                text = self._complete(
+                    f"An agent shows this issue: {kind}. Overlapping files: {paths}\nRecent commands:\n{tail}\n\n"
+                    "Write one specific corrective instruction in at most 40 words."
+                )
+                if isinstance(text, str) and text.strip():
+                    return " ".join(text.split())
+            except Exception:
+                pass
+        return self._FALLBACK[kind].format(files=paths)
+
+    def run(self) -> None:
+        while not self._stop.wait(self._interval):
+            with self._lock:
+                agents = dict(self._agents)
+            dirty: dict[str, set[str]] | None = None
+            for aid, agent in sorted(agents.items()):
+                if self._stop.is_set() or self._sent[aid] >= 3:
+                    continue
+                commands, outputs = self._history(list(agent.messages))
+                kind = self._behavior(commands, outputs)
+                paths = ""
+                if kind is None:
+                    if dirty is None:
+                        dirty = {peer: self._dirty_files(env, agents.get(peer)) for peer, env in self._envs.items()}
+                    overlap = {path for peer, files in dirty.items() if peer != aid for path in dirty[aid] & files}
+                    if not overlap:
+                        continue
+                    kind = "COLLISION"
+                    paths = ",".join(sorted(overlap)[:3])
+                text = self._compose(kind, commands, paths)
+                with self._lock:
+                    if aid in self._agents and not self._stop.is_set():
+                        self._queues[aid].append((kind, (self._PREFIX + text)[:400]))
+                        self._sent[aid] += 1
+
+    def finish(self, thread: threading.Thread) -> None:
+        self._stop.set()
+        thread.join(timeout=600)
+        if thread.is_alive():
+            raise RuntimeError("Deterministic coordinator still running; episode is incomplete")
 
 
 _GITSHARE = "/cbshared/repo.git"
@@ -1917,7 +2063,8 @@ class UnifiedHarness:
         on_event: Callable[[str], None] | None = None,
         trajectory=None,
         langfuse: bool = False,
-        coordinator_complete: Callable[[str], list[dict[str, str]]] | None = None,
+        coordinator_complete: Callable[[str], list[dict[str, str]] | str] | None = None,
+        deterministic_coordinator_interval_s: float = 20.0,
         coordinator_notebook_path: Path | None = None,
         coordination_variant: str = "auto-prompt",
         coordination_mode: str = "direct",
@@ -1950,6 +2097,9 @@ class UnifiedHarness:
         self.planning_only = planning_only
         self.repair_completion = repair_completion
         self.coordinator_complete = coordinator_complete
+        if not 0 < deterministic_coordinator_interval_s < float("inf"):
+            raise ValueError("Deterministic coordinator interval must be positive and finite")
+        self.deterministic_coordinator_interval_s = deterministic_coordinator_interval_s
         if coordination_variant not in ("auto-prompt", "human-prompt"):
             raise ValueError(f"Unknown coordination variant: {coordination_variant}")
         if coordination_mode not in ("direct", "group-chat", "group-chat-planning"):
@@ -2057,6 +2207,7 @@ class UnifiedHarness:
             poller=None,
             time_limit_s: int | None = None,
             monitor=None,
+            deterministic_monitor=None,
             on_start=None,
         ) -> AgentResult:
             """Run one agent (mini-swe or builtin worker) on the shared tree."""
@@ -2091,6 +2242,7 @@ class UnifiedHarness:
                     spawn_handler=make_spawn_handler(agent_id) if spec.allow_spawn_tool else None,
                     time_limit_s=time_limit_s,
                     monitor=monitor,
+                    deterministic_monitor=deterministic_monitor,
                     git_share=spec.git_share,
                     on_start=on_start,
                     completion=self.repair_completion if role == "integrator" else self.worker_completion,
@@ -2132,6 +2284,7 @@ class UnifiedHarness:
         seeds: dict[str, AgentResult] = {}
         gate_discards: list[str] = []  # agents whose delta the do_no_harm gate rejected
         coordinator = None  # set in the coop branch when spec.coordinator
+        deterministic = None
         start = time.time()
         integrated_patch = ""  # cumulative diff across the team so far (seed mode)
         raw_worker_patches: dict[str, str] = {}
@@ -2247,6 +2400,13 @@ class UnifiedHarness:
                     env = env_factory(assignment.agent_id)
                     register_cleanup(env.cleanup)
                     coop_envs[assignment.agent_id] = env
+                if spec.deterministic_coordinator:
+                    deterministic = _DeterministicCoordinator(
+                        coop_envs, interval=self.deterministic_coordinator_interval_s, complete=self.coordinator_complete,
+                    )
+                    monitor_thread = threading.Thread(target=deterministic.run, daemon=True)
+                    monitor_thread.start()
+                    register_cleanup(deterministic.finish, monitor_thread)
                 gitsync = None
                 if spec.git_share:
                     first = True
@@ -2296,34 +2456,46 @@ class UnifiedHarness:
                     register_cleanup(coordinator.finish, coordinator_thread)
 
 
-                def collect_raw_diff(env, aid: str) -> tuple[str, str]:
-                    """Agent diff with share fallback: agents sometimes wipe their
-                    working tree at the end (stash/checkout/rm to "verify a clean
-                    patch"); the 45s share sync holds their last state, so recover
-                    the diff from the pushed branch when the tree reads empty."""
-                    raw = env.git_diff()
-                    if strip_test_sections(raw).strip():
-                        return raw, "working_tree"
-                    base = getattr(env, "_base_commit", "") or "HEAD"
-                    r = env.execute(
-                        f"git fetch -q shared {aid} 2>/dev/null && "
-                        f"git diff --binary {base} FETCH_HEAD -- . 2>/dev/null")
-                    if r.stdout.strip():
-                        return r.stdout, "shared_branch"
-                    # last resort: the agent destroyed even its .git — read the
-                    # share volume directly with a throwaway container
-                    if hasattr(env, "recover_shared_diff"):
-                        return env.recover_shared_diff(aid), "shared_branch_recovery"
+                def recover_shared_diff(env, aid: str, base: str) -> tuple[str, str]:
+                    """Read the shared bare repository independently of the worker tree."""
+                    recover = getattr(env, "recover_shared_diff", None)
+                    if recover is not None:
+                        return recover(aid), "shared_branch_recovery"
                     vol = next((v.split(":")[0] for v in getattr(env, "volumes", None) or []
                                 if v.endswith(":/cbshared")), None)
-                    if vol and base != "HEAD":
-                        import subprocess as _sp
-                        rr = _sp.run(["docker", "run", "--rm", "-v", f"{vol}:/cb",
-                                      "alpine/git", "--git-dir=/cb/repo.git",
-                                      "diff", "--binary", base, aid],
-                                     capture_output=True, text=True, timeout=120)
-                        if rr.returncode == 0 and rr.stdout.strip():
-                            return rr.stdout, "shared_volume_recovery"
+                    if not vol or base == "HEAD":
+                        return "", "empty_working_tree"
+                    if os.getenv("COOPER_RUNTIME", "docker") == "docker":
+                        command = ["docker", "run", "--rm", "-v", f"{vol}:/cb", "alpine/git", "--git-dir=/cb/repo.git"]
+                    else:
+                        command = ["git", f"--git-dir={Path(vol) / 'repo.git'}"]
+                    result = subprocess.run(
+                        [*command, "diff", "--binary", "--no-ext-diff", "--no-textconv", base, f"refs/heads/{aid}", "--"],
+                        capture_output=True, text=True, timeout=120,
+                    )
+                    return result.stdout if result.returncode == 0 else "", "shared_volume_recovery"
+
+                def collect_raw_diff(env, aid: str) -> tuple[str, str]:
+                    """Use the last shared draft if the worker discarded its local changes."""
+                    base = getattr(env, "_base_commit", "") or "HEAD"
+                    try:
+                        raw = env.git_diff()
+                    except RuntimeError:
+                        if spec.git_share:
+                            recovered, source = recover_shared_diff(env, aid, base)
+                            if recovered.strip():
+                                return recovered, source
+                        raise
+                    if strip_test_sections(raw).strip():
+                        return raw, "working_tree"
+                    if not spec.git_share:
+                        return raw, "empty_working_tree"
+                    r = env.execute(f"git fetch -q shared {aid} 2>/dev/null && git diff --binary {base} FETCH_HEAD -- . 2>/dev/null")
+                    if r.exit_code == 0 and r.stdout.strip():
+                        return r.stdout, "shared_branch"
+                    recovered, source = recover_shared_diff(env, aid, base)
+                    if recovered.strip():
+                        return recovered, source
                     return raw, "empty_working_tree"
 
                 def collect_diff(env, aid: str, result: AgentResult) -> str:
@@ -2436,17 +2608,19 @@ class UnifiedHarness:
                             )
                         poller = (
                             _TeammatePoller(a.agent_id, coop_envs)
-                            if (spec.live_awareness or spec.task_board or spec.coordinator or spec.git_share)
+                            if (spec.live_awareness or spec.task_board or coordinator or deterministic or spec.git_share)
                             else None
                         )
                         if poller is not None and spec.git_share:
                             poller.watch_gitshare()
                         if poller is not None and spec.task_board:
                             poller.watch_board(bus)
-                        if poller is not None and coordinator is not None:
-                            poller.watch_coordinator(coordinator)
-                        r = run_on_shared(env, a.agent_id, a.role, task, a.feature_id,
-                                          poller=poller, monitor=coordinator, time_limit_s=spec.agent_time_limit)
+                        if poller is not None and (coordinator or deterministic):
+                            poller.watch_coordinator(coordinator or deterministic)
+                        r = run_on_shared(
+                            env, a.agent_id, a.role, task, a.feature_id, poller=poller, monitor=coordinator,
+                            time_limit_s=spec.agent_time_limit, deterministic_monitor=deterministic,
+                        )
 
                         return a.agent_id, r, "" if self.planning_only else collect_diff(env, a.agent_id, r)
                     return None  # unreachable
@@ -2739,6 +2913,7 @@ class UnifiedHarness:
                     if spec.coordinator and coordinator is not None
                     else {}
                 ),
+                **({"coordinator_events": deterministic.events()} if deterministic is not None else {}),
             },
         )
 
@@ -3167,6 +3342,13 @@ class UnifiedHarness:
         selector: Callable[[list[RunResult]], int] | None = None,
         planner: Planner | None = None,
     ) -> RunResult:
+        if spec.deterministic_coordinator and spec.coordinator:
+            raise ValueError("Coordinator families are mutually exclusive")
+        if spec.deterministic_coordinator and (
+            not spec.shared_workspace or not spec.coop_tools or spec.worker != "mini_swe"
+            or spec.seed_prior or spec.team_roles or spec.decompose or spec.adaptive
+        ):
+            raise ValueError("Deterministic coordinator requires a no-seed mini_swe coop-tools team")
         if self.stop_after_repair_checkpoint and not spec.repair_integrator:
             raise ValueError("Stopping after the repair checkpoint requires repair_integrator")
         if self.collect_source_conflicts and self.trajectory is None:
@@ -3224,7 +3406,8 @@ class UnifiedHarness:
         if self.coordination_variant == "human-prompt" and not (spec.coordinator and spec.coordinator_notebook):
             raise ValueError("Human-prompt coordination requires coordinator and notebook")
         if (
-            spec.coordinator or self.coordinator_complete is not None or self.coordinator_completion is not None
+            spec.coordinator or (self.coordinator_complete is not None and not spec.deterministic_coordinator)
+            or self.coordinator_completion is not None
             or self.worker_completion is not None or self.planning_only
         ) and (
             not spec.coordinator or not spec.shared_workspace or not spec.coop_tools

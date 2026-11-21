@@ -372,16 +372,15 @@ class ApptainerEnv(Environment):
             raise
 
     def recover_shared_diff(self, agent_id: str) -> str:
-        # Run outside the repo in case the worker removed its working directory.
-        with self._lock:
-            cwd, self.repo_path = self.repo_path, "/"
-            try:
-                result = self.execute(
-                    f"git --git-dir=/cbshared/repo.git diff --binary {shlex.quote(self._base_commit)} {shlex.quote(agent_id)}"
-                )
-                return result.stdout if result.exit_code == 0 else ""
-            finally:
-                self.repo_path = cwd
+        shared = self._checkpoint_mounts.get("/cbshared")
+        if shared is None:
+            return ""
+        result = subprocess.run(
+            ["git", f"--git-dir={shared / 'repo.git'}", "diff", "--binary", "--no-ext-diff", "--no-textconv",
+             self._base_commit, f"refs/heads/{agent_id}", "--"],
+            capture_output=True, text=True, timeout=120,
+        )
+        return result.stdout if result.returncode == 0 else ""
 
     def cleanup(self) -> None:
         from cooperagents.checkpoint import remove_tree
