@@ -86,6 +86,11 @@ _MERGE = (
     "for b in $(git for-each-ref --format='%(refname:short)' refs/remotes/shared/ | sed 's|shared/||'); do "
     "[ \"$b\" = \"$AID\" ] && continue; "
     "if ! git -c user.name=agent -c user.email=a@t merge --no-edit shared/$b >/tmp/.mg 2>&1; then "
+    # Keep the worker's own submission artifact if both sides created it.
+    "if [ \"$(git diff --name-only --diff-filter=U -- patch.txt)\" = patch.txt ] && "
+    "git checkout --ours -- patch.txt 2>/dev/null && git add -- patch.txt && "
+    "[ -z \"$(git diff --name-only --diff-filter=U)\" ] && "
+    "git -c user.name=agent -c user.email=a@t commit -q --no-edit; then continue; fi; "
     "echo \"TEAMMATE_MERGE_CONFLICT merging shared/$b — conflicted files:\"; "
     "git diff --name-only --diff-filter=U | head -10; ok=0; break; fi; done; "
     "[ $ok = 1 ] && echo MERGED_OK; "
