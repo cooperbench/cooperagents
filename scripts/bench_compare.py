@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import logging
 import os
 import tempfile
 import time
@@ -183,6 +184,7 @@ def _planning_completion(model_name: str, *, worker: bool):
     """Bind planning to the same verified endpoint transport as mini-SWE."""
     from cooperagents.completion import CompletionBinding, CompletionSettings, MiniSweCompletionRequest
     from cooperagents.sampling import sampling_kwargs
+    from cooperagents.vendor.mini_swe.models.utils.retry import retry
     from cooperagents.workers.mini_swe_worker import build_model
 
     model = build_model(model_name, worker_sampling=worker)
@@ -199,15 +201,17 @@ def _planning_completion(model_name: str, *, worker: bool):
     def complete(request: MiniSweCompletionRequest):
         transport = copy.copy(model)
         transport.trace = request.trace
-        return transport._query(
-            request.messages,
-            _tools=request.tools,
-            worker_sampling=worker,
-            verify_wire=True,
-            timeout=request.settings.timeout,
-            **({"tool_choice": request.tool_choice} if request.tool_choice and os.getenv("COOPER_SEND_TOOL_CHOICE", "true").lower() != "false" else {}),
-            **request.settings.generation,
-        )
+        for attempt in retry(logger=logging.getLogger("cooperagents.planning_completion"), abort_exceptions=transport.abort_exceptions):
+            with attempt:
+                return transport._query(
+                    request.messages,
+                    _tools=request.tools,
+                    worker_sampling=worker,
+                    verify_wire=True,
+                    timeout=request.settings.timeout,
+                    **({"tool_choice": request.tool_choice} if request.tool_choice and os.getenv("COOPER_SEND_TOOL_CHOICE", "true").lower() != "false" else {}),
+                    **request.settings.generation,
+                )
 
     return CompletionBinding(complete, settings, complete, settings)
 

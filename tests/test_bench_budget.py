@@ -138,6 +138,42 @@ def test_planning_tool_choice_env_controls_coordinator_and_worker(compare, monke
         assert all("tool_choice" not in body for body in received)
 
 
+@pytest.mark.parametrize("abort", [False, True])
+def test_planning_completion_retries_transient_errors_only(compare, monkeypatch, abort):
+    import importlib
+
+    import litellm
+    from tenacity import wait_none
+
+    from cooperagents.vendor.mini_swe.models.litellm_model import LitellmModel, SamplingTransportError
+
+    retry_module = importlib.import_module("cooperagents.vendor.mini_swe.models.utils.retry")
+    monkeypatch.setattr(retry_module, "wait_exponential", lambda **kwargs: wait_none())
+    monkeypatch.setenv("MSWEA_MODEL_RETRY_STOP_AFTER_ATTEMPT", "2")
+    calls = []
+    response = litellm.ModelResponse(choices=[{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "done"}}])
+
+    def query(self, *args, **kwargs):
+        calls.append((args, kwargs))
+        if len(calls) == 1:
+            if abort:
+                raise SamplingTransportError("invalid transport")
+            raise litellm.Timeout(message="timeout", model="test", llm_provider="openai")
+        return response
+
+    monkeypatch.setattr(LitellmModel, "_query", query)
+    binding = compare._planning_completion("test-model", worker=True)
+    kwargs = dict(messages=[{"role": "user", "content": "work"}], tools=None, actor_id="agent1", call_id=1)
+    if abort:
+        with pytest.raises(SamplingTransportError, match="invalid transport"):
+            binding.complete(**kwargs)
+        assert len(calls) == 1
+    else:
+        assert binding.complete(**kwargs) is response
+        assert len(calls) == 2
+        assert calls[0] == calls[1]
+
+
 def test_budget_reaches_solo_and_team(monkeypatch, tmp_path):
     spec = importlib.util.spec_from_file_location("bench_compare", Path(__file__).parents[1] / "scripts/bench_compare.py")
     bench = importlib.util.module_from_spec(spec)
