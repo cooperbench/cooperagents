@@ -95,6 +95,12 @@ The remaining feature ideas below feed that backlog:
 5. **Auto-decomposition for `--mode shared`.** A planner agent that turns one objective into a dependency-aware task DAG, then assigns/spawns against it.
 6. **Self-eval loop.** Run flash → read eval → propose a harness change → re-run → compare, fully autonomously, with guardrails (cost cap, regression gate vs. single-agent baseline).
 
+## Protected macro tests
+
+- Protected macro tests (`tests/protected/**`, guarded by `scripts/check_protected_tests.py`) cover
+  each coordinator/agent mode in separate per-family files; run all suites on every PR.
+- Implementation PRs must not edit `tests/protected/**` or `scripts/check_protected_tests.py`
+  (stop and escalate on failure). Protected test changes need a single-family test PR and explicit user approval before merge.
 
 # Style Guide
 
