@@ -212,3 +212,26 @@ def test_collection_cli_requires_stop_mode(monkeypatch, capsys, script, flag):
     with pytest.raises(SystemExit):
         module.main()
     assert "requires --stop-after-repair-checkpoint" in capsys.readouterr().err
+
+
+def test_merged_state_cli_and_harness_wiring(monkeypatch, tmp_path):
+    import sys
+
+    module_spec = importlib.util.spec_from_file_location("bench_merged", Path(__file__).parents[1] / "scripts/bench_compare.py")
+    bench = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(bench)
+    monkeypatch.setattr(bench, "_load_env", lambda: None)
+    monkeypatch.setattr(bench, "run_eval", lambda *a, **k: pytest.fail("capture must not evaluate"))
+    calls = []
+    monkeypatch.setattr(bench, "run_team", lambda *a, **k: calls.append(k) or {"duration": 0, "steps": 0})
+    flags = ["--pairs", "go_chi_task:26:1,2", "--team-only", "--no-seed", "--record-trajectory", "--capture-merged-state"]
+    monkeypatch.setattr(sys, "argv", ["bench_compare.py", *flags, "--log-dir", str(tmp_path)])
+    bench.main()
+    assert calls[0]["capture_merged_state"]
+    monkeypatch.setattr(sys, "argv", ["bench_compare.py", *[flag for flag in flags if flag != "--record-trajectory"]])
+    with pytest.raises(SystemExit):
+        bench.main()
+    for forbidden in ("--repair-integrator", "--focused-repair", "--verify-fix", "--completeness-review", "--checkpoint-repair"):
+        monkeypatch.setattr(sys, "argv", ["bench_compare.py", *flags, forbidden])
+        with pytest.raises(SystemExit):
+            bench.main()

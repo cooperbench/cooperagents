@@ -269,15 +269,25 @@ class BusComm:
         self._bus = bus
         self._id = agent_id
         self.group = group
+        self.trace = None
+        self.step = lambda: 0
 
     def send(self, recipient: str, content: str) -> None:
         if self.group is not None:
             self.group.publish(self._id, recipient, content)
         else:
             self._bus.send(sender=self._id, to=recipient, content=content)
+        if self.trace is not None:
+            self.trace("message_sent", recipient=recipient, content=content, bytes=len(content.encode("utf-8")), step=self.step())
 
     def receive(self) -> list[dict]:
-        return [] if self.group is not None else self._bus.receive(self._id)
+        messages = [] if self.group is not None else self._bus.receive(self._id)
+        if self.trace is not None:
+            for message in messages:
+                content = message["content"]
+                self.trace("message_delivered", sender=message["from"], content=content,
+                           bytes=len(content.encode("utf-8")), step=self.step() + 1)
+        return messages
 
     def send_and_wait(self, recipient: str, content: str, timeout: int = 60) -> list[dict]:
         """TK5: blocking request — send, then poll the inbox for a reply."""
@@ -508,6 +518,9 @@ def run_mini_swe_agent(
         agent.config = agent.config.model_validate(repair_input.agent_config)
         agent.config.wall_deadline = (_time.time() + time_limit_s) if time_limit_s else None
     agent.trace = trace
+    if isinstance(comm, BusComm):
+        comm.trace = trace
+        comm.step = lambda: agent.n_calls
     agent.coordinator = monitor
     if human_phase:
         prompt_phase = "planning" if initial_planning else "implementation"

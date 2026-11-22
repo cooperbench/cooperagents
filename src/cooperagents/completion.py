@@ -15,8 +15,9 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, model
 
 def safe_generation(kwargs: dict[str, JsonValue]) -> dict[str, JsonValue]:
     """Persist supported generation fields; transport credentials never enter snapshots."""
-    ranges = {"temperature": (0, 2), "top_p": (0, 1), "presence_penalty": (-2, 2), "max_tokens": (1, math.inf), "timeout": (1, math.inf)}
-    allowed = set(ranges) | {"drop_params", "extra_body"}
+    ranges = {"temperature": (0, 2), "top_p": (0, 1), "presence_penalty": (-2, 2),
+              "max_tokens": (1, math.inf), "max_completion_tokens": (1, math.inf), "timeout": (1, math.inf)}
+    allowed = set(ranges) | {"drop_params", "extra_body", "reasoning_effort"}
     if set(kwargs) - allowed:
         raise ValueError(f"Unsupported repair generation fields: {sorted(set(kwargs) - allowed)}")
     for key, bounds in ranges.items():
@@ -24,8 +25,16 @@ def safe_generation(kwargs: dict[str, JsonValue]) -> dict[str, JsonValue]:
             type(kwargs[key]) not in (int, float) or not math.isfinite(kwargs[key]) or not bounds[0] <= kwargs[key] <= bounds[1]
         ):
             raise ValueError(f"Invalid repair generation setting: {key}")
-    if "max_tokens" in kwargs and type(kwargs["max_tokens"]) is not int:
-        raise ValueError("max_tokens must be an integer")
+    if "max_tokens" in kwargs and "max_completion_tokens" in kwargs:
+        raise ValueError("max_tokens and max_completion_tokens are mutually exclusive")
+    for key in ("max_tokens", "max_completion_tokens"):
+        if key in kwargs and type(kwargs[key]) is not int:
+            raise ValueError(f"{key} must be an integer")
+    if "reasoning_effort" in kwargs:
+        effort = kwargs["reasoning_effort"]
+        if not (type(effort) is bool or (type(effort) in (int, float) and math.isfinite(effort) and 0 <= effort <= 0.99)
+                or (isinstance(effort, str) and effort.lower() in {"none", "minimal", "low", "medium", "high", "xhigh", "max"})):
+            raise ValueError("Invalid repair reasoning_effort")
     if "drop_params" in kwargs and type(kwargs["drop_params"]) is not bool:
         raise ValueError("drop_params must be boolean")
     extra = kwargs.get("extra_body", {})
