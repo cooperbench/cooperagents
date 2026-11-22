@@ -29,7 +29,8 @@ def task_environment(image: str, *, volumes: list[str] | None = None, coordinato
     shared = None
     for volume in volumes or []:
         name, mount = volume.split(":", 1)
-        if mount != "/cbshared" or not name.isalnum():
+        host_dir = Path(name)
+        if mount != "/cbshared" or not (name.isalnum() or (host_dir.is_absolute() and host_dir.is_dir())):
             raise ValueError(f"Unsupported Apptainer shared volume: {volume}")
-        shared = str(scratch / "shared" / name)
+        shared = str(host_dir if host_dir.is_absolute() else scratch / "shared" / name)
     return ApptainerEnv(images[image], scratch=str(scratch), shared=shared, coordinator_dir=coordinator_dir)

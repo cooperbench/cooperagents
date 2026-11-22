@@ -313,6 +313,7 @@ def build_model(
     with_send_message: bool = False,
     with_task_board: bool = False,
     with_spawn: bool = False,
+    worker_sampling: bool = True,
 ) -> LitellmModel:
     """Build a mini-swe LitellmModel against the configured OpenAI-compatible endpoint."""
     base_url = os.getenv("AZURE_OPENAI_BASE_URL") or os.getenv("OPENAI_BASE_URL")
@@ -323,7 +324,7 @@ def build_model(
         model_kwargs["api_base"] = base_url
     if api_key:
         model_kwargs["api_key"] = api_key
-    model_kwargs.update(sampling_kwargs(temperature, worker=True))
+    model_kwargs.update(sampling_kwargs(temperature, worker=worker_sampling))
     # Short request timeout: the litellm/httpx default (~600s) makes an agent
     # hang 10 minutes on a dead pooled connection (socket to a scaled-down
     # serving container that vanished without RST) before retrying onto a
@@ -401,6 +402,7 @@ def run_mini_swe_agent(
     spawn_handler=None,
     time_limit_s: int | None = None,
     monitor=None,
+    deterministic_monitor=None,
     git_share: bool = False,
     completion_gate=None,
     trace=None,
@@ -596,6 +598,8 @@ def run_mini_swe_agent(
     status = "error"
     error = None
     try:
+        if deterministic_monitor is not None:
+            deterministic_monitor.register(agent_id, agent)
 
         def started(current: DefaultAgent) -> None:
             nonlocal capture_failed, stopped_at_capture
@@ -647,6 +651,8 @@ def run_mini_swe_agent(
     finally:
         if monitor is not None:
             monitor.mark_finished(agent_id, status)
+        if deterministic_monitor is not None:
+            deterministic_monitor.mark_finished(agent_id)
         _hb_end(status)
         if trace is not None:
             trace("agent_end", status=status, steps=agent.n_calls, **({"error": error} if error is not None else {}))

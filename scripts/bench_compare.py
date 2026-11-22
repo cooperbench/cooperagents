@@ -16,10 +16,14 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import copy
 import json
+import logging
 import os
+import tempfile
 import time
 import uuid
+from contextlib import nullcontext
 from functools import partial
 from pathlib import Path
 
@@ -176,6 +180,42 @@ def _mechanical_selector(img: str):
     return select
 
 
+def _planning_completion(model_name: str, *, worker: bool):
+    """Bind planning to the same verified endpoint transport as mini-SWE."""
+    from cooperagents.completion import CompletionBinding, CompletionSettings, MiniSweCompletionRequest
+    from cooperagents.sampling import sampling_kwargs
+    from cooperagents.vendor.mini_swe.models.utils.retry import retry
+    from cooperagents.workers.mini_swe_worker import build_model
+
+    model = build_model(model_name, worker_sampling=worker)
+    generation = sampling_kwargs(worker=worker)
+    if not generation.keys() & {"max_tokens", "max_completion_tokens"}:
+        generation.update({"max_tokens": 4096} if worker else {"max_completion_tokens": 2000})
+    settings = CompletionSettings(
+        model=model.config.model_name,
+        revision=model_name,
+        generation=generation,
+        timeout=float(model.config.model_kwargs["timeout"]),
+    )
+
+    def complete(request: MiniSweCompletionRequest):
+        transport = copy.copy(model)
+        transport.trace = request.trace
+        for attempt in retry(logger=logging.getLogger("cooperagents.planning_completion"), abort_exceptions=transport.abort_exceptions):
+            with attempt:
+                return transport._query(
+                    request.messages,
+                    _tools=request.tools,
+                    worker_sampling=worker,
+                    verify_wire=True,
+                    timeout=request.settings.timeout,
+                    **({"tool_choice": request.tool_choice} if request.tool_choice and os.getenv("COOPER_SEND_TOOL_CHOICE", "true").lower() != "false" else {}),
+                    **request.settings.generation,
+                )
+
+    return CompletionBinding(complete, settings, complete, settings)
+
+
 def run_team(
     item: WorkItem,
     *,
@@ -212,6 +252,7 @@ def run_team(
     git_share: bool = False,
     team_roles: bool = False,
     coordinator: bool = False,
+    deterministic_coordinator: bool = False,
     coordinator_notebook: bool = True,
     coordination_variant: str = "auto-prompt",
     coordination_mode: str = "direct",
@@ -301,6 +342,7 @@ def run_team(
         git_share=git_share,
         team_roles=team_roles,
         coordinator=coordinator,
+        deterministic_coordinator=deterministic_coordinator,
         coordinator_notebook=coordinator_notebook,
         focused_repair=focused_repair,
         repair_time_limit=repair_time or None,
@@ -326,6 +368,8 @@ def run_team(
         langfuse=langfuse,
         coordination_mode=coordination_mode,
         coordinator_implementation_enabled=coordinator_implementation_enabled,
+        coordinator_completion=_planning_completion(spec.model, worker=False) if coordination_mode == "group-chat-planning" else None,
+        worker_completion=_planning_completion(spec.model, worker=True) if coordination_mode == "group-chat-planning" else None,
         initial_plan=(InitialPlan.load(initial_plan_path(initial_plan_dir, f"{item.repo}:{item.task_id}:{','.join(map(str, feats))}"),
                                        expected_pair=f"{item.repo}:{item.task_id}:{','.join(map(str, feats))}")
                       if initial_plan_dir is not None else None),
@@ -343,8 +387,6 @@ def run_team(
     selector = None
     if best_of_n > 1:
         selector = _mechanical_selector(image_name(item.repo, item.task_id)) if select == "mechanical" else _judge_selector(spec_bundle)
-    vols = ([f"cbs{run_id}:/cbshared"] if git_share else []) + ([f"cbt{run_id}:/workspace/shared"] if team_roles else [])
-    vols = vols or None
     from cooperagents.trajectory import Trajectory
 
     trajectory = None
@@ -361,6 +403,7 @@ def run_team(
             task_id=item.task_id,
             features=feats,
             coordinator=coordinator,
+            deterministic_coordinator=deterministic_coordinator,
             coordinator_notebook=coordinator and coordinator_notebook,
             coordination_variant=coordination_variant,
             coordination_mode=coordination_mode,
@@ -371,9 +414,15 @@ def run_team(
         )
     try:
         worker_ids = {a.agent_id for a in assignments}
-        res = harness.run(spec, env_factory=lambda _id: task_environment(
-            img, volumes=vols, coordinator_dir=notebook_path.parent if notebook_path is not None and _id in worker_ids else None,
-        ), selector=selector)
+        host_share = git_share and os.getenv("COOPER_RUNTIME", "docker") != "docker"
+        with tempfile.TemporaryDirectory(prefix="cooper-git-share-") if host_share else nullcontext() as share_dir:
+            volumes = [f"{share_dir or f'cbs{run_id}'}:/cbshared"] if git_share else []
+            if team_roles:
+                volumes.append(f"cbt{run_id}:/workspace/shared")
+            res = harness.run(spec, env_factory=lambda _id: task_environment(
+                img, volumes=volumes or None,
+                coordinator_dir=notebook_path.parent if notebook_path is not None and _id in worker_ids else None,
+            ), selector=selector)
         if trajectory:
             trajectory.emit("harness", "pair_end", agents={k: {"status": v.status, "steps": v.steps} for k, v in res.seeds.items()})
     finally:
@@ -428,8 +477,11 @@ def main() -> None:
     ap.add_argument("--team-roles", action="store_true",
                     help="Complete-Team cell: lead/member roles + shared scratchpad volume;"
                          " lead merges member patches and its tree is the submission")
-    ap.add_argument("--coordinator", action="store_true",
+    coordinator_family = ap.add_mutually_exclusive_group()
+    coordinator_family.add_argument("--coordinator", action="store_true",
                     help="tool-call coordinator: initial and ongoing coordination, messages and a read-only shared notebook")
+    coordinator_family.add_argument("--deterministic-coordinator", action="store_true",
+                                    help="monitor repeated commands, errors, and overlapping edits; requires --coop-tools --no-seed")
     ap.add_argument("--initial-plan-dir", type=Path, help="Reviewed plan/history checkpoint; start directly in implementation")
     ap.add_argument("--no-implementation-coordinator", action="store_true",
                     help="skip coordinator model decisions during implementation; keep planning, group chat and notebook delivery")
@@ -515,6 +567,8 @@ def main() -> None:
         args.skip_eval = True
     if args.no_implementation_coordinator and not args.coordinator:
         ap.error("--no-implementation-coordinator requires --coordinator")
+    if args.deterministic_coordinator and (not args.coop_tools or not args.no_seed):
+        ap.error("--deterministic-coordinator requires --coop-tools and --no-seed")
     if args.worker_reminder_interval < 0:
         ap.error("Worker reminder interval must be nonnegative")
     if args.planning_step_limit < 1 or args.planning_time_limit < 1:
@@ -613,6 +667,7 @@ def main() -> None:
                     team_roles=args.team_roles,
                     langfuse=args.langfuse,
                     coordinator=args.coordinator,
+                    deterministic_coordinator=args.deterministic_coordinator,
                     coordinator_notebook=not args.no_coordinator_notebook,
                     coordination_variant=args.coordination_variant,
                     coordination_mode=args.coordination_mode,

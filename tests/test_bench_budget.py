@@ -1,8 +1,177 @@
 import importlib.util
+import json
+import os
+import sys
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+
+
+@pytest.fixture
+def compare():
+    spec = importlib.util.spec_from_file_location("bench_compare", Path(__file__).parents[1] / "scripts/bench_compare.py")
+    bench = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bench)
+    return bench
+
+
+def test_deterministic_coordinator_cli_excludes_tool_call_coordinator(compare, monkeypatch, capsys):
+    monkeypatch.setattr(compare, "_load_env", lambda: None)
+    monkeypatch.setattr(sys, "argv", ["bench_compare.py", "--coordinator", "--deterministic-coordinator"])
+    with pytest.raises(SystemExit) as exc:
+        compare.main()
+    assert exc.value.code == 2
+    assert "argument --deterministic-coordinator: not allowed with argument --coordinator" in capsys.readouterr().err
+
+
+def test_planning_cli_bindings_use_verified_wire_transport(compare, monkeypatch, tmp_path):
+    import httpx
+
+    from cooperagents.completion import CompletionBinding
+    from cooperagents.trajectory import open_events
+    from cooperagents.vendor.mini_swe.models.utils.actions_toolcall import BASH_TOOL
+
+    for key in list(os.environ):
+        if key.startswith("COOPER_") or key.startswith("AZURE_OPENAI_"):
+            monkeypatch.delenv(key)
+    for key, value in {
+        "OPENAI_BASE_URL": "https://tinker.invalid/v1",
+        "OPENAI_API_KEY": "fixture-key",
+        "COOPER_MAX_COMPLETION_TOKENS": "2000",
+        "COOPER_WORKER_MAX_COMPLETION_TOKENS": "4096",
+        "COOPER_TEMPERATURE_FORCE": "1",
+        "COOPER_TOP_P": "0.9",
+        "COOPER_REASONING_EFFORT": "high",
+        "COOPER_CHAT_TEMPLATE_ENABLE_THINKING": "false",
+        "COOPER_WORKER_CHAT_TEMPLATE_ENABLE_THINKING": "true",
+    }.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(compare, "MODEL", "tinker-model")
+    monkeypatch.setattr(compare, "read_feature", lambda *a: "feature")
+    monkeypatch.setattr(compare, "write_run_outputs", lambda *a, **k: None)
+    received = []
+
+    def respond(request):
+        assert str(request.url) == "https://tinker.invalid/v1/chat/completions"
+        assert request.headers["authorization"] == "Bearer fixture-key"
+        received.append(json.loads(request.content))
+        return httpx.Response(200, json={
+            "id": "test", "object": "chat.completion", "created": 0, "model": "tinker-model",
+            "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "done"}}],
+        })
+
+    transport = httpx.MockTransport(respond)
+    monkeypatch.setattr(httpx.Client, "_transport_for_url", lambda self, url: transport)
+
+    def run(self, team, **kwargs):
+        assert self.coordination_mode == "group-chat-planning"
+        for actor, binding, tools in (
+            ("coordinator", self.coordinator_completion, [BASH_TOOL]),
+            ("agent1", self.worker_completion, [BASH_TOOL]),
+            ("agent1", self.worker_completion, None),
+        ):
+            assert isinstance(binding, CompletionBinding)
+            response = binding.complete(
+                messages=[{"role": "user", "content": "work"}], tools=tools, actor_id=actor, call_id=1,
+                trace=partial(self.trajectory.emit, actor),
+            )
+            assert response.choices[0].message.content == "done"
+        return SimpleNamespace(duration_seconds=0, total_steps=0, helpers={}, seeds={})
+
+    monkeypatch.setattr(compare.UnifiedHarness, "run", run)
+    compare.run_team(
+        compare.WorkItem("go_chi_task", 26, [1, 2]), run_name="planning", logs_dir=tmp_path, step_limit=10, max_agents=2,
+        coordinator=True, coop_tools=True, seed_prior=False, coordination_mode="group-chat-planning", record_trajectory=True,
+    )
+
+    assert [body["max_completion_tokens"] for body in received] == [2000, 4096, 4096]
+    assert [body["chat_template_kwargs"]["enable_thinking"] for body in received] == [False, True, True]
+    assert all(body["model"] == "tinker-model" and body["temperature"] == 1 and body["top_p"] == 0.9 for body in received)
+    assert all(body["reasoning_effort"] == "high" and "max_tokens" not in body for body in received)
+    assert [body.get("tool_choice") for body in received] == ["auto", "auto", None]
+    assert [body.get("tools") for body in received] == [[BASH_TOOL], [BASH_TOOL], None]
+    with open_events(next(tmp_path.rglob("trajectory.jsonl.gz"))) as journal:
+        rows = list(map(json.loads, journal))
+    wire = [row for row in rows if row["event"] == "wire_request"]
+    assert [row["actor"] for row in wire] == ["coordinator", "agent1", "agent1"]
+    assert [row["data"]["request"] for row in wire] == received
+    assert "fixture-key" not in json.dumps(rows)
+
+
+@pytest.mark.parametrize("send_tool_choice", [None, "false"])
+def test_planning_tool_choice_env_controls_coordinator_and_worker(compare, monkeypatch, send_tool_choice):
+    import httpx
+
+    from cooperagents.vendor.mini_swe.models.utils.actions_toolcall import BASH_TOOL
+
+    for key in list(os.environ):
+        if key.startswith("COOPER_") or key.startswith("AZURE_OPENAI_"):
+            monkeypatch.delenv(key)
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://tinker.invalid/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "fixture-key")
+    if send_tool_choice is not None:
+        monkeypatch.setenv("COOPER_SEND_TOOL_CHOICE", send_tool_choice)
+    received = []
+
+    def respond(request):
+        received.append(json.loads(request.content))
+        return httpx.Response(200, json={
+            "id": "test", "object": "chat.completion", "created": 0, "model": "tinker-model",
+            "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "done"}}],
+        })
+
+    transport = httpx.MockTransport(respond)
+    monkeypatch.setattr(httpx.Client, "_transport_for_url", lambda self, url: transport)
+    for worker in (False, True):
+        compare._planning_completion("tinker-model", worker=worker).complete(
+            messages=[{"role": "user", "content": "work"}], tools=[BASH_TOOL],
+            actor_id="worker" if worker else "coordinator", call_id=1,
+        )
+
+    assert len(received) == 2
+    assert all(body["tools"] == [BASH_TOOL] for body in received)
+    if send_tool_choice is None:
+        assert all(body["tool_choice"] == "auto" for body in received)
+    else:
+        assert all("tool_choice" not in body for body in received)
+
+
+@pytest.mark.parametrize("abort", [False, True])
+def test_planning_completion_retries_transient_errors_only(compare, monkeypatch, abort):
+    import importlib
+
+    import litellm
+    from tenacity import wait_none
+
+    from cooperagents.vendor.mini_swe.models.litellm_model import LitellmModel, SamplingTransportError
+
+    retry_module = importlib.import_module("cooperagents.vendor.mini_swe.models.utils.retry")
+    monkeypatch.setattr(retry_module, "wait_exponential", lambda **kwargs: wait_none())
+    monkeypatch.setenv("MSWEA_MODEL_RETRY_STOP_AFTER_ATTEMPT", "2")
+    calls = []
+    response = litellm.ModelResponse(choices=[{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "done"}}])
+
+    def query(self, *args, **kwargs):
+        calls.append((args, kwargs))
+        if len(calls) == 1:
+            if abort:
+                raise SamplingTransportError("invalid transport")
+            raise litellm.Timeout(message="timeout", model="test", llm_provider="openai")
+        return response
+
+    monkeypatch.setattr(LitellmModel, "_query", query)
+    binding = compare._planning_completion("test-model", worker=True)
+    kwargs = dict(messages=[{"role": "user", "content": "work"}], tools=None, actor_id="agent1", call_id=1)
+    if abort:
+        with pytest.raises(SamplingTransportError, match="invalid transport"):
+            binding.complete(**kwargs)
+        assert len(calls) == 1
+    else:
+        assert binding.complete(**kwargs) is response
+        assert len(calls) == 2
+        assert calls[0] == calls[1]
 
 
 def test_budget_reaches_solo_and_team(monkeypatch, tmp_path):

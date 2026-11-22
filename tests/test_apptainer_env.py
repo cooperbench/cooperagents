@@ -1,6 +1,14 @@
 """Local adapter checks; real Apptainer coverage lives in the CPU dummy smoke."""
 
+import importlib.util
+import json
+import shlex
+import subprocess
 import threading
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 from cooperagents.env.apptainer import ApptainerEnv
 from cooperagents.env.runtime import task_environment
@@ -115,3 +123,72 @@ def test_notebook_mounts_reuse_existing_runtime_options(monkeypatch, tmp_path):
         assert (env.root / "fs/coordination").is_dir()
     finally:
         env.cleanup()
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_benchmark_apptainer_git_share_uses_temporary_host_mount(monkeypatch, tmp_path, fail):
+    from cooperagents.env.local import LocalEnv
+
+    script = Path(__file__).parents[1] / "scripts/bench_compare.py"
+    spec = importlib.util.spec_from_file_location("bench_compare", script)
+    bench = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bench)
+    manifest = tmp_path / "images.json"
+    monkeypatch.setattr(bench, "image_name", lambda *a: "image")
+    manifest.write_text(json.dumps({"image": "fixture.sif"}))
+    monkeypatch.setenv("COOPER_RUNTIME", "apptainer")
+    monkeypatch.setenv("COOPER_IMAGE_MANIFEST", str(manifest))
+    monkeypatch.setenv("COOPER_SCRATCH", str(tmp_path / "scratch"))
+    monkeypatch.setattr(bench, "read_feature", lambda *a: "feature")
+    monkeypatch.setattr(bench, "write_run_outputs", lambda *a, **k: None)
+    mounts, commands = [], []
+    real_run = subprocess.run
+
+    def run_command(args, *rest, **kwargs):
+        assert args[0] != "docker"
+        commands.append(args)
+        return real_run(args, *rest, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", run_command)
+
+    def environment(sif, *, scratch, shared, coordinator_dir):
+        host = Path(shared)
+        assert host.is_absolute() and host.is_dir()
+        mounts.append(host)
+        env = object.__new__(ApptainerEnv)
+        env._checkpoint_mounts = {"/cbshared": host}
+        return env
+
+    monkeypatch.setattr("cooperagents.env.apptainer.ApptainerEnv", environment)
+
+    def run(self, team, *, env_factory, **kwargs):
+        assert team.git_share
+        worker = env_factory("agent1")
+        env_factory("agent2")
+        assert mounts[0] == mounts[1]
+        bare = shlex.quote(str(mounts[0] / "repo.git"))
+        seed = LocalEnv.fresh(workdir=str(tmp_path))
+        try:
+            worker._base_commit = seed.execute("git rev-parse HEAD").stdout.strip()
+            seed.write_file("implementation.txt", "feature\n")
+            result = seed.execute(
+                f"git init -q --bare {bare} && git add . && git commit -qm 'implement' && git push -q {bare} HEAD:refs/heads/agent1"
+            )
+            assert result.exit_code == 0, result.stdout
+            assert "+feature" in worker.recover_shared_diff("agent1")
+        finally:
+            seed.cleanup()
+        if fail:
+            raise RuntimeError("fixture rollout failed")
+        return SimpleNamespace(duration_seconds=0, total_steps=0, helpers={})
+
+    monkeypatch.setattr(bench.UnifiedHarness, "run", run)
+    item = bench.WorkItem("go_chi_task", 26, [1, 2])
+    kwargs = dict(run_name="share", logs_dir=tmp_path, step_limit=10, max_agents=2, git_share=True)
+    if fail:
+        with pytest.raises(RuntimeError, match="fixture rollout failed"):
+            bench.run_team(item, **kwargs)
+    else:
+        bench.run_team(item, **kwargs)
+    assert not mounts[0].exists()
+    assert ["git", f"--git-dir={mounts[0] / 'repo.git'}"] in [args[:2] for args in commands]
