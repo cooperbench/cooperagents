@@ -9,6 +9,7 @@ from cooperagents.checkpoint import remove_tree
 from cooperagents.env.apptainer import ApptainerEnv
 from cooperagents.env.image_base import ImageBase
 from cooperagents.env.published_holder import MountHolder
+from cooperagents.env.runtime_cache import RuntimeCache
 from cooperagents.published import PublicationError, PublishedCheckpoint, _manifest, file_hash
 from cooperagents.workers.mini_swe_worker import MiniSweEnvAdapter
 
@@ -34,6 +35,7 @@ def restore_environment(
     image_base: ImageBase | None = None,
     requested: float | None = None,
     purpose: str = "difficulty",
+    runtime_cache: RuntimeCache | None = None,
 ) -> ApptainerEnv:
     validate_checkpoint(reference, checkpoint, purpose)
     started = requested if requested is not None else time.monotonic()
@@ -42,17 +44,19 @@ def restore_environment(
     try:
         if base.proof["image_sha256"] != reference.image_sha256:
             raise PublicationError("shared image capability belongs to a different SIF")
-        return _restore_with_base(reference, checkpoint, scratch, base, started, owned, purpose)
+        return _restore_with_base(reference, checkpoint, scratch, base, started, owned, purpose,
+                                  **({"runtime_cache": runtime_cache} if runtime_cache is not None else {}))
     except BaseException:
         if owned:
             base.close()
         raise
 
 
-def _restore_with_base(reference, checkpoint, scratch, base, started, owned, purpose) -> ApptainerEnv:
+def _restore_with_base(reference, checkpoint, scratch, base, started, owned, purpose, *, runtime_cache=None) -> ApptainerEnv:
     holder = None
     try:
-        holder = MountHolder(reference, scratch, base, purpose=purpose)
+        holder = MountHolder(reference, scratch, base, purpose=purpose,
+                             **({"runtime_cache": runtime_cache} if runtime_cache is not None else {}))
 
         def close() -> None:
             try:
@@ -65,6 +69,8 @@ def _restore_with_base(reference, checkpoint, scratch, base, started, owned, pur
             holder.root, holder.ready["state"], exec_prefix=holder.exec_prefix(), cleanup=close, checkpoint=checkpoint
         )
         try:
+            if "runtime_cache" in holder.ready:
+                env._record_runtime_cache(holder.ready["runtime_cache"])
             probe = _probe(env)
             env.restore_metrics = _metrics(reference, holder, base, started, owned, probe, purpose)
             return env
@@ -99,6 +105,7 @@ def _metrics(reference, holder, base, started, owned, probe, purpose) -> dict:
         restore_risks=holder.ready["risks"],
         training_eligible=False,
         repair_validated=False,
+        **({"runtime_cache": holder.ready["runtime_cache"]} if "runtime_cache" in holder.ready else {}),
     )
 
 

@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from cooperagents.env.image_base import ImageBase
+    from cooperagents.env.runtime_cache import RuntimeCache
 
 from cooperagents.env.base import Environment, ExecResult
 from cooperagents.env.limited_process import run_limited
@@ -223,8 +224,27 @@ class ApptainerEnv(Environment):
             env.cleanup()
             raise
 
+    def _enable_runtime_cache(self) -> None:
+        """The holder has authenticated and mounted this episode-private overlay."""
+        from cooperagents.env.runtime_cache import TARGET
+
+        self._argv[-3:-3] = ["--bind", f"{self.root}/runtime-cache/fs:{TARGET}", "--env", f"UV_CACHE_DIR={TARGET}"]
+
+    def _record_runtime_cache(self, record: dict) -> None:
+        import logging
+
+        if record["status"] == "hit":
+            self._enable_runtime_cache()
+        else:
+            logging.getLogger(__name__).warning("uv runtime cache fallback: %s", record["reason"])
+        (self.root / "receipts.json").write_text(json.dumps({"runtime_cache": record}, indent=2) + "\n")
+        self.runtime_cache_receipt = record
+
     @classmethod
-    def from_image_base(cls, image: Path, checksum: str, *, scratch: Path, base: ImageBase, workdir: str = "/workspace") -> ApptainerEnv:
+    def from_image_base(
+        cls, image: Path, checksum: str, *, scratch: Path, base: ImageBase, workdir: str = "/workspace",
+        runtime_cache: RuntimeCache | None = None, cache_task: tuple[str, int] | None = None,
+    ) -> ApptainerEnv:
         """Create an independent evaluator from an existing immutable base."""
         from cooperagents.checkpoint import complete_output, remove_tree
         from cooperagents.env.published_holder import MountHolder
@@ -232,7 +252,10 @@ class ApptainerEnv(Environment):
         directory = Path(workdir)
         if not directory.is_absolute() or ".." in directory.parts:
             raise ValueError("invalid evaluator working directory")
-        holder = MountHolder.for_image(image, checksum, scratch, base)
+        if runtime_cache is None:
+            holder = MountHolder.for_image(image, checksum, scratch, base)
+        else:
+            holder = MountHolder.for_image(image, checksum, scratch, base, runtime_cache=runtime_cache, cache_task=cache_task)
         state = dict(repo_path="/workspace/repo", base_commit="", runtime=dict(image=str(image), image_sha256=checksum, mounts=[]))
         try:
             env = cls._configure_filesystem(holder.root, state, holder.exec_prefix(), holder.close)
@@ -242,6 +265,8 @@ class ApptainerEnv(Environment):
                 remove_tree(holder.root)
             raise
         try:
+            if runtime_cache is not None and "runtime_cache" in holder.ready:
+                env._record_runtime_cache(holder.ready["runtime_cache"])
             env._base_commit = complete_output(env.execute("git rev-parse HEAD"), "Validate evaluator base").strip()
             if not re.fullmatch(r"[0-9a-f]{40}", env._base_commit):
                 raise ValueError("invalid evaluator image Git base")

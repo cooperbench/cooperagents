@@ -19,8 +19,13 @@ import subprocess
 import sys
 import tempfile
 import time
-from cooperagents import installed_artifacts
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+from cooperagents import installed_artifacts
+
+if TYPE_CHECKING:
+    from cooperagents.env.runtime_cache import RuntimeCache
 
 from cooperagents.checkpoint import remove_tree
 from cooperagents.env.image_base import ImageBase
@@ -51,20 +56,32 @@ def read_ready(descriptor: int, timeout: float) -> dict:
 
 
 class MountHolder:
-    def __init__(self, reference: PublishedCheckpoint, scratch: Path, base: ImageBase, *, purpose: str = "difficulty") -> None:
+    def __init__(
+        self, reference: PublishedCheckpoint, scratch: Path, base: ImageBase, *, purpose: str = "difficulty",
+        runtime_cache: RuntimeCache | None = None,
+    ) -> None:
         if purpose not in SUPPORTED_PURPOSES:
             raise PublicationError("published holder requires explicit difficulty or training purpose")
         installed = installed_artifacts.publication(Path(reference.publication.path))
         config = dict(reference=reference.model_dump(), purpose=purpose)
         if installed is not None:
             config["installed"] = installed.binding
+        if runtime_cache is not None:
+            config["runtime_cache"] = runtime_cache.transport()
         self._initialize(config, scratch, base, reference.id)
 
     @classmethod
-    def for_image(cls, image: Path, checksum: str, scratch: Path, base: ImageBase) -> MountHolder:
+    def for_image(
+        cls, image: Path, checksum: str, scratch: Path, base: ImageBase, *, runtime_cache: RuntimeCache | None = None,
+        cache_task: tuple[str, int] | None = None,
+    ) -> MountHolder:
         base.validate(checksum)
         holder = cls.__new__(cls)
-        holder._initialize(dict(operation="clean-image", image=str(image), image_sha256=checksum), scratch, base, checksum)
+        config: dict = dict(operation="clean-image", image=str(image), image_sha256=checksum)
+        if runtime_cache is not None:
+            config["runtime_cache"] = runtime_cache.transport()
+            config["cache_task"] = cache_task
+        holder._initialize(config, scratch, base, checksum)
         return holder
 
     @classmethod
@@ -93,7 +110,8 @@ class MountHolder:
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=self._stderr,
-                pass_fds=(base.descriptor,),
+                pass_fds=(base.descriptor, *(() if config.get("runtime_cache", {}).get("descriptor", -1) < 0
+                                             else (config["runtime_cache"]["descriptor"],))),
                 start_new_session=True,
             )
             if self.process.stdout is None:
@@ -252,6 +270,7 @@ def _hold_publication(control, config, reference):
         raise PublicationError("image base was qualified for a different runtime")
     prepare_layers(publication, root)
     helper = _base_mount(root, config["base_fd"], config["base_proof"], reference.image_sha256)
+    cache_helper = None
     try:
         _mount_overlay(root)
         _check_base_precision(root, publication, config["base_proof"])
@@ -260,14 +279,22 @@ def _hold_publication(control, config, reference):
             if path.is_symlink() or not path.resolve().is_relative_to(root / "fs"):
                 raise PublicationError("runtime path escapes restored filesystem")
             path.mkdir(parents=True, exist_ok=True)
+        cache_record = {}
+        if "runtime_cache" in config:
+            from cooperagents.env.runtime_cache_mount import prepare_cache
+
+            record, cache_helper = prepare_cache(config["runtime_cache"], root, publication)
+            cache_record["runtime_cache"] = record
         print(
             json.dumps(
-                dict(status="ready", state=publication.state, risks=publication.risks, publication_sha256=reference.publication.sha256)
+                dict(status="ready", state=publication.state, risks=publication.risks,
+                     publication_sha256=reference.publication.sha256, **cache_record)
             ),
             flush=True,
         )
         sys.stdin.buffer.read(1)
     finally:
+        _stop_cache(cache_helper)
         helper.terminate()
         try:
             helper.wait(timeout=10)
@@ -286,6 +313,7 @@ def _hold_image(config: dict) -> None:
     base = ImageBase(config["base_fd"], config["base_proof"])
     base.validate(config["image_sha256"])
     helper = _base_mount(root, base.descriptor, base.proof, config["image_sha256"])
+    cache_helper = None
     try:
         workspace = root / "protected-base/workspace"
         if workspace.is_symlink() or not workspace.is_dir():
@@ -304,9 +332,27 @@ def _hold_image(config: dict) -> None:
             if path.is_symlink() or not path.resolve().is_relative_to(root / "fs"):
                 raise PublicationError("evaluator runtime path escapes image")
             path.mkdir(parents=True, exist_ok=True)
-        print(json.dumps(dict(status="ready", operation="clean-image")), flush=True)
+        cache_record = {}
+        if "runtime_cache" in config:
+            from cooperagents.env.runtime_cache_mount import prepare_cache
+
+            record, cache_helper = prepare_cache(config["runtime_cache"], root, task=config.get("cache_task"),
+                                                 image=config["image_sha256"])
+            cache_record["runtime_cache"] = record
+        print(json.dumps(dict(status="ready", operation="clean-image", **cache_record)), flush=True)
         sys.stdin.buffer.read(1)
     finally:
+        _stop_cache(cache_helper)
+        helper.terminate()
+        try:
+            helper.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            helper.kill()
+            helper.wait()
+
+
+def _stop_cache(helper: subprocess.Popen | None) -> None:
+    if helper is not None:
         helper.terminate()
         try:
             helper.wait(timeout=10)

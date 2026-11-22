@@ -19,10 +19,19 @@ value = dict(
     admitted_capture_profiles=["captured-post-gate-v1", "captured-direct-v3-v1"],
     sources=sources,
     # 6a2d7bc: unchanged packer, native inventory and image audit implementation.
-    admitted_image_readers=["90db555845889be5ba02e7d17b198b48c2b0b7e605aaf3b3c77d50af0a9f1be7"],
-    reference_revision="1b5139d017e9c3ccfdbb1c5b1f0604df28c54e43",
-    runtime_base_revision="1b5139d017e9c3ccfdbb1c5b1f0604df28c54e43",
-    qualification_note=("V3 installed-asset restore, archived held-out producer and exact historical image audit admission; "
+    admitted_image_readers=[
+        "90db555845889be5ba02e7d17b198b48c2b0b7e605aaf3b3c77d50af0a9f1be7",
+        # 094a8bb: identical image packing, inventory and strict native image audit.
+        "ba52a0bd7fad7e4bdcb7616c6664308582bf26a84c47e824dce20fd778d4d811",
+        # c9a3c47: splitting consumers leaves strict image audit unchanged.
+        "7448524b027831464a339028ffa967a17f3726443ad027781c5dcac460e0ace5",
+        # 83d227a: training-only predecessor; eval consumer leaves image audit unchanged.
+        "0eb9a4fa30a6281718199e00b64a4bb419787277b82717a75f768a1e42f62742",
+    ],
+    reference_revision="094a8bbd4f3ff321fb1decd39bf337f768668f06",
+    runtime_base_revision="094a8bbd4f3ff321fb1decd39bf337f768668f06",
+    qualification_note=("Optional per-task uv runtime layer after unchanged strict image audit; "
+                        "archived direct producers and exact historical image readers remain admitted; "
                         "source identity only; deployment qualification requires independent evidence"),
 )
 (root / "reader_qualification.json").write_text(json.dumps(value, indent=2) + "\n")
