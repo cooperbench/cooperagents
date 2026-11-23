@@ -1,0 +1,159 @@
+[
+  {
+    "role": "assistant",
+    "extra": {
+      "actions": [
+        {
+          "tool_name": "bash",
+          "command": "pytest",
+          "tool_call_id": "a"
+        },
+        {
+          "tool_name": "bash",
+          "command": "git status",
+          "tool_call_id": "b"
+        },
+        {
+          "tool_name": "bash",
+          "command": "nox",
+          "tool_call_id": "missing"
+        }
+      ]
+    }
+  },
+  {
+    "role": "tool",
+    "extra": {
+      "raw_output": "code",
+      "returncode": 130
+    },
+    "tool_call_id": "b"
+  },
+  {
+    "role": "tool",
+    "extra": {
+      "raw_output": "full\n雪",
+      "returncode": 1
+    },
+    "tool_call_id": "a"
+  },
+  {
+    "role": "assistant",
+    "extra": {
+      "actions": [
+        {
+          "tool_name": "bash",
+          "command": "go test ./..."
+        },
+        {
+          "tool_name": "bash",
+          "command": "ignored wrong type"
+        },
+        {
+          "tool_name": "bash",
+          "command": "not executed"
+        },
+        {
+          "tool_name": "read_file",
+          "command": "read"
+        }
+      ]
+    }
+  },
+  {
+    "role": "tool",
+    "extra": {
+      "raw_output": "passed",
+      "returncode": 0
+    }
+  },
+  {
+    "role": "tool",
+    "extra": {
+      "raw_output": "invalid",
+      "returncode": true
+    }
+  },
+  {
+    "role": "tool",
+    "extra": {
+      "raw_output": "skipped",
+      "returncode": 1,
+      "exception_info": "action was not executed"
+    }
+  },
+  {
+    "role": "tool",
+    "extra": {
+      "raw_output": "ok",
+      "returncode": 0
+    }
+  },
+  {
+    "role": "assistant",
+    "tool_calls": [
+      {
+        "id": "invalid",
+        "function": {
+          "name": "bash",
+          "arguments": "broken json"
+        }
+      },
+      {
+        "id": "legacy",
+        "function": {
+          "name": "bash",
+          "arguments": "{\"command\":\"cargo test\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "extra": {
+      "raw_output": "text\n[output truncated after 42 bytes]",
+      "returncode": 1
+    },
+    "tool_call_id": "legacy"
+  },
+  {
+    "role": "assistant",
+    "extra": {
+      "actions": [
+        {
+          "tool_name": "bash",
+          "command": "unused",
+          "tool_call_id": "x"
+        }
+      ]
+    }
+  },
+  {
+    "role": "assistant",
+    "extra": {
+      "actions": [
+        {
+          "tool_name": "bash",
+          "command": "ctest",
+          "tool_call_id": "y"
+        }
+      ]
+    }
+  },
+  {
+    "role": "tool",
+    "extra": {
+      "raw_output": "stale",
+      "returncode": 0
+    },
+    "tool_call_id": "x"
+  },
+  {
+    "role": "tool",
+    "extra": {
+      "raw_output": "current",
+      "returncode": 0
+    },
+    "tool_call_id": "y"
+  }
+]

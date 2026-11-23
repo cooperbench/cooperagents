@@ -1,0 +1,19 @@
+{
+  "path": "/api/alpha/decisions",
+  "auth_matches": true,
+  "content_type": "application/json",
+  "body": {
+    "model": "liquid/d1.2-ultra",
+    "state": "",
+    "questions": {
+      "decision": {
+        "type": "choice",
+        "instructions": "Choose whether the coordinator should intervene now.",
+        "criteria": {
+          "WAKE": "Wake when timely coordination is likely to help resolve a problem or coordinate workers.",
+          "SKIP": "Skip when the worker can reasonably continue without an intervention."
+        }
+      }
+    }
+  }
+}
