@@ -13,6 +13,7 @@ from typing import Any, cast
 import pytest
 
 from cooperagents.agent_coordination_types import (
+    TOOL_SCHEMAS,
     AgentComplete,
     AgentCoordinatorConfig,
     DecisionQuestion,
@@ -36,7 +37,16 @@ from cooperagents.agent_coordinator import (
     ReadOnlyGit,
     composed_completion_gate,
 )
-from cooperagents.agent_coordinator_prompts import GATE_PROMPT_ID, gate_prompt_id, prompt_id
+from cooperagents.agent_coordinator_prompts import (
+    BUDGET_NOTES_PROMPT_ID,
+    GATE_PROMPT_ID,
+    OPENING_BUDGET_WARNING,
+    OPENING_FINAL_TURN,
+    WAKE_BUDGET_WARNING,
+    WAKE_FINAL_TURN,
+    gate_prompt_id,
+    prompt_id,
+)
 from cooperagents.bus.memory import InMemoryBus
 from cooperagents.env.base import Environment, ExecResult
 from cooperagents.env.local import LocalEnv
@@ -193,6 +203,82 @@ def test_read_only_git_reads_objects_and_bounds_output(repo, tmp_path):
     assert repo.execute("git status --porcelain").stdout == " M src/core.py\n"
 
 
+def test_read_tool_messages(coordinators, repo, tmp_path):
+    base = repo._base_commit
+    bare = tmp_path / "repo.git"
+    assert repo.execute(f"git clone -q --bare . '{bare}'").exit_code == 0
+    repo.write_file("src/core.py", "worker draft\n")
+    for index in range(400):
+        repo.write_file(f"many/file_{index:03d}.txt", "needle\n")
+    assert repo.execute(f"git add . && git commit -qm snapshot && git push -q '{bare}' HEAD:snapshot").exit_code == 0
+    sha = repo.execute("git rev-parse HEAD").stdout.strip()
+    evidence = GitEvidence(base, {"agent1": Snapshot(sha, "captured", "published")})
+    coordinator = coordinators(snapshot_repo=str(bare))
+    git = coordinator._git_tools(evidence)
+
+    def read(name, **args):
+        return coordinator._read_tool(name, args, evidence, time.monotonic() + 5)
+
+    search = {"pattern": "alpha|beta", "path_glob": "src/*.py"}
+    assert git.read("search_code", search, evidence=evidence) == ""
+    assert read("search_code", **search) == (
+        f'No matches for the fixed string "alpha|beta" under "src/*.py" at {base[:12]}. '
+        "search_code does not interpret regular expressions."
+    )
+    assert git.read("git_show", {"path": "src/view.py", "rev": sha}, evidence=evidence) == ""
+    assert read("git_show", path="src/view.py", rev=sha) == f"No difference in src/view.py between base_sha and {sha[:12]}."
+    assert read("read_file", path="src/core.py", start=10, end=20, rev=sha) == (
+        f"No lines 10-20 in src/core.py at {sha[:12]}; the file is shorter or empty."
+    )
+    assert read("read_file", path="src/core.py", start=1, end=1) == "alpha\n"
+    assert read("read_file", path="src/core.py", start=1, end=1, rev=sha) == "worker draft\n"
+    for start in (1, 2):
+        args = {"path": "src/long.py", "start": start, "end": 1000}
+        assert read("read_file", **args) == (
+            git.read("read_file", args, evidence=evidence)
+            + "\n[output limited to 400 lines or 16000 characters; request a narrower range]"
+        )
+    assert read("list_dir", path="many", rev=sha) == (
+        git.read("list_dir", {"path": "many", "rev": sha}, evidence=evidence)
+        + "\n[output limited to 400 entries; list a subdirectory]"
+    )
+    args = {"pattern": "needle", "path_glob": "many/*.txt", "rev": sha}
+    assert read("search_code", **args) == (
+        git.read("search_code", args, evidence=evidence) + "\n[output limited to 200 rows; narrow path_glob or the pattern]"
+    )
+
+
+def test_tool_schema_descriptions():
+    required = {
+        "list_dir": ["path"],
+        "read_file": ["path", "start", "end"],
+        "search_code": ["pattern", "path_glob"],
+        "git_show": ["rev"],
+        "send_message": ["recipient", "content"],
+        "submit_plan": ["schema", "version", "workers", "shared_interfaces", "risks", "evidence"],
+        "spec_verdict": ["verdict", "findings"],
+        "end_wake": ["note"],
+    }
+    functions = {tool["function"]["name"]: tool["function"] for tool in TOOL_SCHEMAS}
+    assert list(functions) == list(required)
+    for name, function in functions.items():
+        assert function["description"]
+        parameters = function["parameters"]
+        assert parameters["required"] == required[name]
+        assert all(prop["description"] for prop in parameters["properties"].values())
+    for name in ("list_dir", "read_file", "search_code"):
+        assert "rev" in functions[name]["parameters"]["properties"]
+    assert "fixed string" in functions["search_code"]["description"]
+
+
+def test_prompt_ids_cover_tools_and_notes(coordinators, monkeypatch):
+    ids = coordinators().metrics()["config"]["prompt_ids"]
+    assert ids["tools"] == prompt_id("tools", json.dumps(TOOL_SCHEMAS, sort_keys=True, separators=(",", ":")))
+    assert ids["budget-notes"] == BUDGET_NOTES_PROMPT_ID
+    monkeypatch.setitem(TOOL_SCHEMAS[0]["function"], "description", "A changed tool description.")
+    assert coordinators().metrics()["config"]["prompt_ids"]["tools"] != ids["tools"]
+
+
 @pytest.mark.parametrize("bad_path", [
     "/etc/passwd", "../core.py", "src/../core.py", "bad\x00path", "bad\npath", ".cb_config", "./.cb_state",
 ])
@@ -246,6 +332,76 @@ def test_opening_delivers_a_valid_plan_once(coordinators, journal):
     assert complete.inputs[1][0][-1]["content"] == "alpha\nbeta\n"
 
 
+def test_opening_reserves_submit_plan_turn(coordinators):
+    data = json.loads((FIXTURES / "opening_plan.json").read_text())
+    inputs = []
+
+    def complete(messages, tools):
+        names = {tool["function"]["name"] for tool in tools}
+        inputs.append((messages, names))
+        if names == {"submit_plan"}:
+            return [call("submit_plan", **data)]
+        return [call("read_file", path="src/core.py", start=1, end=1)]
+
+    config = AgentCoordinatorConfig(gate=RULE, opening_max_tool_calls=4)
+    coordinator = coordinators(complete=complete, config=config)
+    assert coordinator.run_opening() is not None
+    assert [names for _, names in inputs] == [
+        {"list_dir", "read_file", "search_code", "git_show", "submit_plan"},
+    ] * 3 + [{"submit_plan"}]
+    assert json.loads(inputs[0][0][-1]["content"])["tool_call_budget"] == 4
+    assert inputs[1][0][-1]["role"] == "tool"
+    assert inputs[2][0][-1] == {"role": "user", "content": OPENING_BUDGET_WARNING.format(remaining=2)}
+    assert inputs[3][0][-1] == {"role": "user", "content": OPENING_FINAL_TURN.format(remaining=1)}
+    assert coordinator.metrics()["opening"]["outcome"] == "delivered"
+    assert coordinator.metrics()["opening"]["tool_calls"] == 4
+
+
+def test_opening_batched_reads_keep_reserve(coordinators):
+    data = json.loads((FIXTURES / "opening_plan.json").read_text())
+    read = call("read_file", path="src/core.py", start=1, end=1)
+    complete = CompletionStub([read] * 6, [call("submit_plan", **data)])
+    config = AgentCoordinatorConfig(gate=RULE, opening_max_tool_calls=4)
+    coordinator = coordinators(complete=complete, config=config)
+    assert coordinator.run_opening() is not None
+    _, (messages, tools) = complete.inputs
+    assert {tool["function"]["name"] for tool in tools} == {"submit_plan"}
+    results = [message for message in messages if message["role"] == "tool"]
+    assert [result["content"] for result in results] == ["alpha\n"] * 3 + [
+        "Error: read budget exhausted; the remaining call is reserved for submit_plan.",
+    ]
+    assert len({result["tool_call_id"] for result in results}) == len(results)
+    assert messages[-1]["content"] == OPENING_FINAL_TURN.format(remaining=1)
+    assert coordinator.metrics()["opening"]["tool_calls"] == 4
+
+
+def test_opening_invalid_plan_retries(coordinators):
+    data = json.loads((FIXTURES / "opening_plan.json").read_text())
+    invalid = data | {"workers": {"agent3": data["workers"]["agent1"]}}
+    complete = CompletionStub([call("submit_plan", **invalid)], [call("submit_plan", **data)])
+    config = AgentCoordinatorConfig(gate=RULE, opening_max_tool_calls=2)
+    coordinator = coordinators(complete=complete, config=config)
+    assert coordinator.run_opening() is not None
+    messages, tools = complete.inputs[1]
+    assert {tool["function"]["name"] for tool in tools} == {"submit_plan"}
+    assert messages[-2]["content"] == "Error: opening plan must cover the worker roster: expected agent1, agent2, received agent3"
+    assert [message["to"] for message in coordinator.bus.message_log()] == ["agent1", "agent2"]
+
+
+def test_unoffered_tool_is_counted_error(coordinators):
+    data = json.loads((FIXTURES / "opening_plan.json").read_text())
+    complete = CompletionStub([call("send_message", recipient="agent1", content="Unallowed")], [call("submit_plan", **data)])
+    config = AgentCoordinatorConfig(gate=RULE, opening_max_tool_calls=2)
+    coordinator = coordinators(complete=complete, config=config)
+    assert coordinator.run_opening() is not None
+    messages, tools = complete.inputs[1]
+    assert messages[-2]["content"] == (
+        "Error: send_message is not offered in this turn; offered: git_show, list_dir, read_file, search_code, submit_plan"
+    )
+    assert {tool["function"]["name"] for tool in tools} == {"submit_plan"}
+    assert coordinator.metrics()["opening"]["tool_calls"] == 2
+
+
 @pytest.mark.parametrize("response", [
     [call("list_dir", path=".")],
     [{"name": "submit_plan", "arguments": "{invalid"}],
@@ -258,6 +414,41 @@ def test_opening_failure_is_passive(coordinators, response):
     assert coordinator.metrics()["opening"]["outcome"] == "failed"
     assert coordinator.bus.message_log() == []
     assert len(complete.inputs) == 1
+
+
+def test_wake_reserves_message_turn(coordinators, journal, repo, tmp_path):
+    read = call("read_file", path="src/core.py", start=1, end=1)
+    complete = CompletionStub(
+        *([[read]] * 4),
+        [call("send_message", recipient="agent1", content="Confirm the parser interface."), call("end_wake", note="Sent.")],
+        [call("end_wake", note="No further coordination needed.")],
+    )
+    config = AgentCoordinatorConfig(gate=RULE, opening="none", wake_max_tool_calls=6, tick_s=0.01)
+    base = repo._base_commit
+    bare = tmp_path / "repo.git"
+    repo.write_file("src/core.py", "worker draft\n")
+    assert repo.execute(f"git commit -qam snapshot && git clone -q --bare . '{bare}'").exit_code == 0
+    sha = repo.execute("git rev-parse HEAD").stdout.strip()
+    evidence = GitEvidence(base, {"agent1": Snapshot(sha, "captured", "published")})
+    coordinator = coordinators(complete=complete, config=config, trajectory=journal, evidence=lambda: evidence, snapshot_repo=str(bare))
+    coordinator.enqueue("agent1", "heartbeat")
+    coordinator.start()
+    wait_for(lambda: len(events(journal, "wake_end")) == 1)
+    first, = events(journal, "wake_end")
+    assert first["data"]["outcome"] == "ended"
+    assert first["data"]["tool_calls"] == 6
+    assert first["data"]["messages_sent"] == 1
+    assert [msg["content"] for msg in coordinator.bus.message_log()] == ["Confirm the parser interface."]
+    assert json.loads(complete.inputs[0][0][1]["content"])["tool_call_budget"] == 6
+    assert any(row.get("content") == "alpha\n" for row in complete.inputs[1][0])
+    assert complete.inputs[3][0][-1] == {"role": "user", "content": WAKE_BUDGET_WARNING.format(remaining=3)}
+    messages, tools = complete.inputs[4]
+    assert messages[-1] == {"role": "user", "content": WAKE_FINAL_TURN.format(remaining=2)}
+    assert {tool["function"]["name"] for tool in tools} == {"send_message", "end_wake"}
+
+    coordinator.enqueue("agent2", "heartbeat")
+    wait_for(lambda: len(events(journal, "wake_end")) == 2)
+    assert all(not row.get("content", "").startswith("[remaining_tool_calls:") for row in complete.inputs[5][0])
 
 
 def test_wake_limits_blind_observation_and_compacts_prior_tools(coordinators, journal):

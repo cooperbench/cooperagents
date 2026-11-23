@@ -298,33 +298,83 @@ class AgentCoordinatorConfig:
 
 
 # OpenAI function-tool schemas.  Phase-specific callers select the applicable tools.
-def _tool(name: str, properties: dict[str, Any], required: list[str]) -> dict[str, Any]:
+def _tool(name: str, description: str, properties: dict[str, Any], required: list[str]) -> dict[str, Any]:
     return {
         "type": "function",
         "function": {
             "name": name,
-            "description": name.replace("_", " "),
+            "description": description,
             "parameters": {"type": "object", "properties": properties, "required": required, "additionalProperties": False},
         },
     }
 
 
 _STRING = {"type": "string"}
-LIST_DIR_TOOL = _tool("list_dir", {"path": _STRING}, ["path"])
+_READ_REV = {"type": "string", "description": "base_sha or a worker snapshot sha from git_evidence. Default: base_sha."}
+LIST_DIR_TOOL = _tool(
+    "list_dir",
+    "List one directory of a committed tree (git ls-tree). Returns at most 400 names.",
+    {
+        "path": {**_STRING, "description": 'Directory relative to the repository root, for example "src/pkg"; use "." for the root.'},
+        "rev": _READ_REV,
+    },
+    ["path"],
+)
 READ_FILE_TOOL = _tool(
     "read_file",
-    {"path": _STRING, "start": {"type": "integer", "minimum": 1}, "end": {"type": "integer", "minimum": 1}},
+    "Read lines start to end of one committed file (git show rev:path). Returns at most 400 lines and 16000 characters.",
+    {
+        "path": {**_STRING, "description": 'File path relative to the repository root, for example "src/pkg/core.py".'},
+        "start": {"type": "integer", "minimum": 1, "description": "First line, 1-based."},
+        "end": {"type": "integer", "minimum": 1, "description": "Last line, inclusive."},
+        "rev": _READ_REV,
+    },
     ["path", "start", "end"],
 )
-SEARCH_CODE_TOOL = _tool("search_code", {"pattern": _STRING, "path_glob": _STRING}, ["pattern", "path_glob"])
-GIT_SHOW_TOOL = _tool("git_show", {"rev": _STRING, "path": _STRING}, ["rev"])
+SEARCH_CODE_TOOL = _tool(
+    "search_code",
+    "Search committed files for one fixed string (git grep -n -F). Regular-expression syntax is matched literally. "
+    "Returns path:line:text rows, at most 20 per file and 200 in total.",
+    {
+        "pattern": {**_STRING, "description": 'One fixed string, one line, for example "def load_dataset".'},
+        "path_glob": {
+            **_STRING,
+            "description": 'Git glob relative to the repository root, for example "src/**/*.py"; use "." for the whole repository.',
+        },
+        "rev": _READ_REV,
+    },
+    ["pattern", "path_glob"],
+)
+GIT_SHOW_TOOL = _tool(
+    "git_show",
+    "Show a committed snapshot. Without path: commit summary and changed files. With path: the diff of that file from base_sha to rev.",
+    {
+        "rev": {
+            **_STRING,
+            "description": "base_sha or a worker snapshot sha from git_evidence, as full hex. Names such as HEAD are rejected.",
+        },
+        "path": {**_STRING, "description": "Optional file path relative to the repository root."},
+    },
+    ["rev"],
+)
 SEND_MESSAGE_TOOL = _tool(
-    "send_message", {"recipient": _STRING, "content": {"type": "string", "maxLength": 1500}}, ["recipient", "content"]
+    "send_message",
+    'Send one message to a worker, or to every worker with recipient "group". At most 2 calls per wake.',
+    {
+        "recipient": {**_STRING, "description": 'A worker ID from the roster, or "group".'},
+        "content": {"type": "string", "maxLength": 1500, "description": "Concise, actionable message, at most 1500 characters."},
+    },
+    ["recipient", "content"],
 )
 _STRING_LIST = {"type": "array", "items": _STRING}
 _WORKER_PLAN = {
     "type": "object",
-    "properties": {"owns": _STRING_LIST, "avoid": _STRING_LIST, "interfaces": _STRING_LIST, "notes": _STRING},
+    "properties": {
+        "owns": {**_STRING_LIST, "description": "Files or symbols the worker should own."},
+        "avoid": {**_STRING_LIST, "description": "Files or symbols the worker should avoid editing."},
+        "interfaces": {**_STRING_LIST, "description": "Interfaces the worker should coordinate on."},
+        "notes": {**_STRING, "description": "Additional guidance for the worker."},
+    },
     "required": ["owns", "avoid", "interfaces", "notes"],
     "additionalProperties": False,
 }
@@ -336,32 +386,65 @@ def _record(properties: dict[str, Any], required: list[str]) -> dict[str, Any]:
 
 SUBMIT_PLAN_TOOL = _tool(
     "submit_plan",
+    "Deliver the opening plan to every worker and end the opening. workers has exactly one entry per roster worker ID.",
     {
-        "schema": {"type": "string", "const": OPENING_PLAN_SCHEMA},
-        "version": {"type": "integer", "const": 1},
-        "workers": {"type": "object", "additionalProperties": _WORKER_PLAN},
+        "schema": {"type": "string", "const": OPENING_PLAN_SCHEMA, "description": 'Always "opening-plan/1".'},
+        "version": {"type": "integer", "const": 1, "description": "Always 1."},
+        "workers": {"type": "object", "description": "One plan per roster worker ID.", "additionalProperties": _WORKER_PLAN},
         "shared_interfaces": {
             "type": "array",
+            "description": "Interfaces shared by workers.",
             "items": _record(
-                {"name": _STRING, "owner": _STRING, "definition": _STRING, "location": _STRING}, ["name", "owner", "definition", "location"]
+                {
+                    "name": {**_STRING, "description": "Interface name."},
+                    "owner": {**_STRING, "description": "Roster ID of the worker who owns the interface."},
+                    "definition": {**_STRING, "description": "Proposed signature or contract."},
+                    "location": {**_STRING, "description": "Repository-relative location of the interface."},
+                },
+                ["name", "owner", "definition", "location"],
             ),
         },
-        "risks": {"type": "array", "items": _record({"path": _STRING, "reason": _STRING}, ["path", "reason"])},
-        "evidence": {"type": "array", "items": _record({"tool": _STRING, "path": _STRING, "lines": _STRING}, ["tool", "path", "lines"])},
+        "risks": {
+            "type": "array",
+            "description": "Coordination risks and gaps in the evidence.",
+            "items": _record(
+                {
+                    "path": {**_STRING, "description": "Repository-relative path affected by the risk."},
+                    "reason": {**_STRING, "description": "Why the risk matters."},
+                },
+                ["path", "reason"],
+            ),
+        },
+        "evidence": {
+            "type": "array",
+            "description": "Read-only tool results that support the plan.",
+            "items": _record(
+                {
+                    "tool": {**_STRING, "description": "Name of the read-only tool used."},
+                    "path": {**_STRING, "description": "Repository-relative path inspected."},
+                    "lines": {**_STRING, "description": "Relevant lines in the tool result."},
+                },
+                ["tool", "path", "lines"],
+            ),
+        },
     },
     ["schema", "version", "workers", "shared_interfaces", "risks", "evidence"],
 )
 SPEC_VERDICT_TOOL = _tool(
     "spec_verdict",
+    "Return ACCEPT or REJECT for the frozen diff. Each finding quotes an exact substring, at most 300 characters, "
+    "of the supplied feature text; any other quote invalidates the verdict.",
     {
-        "verdict": {"type": "string", "enum": ["ACCEPT", "REJECT"]},
+        "verdict": {"type": "string", "enum": ["ACCEPT", "REJECT"], "description": "Verdict for the frozen diff."},
         "findings": {
             "type": "array",
             "maxItems": 3,
+            "description": "Up to three findings grounded in the supplied feature text.",
             "items": _record(
                 {
                     "kind": {
                         "type": "string",
+                        "description": "Category of the finding.",
                         "enum": [
                             "missing_requirement",
                             "api_mismatch",
@@ -371,9 +454,9 @@ SPEC_VERDICT_TOOL = _tool(
                             "conflict_marker",
                         ],
                     },
-                    "feature_id": _STRING,
-                    "quote": {"type": "string", "maxLength": 300},
-                    "path": _STRING,
+                    "feature_id": {**_STRING, "description": "ID of the feature that the finding concerns."},
+                    "quote": {"type": "string", "maxLength": 300, "description": "Exact substring of the supplied feature text."},
+                    "path": {**_STRING, "description": "Optional repository-relative path affected by the finding."},
                 },
                 ["kind", "feature_id", "quote"],
             ),
@@ -381,7 +464,12 @@ SPEC_VERDICT_TOOL = _tool(
     },
     ["verdict", "findings"],
 )
-END_WAKE_TOOL = _tool("end_wake", {"note": _STRING}, ["note"])
+END_WAKE_TOOL = _tool(
+    "end_wake",
+    "End the wake after the coordination messages, or with a note when no message is needed.",
+    {"note": {**_STRING, "description": "One-line reason."}},
+    ["note"],
+)
 TOOL_SCHEMAS = (
     LIST_DIR_TOOL,
     READ_FILE_TOOL,

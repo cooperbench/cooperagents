@@ -515,6 +515,9 @@ def _write_summaries(logs_dir: Path, items: list[WorkItem], arms: list[tuple[str
                 }
                 for actor in ("coordinator", "coordinator_gate")
             }
+            usage["coordinator_gate"]["reported_cost_usd"] = sum(
+                metrics["usage"]["coordinator_gate"].get("reported_cost_usd", 0.0) for metrics in coordinator_metrics
+            )
             summary["agent_coordinator"] = dict(
                 wakes=sum(metrics["gate"]["wake"] for metrics in coordinator_metrics),
                 skips=sum(metrics["gate"]["skip"] for metrics in coordinator_metrics),
@@ -532,6 +535,7 @@ def _write_summaries(logs_dir: Path, items: list[WorkItem], arms: list[tuple[str
                     f"  {setting} agent coordinator: wakes={agent['wakes']} skips={agent['skips']} "
                     f"coordinator calls={coordinator['calls']} tokens={coordinator['prompt_tokens'] + coordinator['completion_tokens']} "
                     f"gate calls={gate['calls']} tokens={gate['prompt_tokens'] + gate['completion_tokens']}"
+                    f" gate reported_cost=${gate['reported_cost_usd']:.6f}"
                 )
     for name, summary_by_arm in by_run.items():
         run_dir = logs_dir / name

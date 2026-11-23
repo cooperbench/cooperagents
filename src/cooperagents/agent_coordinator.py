@@ -29,6 +29,7 @@ from cooperagents.agent_coordination_types import (
     SEND_MESSAGE_TOOL,
     SPEC_VERDICT_TOOL,
     SUBMIT_PLAN_TOOL,
+    TOOL_SCHEMAS,
     AgentComplete,
     AgentCoordinatorConfig,
     CandidateKind,
@@ -49,9 +50,14 @@ from cooperagents.agent_coordination_types import (
     to_json,
 )
 from cooperagents.agent_coordinator_prompts import (
+    BUDGET_NOTES_PROMPT_ID,
     GATE_INSTRUCTIONS,
+    OPENING_BUDGET_WARNING,
+    OPENING_FINAL_TURN,
     OPENING_PLAN_PROMPT,
     SPEC_CHECK_PROMPT,
+    WAKE_BUDGET_WARNING,
+    WAKE_FINAL_TURN,
     WAKE_PROMPT,
     gate_prompt_id,
     prompt_id,
@@ -69,6 +75,15 @@ _COORDINATOR = "coordinator"
 _GATE = "coordinator_gate"
 _SNAPSHOT_REPO = "/cbshared/repo.git"
 _READ_TOOLS = [LIST_DIR_TOOL, READ_FILE_TOOL, SEARCH_CODE_TOOL, GIT_SHOW_TOOL]
+_READ_NAMES = {tool["function"]["name"] for tool in _READ_TOOLS}
+_BUDGET_NOTES = {
+    "opening-plan": (OPENING_BUDGET_WARNING, OPENING_FINAL_TURN),
+    "wake": (WAKE_BUDGET_WARNING, WAKE_FINAL_TURN),
+}
+_READ_EXHAUSTED = {
+    "opening-plan": "Error: read budget exhausted; the remaining call is reserved for submit_plan.",
+    "wake": "Error: read budget exhausted; the remaining calls are reserved for send_message and end_wake.",
+}
 _WAKING_SIGNALS = {"NO_PROGRESS_FAILING", "HUNK_CHURN", "TEST_REGRESSION", "PEER_OVERLAP", "SUBMIT_REJECTED"}
 _SHA = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
 _CONFLICT = re.compile(r"^\+(?:<<<<<<< |=======\r?$|>>>>>>> )", re.MULTILINE)
@@ -148,7 +163,7 @@ def _path(value: object, *, root: bool = False) -> str:
         return ""
     value = value.removeprefix("./")
     if not value or value == ".":
-        raise ValueError("repository path is required")
+        raise ValueError("repository path is required; use a path relative to the repository root")
     return value
 
 
@@ -180,17 +195,17 @@ class ReadOnlyGit:
         self, name: str, args: dict, *, evidence: GitEvidence, worker: str | None = None, timeout: int = 60,
     ) -> str:
         snapshot = evidence.workers.get(worker) if worker is not None else None
-        rev = args.get("rev") if name == "git_show" else (snapshot.sha if snapshot else self.base_sha)
+        rev = args.get("rev") if name == "git_show" else args.get("rev", snapshot.sha if snapshot else self.base_sha)
         if not isinstance(rev, str) or not _SHA.fullmatch(rev) or (
             rev != self.base_sha and rev not in {item.sha for item in evidence.workers.values()}
         ):
-            raise ValueError("revision is outside the available snapshots")
+            raise ValueError("revision is outside the available snapshots; use base_sha or a worker snapshot sha from git_evidence")
 
         def git(*parts: str, literal: bool = True) -> str:
             options = ["--no-pager"]
             if literal:
                 options.append("--literal-pathspecs")
-            if rev != self.base_sha or (snapshot is not None and name != "git_show"):
+            if rev != self.base_sha or (snapshot is not None and name != "git_show" and "rev" not in args):
                 options.append(f"--git-dir={self.snapshot_repo}")
             return " ".join(shlex.quote(part) for part in ["git", *options, *parts])
 
@@ -206,7 +221,7 @@ class ReadOnlyGit:
             path = _path(args.get("path"))
             start, end = args.get("start"), args.get("end")
             if type(start) is not int or type(end) is not int or not 1 <= start <= end <= 2_147_483_647:
-                raise ValueError("invalid line range")
+                raise ValueError("invalid line range; start and end are integers with 1 <= start <= end")
             command = git("show", "--no-ext-diff", "--no-textconv", f"{rev}:{path}")
             limit = " | sed -n " + shlex.quote(f"{start},{min(end, start + 399)}p")
             chars = 16000
@@ -232,7 +247,7 @@ class ReadOnlyGit:
             command = "bash -o pipefail -c " + shlex.quote(command + limit)
         result = self.env.execute(command, timeout=timeout)
         if result.exit_code not in accepted:
-            raise ValueError("Git object query failed")
+            raise ValueError("Git object query failed; the path may not exist at this revision")
         return result.stdout[:chars]
 
 
@@ -423,6 +438,8 @@ class AgentCoordinator:
         } | (config.prompts or {})
         self._prompt_ids = {name: prompt_id(name, self._prompts[name]) for name in ("opening-plan", "wake", "spec-check")}
         self._prompt_ids["gate"] = gate_prompt_id(self._prompts["gate"])
+        self._prompt_ids["tools"] = prompt_id("tools", json.dumps(TOOL_SCHEMAS, sort_keys=True, separators=(",", ":")))
+        self._prompt_ids["budget-notes"] = BUDGET_NOTES_PROMPT_ID
         self._clock = clock
         self._started = clock()
         self._stop = threading.Event()
@@ -468,13 +485,36 @@ class AgentCoordinator:
             self._git = ReadOnlyGit(self.env, base, snapshot_repo=self._snapshot_repo)
         return self._git
 
-    def _read_tool(self, name: str, args: dict, evidence: GitEvidence, deadline: float, *, worker: str | None = None) -> str:
+    def _read_tool(self, name: str, args: dict, evidence: GitEvidence, deadline: float) -> str:
         git = self._git_tools(evidence)
         timeout = max(1, math.ceil(deadline - time.monotonic()))
-        return _bounded_call(
-            partial(git.read, name, args, evidence=evidence, worker=worker, timeout=timeout),
+        output = _bounded_call(
+            partial(git.read, name, args, evidence=evidence, timeout=timeout),
             deadline, self._stop,
         )
+        if not output:
+            rev12 = args.get("rev", git.base_sha)[:12]
+            if name == "search_code":
+                pattern, glob = json.dumps(args["pattern"]), json.dumps(args["path_glob"])
+                return (
+                    f"No matches for the fixed string {pattern} under {glob} at {rev12}. "
+                    "search_code does not interpret regular expressions."
+                )
+            if name == "read_file":
+                return f"No lines {args['start']}-{args['end']} in {args['path']} at {rev12}; the file is shorter or empty."
+            if name == "list_dir":
+                return f"Directory {args['path'] or '.'} at {rev12} is empty."
+            if name == "git_show" and "path" in args:
+                return f"No difference in {args['path']} between base_sha and {rev12}."
+        else:
+            lines = output.count("\n") + (not output.endswith("\n"))
+            if name == "read_file" and (len(output) == 16000 or lines == 400):
+                return output + "\n[output limited to 400 lines or 16000 characters; request a narrower range]"
+            if name == "search_code" and lines == 200:
+                return output + "\n[output limited to 200 rows; narrow path_glob or the pattern]"
+            if name == "list_dir" and lines == 400:
+                return output + "\n[output limited to 400 entries; list a subdirectory]"
+        return output
 
     def _call(self, messages: list[dict], tools: list[dict], phase: str, deadline: float, usage: Counter[str]) -> list[dict]:
         trace = partial(self._emit, _COORDINATOR, prompt_id=self._prompt_ids[phase], phase=phase) if self.trajectory else None
@@ -529,34 +569,54 @@ class AgentCoordinator:
         run: _ToolLoop,
         *,
         tools: list[dict],
+        finish: list[dict],
+        reserve: int,
         deadline: float,
         max_calls: int,
         execute: Callable[[str, dict], tuple[str, bool]],
     ) -> None:
+        # A budget-refused read still needs a unique tool call ID in the transcript.
+        call_number = 0
         while run.calls < max_calls and not self._stop.is_set() and time.monotonic() < deadline:
-            calls = self._call(messages + run.turns, tools, phase, deadline, run.usage)
+            remaining = max_calls - run.calls
+            final = remaining <= reserve
+            offered = finish if final else tools
+            note = []
+            if run.turns and remaining <= reserve + 1:
+                warning, final_turn = _BUDGET_NOTES[phase]
+                text = final_turn if final else warning
+                note = [{"role": "user", "content": text.format(remaining=remaining)}]
+            calls = self._call(messages + run.turns + note, offered, phase, deadline, run.usage)
             if not isinstance(calls, list) or not calls:
                 return
             if self._stop.is_set() or time.monotonic() >= deadline:
                 return
             assistant: dict = {"role": "assistant", "tool_calls": []}
             run.turns.append(assistant)
-            for call in calls[:max_calls - run.calls]:
+            allowed = {tool["function"]["name"] for tool in offered}
+            for call in calls[:remaining]:
                 if self._stop.is_set() or time.monotonic() >= deadline:
                     if not assistant["tool_calls"]:
                         run.turns.pop()
                     return
-                run.calls += 1
-                call_id = f"call_{phase}_{len(messages)}_{run.calls}"
+                call_number += 1
+                call_id = f"call_{phase}_{len(messages)}_{call_number}"
                 name, raw = "invalid", "{}"
                 done = False
+                counted = True
                 try:
                     name, raw, args = self._tool_args(call)
-                    result, done = execute(name, args)
+                    if name not in allowed:
+                        result = f"Error: {name} is not offered in this turn; offered: {', '.join(sorted(allowed))}"
+                    elif name in _READ_NAMES and run.calls >= max_calls - reserve:
+                        result = _READ_EXHAUSTED[phase]
+                        counted = False
+                    else:
+                        result, done = execute(name, args)
                 except (ValueError, RuntimeError) as exc:
                     result = f"Error: {exc}"
-                    if phase == "opening-plan" and isinstance(call, dict) and call.get("name") == "submit_plan":
-                        done = True
+                finally:
+                    run.calls += counted
                 assistant["tool_calls"].append({
                     "id": call_id, "type": "function", "function": {"name": name, "arguments": raw},
                 })
@@ -584,9 +644,15 @@ class AgentCoordinator:
 
                 def execute(name: str, args: dict) -> tuple[str, bool]:
                     if name == "submit_plan":
-                        plan: OpeningPlan = from_json(OpeningPlan, json.dumps(args))
-                        if plan.version != 1 or plan.workers.keys() != self.assignments.keys():
-                            raise ValueError("opening plan must cover the worker roster")
+                        try:
+                            plan: OpeningPlan = from_json(OpeningPlan, json.dumps(args))
+                        except ValueError as exc:
+                            raise ValueError(f"invalid opening plan: {exc}") from exc
+                        if plan.version != 1:
+                            raise ValueError("opening plan version must be 1")
+                        if plan.workers.keys() != self.assignments.keys():
+                            expected, received = ", ".join(sorted(self.assignments)), ", ".join(sorted(plan.workers))
+                            raise ValueError(f"opening plan must cover the worker roster: expected {expected}, received {received}")
                         for aid in self.assignments:
                             self.bus.send(
                                 sender=_COORDINATOR, to=aid,
@@ -603,9 +669,12 @@ class AgentCoordinator:
                     "opening-plan",
                     [
                         {"role": "system", "content": self._prompts["opening-plan"]},
-                        self._user({"roster": [asdict(a) for a in self.assignments.values()], "base_sha": git.base_sha}),
+                        self._user({
+                            "roster": [asdict(a) for a in self.assignments.values()], "base_sha": git.base_sha,
+                            "tool_call_budget": self.config.opening_max_tool_calls,
+                        }),
                     ],
-                    run, tools=[*_READ_TOOLS, SUBMIT_PLAN_TOOL], deadline=deadline,
+                    run, tools=[*_READ_TOOLS, SUBMIT_PLAN_TOOL], finish=[SUBMIT_PLAN_TOOL], reserve=1, deadline=deadline,
                     max_calls=self.config.opening_max_tool_calls, execute=execute,
                 )
                 if self.opening_plan is not None:
@@ -896,19 +965,19 @@ class AgentCoordinator:
                 return "Wake ended", True
             if name == "send_message":
                 if run.send_calls >= 2:
-                    raise ValueError("message limit reached")
+                    raise ValueError("message limit reached: at most 2 send_message calls per wake; call end_wake")
                 run.send_calls += 1
                 recipient, content = args.get("recipient"), args.get("content")
                 if not isinstance(content, str) or len(content) > 1500:
                     raise ValueError("message exceeds the 1500-character limit or is invalid")
                 if not isinstance(recipient, str) or (recipient != "group" and recipient not in self.assignments):
-                    raise ValueError("unknown message recipient")
+                    raise ValueError(f'unknown message recipient; use "group" or one of: {", ".join(sorted(self.assignments))}')
                 for aid in self.assignments if recipient == "group" else (recipient,):
                     self.bus.send(sender=_COORDINATOR, to=aid, content=content)
                     self._sent.append(dict(to=aid, content=content))
                     run.sent += 1
                 return "Message sent", False
-            return self._read_tool(name, args, evidence, deadline, worker=target), False
+            return self._read_tool(name, args, evidence, deadline), False
 
         try:
             evidence = self.evidence()
@@ -918,12 +987,16 @@ class AgentCoordinator:
                 self._history[index]["content"] = summary
             messages = [
                 {"role": "system", "content": self._prompts["wake"]},
-                self._user({"opening_plan": asdict(self.opening_plan) if self.opening_plan else None}),
+                self._user({
+                    "opening_plan": asdict(self.opening_plan) if self.opening_plan else None,
+                    "tool_call_budget": self.config.wake_max_tool_calls,
+                }),
                 *self._history,
                 self._user(observation),
             ]
             self._run_tools(
-                "wake", messages, run, tools=[*_READ_TOOLS, SEND_MESSAGE_TOOL, END_WAKE_TOOL], deadline=deadline,
+                "wake", messages, run, tools=[*_READ_TOOLS, SEND_MESSAGE_TOOL, END_WAKE_TOOL],
+                finish=[SEND_MESSAGE_TOOL, END_WAKE_TOOL], reserve=2, deadline=deadline,
                 max_calls=self.config.wake_max_tool_calls, execute=execute,
             )
         except TimeoutError:
