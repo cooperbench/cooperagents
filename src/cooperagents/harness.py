@@ -3342,6 +3342,8 @@ class UnifiedHarness:
         selector: Callable[[list[RunResult]], int] | None = None,
         planner: Planner | None = None,
     ) -> RunResult:
+        if spec.agent_coordinator:
+            raise NotImplementedError("agent coordinator is not wired")
         if spec.deterministic_coordinator and spec.coordinator:
             raise ValueError("Coordinator families are mutually exclusive")
         if spec.deterministic_coordinator and (
