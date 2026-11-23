@@ -55,16 +55,18 @@ MODEL = GateConfig(min_seconds_between_wakes=0, min_steps_between_wakes=0)
 
 
 class TrackerStub:
-    def __init__(self, *, signals: list[Signal] | None = None) -> None:
+    def __init__(self, worker: str = "agent1", *, signals: list[Signal] | None = None) -> None:
+        self.worker = worker
         self.steps: list[StepRecord] = []
         self.attempts: list[tuple[str, str | None]] = []
         self.signals = signals or []
 
-    def observe(self, records: list[StepRecord]) -> list[Signal]:
+    def observe(self, records: list[StepRecord], *, probe: DiffProbe | None = None) -> list[Signal]:
         self.steps.extend(records)
         return self.signals if records else []
 
-    def submit_attempt(self, aid: str, error: str | None) -> list[Signal]:
+    def submit_attempt(self, error: str | None) -> list[Signal]:
+        aid = self.worker
         self.attempts.append((aid, error))
         signals = [Signal(f"{aid}:SUBMIT_ATTEMPT", "SUBMIT_ATTEMPT", "info", {})]
         if error:
@@ -77,7 +79,9 @@ class GateStub:
         self.wakes = wakes
         self.states: list[GateState] = []
 
-    def decide(self, state: GateState, *, candidate_id: str, team_step: int) -> GateDecision:
+    def decide(
+        self, state: GateState, now: float, *, candidate_id: str, target_step: int, target_status: str,
+    ) -> GateDecision:
         self.states.append(state)
         return GateDecision(
             candidate_id, state.candidate_kind, "WAKE" if self.wakes else "SKIP",
@@ -139,7 +143,7 @@ def coordinators(repo, journal):
     all_coordinators = []
 
     def create(**kwargs) -> AgentCoordinator:
-        kwargs.setdefault("trackers", {aid.agent_id: TrackerStub() for aid in FEATURES})
+        kwargs.setdefault("trackers", {aid.agent_id: TrackerStub(aid.agent_id) for aid in FEATURES})
         kwargs.setdefault("gate", GateStub())
         kwargs.setdefault("config", AgentCoordinatorConfig(gate=RULE, opening="none", tick_s=0.01))
         coordinator = AgentCoordinator(repo, InMemoryBus("pair"), FEATURES, **kwargs)
@@ -370,10 +374,10 @@ def test_poller_keeps_teammate_text_and_does_not_wait_for_gate(coordinators, rep
     release_gate = threading.Event()
 
     class SlowGate(GateStub):
-        def decide(self, state, *, candidate_id, team_step):
+        def decide(self, state, now, *, candidate_id, target_step, target_status):
             gate_started.set()
             assert release_gate.wait(3)
-            return super().decide(state, candidate_id=candidate_id, team_step=team_step)
+            return super().decide(state, now, candidate_id=candidate_id, target_step=target_step, target_status=target_status)
 
     tracker = TrackerStub(signals=[HARD_SIGNAL])
     coordinator = coordinators(trackers={"agent1": tracker, "agent2": TrackerStub()}, gate=SlowGate())
@@ -386,7 +390,7 @@ def test_poller_keeps_teammate_text_and_does_not_wait_for_gate(coordinators, rep
         parsed.append(messages)
         return [step(start + 1)] if messages else []
 
-    def probe(env: Environment) -> DiffProbe:
+    def probe(env: Environment, *, config: SignalConfig) -> DiffProbe:
         probes.append(env)
         return PROBE
 
@@ -404,6 +408,36 @@ def test_poller_keeps_teammate_text_and_does_not_wait_for_gate(coordinators, rep
         assert tracker.steps == [replace(step(), fingerprint=PROBE.fingerprint)]
     finally:
         release_gate.set()
+
+
+def test_poller_preserves_step_numbers_after_message_compaction(coordinators, repo):
+    tracker = TrackerStub()
+    coordinator = coordinators(trackers={"agent1": tracker, "agent2": TrackerStub("agent2")})
+    teammate = _TeammatePoller("agent1", {"agent1": repo})
+
+    def parse(worker: str, messages: list[dict], *, start: int, config: SignalConfig) -> list[StepRecord]:
+        assert start == 0
+        return [step(index) for index, _ in enumerate((row for row in messages if row["role"] == "tool"), 1)]
+
+    def probe(env: Environment, *, config: SignalConfig) -> DiffProbe:
+        return PROBE
+
+    prefix = [{"role": "system"}, {"role": "user"}]
+    agent = SimpleNamespace(messages=list(prefix))
+    poller = AgentCoordinatorPoller(coordinator, "agent1", repo, teammate, parse_steps=parse, probe=probe)
+    poller.attach(agent)
+    poller.poll()
+    agent.messages.extend([{"role": "assistant"}, {"role": "tool", "tool_call_id": "call_1", "content": "full output"}])
+    poller.poll()
+    agent.messages = [
+        *prefix,
+        {"role": "tool", "tool_call_id": "call_1", "content": "clipped"},
+        {"role": "assistant"},
+        {"role": "tool", "tool_call_id": "call_2"},
+    ]
+    poller.poll()
+    assert [row.step for row in tracker.steps] == [1, 2]
+    assert coordinator.metrics()["team_worker_steps"] == 2
 
 
 def test_gate_keeps_running_during_wake_and_finish_joins_both(coordinators):
@@ -461,7 +495,7 @@ def test_candidates_coalesce_and_pending_wakes_merge_signals(coordinators, journ
     merged = events(journal, "wake_end")[1]["data"]
     assert len(merged["candidate_ids"]) == 2
     assert merged["signal_ids"] == [first.signal_id, second.signal_id]
-    assert coordinator.metrics()["gate"]["budget_remaining"] == RULE.wake_budget - 2
+    assert coordinator.metrics()["gate"]["budget_remaining"] == RULE.wake_budget - 3
 
 
 def test_stale_wake_rechecks_constraints_without_scoring_again(coordinators, journal):
@@ -504,7 +538,9 @@ def test_gate_model_request_rows_and_metrics(coordinators, journal):
     recorder = DecisionCallRecorder(decide, config.gate, journal)
 
     class ModelGate(GateStub):
-        def decide(self, state: GateState, *, candidate_id: str, team_step: int) -> GateDecision:
+        def decide(
+            self, state: GateState, now: float, *, candidate_id: str, target_step: int, target_status: str,
+        ) -> GateDecision:
             self.states.append(state)
             request = DecisionRequest(to_json(state), (DecisionQuestion("decision", "Answer", {"WAKE": "Wake", "SKIP": "Skip"}),),
                                       gate_prompt_id())

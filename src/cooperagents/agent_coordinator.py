@@ -77,13 +77,21 @@ _T = TypeVar("_T")
 
 
 class Tracker(Protocol):
-    def observe(self, records: list[StepRecord]) -> list[Signal]: ...
+    def observe(self, records: list[StepRecord], *, probe: DiffProbe | None = None) -> list[Signal]: ...
 
-    def submit_attempt(self, aid: str, error: str | None) -> list[Signal]: ...
+    def submit_attempt(self, error: str | None) -> list[Signal]: ...
 
 
 class GatePolicy(Protocol):
-    def decide(self, state: GateState, *, candidate_id: str, team_step: int) -> GateDecision: ...
+    def decide(
+        self, state: GateState, now: float, *, candidate_id: str, target_step: int, target_status: str,
+    ) -> GateDecision: ...
+
+
+class ScheduledGatePolicy(Protocol):
+    def decide(
+        self, state: GateState, now: float, *, candidate_id: str, target_step: int, target_status: str, team_step: int,
+    ) -> GateDecision: ...
 
 
 class TeammatePoller(Protocol):
@@ -96,6 +104,10 @@ class WorkerMessages(Protocol):
 
 class ParseSteps(Protocol):
     def __call__(self, worker: str, messages: list[dict], *, start: int, config: SignalConfig) -> list[StepRecord]: ...
+
+
+class Probe(Protocol):
+    def __call__(self, env: Environment, *, config: SignalConfig) -> DiffProbe: ...
 
 
 def _bounded_call(function: Callable[[], _T], deadline: float, stop: threading.Event | None = None) -> _T:
@@ -254,16 +266,20 @@ class DecisionCallRecorder:
         def invoke(**_: Any) -> dict:
             nonlocal result
             result = self.complete(request)
+            if not isinstance(result, DecisionResult):
+                return {"invalid_response_type": type(result).__name__, "tool_calls": []}
             with self._lock:
                 if not self._closed:
                     self._reported_cost += result.cost_usd or 0.0
+            probabilities = result.probabilities if isinstance(result.probabilities, dict) else {}
+            choices = result.chosen if isinstance(result.chosen, dict) else {}
             return {
                 "id": result.response_id,
                 "model": result.raw_model,
                 "provider": result.provider,
                 "answers": {
-                    qid: {"probabilities": values, "choice": result.chosen.get(qid)}
-                    for qid, values in result.probabilities.items()
+                    qid: {"probabilities": values, "choice": choices.get(qid)}
+                    for qid, values in probabilities.items()
                 },
                 "input_tokens": result.input_tokens,
                 "completion_tokens": result.completion_tokens,
@@ -485,7 +501,7 @@ class AgentCoordinator:
         if reported:
             tokens = dict(
                 prompt_tokens=reported.prompt_tokens or 0, completion_tokens=reported.completion_tokens or 0,
-                cached_tokens=getattr(reported.prompt_tokens_details, "cached_tokens", None) or 0,
+                cached_tokens=getattr(getattr(reported, "prompt_tokens_details", None), "cached_tokens", None) or 0,
             )
             usage.update(tokens)
             with self._ready:
@@ -659,23 +675,28 @@ class AgentCoordinator:
             self._enqueue(aid, kind, waking)
 
     def observe(self, aid: str, records: list[StepRecord], probe: DiffProbe) -> None:
-        signals = self.trackers[aid].observe(records)
+        if records:
+            records = [
+                *records[:-1],
+                replace(records[-1], fingerprint=probe.fingerprint, hunks=probe.hunks, diff_added=probe.added, diff_deleted=probe.deleted),
+            ]
+        signals = self.trackers[aid].observe(records, probe=probe)
         with self._ready:
             worker = self._workers[aid]
             self._probes.append((probe.latency_ms, probe.error is not None))
-            if probe.error:
-                signals = [*signals, Signal(f"{aid}:PROBE_ERROR:{len(self._probes)}", "PROBE_ERROR", "info", {"error": probe.error})]
+            steps = max(0, records[-1].step - worker.steps) if records else 0
             if probe.fingerprint is not None:
                 previous = worker.probe.fingerprint if worker.probe else None
-                worker.unchanged = worker.unchanged + len(records) if previous == probe.fingerprint else 0
+                if steps:
+                    worker.unchanged = worker.unchanged + steps if previous == probe.fingerprint and steps == 1 else 0
                 if aid not in self._first_edit and (probe.hunks or (previous is not None and previous != probe.fingerprint)):
                     self._first_edit[aid] = self._clock() - self._started
             worker.probe = probe
             worker.records.extend(records)
-            worker.steps += len(records)
-            self._team_steps += len(records)
+            worker.steps += steps
+            self._team_steps += steps
             self._signals(aid, signals)
-            if (records and aid not in self._candidates
+            if (steps and aid not in self._candidates
                 and (self.config.gate.policy == "random" or worker.steps - worker.last_candidate_step >= self.config.gate.heartbeat_steps)
             ):
                 self._enqueue(aid, "heartbeat", [])
@@ -735,10 +756,13 @@ class AgentCoordinator:
             target=aid, candidate_kind=candidate.kind, signals=candidate.signals, recent_steps=_recent_steps(worker),
             diff=dict(files=len(probe.hunks) if probe else 0, added=probe.added if probe else 0,
                       deleted=probe.deleted if probe else 0, unchanged_for_steps=worker.unchanged),
-            since_last_intervention=dict(steps=step_gap, seconds=now - last_time if last_time is not None else None),
+            since_last_intervention=dict(
+                steps=step_gap if step_gap is not None else worker.steps,
+                seconds=now - (last_time if last_time is not None else self._started),
+            ),
             budget=dict(remaining=remaining, target_remaining=target_remaining,
-                        steps_remaining=None if self.step_limit is None else max(0, self.step_limit - worker.steps),
-                        seconds_remaining=None if self.time_limit_s is None else max(0.0, self.time_limit_s - (now - self._started))),
+                        steps_remaining=max(0, (self.step_limit or 0) - worker.steps),
+                        seconds_remaining=max(0.0, (self.time_limit_s or 0.0) - (now - self._started))),
             peers=[
                 dict(id=peer, status=info.status, steps=info.steps, active_signals=sorted({s.kind for _, s in info.signals}))
                 for peer, info in self._workers.items() if peer != aid
@@ -765,12 +789,21 @@ class AgentCoordinator:
                     continue
                 candidate = self._candidates.pop(next(iter(self._candidates)))
                 state, allowed = self._gate_state(candidate)
+                worker = self._workers[candidate.target]
+                now, target_step, target_status = self._clock(), worker.steps, worker.status
             if allowed:
-                try:
-                    decision = _bounded_call(
-                        partial(self.gate.decide, state, candidate_id=candidate.id, team_step=candidate.team_step),
-                        time.monotonic() + 11.0, self._stop,
+                if self.config.gate.policy == "random":
+                    gate = cast(ScheduledGatePolicy, self.gate)
+                    evaluate = partial(
+                        gate.decide, state, now, candidate_id=candidate.id, target_step=target_step,
+                        target_status=target_status, team_step=candidate.team_step,
                     )
+                else:
+                    evaluate = partial(
+                        self.gate.decide, state, now, candidate_id=candidate.id, target_step=target_step, target_status=target_status,
+                    )
+                try:
+                    decision = _bounded_call(evaluate, time.monotonic() + 11.0, self._stop)
                 except Exception as exc:
                     if self._stop.is_set():
                         return
@@ -782,27 +815,26 @@ class AgentCoordinator:
                 if self._stop.is_set():
                     return
                 if decision.decision == "WAKE":
-                    self._queue_wake(candidate, decision)
+                    self._queue_wake(candidate, decision, now=now, step=target_step)
                 decision = replace(decision, budget_remaining_after=self.config.gate.wake_budget - self._wake_count)
                 self._decisions.append(decision)
                 self._emit(_GATE, "gate_decision", run_id=self.bus.run_id, state=asdict(state), **json.loads(to_json(decision)))
                 self._ready.notify_all()
 
-    def _queue_wake(self, candidate: _Candidate, decision: GateDecision) -> None:
+    def _queue_wake(self, candidate: _Candidate, decision: GateDecision, *, now: float, step: int) -> None:
         aid = candidate.target
+        self._last_wake_at = now
+        worker = self._workers[aid]
+        worker.last_wake_at, worker.last_wake_step = now, step
+        worker.wake_count += 1
+        self._wake_count += 1
         if aid in self._wakes:
             wake = self._wakes[aid]
             wake.signal_ids = list(dict.fromkeys(wake.signal_ids + decision.signal_ids))
             wake.decisions.append(candidate.id)
             wake.candidate = candidate
             return
-        now = self._clock()
-        self._last_wake_at = now
-        worker = self._workers[aid]
-        worker.last_wake_at, worker.last_wake_step = now, worker.steps
-        worker.wake_count += 1
-        self._wake_count += 1
-        self._wakes[aid] = _Wake(candidate, [candidate.id], list(decision.signal_ids), now)
+        self._wakes[aid] = _Wake(candidate, [candidate.id], list(decision.signal_ids), self._clock())
 
     def _wake_loop(self) -> None:
         while not self._stop.is_set():
@@ -992,7 +1024,7 @@ class AgentCoordinator:
             ])
 
     def submit_attempt(self, aid: str, error: str | None) -> None:
-        signals = self.trackers[aid].submit_attempt(aid, error)
+        signals = self.trackers[aid].submit_attempt(error)
         with self._ready:
             self._signals(aid, signals)
 
@@ -1068,7 +1100,7 @@ class AgentCoordinatorPoller:
         teammate: TeammatePoller,
         *,
         parse_steps: ParseSteps,
-        probe: Callable[[Environment], DiffProbe],
+        probe: Probe,
     ) -> None:
         self.coordinator, self.aid, self.env, self.teammate = coordinator, aid, env, teammate
         self.parse_steps, self.probe = parse_steps, probe
@@ -1097,17 +1129,18 @@ class AgentCoordinatorPoller:
         if messages is not self._messages or len(messages) < start:
             previous = {self._message_key(message) for message in self._messages[2:start]}
             start = next((index + 1 for index in range(len(messages) - 1, 1, -1) if self._message_key(messages[index]) in previous), 0)
-        records = self.parse_steps(self.aid, messages[start:], start=self._steps, config=self.coordinator.config.signals)
+        # The parser's cursor and step numbers are relative to this message batch.
+        config = self.coordinator.config.signals
+        records = self.parse_steps(self.aid, messages[start:], start=0, config=config)
+        records = [replace(record, step=record.step + self._steps) for record in records]
         self._messages = messages
         self._cursor = len(messages)
-        self._steps += len(records)
+        if records:
+            self._steps = records[-1].step
         try:
-            probe = self.probe(self.env)
+            probe = self.probe(self.env, config=config)
         except Exception as exc:
             probe = DiffProbe(None, {}, 0, 0, 0.0, type(exc).__name__)
-        if records:
-            records[-1] = replace(records[-1], fingerprint=probe.fingerprint, hunks=probe.hunks,
-                                  diff_added=probe.added, diff_deleted=probe.deleted)
         self.coordinator.observe(self.aid, records, probe)
         return notes
 
