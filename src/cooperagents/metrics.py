@@ -7,7 +7,18 @@ so no agent has to emit metrics itself.
 from __future__ import annotations
 
 from collections import Counter
+from statistics import mean, quantiles
 from typing import Any
+
+
+def completion_time_summary(durations: list[float]) -> dict[str, float | int | None]:
+    """Summarize pair durations using inclusive percentiles."""
+    count = len(durations)
+    average = mean(durations) if count else None
+    if count < 2:
+        return dict(n=count, mean=average, p50=average, p90=average, p95=average, p99=average)
+    cuts = quantiles(durations, n=100, method="inclusive")
+    return dict(n=count, mean=average, p50=cuts[49], p90=cuts[89], p95=cuts[94], p99=cuts[98])
 
 
 def coordination_metrics(events: list[dict[str, Any]], *, final_tasks: list[dict[str, Any]]) -> dict[str, Any]:
@@ -42,4 +53,4 @@ def spawn_metrics(events: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-__all__ = ["coordination_metrics", "spawn_metrics"]
+__all__ = ["completion_time_summary", "coordination_metrics", "spawn_metrics"]
