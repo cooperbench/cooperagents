@@ -17,8 +17,8 @@ OPENING_PLAN_PROMPT = (
     "Inspect the base checkout and propose ownership, interfaces and risks for the workers. "
     "Submit a plan grounded in evidence; ask workers to verify and correct it.\n"
     + TOOL_RULES + "\n"
-    "Budget: the user message states tool_call_budget. Every tool call, including a rejected one, uses one unit. "
-    "The last call is reserved for submit_plan: when one call remains, only submit_plan is offered. "
+    "Budget: the user message states tool_call_budget. Calls use one unit each, except reads beyond the read budget in an earlier batch. "
+    "The tool list stays the same. When one call remains, read tools are rejected and only submit_plan is accepted. "
     "When the evidence is incomplete, submit the plan with the evidence collected so far and record the gaps in risks."
 )
 WAKE_PROMPT = (
@@ -26,17 +26,17 @@ WAKE_PROMPT = (
     "Send concise, actionable coordination messages when useful, then end the wake.\n"
     + TOOL_RULES + "\n"
     "Budget: the second message states tool_call_budget. At most 2 send_message calls per wake. "
-    "The last 2 calls are reserved for send_message and end_wake: when two calls remain, only those tools are offered."
+    "The tool list stays the same. When two or fewer calls remain, read tools are rejected and only send_message and end_wake are accepted."
 )
-OPENING_BUDGET_WARNING = "[remaining_tool_calls: {remaining}] One read call remains. The next turn offers only submit_plan."
+OPENING_BUDGET_WARNING = "[remaining_tool_calls: {remaining}] One read call remains. After that, only submit_plan is accepted."
 OPENING_FINAL_TURN = (
-    "[remaining_tool_calls: {remaining}] Final turn: the read budget is exhausted. "
+    "[remaining_tool_calls: {remaining}] Final turn: only submit_plan is accepted. "
     "Call submit_plan now with the evidence collected so far."
 )
-WAKE_BUDGET_WARNING = "[remaining_tool_calls: {remaining}] One read call remains. The next turn offers only send_message and end_wake."
+WAKE_BUDGET_WARNING = "[remaining_tool_calls: {remaining}] One read call remains. After that, only send_message and end_wake are accepted."
 WAKE_FINAL_TURN = (
-    "[remaining_tool_calls: {remaining}] Final turn: the read budget is exhausted. "
-    "Send any needed coordination message with send_message, then call end_wake."
+    "[remaining_tool_calls: {remaining}] Final turn: only send_message and end_wake are accepted. "
+    "Send any needed coordination message with send_message, then call end_wake if a call remains."
 )
 SPEC_CHECK_PROMPT = (
     "Compare the frozen diff with the assigned feature and any teammate features. Reject only concrete missing requirements, "

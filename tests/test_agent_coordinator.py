@@ -334,21 +334,15 @@ def test_opening_delivers_a_valid_plan_once(coordinators, journal):
 
 def test_opening_reserves_submit_plan_turn(coordinators):
     data = json.loads((FIXTURES / "opening_plan.json").read_text())
-    inputs = []
-
-    def complete(messages, tools):
-        names = {tool["function"]["name"] for tool in tools}
-        inputs.append((messages, names))
-        if names == {"submit_plan"}:
-            return [call("submit_plan", **data)]
-        return [call("read_file", path="src/core.py", start=1, end=1)]
-
+    read = call("read_file", path="src/core.py", start=1, end=1)
+    complete = CompletionStub([read], [read], [read], [call("submit_plan", **data)])
     config = AgentCoordinatorConfig(gate=RULE, opening_max_tool_calls=4)
     coordinator = coordinators(complete=complete, config=config)
     assert coordinator.run_opening() is not None
-    assert [names for _, names in inputs] == [
-        {"list_dir", "read_file", "search_code", "git_show", "submit_plan"},
-    ] * 3 + [{"submit_plan"}]
+    inputs = complete.inputs
+    opening_tools = inputs[0][1]
+    assert {tool["function"]["name"] for tool in opening_tools} == {"list_dir", "read_file", "search_code", "git_show", "submit_plan"}
+    assert [tools for _, tools in inputs] == [opening_tools] * 4
     assert json.loads(inputs[0][0][-1]["content"])["tool_call_budget"] == 4
     assert inputs[1][0][-1]["role"] == "tool"
     assert inputs[2][0][-1] == {"role": "user", "content": OPENING_BUDGET_WARNING.format(remaining=2)}
@@ -364,8 +358,8 @@ def test_opening_batched_reads_keep_reserve(coordinators):
     config = AgentCoordinatorConfig(gate=RULE, opening_max_tool_calls=4)
     coordinator = coordinators(complete=complete, config=config)
     assert coordinator.run_opening() is not None
-    _, (messages, tools) = complete.inputs
-    assert {tool["function"]["name"] for tool in tools} == {"submit_plan"}
+    (_, opening_tools), (messages, tools) = complete.inputs
+    assert tools == opening_tools
     results = [message for message in messages if message["role"] == "tool"]
     assert [result["content"] for result in results] == ["alpha\n"] * 3 + [
         "Error: read budget exhausted; the remaining call is reserved for submit_plan.",
@@ -383,7 +377,7 @@ def test_opening_invalid_plan_retries(coordinators):
     coordinator = coordinators(complete=complete, config=config)
     assert coordinator.run_opening() is not None
     messages, tools = complete.inputs[1]
-    assert {tool["function"]["name"] for tool in tools} == {"submit_plan"}
+    assert tools == complete.inputs[0][1]
     assert messages[-2]["content"] == "Error: opening plan must cover the worker roster: expected agent1, agent2, received agent3"
     assert [message["to"] for message in coordinator.bus.message_log()] == ["agent1", "agent2"]
 
@@ -398,7 +392,7 @@ def test_unoffered_tool_is_counted_error(coordinators):
     assert messages[-2]["content"] == (
         "Error: send_message is not offered in this turn; offered: git_show, list_dir, read_file, search_code, submit_plan"
     )
-    assert {tool["function"]["name"] for tool in tools} == {"submit_plan"}
+    assert tools == complete.inputs[0][1]
     assert coordinator.metrics()["opening"]["tool_calls"] == 2
 
 
@@ -421,6 +415,7 @@ def test_wake_reserves_message_turn(coordinators, journal, repo, tmp_path):
     complete = CompletionStub(
         *([[read]] * 4),
         [call("send_message", recipient="agent1", content="Confirm the parser interface."), call("end_wake", note="Sent.")],
+        *([[read]] * 5),
         [call("end_wake", note="No further coordination needed.")],
     )
     config = AgentCoordinatorConfig(gate=RULE, opening="none", wake_max_tool_calls=6, tick_s=0.01)
@@ -444,11 +439,16 @@ def test_wake_reserves_message_turn(coordinators, journal, repo, tmp_path):
     assert complete.inputs[3][0][-1] == {"role": "user", "content": WAKE_BUDGET_WARNING.format(remaining=3)}
     messages, tools = complete.inputs[4]
     assert messages[-1] == {"role": "user", "content": WAKE_FINAL_TURN.format(remaining=2)}
-    assert {tool["function"]["name"] for tool in tools} == {"send_message", "end_wake"}
+    assert {tool["function"]["name"] for tool in tools} == {"list_dir", "read_file", "search_code", "git_show", "send_message", "end_wake"}
+    assert [offered for _, offered in complete.inputs] == [tools] * 5
 
     coordinator.enqueue("agent2", "heartbeat")
     wait_for(lambda: len(events(journal, "wake_end")) == 2)
     assert all(not row.get("content", "").startswith("[remaining_tool_calls:") for row in complete.inputs[5][0])
+    messages, _ = complete.inputs[-1]
+    assert messages[-2]["content"] == "Error: read_file is not allowed in the final turn; allowed: end_wake, send_message"
+    assert messages[-1]["content"] == WAKE_FINAL_TURN.format(remaining=1)
+    assert events(journal, "wake_end")[1]["data"]["outcome"] == "ended"
 
 
 def test_wake_limits_blind_observation_and_compacts_prior_tools(coordinators, journal):
@@ -814,3 +814,47 @@ def test_default_completion_uses_sdk_and_records_usage(coordinators, journal, mo
     row, = events(journal, "request")
     assert row["actor"] == "coordinator" and row["data"]["phase"] == "spec-check"
     assert "test-key" not in journal.path.read_text()
+
+
+@pytest.mark.parametrize(("prefix", "field", "encode_arguments"), [
+    ("submit_plan", "args", False),
+    ("submit_plan", None, False),
+    ("", "arguments", False),
+    ("", "args", True),
+    ("", "arguments", True),
+])
+def test_default_completion_parses_textual_tool_call(coordinators, monkeypatch, prefix, field, encode_arguments):
+    data = json.loads((FIXTURES / "opening_plan.json").read_text())
+    args = json.dumps(data) if encode_arguments else data
+    content = prefix + json.dumps({"name": "submit_plan", field: args} if field else args)
+    response = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(tool_calls=None, content=content))], usage=None)
+    completions = SimpleNamespace(create=lambda **request: response)
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=lambda **kwargs: client))
+
+    config = AgentCoordinatorConfig(gate=RULE, opening_max_tool_calls=1)
+    coordinator = coordinators(config=config)
+    assert coordinator.run_opening() == from_json(OpeningPlan, json.dumps(data))
+    assert coordinator.metrics()["opening"]["tool_calls"] == 1
+
+
+@pytest.mark.parametrize(("content", "tool_calls"), [
+    ('read_file{"path":"src/core.py","start":1,"end":1}', 1),
+    ('submit_plan{"name":"submit_plan","args":"{invalid"}', 0),
+    ('{"name":"send_message","arguments":{"recipient":"agent1","content":"Unexpected"}}', 0),
+])
+def test_default_completion_ignores_invalid_calls_and_rejects_final_reads(coordinators, monkeypatch, content, tool_calls):
+    response = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(tool_calls=None, content=content))], usage=None)
+    completions = SimpleNamespace(create=lambda **request: response)
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=lambda **kwargs: client))
+
+    config = AgentCoordinatorConfig(gate=RULE, opening_max_tool_calls=1)
+    coordinator = coordinators(config=config)
+
+    def unexpected_read(*args):
+        pytest.fail("A final-turn read must be rejected before execution")
+
+    monkeypatch.setattr(coordinator, "_read_tool", unexpected_read)
+    assert coordinator.run_opening() is None
+    assert coordinator.metrics()["opening"]["tool_calls"] == tool_calls
