@@ -2199,8 +2199,6 @@ class UnifiedHarness:
         env_factory: EnvFactory,
         llm: LLMClient | None,
         llm_factory: LLMFactory | None,
-        *,
-        agent_config: AgentCoordinatorConfig | None = None,
     ) -> RunResult:
         """Coordinated team where **every agent runs in its OWN container**
         (hard constraint — no shared live container).
@@ -2309,6 +2307,7 @@ class UnifiedHarness:
         coordinator = None  # set in the coop branch when spec.coordinator
         deterministic = None
         agent_coord = None
+        agent_config = (self.agent_coordinator_config or AgentCoordinatorConfig()) if spec.agent_coordinator else None
         start = time.time()
         integrated_patch = ""  # cumulative diff across the team so far (seed mode)
         raw_worker_patches: dict[str, str] = {}
@@ -3413,7 +3412,6 @@ class UnifiedHarness:
         selector: Callable[[list[RunResult]], int] | None = None,
         planner: Planner | None = None,
     ) -> RunResult:
-        agent_config = None
         if spec.agent_coordinator:
             if not spec.shared_workspace or not spec.coop_tools or spec.worker != "mini_swe" or spec.seed_prior or not spec.git_share:
                 raise ValueError("Agent coordinator requires a no-seed mini_swe coop-tools team with Git sharing")
@@ -3573,7 +3571,7 @@ class UnifiedHarness:
         if spec.shared_workspace and spec.best_of_n > 1:
             return self._run_best_of_n(spec, assignments, env_factory, llm, llm_factory, selector)
         if spec.shared_workspace:
-            return self._run_isolated(spec, assignments, bus, env_factory, llm, llm_factory, agent_config=agent_config)
+            return self._run_isolated(spec, assignments, bus, env_factory, llm, llm_factory)
         n_seed = len(assignments)
         cap = spec.max_agents if spec.max_agents is not None else n_seed
         spawning = spec.allow_spawn and cap > n_seed
