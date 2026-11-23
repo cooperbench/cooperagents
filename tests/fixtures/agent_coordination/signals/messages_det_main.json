@@ -1,0 +1,348 @@
+{
+  "source": "polar-ext/goal-cooperbench-coordination/artifacts/2026-11-21-aws-det-main/20261121T222218Z-cbc-strong_team-9be129a/rollouts/samuelcolvin_dirty_equals_task-43-f2_f4/1/cooperagents/team/samuelcolvin_dirty_equals_task/43/f2_f4/trajectory.jsonl.gz",
+  "worker_message_index_ranges": {
+    "agent1": [
+      20,
+      38
+    ],
+    "agent2": [
+      40,
+      55
+    ]
+  },
+  "workers": {
+    "agent1": [
+      {
+        "role": "assistant",
+        "extra": {
+          "actions": [
+            {
+              "tool_name": "bash",
+              "tool_call_id": "functions.bash:9",
+              "command": "cd /workspace/repo && python - <<'EOF'\nfrom pathlib import Path\n\npath = Path('dirty_equals/__init__.py')\nsrc = path.read_text()\n\nold_import = 'from ._other import FunctionCheck, IsJson, IsUUID'\nnew_import = 'from ._other import FunctionCheck, IsJson, IsMac, IsUUID'\nassert old_import in src\nsrc = src.replace(old_import, new_import, 1)\n\nold_all = \"    'IsJson',\\n    'IsUUID',\\n\"\nnew_all = \"    'IsJson',\\n    'IsMac',\\n    'IsUUID',\\n\"\nassert old_all in src\nsrc = src.replace(old_all, new_all, 1)\n\npath.write_text(src)\nprint('done')\nEOF"
+            }
+          ]
+        }
+      },
+      {
+        "role": "tool",
+        "extra": {
+          "raw_output": "done\n",
+          "returncode": 0,
+          "exception_info": ""
+        },
+        "tool_call_id": "functions.bash:9"
+      },
+      {
+        "role": "assistant",
+        "extra": {
+          "actions": [
+            {
+              "tool_name": "bash",
+              "tool_call_id": "functions.bash:10",
+              "command": "cd /workspace/repo && python - <<'EOF'\nfrom dirty_equals import IsMac\n\nvalid = {\n    'colon': ['00:1B:44:11:3A:B7', '00:1b:44:11:3a:b7', 'AA:BB:CC:DD:EE:FF', '00:00:00:00:00:00'],\n    'hyphen': ['00-1B-44-11-3A-B7', 'aa-bb-cc-dd-ee-ff'],\n    'dot': ['001B.4411.3AB7', '001b.4411.3ab7', 'AABB.CCDD.EEFF'],\n    'compact': ['001b44113ab7', '001B44113AB7', 'aabbccddeeff'],\n}\nfor fmt, addrs in valid.items():\n    for a in addrs:\n        assert a == IsMac(fmt), (a, fmt)\n        assert a == IsMac(), (a, 'any')\n\ninvalid = [\n    '00:1B:44:11:3A',          # too short\n    '00:1B:44:11:3A:B7:00',    # too long\n    '00:1B:44:11:3A:GG',       # bad hex\n    '0:1B:44:11:3A:B7',        # group too short\n    '00:1b:44:11:3a:b',        # last group short\n    '00-1B-44-11-3A-B7-extra',\n    '001B.4411.3AB',           # dot groups wrong\n    '001B.4411.3AB77',         # dot group too long\n    '001b44113ab',             # compact too short\n    '001b44113ab77',           # compact too long\n    '00:1B-44:11-3A:B7',       # mixed separators\n    '00 1B 44 11 3A B7',       # spaces\n    '',\n    'zz:1b:44:11:3a:b7',\n]\nfor a in invalid:\n    assert a != IsMac(), a\n\n# format strictness\nassert '00:1B:44:11:3A:B7' != IsMac('hyphen')\nassert '00-1B-44-11-3A-B7' != IsMac('colon')\nassert '001B.4411.3AB7' != IsMac('compact')\nassert '001b44113ab7' != IsMac('dot')\n\n# non-str input\nassert 123 != IsMac()\nassert None != IsMac()\nassert ['00:1B:44:11:3A:B7'] != IsMac()\n\n# repr checks\nassert str(IsMac()) == 'IsMac(*)'\nassert str(IsMac('colon')) == \"IsMac('colon')\"\nassert str(IsMac('hyphen')) == \"IsMac('hyphen')\"\nassert str(IsMac('dot')) == \"IsMac('dot')\"\nassert str(IsMac('compact')) == \"IsMac('compact')\"\n\n# invalid format raises\ntry:\n    IsMac('bogus')\n    assert False, 'expected ValueError'\nexcept ValueError:\n    pass\n\n# class-level comparison (metaclass __eq__)\nassert '00:1B:44:11:3A:B7' == IsMac\n\nprint('all checks passed')\nEOF"
+            }
+          ]
+        }
+      },
+      {
+        "role": "tool",
+        "extra": {
+          "raw_output": "all checks passed\n",
+          "returncode": 0,
+          "exception_info": ""
+        },
+        "tool_call_id": "functions.bash:10"
+      },
+      {
+        "role": "assistant",
+        "extra": {
+          "actions": [
+            {
+              "tool_name": "bash",
+              "tool_call_id": "functions.bash:11",
+              "command": "cd /workspace/repo && (python -m pytest tests/ -q 2>&1 | tail -20)"
+            }
+          ]
+        }
+      },
+      {
+        "role": "tool",
+        "extra": {
+          "raw_output": "\n==================================== ERRORS ====================================\n_____________________ ERROR collecting tests/test_docs.py ______________________\ntests/test_docs.py:66: in pytest_generate_tests\n    metafunc.parametrize('module_name,source_code', generate_code_chunks('dirty_equals', 'docs'))\n/usr/local/lib/python3.11/site-packages/_pytest/python.py:1316: in parametrize\n    argnames, parametersets = ParameterSet._for_parametrize(\n/usr/local/lib/python3.11/site-packages/_pytest/mark/structures.py:203: in _for_parametrize\n    warnings.warn(\nE   pytest.PytestRemovedIn10Warning: Passing a non-Collection iterable to parametrize is deprecated.\nE   Test: tests/test_docs.py::test_docs_examples, argvalues type: generator\nE   Please convert to a list or tuple.\nE   See https://docs.pytest.org/en/stable/deprecations.html#parametrize-iterators\n=========================== short test summary info ============================\nERROR tests/test_docs.py - pytest.PytestRemovedIn10Warning: Passing a non-Col...\n!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!\n1 error in 0.22s\n",
+          "returncode": 0,
+          "exception_info": ""
+        },
+        "tool_call_id": "functions.bash:11"
+      },
+      {
+        "role": "assistant",
+        "extra": {
+          "actions": [
+            {
+              "tool_name": "bash",
+              "tool_call_id": "functions.bash:12",
+              "command": "cd /workspace/repo && python -m pytest tests/ --ignore=tests/test_docs.py -q 2>&1 | tail -5"
+            },
+            {
+              "tool_name": "bash",
+              "tool_call_id": "functions.bash:13",
+              "command": "cd /workspace/repo && git stash && python -m pytest tests/test_docs.py -q 2>&1 | tail -6; git stash pop"
+            }
+          ]
+        }
+      },
+      {
+        "role": "tool",
+        "extra": {
+          "raw_output": "........................................................................ [ 65%]\n........................................................................ [ 82%]\n........................................................................ [ 98%]\n.....                                                                    [100%]\n437 passed in 0.32s\n",
+          "returncode": 0,
+          "exception_info": ""
+        },
+        "tool_call_id": "functions.bash:12"
+      },
+      {
+        "role": "tool",
+        "extra": {
+          "raw_output": "Saved working directory and index state WIP on (no branch): 593bccc Make IsNow relative to current moment of time (#40)\nE   Please convert to a list or tuple.\nE   See https://docs.pytest.org/en/stable/deprecations.html#parametrize-iterators\n=========================== short test summary info ============================\nERROR tests/test_docs.py - pytest.PytestRemovedIn10Warning: Passing a non-Col...\n!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!\n1 error in 0.12s\nHEAD detached at 593bccc\nChanges not staged for commit:\n  (use \"git add <file>...\" to update what will be committed)\n  (use \"git restore <file>...\" to discard changes in working directory)\n\tmodified:   dirty_equals/__init__.py\n\tmodified:   dirty_equals/_other.py\n\nno changes added to commit (use \"git add\" and/or \"git commit -a\")\nDropped refs/stash@{0} (dcb31a5b46303738c9e60aaf6470d27121bde30d)\n",
+          "returncode": 0,
+          "exception_info": ""
+        },
+        "tool_call_id": "functions.bash:13"
+      },
+      {
+        "role": "assistant",
+        "extra": {
+          "actions": [
+            {
+              "tool_name": "bash",
+              "tool_call_id": "functions.bash:14",
+              "command": "cd /workspace/repo && python - <<'EOF'\nfrom dirty_equals import IsMac\n\nassert '00:1B:44:11:3A:B7' == IsMac\nassert '00:1B:44:11:3A:B7' == IsMac('colon')\nassert '00-1b-44-11-3a-b7' == IsMac('hyphen')\nassert '001B.4411.3AB7' == IsMac('dot')\nassert '001b44113ab7' == IsMac('compact')\nassert '00:1B:44:11:3A:B7' != IsMac('hyphen')\nassert 'not a mac' != IsMac\nprint('doc example OK')\nEOF"
+            }
+          ]
+        }
+      },
+      {
+        "role": "tool",
+        "extra": {
+          "raw_output": "doc example OK\n",
+          "returncode": 0,
+          "exception_info": ""
+        },
+        "tool_call_id": "functions.bash:14"
+      },
+      {
+        "role": "assistant",
+        "extra": {
+          "actions": [
+            {
+              "tool_name": "bash",
+              "tool_call_id": "functions.bash:15",
+              "command": "cd /workspace/repo && git diff -- dirty_equals/__init__.py dirty_equals/_other.py > patch.txt && cat patch.txt"
+            }
+          ]
+        }
+      },
+      {
+        "role": "tool",
+        "extra": {
+          "raw_output": "diff --git a/dirty_equals/__init__.py b/dirty_equals/__init__.py\nindex ba8214e..932a3c6 100644\n--- a/dirty_equals/__init__.py\n+++ b/dirty_equals/__init__.py\n@@ -18,7 +18,7 @@ from ._numeric import (\n     IsPositiveFloat,\n     IsPositiveInt,\n )\n-from ._other import FunctionCheck, IsJson, IsUUID\n+from ._other import FunctionCheck, IsJson, IsMac, IsUUID\n from ._sequence import Contains, HasLen, IsList, IsListOrTuple, IsTuple\n from ._strings import IsAnyStr, IsBytes, IsStr\n \n@@ -68,6 +68,7 @@ __all__ = (\n     # other\n     'FunctionCheck',\n     'IsJson',\n+    'IsMac',\n     'IsUUID',\n     # strings\n     'IsStr',\ndiff --git a/dirty_equals/_other.py b/dirty_equals/_other.py\nindex b2b8379..615383b 100644\n--- a/dirty_equals/_other.py\n+++ b/dirty_equals/_other.py\n@@ -1,5 +1,6 @@\n import json\n-from typing import Any, Callable, TypeVar, overload\n+import re\n+from typing import Any, Callable, Optional, TypeVar, overload\n from uuid import UUID\n \n from ._base import DirtyEquals\n@@ -51,6 +52,52 @@ class IsUUID(DirtyEquals[UUID]):\n             return True\n \n \n+class IsMac(DirtyEquals[str]):\n+    \"\"\"\n+    A class that checks if a value is a valid MAC address, optionally checking the format.\n+\n+    Supports colon-separated (`00:1B:44:11:3A:B7`), hyphen-separated (`00-1B-44-11-3A-B7`),\n+    dot-separated (`001B.4411.3AB7`) and compact (`001B44113AB7`) formats. Validation is case-insensitive.\n+    \"\"\"\n+\n+    _PATTERNS = {\n+        'colon': r'[0-9a-fA-F]{2}(:[0-9a-fA-F]{2}){5}',\n+        'hyphen': r'[0-9a-fA-F]{2}(-[0-9a-fA-F]{2}){5}',\n+        'dot': r'[0-9a-fA-F]{4}(\\.[0-9a-fA-F]{4}){2}',\n+        'compact': r'[0-9a-fA-F]{12}',\n+    }\n+\n+    def __init__(self, format: Optional[Literal['colon', 'hyphen', 'dot', 'compact']] = None):\n+        \"\"\"\n+        Args:\n+            format: The format of the MAC address to check, if omitted, all valid formats are accepted.\n+                One of `'colon'`, `'hyphen'`, `'dot'` or `'compact'`.\n+\n+        ```py title=\"IsMac\"\n+        from dirty_equals import IsMac\n+\n+        assert '00:1B:44:11:3A:B7' == IsMac\n+        assert '00:1B:44:11:3A:B7' == IsMac('colon')\n+        assert '00-1b-44-11-3a-b7' == IsMac('hyphen')\n+        assert '001B.4411.3AB7' == IsMac('dot')\n+        assert '001b44113ab7' == IsMac('compact')\n+        assert '00:1B:44:11:3A:B7' != IsMac('hyphen')\n+        assert 'not a mac' != IsMac\n+        ```\n+        \"\"\"\n+        if format is not None and format not in self._PATTERNS:\n+            raise ValueError(f\"format must be one of 'colon', 'hyphen', 'dot', 'compact', got {format!r}\")\n+        self.format = format\n+        super().__init__(plain_repr('*') if format is None else format)\n+\n+    def equals(self, other: Any) -> bool:\n+        if not isinstance(other, str):\n+            return False\n+        if self.format is not None:\n+            return re.fullmatch(self._PATTERNS[self.format], other) is not None\n+        return any(re.fullmatch(pattern, other) is not None for pattern in self._PATTERNS.values())\n+\n+\n AnyJson = object\n JsonType = TypeVar('JsonType', AnyJson, Any)\n \n",
+          "returncode": 0,
+          "exception_info": ""
+        },
+        "tool_call_id": "functions.bash:15"
+      },
+      {
+        "role": "assistant",
+        "extra": {
+          "actions": [
+            {
+              "tool_name": "bash",
+              "tool_call_id": "functions.bash:16",
+              "command": "cd /workspace/repo && echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
+            }
+          ]
+        }
+      },
+      {
+        "role": "tool",
+        "extra": {
+          "raw_output": "SUBMISSION REJECTED by the completion gate (2 rejection(s) left before forced accept):\nBuild failed (`make`):\nflake8 --max-complexity 10 --max-line-length 120 --ignore E203,W503 dirty_equals tests\nmake: flake8: No such file or directory\nmake: *** [Makefile:20: lint] Error 127\n\nReminder: there is NO network access during builds — package downloads fail; use the standard library or sources vendored in-tree. Fix the problem, verify the build, then submit again.\nFix the problem, verify, then submit again.",
+          "returncode": 1,
+          "exception_info": ""
+        },
+        "tool_call_id": "functions.bash:16"
+      },
+      {
+        "role": "assistant",
+        "extra": {
+          "actions": [
+            {
+              "tool_name": "bash",
+              "tool_call_id": "functions.bash:17",
+              "command": "cd /workspace/repo && cat Makefile && which python python3 && python3 -c \"import flake8\" 2>&1 | head -1; python3 -m flake8 --version 2>&1 | head -1; ls /usr/local/bin | grep -iE \"flake|lint|mypy|black|isort\" | head"
+            }
+          ]
+        }
+      },
+      {
+        "role": "tool",
+        "extra": {
+          "raw_output": ".DEFAULT_GOAL := all\nisort = isort dirty_equals tests\nblack = black dirty_equals tests\n\n.PHONY: install\ninstall:\n\tpip install -r tests/requirements.txt\n\tpip install -r tests/requirements-linting.txt\n\tpip install -r docs/requirements.txt\n\tpoetry install\n\tpre-commit install\n\n.PHONY: format\nformat:\n\t$(isort)\n\t$(black)\n\n.PHONY: lint\nlint:\n\tflake8 --max-complexity 10 --max-line-length 120 --ignore E203,W503 dirty_equals tests\n\t$(isort) --check-only --df\n\t$(black) --check\n\n.PHONY: test\ntest:\n\tcoverage run -m pytest\n\tpython tests/mypy_checks.py\n\n.PHONY: testcov\ntestcov: test\n\t@coverage report --show-missing\n\t@coverage html\n\n.PHONY: mypy\nmypy:\n\tmypy dirty_equals tests/mypy_checks.py\n\n.PHONY: docs\ndocs:\n\tmkdocs build --strict\n\n.PHONY: all\nall: lint mypy testcov docs\n\n.PHONY: clean\nclean:\n\trm -rf `find . -name __pycache__`\n\trm -f `find . -type f -name '*.py[co]' `\n\trm -f `find . -type f -name '*~' `\n\trm -f `find . -type f -name '.*~' `\n\trm -rf .cache\n\trm -rf .pytest_cache\n\trm -rf .mypy_cache\n\trm -rf htmlcov\n\trm -rf *.egg-info\n\trm -f .coverage\n\trm -f .coverage.*\n\trm -rf build\n/usr/local/bin/python\n/usr/local/bin/python3\nTraceback (most recent call last):\n/usr/local/bin/python3: No module named flake8\n",
+          "returncode": 0,
+          "exception_info": ""
+        },
+        "tool_call_id": "functions.bash:17"
+      }
+    ],
+    "agent2": [
+      {
+        "role": "assistant",
+        "extra": {
+          "actions": [
+            {
+              "tool_name": "bash",
+              "tool_call_id": "functions.bash:2",
+              "command": "cd /workspace/repo && python - <<'EOF'\nimport dirty_equals\nfrom dirty_equals import IsURL\n\n# repr patterns from the spec\nprint(repr(IsURL()))\nprint(repr(IsURL('https')))\nprint(repr(IsURL(domain='example.com')))\nprint(repr(IsURL('https', 'example.com')))\nprint(repr(IsURL(['http', 'https'])))\n\n# equality semantics\nassert 'https://example.com/' == IsURL()\nassert 'https://example.com/' == IsURL('https')\nassert 'https://example.com/' == IsURL(['http', 'https'])\nassert 'http://example.com/' != IsURL('https')\nassert 'ftp://example.com/' != IsURL(['http', 'https'])\nassert 'https://example.com/' == IsURL(domain='example.com')\nassert 'https://example.com:8080/' == IsURL('https', 'example.com:8080')\nassert 'https://example.com:8080/' != IsURL('https', 'example.com')\nassert 'https://EXAMPLE.com/' == IsURL('https', 'example.com')  # netloc case-insensitive\nassert 'HTTPS://EXAMPLE.COM/' == IsURL('https', 'EXAMPLE.com')\nassert 'not a url' != IsURL()\nassert 'example.com' != IsURL()\nassert 'ftp://example.com' == IsURL()  # allowed by default\nassert '//example.com/path' != IsURL()  # no scheme\nassert 'https://' != IsURL()  # no netloc\nassert 'javascript:alert(1)' != IsURL()  # no netloc\nassert 'http://[::1/' != IsURL()  # invalid IPv6 raises ValueError -> not equal\nassert 'x' != IsURL(123)\nassert 123 != IsURL()\n\n# failure repr output\nfrom dirty_equals import IsStr\ntry:\n    assert 'not a url' == IsURL()\nexcept AssertionError as e:\n    print('assertion msg ok:', e)\ntry:\n    assert 'http://example.com' == IsURL('https')\nexcept AssertionError as e:\n    print('protocol mismatch msg ok:', e)\ntry:\n    assert 'https://a.com' == IsURL('https', 'b.com')\nexcept AssertionError as e:\n    print('domain mismatch msg ok:', e)\n\nimport dirty_equals as de\nprint('IsURL' in de.__all__, de.IsURL is IsURL)\nprint('ALL SEMANTIC CHECKS PASSED')\nEOF"
+            }
+          ]
+        }
+      },
+      {
+        "role": "tool",
+        "extra": {
+          "raw_output": "IsURL(*)\nIsURL('https')\nIsURL('example.com')\nIsURL('https', 'example.com')\nIsURL(['http', 'https'])\nassertion msg ok: \nprotocol mismatch msg ok: \ndomain mismatch msg ok: \nTrue True\nALL SEMANTIC CHECKS PASSED\n",
+          "returncode": 0,
+          "exception_info": ""
+        },
+        "tool_call_id": "functions.bash:2"
+      },
+      {
+        "role": "assistant",
+        "extra": {
+          "actions": [
+            {
+              "tool_name": "bash",
+              "tool_call_id": "functions.bash:3",
+              "command": "cd /workspace/repo && python -m pytest -q 2>&1 | tail -5"
+            }
+          ]
+        }
+      },
+      {
+        "role": "tool",
+        "extra": {
+          "raw_output": "E   See https://docs.pytest.org/en/stable/deprecations.html#parametrize-iterators\n=========================== short test summary info ============================\nERROR tests/test_docs.py - pytest.PytestRemovedIn10Warning: Passing a non-Col...\n!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!\n1 error in 0.24s\n",
+          "returncode": 0,
+          "exception_info": ""
+        },
+        "tool_call_id": "functions.bash:3"
+      },
+      {
+        "role": "assistant",
+        "extra": {
+          "actions": [
+            {
+              "tool_name": "bash",
+              "tool_call_id": "functions.bash:4",
+              "command": "cd /workspace/repo && python -m pytest -q 2>&1 | head -30; echo ---; git status --short; git log --oneline -3"
+            }
+          ]
+        }
+      },
+      {
+        "role": "tool",
+        "extra": {
+          "raw_output": "\n==================================== ERRORS ====================================\n_____________________ ERROR collecting tests/test_docs.py ______________________\ntests/test_docs.py:66: in pytest_generate_tests\n    metafunc.parametrize('module_name,source_code', generate_code_chunks('dirty_equals', 'docs'))\n/usr/local/lib/python3.11/site-packages/_pytest/python.py:1316: in parametrize\n    argnames, parametersets = ParameterSet._for_parametrize(\n/usr/local/lib/python3.11/site-packages/_pytest/mark/structures.py:203: in _for_parametrize\n    warnings.warn(\nE   pytest.PytestRemovedIn10Warning: Passing a non-Collection iterable to parametrize is deprecated.\nE   Test: tests/test_docs.py::test_docs_examples, argvalues type: generator\nE   Please convert to a list or tuple.\nE   See https://docs.pytest.org/en/stable/deprecations.html#parametrize-iterators\n=========================== short test summary info ============================\nERROR tests/test_docs.py - pytest.PytestRemovedIn10Warning: Passing a non-Col...\n!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!\n1 error in 0.17s\n---\n M dirty_equals/__init__.py\n M dirty_equals/_other.py\n593bccc Make IsNow relative to current moment of time (#40)\nd4e5a77 Document how the dirty __eq__ is called (#41)\n2d3c0e5 Support pypy (#36)\n",
+          "returncode": 0,
+          "exception_info": ""
+        },
+        "tool_call_id": "functions.bash:4"
+      },
+      {
+        "role": "assistant",
+        "extra": {
+          "actions": [
+            {
+              "tool_name": "bash",
+              "tool_call_id": "functions.bash:5",
+              "command": "cd /workspace/repo && python -m pytest -q -W ignore::pytest.PytestRemovedIn10Warning 2>&1 | tail -5"
+            }
+          ]
+        }
+      },
+      {
+        "role": "tool",
+        "extra": {
+          "raw_output": "........................................................................ [ 59%]\n........................................................................ [ 73%]\n........................................................................ [ 88%]\n.......................................................                  [100%]\n487 passed in 0.54s\n",
+          "returncode": 0,
+          "exception_info": ""
+        },
+        "tool_call_id": "functions.bash:5"
+      },
+      {
+        "role": "assistant",
+        "extra": {
+          "actions": [
+            {
+              "tool_name": "bash",
+              "tool_call_id": "functions.bash:6",
+              "command": "cd /workspace/repo && python -m pytest tests/test_docs.py -q -W ignore::pytest.PytestRemovedIn10Warning --collect-only 2>&1 | grep -i -E \"isurl|other\" ; echo ---; python -m pytest tests/test_docs.py -q -W ignore::pytest.PytestRemovedIn10Warning -k \"IsURL\" 2>&1 | tail -2; echo ---; python tests/mypy_checks.py 2>&1 | tail -3"
+            }
+          ]
+        }
+      },
+      {
+        "role": "tool",
+        "extra": {
+          "raw_output": "tests/test_docs.py::test_docs_examples[dirty_equals/_other.py:25-34]\ntests/test_docs.py::test_docs_examples[dirty_equals/_other.py:88-100]\ntests/test_docs.py::test_docs_examples[dirty_equals/_other.py:134-142]\ntests/test_docs.py::test_docs_examples[dirty_equals/_other.py:167-180]\n---\n\n50 deselected in 0.01s\n---\n",
+          "returncode": 0,
+          "exception_info": ""
+        },
+        "tool_call_id": "functions.bash:6"
+      },
+      {
+        "role": "assistant",
+        "extra": {
+          "actions": [
+            {
+              "tool_name": "bash",
+              "tool_call_id": "functions.bash:7",
+              "command": "cd /workspace/repo && python -m pytest \"tests/test_docs.py::test_docs_examples[dirty_equals/_other.py:167-180]\" -q -W ignore::pytest.PytestRemovedIn10Warning 2>&1 | tail -2; echo ---; python tests/mypy_checks.py; echo \"mypy_checks exit: $?\"; echo ---; python -m mypy dirty_equals/_other.py 2>&1 | tail -3; python -m flake8 dirty_equals/_other.py dirty_equals/__init__.py 2>&1 | head; echo \"flake8 exit: $?\"; python -m black --check dirty_equals/_other.py dirty_equals/__init__.py 2>&1 | tail -2; python -m isort --check-only dirty_equals/_other.py dirty_equals/__init__.py 2>&1 | tail -2"
+            }
+          ]
+        }
+      },
+      {
+        "role": "tool",
+        "extra": {
+          "raw_output": ".                                                                        [100%]\n1 passed in 0.02s\n---\nmypy_checks exit: 0\n---\n/usr/local/bin/python: No module named mypy\n/usr/local/bin/python: No module named flake8\nflake8 exit: 0\n/usr/local/bin/python: No module named black\n/usr/local/bin/python: No module named isort\n",
+          "returncode": 0,
+          "exception_info": ""
+        },
+        "tool_call_id": "functions.bash:7"
+      },
+      {
+        "role": "assistant",
+        "extra": {
+          "actions": [
+            {
+              "tool_name": "bash",
+              "tool_call_id": "functions.bash:10",
+              "command": "cd /workspace/repo && head -30 tests/mypy_checks.py; echo ===; git status --short; git log --oneline -1"
+            }
+          ]
+        }
+      },
+      {
+        "role": "tool",
+        "extra": {
+          "raw_output": "\"\"\"\nThis module is run with mypy to check types can be used correctly externally.\n\"\"\"\nfrom dirty_equals import HasName, HasRepr, IsStr\n\nassert 123 == HasName('int')\nassert 123 == HasRepr('123')\nassert 123 == HasName(IsStr(regex='i..'))\nassert 123 == HasRepr(IsStr(regex=r'\\d{3}'))\n\n# type ignore is required (if it wasn't, there would be an error\nassert 123 != HasName(123)  # type: ignore[arg-type]\n===\n M dirty_equals/__init__.py\n M dirty_equals/_other.py\n593bccc Make IsNow relative to current moment of time (#40)\n",
+          "returncode": 0,
+          "exception_info": ""
+        },
+        "tool_call_id": "functions.bash:10"
+      }
+    ]
+  }
+}
