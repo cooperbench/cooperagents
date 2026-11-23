@@ -174,6 +174,11 @@ class TeamSpec:
     repair_step_limit: int = 25
     """Step cap for the Q5 merge-repair agent — repair is a focused job and must
     not wander (observed: one uncapped repair pass ran 44 minutes)."""
+    repair_attempts: int = 1
+    """Maximum number of sequential repair agent passes on the merged tree.
+    Each pass runs only when the tree is still unhealthy; stops early as soon
+    as _gate passes. Equivalent to ProgramBench's up-to-2-repair-agents loop.
+    Default 1 matches the original Q5 single-pass behaviour."""
     repair_integrator: bool = False
     """Q5 (qwen program): in the no-seed mechanical-merge tail, health-check the
     merged tree (AST/build); if the merge demonstrably broke it (conflict

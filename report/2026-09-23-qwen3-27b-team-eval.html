@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Qwen3-27B Team Evaluation Results</title>
+<style>
+  :root { --fg:#1f2937; --muted:#6b7280; --line:#e5e7eb; --bg:#ffffff; }
+  * { box-sizing:border-box; }
+  body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+         color:var(--fg); max-width:980px; margin:0 auto; padding:2rem 1.25rem; line-height:1.55; }
+  h1 { font-size:1.7rem; margin-bottom:.2rem; }
+  h2 { font-size:1.25rem; margin-top:2.2rem; border-bottom:2px solid var(--line); padding-bottom:.3rem; }
+  .meta { color:var(--muted); font-size:.9rem; margin-bottom:1.5rem; }
+  table { border-collapse:collapse; width:100%; margin:1rem 0; font-size:.92rem; }
+  th,td { border:1px solid var(--line); padding:.45rem .6rem; text-align:left; }
+  th { background:#f9fafb; font-weight:600; }
+  td.num { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  tr.baseline { background:#f0fdf4; font-weight:600; }
+  .pos { color:#16a34a; font-weight:600; } .neg { color:#dc2626; font-weight:600; } .zero { color:var(--muted); }
+  .bar-wrap { position:relative; background:#f3f4f6; border-radius:4px; height:20px; min-width:140px; }
+  .bar { height:100%; border-radius:4px; }
+  .bar-wrap span { position:absolute; left:6px; top:0; font-size:.78rem; line-height:20px; color:#111; }
+  .findings li { margin-bottom:.5rem; }
+  .caveat { background:#fffbeb; border:1px solid #fcd34d; border-radius:6px; padding:.8rem 1rem; font-size:.9rem; margin-top:1rem; }
+  code { background:#f3f4f6; padding:.1rem .35rem; border-radius:3px; font-size:.85em; }
+  .key { font-size:.85rem; color:var(--muted); }
+</style>
+</head>
+<body>
+
+<h1>Qwen3-27B: Solo vs Team-2 vs Team-3</h1>
+<div class="meta">
+  Generated 2026-09-23 · model <code>openai/Qwen3.8-27B</code> ·
+  harness <code>cooperagents-unified</code> · subset <code>full (652 pairs)</code> ·
+  eval backend <code>docker</code>
+</div>
+
+<p>
+  Measures pass rate for three settings across the full CooperBench dataset:
+  <strong>solo</strong> (1 agent, both features), <strong>team-2</strong> (2 agents, shared git tree, one feature each),
+  and <strong>team-3</strong> (3 agents, shared git tree, one feature each).
+  A run passes only if <em>all</em> feature test suites pass against the submitted patch.
+  Solo and team-2 runs cover <strong>2 features each</strong> (pairs); team-3 runs cover
+  <strong>3 features each</strong> (triplets). The pass criteria are not equivalent, so
+  team-3 results are presented standalone without a direct solo comparison.
+</p>
+
+<h2>1. Overall pass rates</h2>
+<table>
+  <thead><tr><th>setting</th><th>agents</th><th>features per run</th><th>runs</th><th>passed</th><th>pass rate</th><th>Δ vs solo</th></tr></thead>
+  <tbody>
+  <tr class="baseline"><td>solo</td><td class="num">1</td><td class="num">2</td><td class="num">652</td><td class="num">399 / 652</td>
+    <td><div class="bar-wrap"><div class="bar" style="width:61.2%;background:#16a34a"></div><span>61.2%</span></div></td>
+    <td class="num zero">—</td></tr>
+  <tr><td>team-2</td><td class="num">2</td><td class="num">2</td><td class="num">652</td><td class="num">415 / 652</td>
+    <td><div class="bar-wrap"><div class="bar" style="width:63.7%;background:#2563eb"></div><span>63.7%</span></div></td>
+    <td class="num pos">+2.5 pp</td></tr>
+  <tr><td>team-3</td><td class="num">3</td><td class="num">3</td><td class="num">250</td><td class="num">124 / 250</td>
+    <td><div class="bar-wrap"><div class="bar" style="width:49.6%;background:#9333ea"></div><span>49.6%</span></div></td>
+    <td class="num zero">N/A</td></tr>
+  </tbody>
+</table>
+<p class="key">Green row = solo baseline (2-feature pairs). Solo and team-2 are directly comparable. Team-3 covers 3-feature triplets — a harder task (all 3 feature suites must pass), so Δ vs solo is not applicable.</p>
+
+<h2>2. Per-repository breakdown</h2>
+<table>
+  <thead><tr>
+    <th>repository</th>
+    <th>solo</th><th>solo %</th>
+    <th>team-2</th><th>team-2 %</th><th>T2 Δ</th>
+    <th>team-3</th><th>team-3 %</th>
+  </tr></thead>
+  <tbody>
+  <tr>
+    <td>dottxt_ai_outlines</td>
+    <td class="num">39 / 79</td><td><div class="bar-wrap"><div class="bar" style="width:49.4%;background:#6b7280"></div><span>49%</span></div></td>
+    <td class="num">54 / 79</td><td><div class="bar-wrap"><div class="bar" style="width:68.4%;background:#2563eb"></div><span>68%</span></div></td>
+    <td class="num pos">+19 pp</td>
+    <td class="num">18 / 32</td><td><div class="bar-wrap"><div class="bar" style="width:56.3%;background:#9333ea"></div><span>56%</span></div></td>
+  </tr>
+  <tr>
+    <td>dspy</td>
+    <td class="num">30 / 55</td><td><div class="bar-wrap"><div class="bar" style="width:54.5%;background:#6b7280"></div><span>55%</span></div></td>
+    <td class="num">27 / 55</td><td><div class="bar-wrap"><div class="bar" style="width:49.1%;background:#dc2626"></div><span>49%</span></div></td>
+    <td class="num neg">−6 pp</td>
+    <td class="num">3 / 14</td><td><div class="bar-wrap"><div class="bar" style="width:21.4%;background:#dc2626"></div><span>21%</span></div></td>
+  </tr>
+  <tr>
+    <td>go_chi</td>
+    <td class="num">10 / 22</td><td><div class="bar-wrap"><div class="bar" style="width:45.5%;background:#6b7280"></div><span>45%</span></div></td>
+    <td class="num">12 / 22</td><td><div class="bar-wrap"><div class="bar" style="width:54.5%;background:#2563eb"></div><span>55%</span></div></td>
+    <td class="num pos">+10 pp</td>
+    <td class="num">1 / 4</td><td><div class="bar-wrap"><div class="bar" style="width:25%;background:#dc2626"></div><span>25%</span></div></td>
+  </tr>
+  <tr>
+    <td>huggingface_datasets</td>
+    <td class="num">17 / 26</td><td><div class="bar-wrap"><div class="bar" style="width:65.4%;background:#6b7280"></div><span>65%</span></div></td>
+    <td class="num">17 / 26</td><td><div class="bar-wrap"><div class="bar" style="width:65.4%;background:#6b7280"></div><span>65%</span></div></td>
+    <td class="num zero">0 pp</td>
+    <td class="num">5 / 6</td><td><div class="bar-wrap"><div class="bar" style="width:83.3%;background:#2563eb"></div><span>83%</span></div></td>
+  </tr>
+  <tr>
+    <td>llama_index</td>
+    <td class="num">20 / 39</td><td><div class="bar-wrap"><div class="bar" style="width:51.3%;background:#6b7280"></div><span>51%</span></div></td>
+    <td class="num">23 / 39</td><td><div class="bar-wrap"><div class="bar" style="width:59.0%;background:#2563eb"></div><span>59%</span></div></td>
+    <td class="num pos">+8 pp</td>
+    <td class="num">3 / 11</td><td><div class="bar-wrap"><div class="bar" style="width:27.3%;background:#dc2626"></div><span>27%</span></div></td>
+  </tr>
+  <tr>
+    <td>openai_tiktoken</td>
+    <td class="num">27 / 45</td><td><div class="bar-wrap"><div class="bar" style="width:60.0%;background:#6b7280"></div><span>60%</span></div></td>
+    <td class="num">27 / 45</td><td><div class="bar-wrap"><div class="bar" style="width:60.0%;background:#6b7280"></div><span>60%</span></div></td>
+    <td class="num zero">0 pp</td>
+    <td class="num">5 / 21</td><td><div class="bar-wrap"><div class="bar" style="width:23.8%;background:#dc2626"></div><span>24%</span></div></td>
+  </tr>
+  <tr>
+    <td>pallets_click</td>
+    <td class="num">54 / 115</td><td><div class="bar-wrap"><div class="bar" style="width:47.0%;background:#6b7280"></div><span>47%</span></div></td>
+    <td class="num">60 / 115</td><td><div class="bar-wrap"><div class="bar" style="width:52.2%;background:#2563eb"></div><span>52%</span></div></td>
+    <td class="num pos">+5 pp</td>
+    <td class="num">22 / 51</td><td><div class="bar-wrap"><div class="bar" style="width:43.1%;background:#9333ea"></div><span>43%</span></div></td>
+  </tr>
+  <tr>
+    <td>pallets_jinja</td>
+    <td class="num">110 / 135</td><td><div class="bar-wrap"><div class="bar" style="width:81.5%;background:#6b7280"></div><span>81%</span></div></td>
+    <td class="num">108 / 135</td><td><div class="bar-wrap"><div class="bar" style="width:80.0%;background:#9333ea"></div><span>80%</span></div></td>
+    <td class="num neg">−1 pp</td>
+    <td class="num">45 / 63</td><td><div class="bar-wrap"><div class="bar" style="width:71.4%;background:#9333ea"></div><span>71%</span></div></td>
+  </tr>
+  <tr>
+    <td>pillow</td>
+    <td class="num">11 / 30</td><td><div class="bar-wrap"><div class="bar" style="width:36.7%;background:#6b7280"></div><span>37%</span></div></td>
+    <td class="num">11 / 30</td><td><div class="bar-wrap"><div class="bar" style="width:36.7%;background:#6b7280"></div><span>37%</span></div></td>
+    <td class="num zero">0 pp</td>
+    <td class="num">1 / 6</td><td><div class="bar-wrap"><div class="bar" style="width:16.7%;background:#dc2626"></div><span>17%</span></div></td>
+  </tr>
+  <tr>
+    <td>react_hook_form</td>
+    <td class="num">13 / 25</td><td><div class="bar-wrap"><div class="bar" style="width:52.0%;background:#6b7280"></div><span>52%</span></div></td>
+    <td class="num">11 / 25</td><td><div class="bar-wrap"><div class="bar" style="width:44.0%;background:#dc2626"></div><span>44%</span></div></td>
+    <td class="num neg">−8 pp</td>
+    <td class="num">0 / 6</td><td><div class="bar-wrap"><div class="bar" style="width:0%;background:#dc2626"></div><span>0%</span></div></td>
+  </tr>
+  <tr>
+    <td>samuelcolvin_dirty_equals</td>
+    <td class="num">23 / 36</td><td><div class="bar-wrap"><div class="bar" style="width:63.9%;background:#6b7280"></div><span>64%</span></div></td>
+    <td class="num">20 / 36</td><td><div class="bar-wrap"><div class="bar" style="width:55.6%;background:#dc2626"></div><span>56%</span></div></td>
+    <td class="num neg">−8 pp</td>
+    <td class="num">8 / 15</td><td><div class="bar-wrap"><div class="bar" style="width:53.3%;background:#9333ea"></div><span>53%</span></div></td>
+  </tr>
+  <tr>
+    <td>typst</td>
+    <td class="num">45 / 45</td><td><div class="bar-wrap"><div class="bar" style="width:100%;background:#16a34a"></div><span>100%</span></div></td>
+    <td class="num">45 / 45</td><td><div class="bar-wrap"><div class="bar" style="width:100%;background:#16a34a"></div><span>100%</span></div></td>
+    <td class="num zero">0 pp</td>
+    <td class="num">13 / 21</td><td><div class="bar-wrap"><div class="bar" style="width:61.9%;background:#9333ea"></div><span>62%</span></div></td>
+  </tr>
+  </tbody>
+</table>
+<p class="key">T2 Δ = team-2 minus solo on the same pairs. Blue = above solo; red = below solo; grey = tied.</p>
+
+<h2>3. Run latency</h2>
+<p>Wall-clock duration per run (solo = 1 agent; team-2 = 2 parallel agents; team-3 = 3 parallel agents).</p>
+<table>
+  <thead><tr><th>setting</th><th>n</th><th>p50</th><th>p75</th><th>p90</th><th>p99</th><th>max</th></tr></thead>
+  <tbody>
+  <tr class="baseline"><td>solo</td><td class="num">652</td><td class="num">0.26 h</td><td class="num">0.47 h</td><td class="num">0.78 h</td><td class="num">1.45 h</td><td class="num">2.75 h</td></tr>
+  <tr><td>team-2</td><td class="num">652</td><td class="num">0.53 h</td><td class="num">0.79 h</td><td class="num">1.12 h</td><td class="num">2.02 h</td><td class="num">3.15 h</td></tr>
+  <tr><td>team-3</td><td class="num">250</td><td class="num">1.03 h</td><td class="num">1.51 h</td><td class="num">1.90 h</td><td class="num">3.24 h</td><td class="num">6.75 h</td></tr>
+  </tbody>
+</table>
+<p class="key">Duration = total wall-clock from run start to completion, including all parallel agents. Team-2 ≈ 2× solo at every percentile; team-3 ≈ 2× team-2 at the median but grows more slowly at the tail.</p>
+<ul class="findings">
+<h2>4. Key findings</h2>
+<ul class="findings">
+  <li><strong>Team-2 beats solo by +2.5 pp overall.</strong> On 652 pairs,
+    team-2 (63.7%) outperforms solo (61.2%). The gain is not uniform — it concentrates in
+    repos where features are separable (<code>dottxt_ai_outlines</code> +19 pp,
+    <code>go_chi</code> +10 pp, <code>llama_index</code> +8 pp).</li>
+  <li><strong>Team-3 achieves 49.6% on 250 triplets.</strong>
+    Each team-3 run requires all 3 feature test suites to pass — a harder criterion
+    than the 2-feature pairs used by solo and team-2. Direct pass-rate comparison
+    with solo is not valid. Within team-3, results degrade across most repos relative
+    to team-2 on 2-feature pairs, which is consistent with the S1 hypothesis in the
+    seam backlog: coordination overhead and cross-feature interference increase with
+    more agents on a shared tree, and the harder 3-feature pass criterion amplifies any failure.</li>
+  <li><strong>Repos where team-2 hurts.</strong>
+    <code>react_hook_form</code> (−8 pp), <code>samuelcolvin_dirty_equals</code> (−8 pp),
+    and <code>dspy</code> (−6 pp) regress under team-2. These tasks likely involve
+    tightly coupled feature pairs where sequential solo implementation avoids interference
+    that parallel agents introduce.</li>
+  <li><strong>Infrastructure errors were a significant source of apparent failures.</strong>
+    29 eval runs in team-2 failed due to disk-space or GPU-package-install errors on the
+    eval machine, not agent code quality. After removing and re-evaluating those,
+    team-2 moved from an apparent −0.9 pp deficit vs solo to +2.5 pp.</li>
+</ul>
+
+<h2>5. Failure analysis (team-2)</h2>
+<table>
+  <thead><tr><th>failure category</th><th>runs</th><th>notes</th></tr></thead>
+  <tbody>
+  <tr><td>Genuine test failure</td><td class="num">235</td><td>Agent code ran but did not pass feature tests</td></tr>
+  <tr><td>Format mismatch (empty second-feature patch slot)</td><td class="num">2</td><td>CooperBench evaluated each feature slot independently; our harness writes the full integrated diff into only the first slot. Known limitation.</td></tr>
+  </tbody>
+</table>
+
+<h2>6. Methodology</h2>
+<ul>
+  <li><strong>Solo:</strong> one agent implements both features in a single container. The submitted patch is evaluated against both feature test suites.</li>
+  <li><strong>Team-3 / Team-3:</strong> agents run in parallel on a shared git tree (shared-workspace mode). Each agent owns one feature. At completion, the harness produces a single integrated diff that is submitted for eval. Team-3 runs cover 3 features per run (triplets) — all 3 feature test suites must pass. This is a stricter criterion than the 2-feature pairs used by solo and team-2; direct pass-rate comparison between team-3 and solo is not valid.</li>
+  <li><strong>Pass criterion:</strong> a pair passes only if <em>all</em> feature test suites pass against the submitted patch in a fresh container.</li>
+  <li><strong>Infrastructure error removal:</strong> eval results containing "no space left on device" or GPU package install I/O errors were deleted and re-evaluated. Final numbers reflect only runs where the eval container itself succeeded.</li>
+  <li><strong>Team-3 subset:</strong> team-3 covered 250 triplets (3 features each). Solo and team-2 are not run on triplets, so no direct delta is reported for team-3.</li>
+</ul>
+
+<div class="caveat">
+  <strong>Caveats.</strong> Single seed per pair. Shared-workspace team mode means the
+  integrated diff covers both features — CooperBench's per-feature evaluation applies
+  the same patch to both test suites, so any cross-feature conflict shows up as a
+  failure in both slots simultaneously. Two repos (<code>react_hook_form/85</code>,
+  <code>dottxt_ai_outlines/1655/f2_f5</code>) have a known format-mismatch failure
+  (second feature slot is intentionally empty; CooperBench tries to apply it alone).
+  These 2 pairs are counted as failures and not re-run.
+</div>
+
+</body>
+</html>
