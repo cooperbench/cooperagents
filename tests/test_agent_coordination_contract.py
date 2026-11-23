@@ -136,7 +136,7 @@ def test_guard_before_environment():
     def unexpected(_):
         pytest.fail("environment created")
 
-    with pytest.raises(NotImplementedError, match="agent coordinator is not wired"):
+    with pytest.raises(ValueError, match="Agent coordinator requires a no-seed mini_swe coop-tools team"):
         UnifiedHarness().run(TeamSpec("r", "repo", 1, [], agent_coordinator=True), env_factory=unexpected)
 
 
