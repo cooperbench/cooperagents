@@ -34,7 +34,7 @@ def test_bench_summary(compare, monkeypatch, tmp_path, capsys, agent, resume, sk
         "gate": {"wake": 2, "skip": 3},
         "usage": {
             "coordinator": dict(calls=4, prompt_tokens=70, cached_tokens=20, completion_tokens=10),
-            "coordinator_gate": dict(calls=3, prompt_tokens=12, cached_tokens=0, completion_tokens=0),
+            "coordinator_gate": dict(calls=3, prompt_tokens=12, cached_tokens=0, completion_tokens=0, reported_cost_usd=0.001),
         },
     }
 
@@ -83,7 +83,10 @@ def test_bench_summary(compare, monkeypatch, tmp_path, capsys, agent, resume, sk
             + "  team total worker cost: $0.500000\n"
         )
         if agent:
-            assert "team agent coordinator: wakes=4 skips=6 coordinator calls=8 tokens=160 gate calls=6 tokens=24" in output
+            assert (
+                "team agent coordinator: wakes=4 skips=6 coordinator calls=8 tokens=160 "
+                "gate calls=6 tokens=24 gate reported_cost=$0.002000"
+            ) in output
 
     summary = json.loads((tmp_path / name / "summary.json").read_text())
     assert summary.keys() == {"team"}

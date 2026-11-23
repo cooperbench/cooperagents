@@ -554,6 +554,10 @@ that a later prompt optimizer needs:
 1. All prompts (gate, opening plan, wake, spec check) live in
    `src/cooperagents/agent_coordinator_prompts.py` as module constants. Each has a
    `prompt_id = "<name>-v<n>:<sha256(text)[:12]>"`, recorded on every decision and wake.
+   The coordinator records two additional IDs at startup and in
+   `metrics.agent_coordinator.config.prompt_ids`. The `tools` ID hashes the tool schemas
+   as compact JSON with sorted keys. The `budget-notes` ID hashes the compact JSON list
+   `[OPENING_BUDGET_WARNING, OPENING_FINAL_TURN, WAKE_BUDGET_WARNING, WAKE_FINAL_TURN]`.
 2. `AgentCoordinatorConfig.prompts: dict[str, str] | None` overrides any prompt by name for
    offline experiments. The CLI exposes no override flag in this method.
 3. Every `GateDecision` is emitted with its full `GateState` (trajectory event
@@ -608,28 +612,44 @@ the worker environments in `_run_isolated` (before `GitShareSync` starts). In
 (`/cbshared` for Git sharing) and no `/coordination` mount, since `coordinator_dir` is only
 passed for worker IDs (`bench_compare.py:424`). It is never diffed, merged or submitted.
 
-Coordinator tools (OpenAI function-tool schemas). Each tool maps to a fixed command template;
-arguments are validated and passed through `shlex.quote`. The model never supplies a shell
-string.
+The OpenAI function-tool schemas describe each tool and its parameters, including path
+format, revision selection, output limits and the exact quote rule for spec findings.
+Git tool arguments are validated and passed through `shlex.quote` in fixed command
+templates.
 
 | Tool | Arguments | Command template | Limits |
 | --- | --- | --- | --- |
-| `list_dir` | `path` | `git ls-tree --name-only <rev> -- <path>/` | ≤ 400 entries |
-| `read_file` | `path`, `start` (≥1), `end` | `git show <rev>:<path> \| sed -n '<start>,<end>p'` | ≤ 400 lines, ≤ 16000 characters |
-| `search_code` | `pattern` (fixed string), `path_glob` | `git grep -n -F -I --max-count=20 -e <pattern> <rev> -- <glob>` | ≤ 200 lines |
+| `list_dir` | Repository-relative `path` (`.` for root), optional `rev` | `git ls-tree --name-only <rev>:<path> --` | ≤ 400 entries |
+| `read_file` | Repository-relative `path`, inclusive 1-based `start` and `end`, optional `rev` | `git show <rev>:<path> \| sed -n '<start>,<end>p'` | ≤ 400 lines, ≤ 16000 characters |
+| `search_code` | One fixed string `pattern`, repository-relative Git `path_glob` (`.` for the whole repository), optional `rev` | `git grep -n -F -I --max-count=20 -e <pattern> <rev> -- <glob>` | ≤ 20 rows per file, ≤ 200 rows total |
 | `git_show` | `rev`, `path` (optional) | `git show --stat <rev>` or `git diff <base> <rev> -- <path>` | `rev` restricted (below) |
 | `send_message` | `recipient` (worker ID or `group`), `content` | Bus send (Section 5.4) | ≤ 1500 characters; ≤ 2 per wake |
-| `submit_plan` | `OpeningPlan` JSON | Opening phase only | One per run |
+| `submit_plan` | `OpeningPlan` JSON with one entry per worker ID | Opening phase only | One successful delivery per run |
 | `spec_verdict` | `SpecVerdict` JSON | Spec check only | One per check |
 | `end_wake` | `note` | Ends the wake | Required to end early |
 
 Read access goes through Git objects, so the coordinator reads committed content and cannot
 observe or alter a working tree. `<rev>` is one of: the base SHA (`GitEvidence.base_sha`,
 or `git rev-parse HEAD` in the coordinator environment at start), or a worker snapshot SHA
-from `GitEvidence.workers[aid].sha`. Snapshot reads use
+from `GitEvidence.workers[aid].sha`. When omitted, `rev` defaults to `base_sha` for
+`list_dir`, `read_file` and `search_code`. Snapshot reads use
 `git --git-dir=/cbshared/repo.git`, as `GitShareSync._query` does. Paths are rejected when
 absolute, when they contain `..`, a NUL byte or a newline, or when they start with `.cb_`.
-Any other tool name returns an error result to the model and counts toward the call budget.
+A call outside the tools offered in the current turn consumes one unit of the call
+budget and returns `Error: <name> is not offered in this turn; offered: <sorted names>`.
+
+In the messages below, `<rev12>` is the first 12 characters of the selected revision.
+Limit notices follow the output on a new line.
+
+| Tool and condition | Message |
+| --- | --- |
+| `search_code`, empty | `No matches for the fixed string <pattern as JSON> under <path_glob as JSON> at <rev12>. search_code does not interpret regular expressions.` |
+| `search_code`, 200 rows | `[output limited to 200 rows; narrow path_glob or the pattern]` |
+| `read_file`, empty | `No lines <start>-<end> in <path> at <rev12>; the file is shorter or empty.` |
+| `read_file`, 400 lines or 16000 characters | `[output limited to 400 lines or 16000 characters; request a narrower range]` |
+| `list_dir`, empty | `Directory <path or "."> at <rev12> is empty.` |
+| `list_dir`, 400 entries | `[output limited to 400 entries; list a subdirectory]` |
+| `git_show` with `path`, empty | `No difference in <path> between base_sha and <rev12>.` |
 
 ### 5.3 Static opening plan
 
@@ -638,9 +658,16 @@ thread starts, at the same position as `coordinator.decide(initial=True)`
 (`harness.py:2448-2453`). No worker exists yet, so the inspection has no race with worker
 edits.
 
-Input: each assignment's `task` text (the feature description), the roster, the base SHA.
-Budget: `opening_max_tool_calls` = 16, `opening_time_limit_s` = 180. The phase ends with
-`submit_plan`.
+The first user message contains the roster with each assignment's `task` text, the base
+SHA and `tool_call_budget` (`opening_max_tool_calls`, default 16). The time limit is
+180 seconds by default. The last call is reserved for `submit_plan`, which is the only
+tool offered in the final turn. After the first turn, the request includes a budget
+warning with two calls left and a final-turn note with one call left. The notes are
+part of the current request only. If a batch of calls reaches the reserve during an
+earlier turn, further reads in that batch return
+`Error: read budget exhausted; the remaining call is reserved for submit_plan.` They
+consume no call budget. An invalid plan returns an error and can be retried while
+calls remain. A valid `submit_plan` ends the phase.
 
 ```json
 {
@@ -662,8 +689,9 @@ is in the worker context at step 1 as `[Message from coordinator]: ...`. The mes
 labels the plan as a proposal and asks the worker to verify it against the code and send
 corrections to the teammate and to `coordinator`.
 
-Failure handling: budget exhaustion, transport error or invalid plan JSON produces
-`opening.outcome="failed"` and workers start without a plan. The run continues.
+If no valid plan is delivered before the tool loop ends, or a timeout or transport
+error prevents delivery, `opening.outcome="failed"` and workers start without a plan.
+The run continues.
 
 #### 5.3.1 Relation to collaborative peer planning
 
@@ -691,8 +719,16 @@ Wake thread loop:
    messages addressed to `coordinator` (`bus.receive("coordinator")`), and the
    coordinator's own previous messages. The observation does not contain the trigger
    reason, the candidate kind or the policy name (required for Section 6).
-3. Run a tool loop with `wake_max_tool_calls` = 6 and `wake_time_limit_s` = 90. The model may
-   inspect snapshots with the read-only tools and send at most 2 messages.
+3. Run a tool loop with `wake_max_tool_calls` = 6 and `wake_time_limit_s` = 90. The second
+   message contains the opening plan and `tool_call_budget`. The first request ends
+   with the wake observation. Reads default to `base_sha` and accept an explicit
+   snapshot SHA. The last two calls are reserved for a final turn offering only
+   `send_message` and `end_wake`. After the first turn, a warning appears at three
+   remaining calls and a final-turn note appears at two or fewer. The notes are
+   part of the current request only. Once a batch reaches the reserve, further
+   reads in that turn consume no budget and return
+   `Error: read budget exhausted; the remaining calls are reserved for send_message and end_wake.`
+   Each wake allows at most two `send_message` calls.
 4. Emit `wake_end` with tool counts, messages sent and usage.
 
 Message delivery uses `bus.send(sender="coordinator", to=<worker>, content=...)`, the same
@@ -942,6 +978,8 @@ supplies token counts per actor for that computation. Worker cost stays in
 in `config.gate.model`, so polar-ext prices that actor with the gate model's input price
 ($0.042 per 1M input tokens) and can compare the result with `reported_cost_usd`.
 `p_wake` percentiles use the method of Section 8.3 over `source="model"` decisions.
+`team_worker_steps` counts executed `bash` actions observed by the poller, while
+`RunResult.total_steps` counts worker model calls.
 
 ### 8.2 Trajectory events
 
@@ -970,8 +1008,10 @@ to the percentiles.
 `scripts/bench_compare.py` summary output (after the existing pass-rate and feature lines,
 `bench_compare.py:741-743`) adds per arm: completion time p50/p90/p95/p99 from
 `RunResult.duration_seconds`, total worker cost, and for agent-mode runs the totals of
-wakes, skips, coordinator calls and tokens. It also writes `logs/<run-name>/summary.json`
-with the same fields. Existing printed lines are kept unchanged.
+wakes, skips, coordinator calls and tokens. The agent-mode line appends
+`gate reported_cost=$<value>` with six decimal places. The same sum appears in
+`logs/<run-name>/summary.json` under
+`agent_coordinator.usage.coordinator_gate.reported_cost_usd` for the arm.
 
 ## 9. Source-identity qualification
 
@@ -1040,7 +1080,7 @@ by Q7 and Q8 (Section 12.1).
 
 ## 12. Decisions and open questions
 
-### 12.1 Resolved decisions (user, 2026-11-22)
+### 12.1 Resolved decisions
 
 | ID | Decision | Sections |
 | --- | --- | --- |
@@ -1052,9 +1092,14 @@ by Q7 and Q8 (Section 12.1).
 | Q6 | `agent_rule_main` (`--agent-gate rule`) is an explicit arm next to `agent_main` and `agent_rand_main` | 6.1, PR plan PR 4 |
 | Q7 | Decision model `liquid/d1.2-ultra` through OpenRouter (`https://openrouter.ai/liquid/d1.2-ultra`), OpenRouter Decisions API `POST https://openrouter.ai/api/alpha/decisions`; default base URL `https://openrouter.ai/api/alpha`, default key variable `OPENROUTER_API_KEY` | 4.3.2, 4.3.3, 10 |
 | Q8 | Price $0.042 per 1M input tokens (weighted average $0.0419), $0.00 per 1M output tokens (`output_tokens = 0`). Context window 65,536 tokens. Median latency 0.22 s (provider Liquid), which is below the 3 s timeout | 4.3.2, 4.5, 8.1, 10 |
+| D1 | Reserve one tool call for the opening and two for each wake. Send budget notes only in the last two turns after the initial request. | 5.3, 5.4 |
+| D2 | Wake reads default to `base_sha`. Use the optional `rev` to read worker snapshot SHAs listed in `git_evidence`. | 5.2, 5.4 |
+| D3 | The AWS Phase A2 report lists pairs where the default `make` target fails because the task image lacks `ruff`. Any later build-discovery change applies to all arms and includes a new `det_main` control. | 5.6, fix and AWS plan §5 |
+| D4 | AWS Phase A2 uses the polar-ext limits `--step-limit 1000 --agent-time-limit 3600`. | Fix and AWS plan §5 |
+| D5 | Installing an arm64 binfmt handler on the x86_64 host requires operator approval. Without approval, run affected pairs elsewhere and report them separately. | Fix and AWS plan §5 |
 
 ### 12.2 Open questions
 
-None. Q1 to Q8 are resolved.
+None. Q1–Q8 and D1–D5 are resolved.
 
 
