@@ -125,6 +125,31 @@ class Probe(Protocol):
     def __call__(self, env: Environment, *, config: SignalConfig) -> DiffProbe: ...
 
 
+def _parse_textual_tool_calls(content: str, tool_names: set[str]) -> list[dict]:
+    """Recover a single tool call emitted as plain text by the provider."""
+    prefix, opening, body = content.strip().partition("{")
+    prefix = prefix.strip()
+    if not opening or (prefix and prefix not in tool_names):
+        return []
+    try:
+        payload = json.loads(opening + body)
+        name, args = prefix, payload
+        if "name" in payload and ("arguments" in payload or "args" in payload):
+            name = payload["name"]
+            if prefix and name != prefix:
+                return []
+            args = payload.get("arguments", payload.get("args"))
+        if not isinstance(name, str) or name not in tool_names:
+            return []
+        if isinstance(args, str):
+            args = json.loads(args)
+        if isinstance(args, dict):
+            return [{"name": name, "arguments": json.dumps(args)}]
+    except (ValueError, RecursionError):
+        pass
+    return []
+
+
 def _bounded_call(function: Callable[[], _T], deadline: float, stop: threading.Event | None = None) -> _T:
     """Keep the caller interruptible even if an injected transport ignores its timeout."""
     if time.monotonic() >= deadline or (stop is not None and stop.is_set()):
@@ -546,7 +571,10 @@ class AgentCoordinator:
             usage.update(tokens)
             with self._ready:
                 self._system2_usage.update(tokens)
-        calls = response.choices[0].message.tool_calls or []
+        message = response.choices[0].message
+        calls = message.tool_calls or []
+        if not calls and message.content:
+            return _parse_textual_tool_calls(message.content, {tool["function"]["name"] for tool in tools})
         return [{"name": call.function.name, "arguments": call.function.arguments} for call in calls]
 
     def _user(self, data: object) -> dict:
@@ -580,20 +608,20 @@ class AgentCoordinator:
         while run.calls < max_calls and not self._stop.is_set() and time.monotonic() < deadline:
             remaining = max_calls - run.calls
             final = remaining <= reserve
-            offered = finish if final else tools
             note = []
             if run.turns and remaining <= reserve + 1:
                 warning, final_turn = _BUDGET_NOTES[phase]
                 text = final_turn if final else warning
                 note = [{"role": "user", "content": text.format(remaining=remaining)}]
-            calls = self._call(messages + run.turns + note, offered, phase, deadline, run.usage)
+            # Keep the provider's tool-call state by sending the same schema on every turn.
+            calls = self._call(messages + run.turns + note, tools, phase, deadline, run.usage)
             if not isinstance(calls, list) or not calls:
                 return
             if self._stop.is_set() or time.monotonic() >= deadline:
                 return
             assistant: dict = {"role": "assistant", "tool_calls": []}
             run.turns.append(assistant)
-            allowed = {tool["function"]["name"] for tool in offered}
+            allowed = {tool["function"]["name"] for tool in (finish if final else tools)}
             for call in calls[:remaining]:
                 if self._stop.is_set() or time.monotonic() >= deadline:
                     if not assistant["tool_calls"]:
@@ -607,7 +635,11 @@ class AgentCoordinator:
                 try:
                     name, raw, args = self._tool_args(call)
                     if name not in allowed:
-                        result = f"Error: {name} is not offered in this turn; offered: {', '.join(sorted(allowed))}"
+                        names = ", ".join(sorted(allowed))
+                        if final:
+                            result = f"Error: {name} is not allowed in the final turn; allowed: {names}"
+                        else:
+                            result = f"Error: {name} is not offered in this turn; offered: {names}"
                     elif name in _READ_NAMES and run.calls >= max_calls - reserve:
                         result = _READ_EXHAUSTED[phase]
                         counted = False

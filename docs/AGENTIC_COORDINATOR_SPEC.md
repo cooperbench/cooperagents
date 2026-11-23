@@ -635,7 +635,7 @@ from `GitEvidence.workers[aid].sha`. When omitted, `rev` defaults to `base_sha` 
 `list_dir`, `read_file` and `search_code`. Snapshot reads use
 `git --git-dir=/cbshared/repo.git`, as `GitShareSync._query` does. Paths are rejected when
 absolute, when they contain `..`, a NUL byte or a newline, or when they start with `.cb_`.
-A call outside the tools offered in the current turn consumes one unit of the call
+Before the final turn, a call outside the offered tools consumes one unit of the call
 budget and returns `Error: <name> is not offered in this turn; offered: <sorted names>`.
 
 In the messages below, `<rev12>` is the first 12 characters of the selected revision.
@@ -660,14 +660,20 @@ edits.
 
 The first user message contains the roster with each assignment's `task` text, the base
 SHA and `tool_call_budget` (`opening_max_tool_calls`, default 16). The time limit is
-180 seconds by default. The last call is reserved for `submit_plan`, which is the only
-tool offered in the final turn. After the first turn, the request includes a budget
-warning with two calls left and a final-turn note with one call left. The notes are
+180 seconds by default. Every request in the opening uses the same tool list so the
+provider can keep its tool-call state and reuse cached context. When one call remains,
+the coordinator accepts only `submit_plan`. A read in that final turn consumes one
+unit and returns `Error: <name> is not allowed in the final turn; allowed: submit_plan`.
+After the first turn, the request includes a budget warning with two calls left and
+a final-turn note with one call left. The notes are
 part of the current request only. If a batch of calls reaches the reserve during an
 earlier turn, further reads in that batch return
 `Error: read budget exhausted; the remaining call is reserved for submit_plan.` They
-consume no call budget. An invalid plan returns an error and can be retried while
-calls remain. A valid `submit_plan` ends the phase.
+consume no call budget. If the SDK returns no structured tool calls, the coordinator
+can recover one call from a tool name followed by a JSON argument object or a JSON
+object with `name` and `args` or `arguments`. The recovered call follows the same
+tool and budget rules. An invalid plan returns an error and can be retried while calls
+remain. A valid `submit_plan` ends the phase.
 
 ```json
 {
@@ -722,9 +728,12 @@ Wake thread loop:
 3. Run a tool loop with `wake_max_tool_calls` = 6 and `wake_time_limit_s` = 90. The second
    message contains the opening plan and `tool_call_budget`. The first request ends
    with the wake observation. Reads default to `base_sha` and accept an explicit
-   snapshot SHA. The last two calls are reserved for a final turn offering only
-   `send_message` and `end_wake`. After the first turn, a warning appears at three
-   remaining calls and a final-turn note appears at two or fewer. The notes are
+   snapshot SHA. Every request in the wake uses the same tool list. With two or fewer
+   calls remaining, the coordinator accepts only `send_message` and `end_wake`. A read
+   in a final turn consumes one unit and returns
+   `Error: <name> is not allowed in the final turn; allowed: end_wake, send_message`.
+   The same SDK fallback as in the opening applies. After the first turn, a warning
+   appears at three remaining calls and a final-turn note appears at two or fewer. The notes are
    part of the current request only. Once a batch reaches the reserve, further
    reads in that turn consume no budget and return
    `Error: read budget exhausted; the remaining calls are reserved for send_message and end_wake.`
