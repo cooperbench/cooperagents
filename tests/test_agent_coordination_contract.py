@@ -65,7 +65,7 @@ def test_golden_roundtrip(name):
     assert json.loads(c.to_json(obj)) == data
     assert c.from_json(type(obj), json.dumps(data)) == obj
     data["unknown"] = 1
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="unknown keys"):
         c.from_json(type(obj), json.dumps(data))
 
 
@@ -74,8 +74,22 @@ def test_schema_version(name):
     obj = SAMPLES[name]
     data = json.loads(c.to_json(obj))
     data["schema"] = "wrong/2"
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="invalid schema version"):
         c.from_json(type(obj), json.dumps(data))
+
+
+def test_opening_plan_decode_names_nested_field():
+    data = json.loads(c.to_json(SAMPLES["opening_plan"]))
+    data["workers"]["agent1"]["notes"] = ["unexpected array"]
+    with pytest.raises(ValueError, match="field 'workers': field 'notes': invalid value type"):
+        c.from_json(c.OpeningPlan, json.dumps(data))
+
+
+def test_decode_reports_missing_fields():
+    data = json.loads(c.to_json(SAMPLES["opening_plan"]))
+    del data["workers"]
+    with pytest.raises(ValueError, match="missing or invalid fields"):
+        c.from_json(c.OpeningPlan, json.dumps(data))
 
 
 def test_model_requires_probabilities():

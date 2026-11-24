@@ -10,7 +10,7 @@
         "type": "choice",
         "instructions": "Choose whether the coordinator should intervene now.",
         "criteria": {
-          "WAKE": "Wake when timely coordination is likely to help resolve a problem or coordinate workers.",
+          "WAKE": "Wake when timely coordination can help: e.g. a worker sent a peer_message to coordinator, hit NO_PROGRESS_FAILING, HUNK_CHURN, PEER_OVERLAP, or SUBMIT_REJECTED, or recent steps show repeated errors or stagnation.",
           "SKIP": "Skip when the worker can reasonably continue without an intervention."
         }
       }

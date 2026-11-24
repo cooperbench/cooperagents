@@ -131,8 +131,30 @@ def _parse_textual_tool_calls(content: str, tool_names: set[str]) -> list[dict]:
     prefix = prefix.strip()
     if not opening or (prefix and prefix not in tool_names):
         return []
+    text = opening + body
     try:
-        payload = json.loads(opening + body)
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            depth = 0
+            in_string = escaped = False
+            for char in text:
+                if in_string:
+                    if escaped:
+                        escaped = False
+                    elif char == "\\":
+                        escaped = True
+                    elif char == '"':
+                        in_string = False
+                elif char == '"':
+                    in_string = True
+                elif char == "{":
+                    depth += 1
+                elif char == "}":
+                    depth -= 1
+            if in_string or not 1 <= depth <= 2:
+                return []
+            payload = json.loads(text + "}" * depth)
         name, args = prefix, payload
         if "name" in payload and ("arguments" in payload or "args" in payload):
             name = payload["name"]
@@ -676,6 +698,18 @@ class AgentCoordinator:
 
                 def execute(name: str, args: dict) -> tuple[str, bool]:
                     if name == "submit_plan":
+                        plan_evidence = args.get("evidence")
+                        if isinstance(plan_evidence, list):
+                            plan_evidence = plan_evidence.copy()
+                            for index, item in enumerate(plan_evidence):
+                                if not isinstance(item, dict):
+                                    continue
+                                lines = item.get("lines")
+                                if isinstance(lines, list) and lines and all(
+                                    line is None or isinstance(line, (str, int, float, bool)) for line in lines
+                                ):
+                                    plan_evidence[index] = {**item, "lines": "; ".join(str(line) for line in lines)}
+                            args = {**args, "evidence": plan_evidence}
                         try:
                             plan: OpeningPlan = from_json(OpeningPlan, json.dumps(args))
                         except ValueError as exc:
@@ -1081,7 +1115,7 @@ class AgentCoordinator:
         try:
             calls = self._call(
                 [{"role": "system", "content": self._prompts["spec-check"]}, self._user(observation)],
-                [SPEC_VERDICT_TOOL], "spec-check", time.monotonic() + 60, used,
+                [SPEC_VERDICT_TOOL], "spec-check", time.monotonic() + 150, used,
             )
             if len(calls) != 1:
                 raise ValueError("expected exactly one spec verdict")

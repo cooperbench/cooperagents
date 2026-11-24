@@ -554,6 +554,10 @@ that a later prompt optimizer needs:
 1. All prompts (gate, opening plan, wake, spec check) live in
    `src/cooperagents/agent_coordinator_prompts.py` as module constants. Each has a
    `prompt_id = "<name>-v<n>:<sha256(text)[:12]>"`, recorded on every decision and wake.
+   `WAKE_CRITERION` names peer messages sent to the coordinator, the signals
+   `NO_PROGRESS_FAILING`, `HUNK_CHURN`, `PEER_OVERLAP`, and `SUBMIT_REJECTED`,
+   and recent steps showing repeated errors or stagnation. This wording changes the
+   gate prompt ID. The default wake threshold is 0.5.
    The coordinator records two additional IDs at startup and in
    `metrics.agent_coordinator.config.prompt_ids`. The `tools` ID hashes the tool schemas
    as compact JSON with sorted keys. The `budget-notes` ID hashes the compact JSON list
@@ -670,10 +674,14 @@ part of the current request only. If a batch of calls reaches the reserve during
 earlier turn, further reads in that batch return
 `Error: read budget exhausted; the remaining call is reserved for submit_plan.` They
 consume no call budget. If the SDK returns no structured tool calls, the coordinator
-can recover one call from a tool name followed by a JSON argument object or a JSON
-object with `name` and `args` or `arguments`. The recovered call follows the same
-tool and budget rules. An invalid plan returns an error and can be retried while calls
-remain. A valid `submit_plan` ends the phase.
+can recover one call in `_call` from a tool name followed by a JSON argument object
+or a JSON object with `name` and `args` or `arguments`. If that JSON fails to parse,
+recovery retries by appending one or two missing closing braces when the text ends
+outside a JSON string. The recovered call follows the same tool and budget rules.
+Before validating a `submit_plan`, the coordinator joins any nonempty list of
+primitive values in `evidence.lines` into a single string with `"; "` as the
+separator. An invalid plan returns an error and can be retried while calls remain.
+A valid `submit_plan` ends the phase.
 
 ```json
 {
@@ -820,7 +828,7 @@ composed callable shares that cap. `spec_check` rejects at most
 4. `REJECT` returns text to the worker through the existing completion-gate path:
    `SPEC_CHECK_REJECTED` followed by at most 3 findings, each with `kind`, `feature_id`,
    a quote of at most 300 characters from the feature text, and an optional path.
-5. Transport error, timeout (60 s) or invalid verdict returns `None` (accept) with
+5. Transport error, model call timeout (150 s) or invalid verdict returns `None` (accept) with
    `verdict="ERROR"`. Infrastructure failures never block a submission.
 
 Finding kinds: `missing_requirement`, `api_mismatch`, `unrelated_edit`,
@@ -1106,9 +1114,10 @@ by Q7 and Q8 (Section 12.1).
 | D3 | The AWS Phase A2 report lists pairs where the default `make` target fails because the task image lacks `ruff`. Any later build-discovery change applies to all arms and includes a new `det_main` control. | 5.6, fix and AWS plan §5 |
 | D4 | AWS Phase A2 uses the polar-ext limits `--step-limit 1000 --agent-time-limit 3600`. | Fix and AWS plan §5 |
 | D5 | Installing an arm64 binfmt handler on the x86_64 host requires operator approval. Without approval, run affected pairs elsewhere and report them separately. | Fix and AWS plan §5 |
+| D6 | After AWS Phase A2, name concrete coordination triggers in `WAKE_CRITERION` and keep the default wake threshold at 0.5. Compare gate scores by prompt ID. | 4.6 |
 
 ### 12.2 Open questions
 
-None. Q1–Q8 and D1–D5 are resolved.
+None. Q1–Q8 and D1–D6 are resolved.
 
 

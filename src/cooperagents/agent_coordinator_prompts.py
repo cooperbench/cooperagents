@@ -5,7 +5,11 @@ from hashlib import sha256
 
 GATE_INSTRUCTIONS = "Assess whether a coordinator intervention would help the target make progress. Use only the supplied execution state."
 DECISION_QUESTION_INSTRUCTIONS = "Choose whether the coordinator should intervene now."
-WAKE_CRITERION = "Wake when timely coordination is likely to help resolve a problem or coordinate workers."
+WAKE_CRITERION = (
+    "Wake when timely coordination can help: e.g. a worker sent a peer_message to coordinator, "
+    "hit NO_PROGRESS_FAILING, HUNK_CHURN, PEER_OVERLAP, or SUBMIT_REJECTED, "
+    "or recent steps show repeated errors or stagnation."
+)
 SKIP_CRITERION = "Skip when the worker can reasonably continue without an intervention."
 TOOL_RULES = (
     'Tool rules: paths are relative to the repository root; use "." for the root. '

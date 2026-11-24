@@ -422,7 +422,7 @@ SUBMIT_PLAN_TOOL = _tool(
                 {
                     "tool": {**_STRING, "description": "Name of the read-only tool used."},
                     "path": {**_STRING, "description": "Repository-relative path inspected."},
-                    "lines": {**_STRING, "description": "Relevant lines in the tool result."},
+                    "lines": {**_STRING, "description": 'Single string summarizing relevant lines, e.g. "1-40".'},
                 },
                 ["tool", "path", "lines"],
             ),
@@ -515,8 +515,14 @@ def _decode(tp: Any, value: Any) -> Any:
         if tp in _SCHEMAS and value.get("schema") != _SCHEMAS[tp]:
             raise ValueError("invalid schema version")
         hints = get_type_hints(tp)
+        decoded = {}
+        for k, v in value.items():
+            try:
+                decoded[k] = _decode(hints[k], v)
+            except (ValueError, TypeError) as exc:
+                raise ValueError(f"field '{k}': {exc}") from exc
         try:
-            return cast(type[Any], tp)(**{k: _decode(hints[k], v) for k, v in value.items()})
+            return cast(type[Any], tp)(**decoded)
         except TypeError as exc:
             raise ValueError("missing or invalid fields") from exc
     if origin in (list, tuple):
