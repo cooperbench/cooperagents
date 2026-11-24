@@ -35,6 +35,7 @@ from cooperagents.agent_coordinator import (
     AgentCoordinatorPoller,
     DecisionCallRecorder,
     ReadOnlyGit,
+    _parse_textual_tool_calls,
     composed_completion_gate,
 )
 from cooperagents.agent_coordinator_prompts import (
@@ -332,6 +333,25 @@ def test_opening_delivers_a_valid_plan_once(coordinators, journal):
     assert complete.inputs[1][0][-1]["content"] == "alpha\nbeta\n"
 
 
+@pytest.mark.parametrize(("lines", "expected"), [
+    (["1-5: a", "10-20: b"], "1-5: a; 10-20: b"),
+    (["1-5", 10, True], "1-5; 10; True"),
+])
+def test_opening_normalizes_evidence_lines(coordinators, lines, expected):
+    data = json.loads((FIXTURES / "opening_plan.json").read_text())
+    data["evidence"][0]["lines"] = lines
+    complete = CompletionStub([call("submit_plan", **data)])
+    coordinator = coordinators(complete=complete, config=AgentCoordinatorConfig(gate=RULE, opening_max_tool_calls=1))
+
+    plan = coordinator.run_opening()
+
+    assert plan is not None
+    assert plan.evidence[0]["lines"] == expected
+    for aid in ("agent1", "agent2"):
+        message, = coordinator.bus.receive(aid)
+        assert json.loads(message["content"].split("\n", 1)[1])["evidence"][0]["lines"] == expected
+
+
 def test_opening_reserves_submit_plan_turn(coordinators):
     data = json.loads((FIXTURES / "opening_plan.json").read_text())
     read = call("read_file", path="src/core.py", start=1, end=1)
@@ -529,6 +549,25 @@ def test_spec_check_freezes_untracked_and_strips_tests(coordinators, repo, journ
     assert row["data"]["verdict"] == "ACCEPT"
     assert row["data"]["frozen_diff_sha256"] == sha256(frozen.encode()).hexdigest()
     assert repo.execute("git diff --cached --stat").stdout == ""
+
+
+def test_spec_check_passes_extended_deadline(coordinators, repo, monkeypatch, journal):
+    repo.write_file("src/core.py", "different\n")
+    coordinator = coordinators(trajectory=journal)
+    timeouts = []
+
+    def complete(messages, tools, phase, deadline, usage):
+        assert phase == "spec-check"
+        timeouts.append(deadline - time.monotonic())
+        return [call("spec_verdict", verdict="ACCEPT", findings=[])]
+
+    monkeypatch.setattr(coordinator, "_call", complete)
+
+    assert coordinator.spec_check("agent1", repo) is None
+    timeout, = timeouts
+    assert 60 < timeout <= 150
+    row, = events(journal, "spec_check")
+    assert row["data"]["verdict"] == "ACCEPT"
 
 
 def test_spec_check_reject_then_accept_error_and_composition(coordinators, repo, journal):
@@ -809,24 +848,28 @@ def test_default_completion_uses_sdk_and_records_usage(coordinators, journal, mo
     repo.write_file("src/core.py", "different\n")
     assert coordinator.spec_check("agent1", repo) is None
     assert clients[0]["max_retries"] == 0 and requests[0]["model"] == "test-model"
-    assert requests[0]["timeout"] <= 60
+    assert 60 < requests[0]["timeout"] <= 150
     assert coordinator.metrics()["usage"]["coordinator"] == {"calls": 1, "prompt_tokens": 17, "cached_tokens": 8, "completion_tokens": 5}
     row, = events(journal, "request")
     assert row["actor"] == "coordinator" and row["data"]["phase"] == "spec-check"
     assert "test-key" not in journal.path.read_text()
 
 
-@pytest.mark.parametrize(("prefix", "field", "encode_arguments"), [
-    ("submit_plan", "args", False),
-    ("submit_plan", None, False),
-    ("", "arguments", False),
-    ("", "args", True),
-    ("", "arguments", True),
+@pytest.mark.parametrize(("prefix", "field", "encode_arguments", "missing_braces"), [
+    ("submit_plan", "args", False, 0),
+    ("submit_plan", "args", False, 1),
+    ("submit_plan", "args", False, 2),
+    ("submit_plan", None, False, 0),
+    ("", "arguments", False, 0),
+    ("", "args", True, 0),
+    ("", "arguments", True, 0),
 ])
-def test_default_completion_parses_textual_tool_call(coordinators, monkeypatch, prefix, field, encode_arguments):
+def test_default_completion_parses_textual_tool_call(coordinators, monkeypatch, prefix, field, encode_arguments, missing_braces):
     data = json.loads((FIXTURES / "opening_plan.json").read_text())
+    data["workers"]["agent1"]["notes"] = 'Braces and escaped quotes: {{"example": "a\\b"}'
     args = json.dumps(data) if encode_arguments else data
     content = prefix + json.dumps({"name": "submit_plan", field: args} if field else args)
+    content = content[:len(content) - missing_braces]
     response = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(tool_calls=None, content=content))], usage=None)
     completions = SimpleNamespace(create=lambda **request: response)
     client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
@@ -836,6 +879,17 @@ def test_default_completion_parses_textual_tool_call(coordinators, monkeypatch, 
     coordinator = coordinators(config=config)
     assert coordinator.run_opening() == from_json(OpeningPlan, json.dumps(data))
     assert coordinator.metrics()["opening"]["tool_calls"] == 1
+
+
+@pytest.mark.parametrize("content", [
+    'submit_plan{"name":"submit_plan","args":{"notes":"unfinished }',
+    'submit_plan{"name":"submit_plan","args":{"workers":{',
+    'submit_plan{"name":"read_file","args":{}',
+    '{"name":"unknown","args":{}',
+    'submit_plan{"name":"submit_plan","args":[]',
+])
+def test_parse_textual_tool_calls_rejects_invalid_truncated_calls(content):
+    assert _parse_textual_tool_calls(content, {"submit_plan", "read_file"}) == []
 
 
 @pytest.mark.parametrize(("content", "tool_calls"), [
