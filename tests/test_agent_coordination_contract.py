@@ -69,6 +69,15 @@ def test_golden_roundtrip(name):
         c.from_json(type(obj), json.dumps(data))
 
 
+def test_agent_config_legacy_json_uses_new_defaults():
+    data = json.loads((FIXTURES / "agent_config.json").read_text())
+    for name in ("max_retries", "reasoning_effort", "opening_reserve", "wake_reserve", "retry_base_delay_s", "spec_check_time_limit_s"):
+        del data[name]
+    config = c.from_json(c.AgentCoordinatorConfig, json.dumps(data))
+    assert config == SAMPLES["agent_config"]
+    config.validate()
+
+
 @pytest.mark.parametrize("name", ["gate_state", "gate_model", "opening_plan"])
 def test_schema_version(name):
     obj = SAMPLES[name]

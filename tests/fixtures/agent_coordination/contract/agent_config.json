@@ -15,10 +15,14 @@
     "wake_budget": 8,
     "wake_threshold": 0.5
   },
+  "max_retries": 2,
   "opening": "draft",
   "opening_max_tool_calls": 16,
+  "opening_reserve": 2,
   "opening_time_limit_s": 180.0,
   "prompts": null,
+  "reasoning_effort": "medium",
+  "retry_base_delay_s": 0.5,
   "signals": {
     "churn_min_steps": 3,
     "churn_window": 10,
@@ -55,8 +59,10 @@
     ]
   },
   "spec_check": true,
+  "spec_check_time_limit_s": 150.0,
   "spec_gate_max_rejections": 1,
   "tick_s": 1.0,
   "wake_max_tool_calls": 6,
+  "wake_reserve": 2,
   "wake_time_limit_s": 90.0
 }

@@ -295,6 +295,32 @@ class AgentCoordinatorConfig:
     spec_gate_max_rejections: int = 1
     tick_s: float = 1.0
     prompts: dict[str, str] | None = None
+    opening_reserve: int = 2
+    wake_reserve: int = 2
+    spec_check_time_limit_s: float = 150.0
+    max_retries: int = 2
+    retry_base_delay_s: float = 0.5
+    reasoning_effort: str | None = "medium"
+
+    def validate(self) -> None:
+        for name in ("opening_reserve", "wake_reserve", "max_retries"):
+            value = getattr(self, name)
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                raise ValueError(f"{name} must be a nonnegative integer")
+        for name in ("opening_max_tool_calls", "wake_max_tool_calls"):
+            value = getattr(self, name)
+            if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+                raise ValueError(f"{name} must be a positive integer")
+        for name in ("opening_time_limit_s", "wake_time_limit_s", "spec_check_time_limit_s"):
+            value = getattr(self, name)
+            if not isinstance(value, (int, float)) or isinstance(value, bool) or not 0 < value < math.inf:
+                raise ValueError(f"{name} must be finite and positive")
+        delay = self.retry_base_delay_s
+        if not isinstance(delay, (int, float)) or isinstance(delay, bool) or not 0 <= delay < math.inf:
+            raise ValueError("retry_base_delay_s must be finite and nonnegative")
+        effort = self.reasoning_effort
+        if effort is not None and (not isinstance(effort, str) or not effort):
+            raise ValueError("reasoning_effort must be None or a non-empty string")
 
 
 # OpenAI function-tool schemas.  Phase-specific callers select the applicable tools.

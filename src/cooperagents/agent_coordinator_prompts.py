@@ -21,16 +21,18 @@ OPENING_PLAN_PROMPT = (
     "Inspect the base checkout and propose ownership, interfaces and risks for the workers. "
     "Submit a plan grounded in evidence; ask workers to verify and correct it.\n"
     + TOOL_RULES + "\n"
-    "Budget: the user message states tool_call_budget. Calls use one unit each, except reads beyond the read budget in an earlier batch. "
-    "The tool list stays the same. When one call remains, read tools are rejected and only submit_plan is accepted. "
+    "The user message gives tool_call_budget and reserved_tool_calls. Calls use one unit each, "
+    "except reads beyond the read budget in an earlier batch. The tool list stays the same. "
+    "When the remaining budget is at or below reserved_tool_calls, only submit_plan is accepted. "
     "When the evidence is incomplete, submit the plan with the evidence collected so far and record the gaps in risks."
 )
 WAKE_PROMPT = (
     "Review the team state and inspect committed snapshots as needed. "
     "Send concise, actionable coordination messages when useful, then end the wake.\n"
     + TOOL_RULES + "\n"
-    "Budget: the second message states tool_call_budget. At most 2 send_message calls per wake. "
-    "The tool list stays the same. When two or fewer calls remain, read tools are rejected and only send_message and end_wake are accepted."
+    "The second message gives tool_call_budget and reserved_tool_calls. At most 2 send_message calls per wake. "
+    "The tool list stays the same. When the remaining budget is at or below reserved_tool_calls, "
+    "only send_message and end_wake are accepted."
 )
 OPENING_BUDGET_WARNING = "[remaining_tool_calls: {remaining}] One read call remains. After that, only submit_plan is accepted."
 OPENING_FINAL_TURN = (

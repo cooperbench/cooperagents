@@ -663,17 +663,19 @@ thread starts, at the same position as `coordinator.decide(initial=True)`
 edits.
 
 The first user message contains the roster with each assignment's `task` text, the base
-SHA and `tool_call_budget` (`opening_max_tool_calls`, default 16). The time limit is
-180 seconds by default. Every request in the opening uses the same tool list so the
-provider can keep its tool-call state and reuse cached context. When one call remains,
-the coordinator accepts only `submit_plan`. A read in that final turn consumes one
-unit and returns `Error: <name> is not allowed in the final turn; allowed: submit_plan`.
-After the first turn, the request includes a budget warning with two calls left and
-a final-turn note with one call left. The notes are
-part of the current request only. If a batch of calls reaches the reserve during an
-earlier turn, further reads in that batch return
-`Error: read budget exhausted; the remaining call is reserved for submit_plan.` They
-consume no call budget. If the SDK returns no structured tool calls, the coordinator
+SHA, `tool_call_budget` (`opening_max_tool_calls`, default 16) and `reserved_tool_calls`
+(`opening_reserve`, default 2). The deadline comes from `opening_time_limit_s`, which
+defaults to 180 seconds. Every request in the opening uses the same tool list so the
+provider can keep its tool-call state and reuse cached context. The final window starts
+when the remaining budget reaches the reserve. Only `submit_plan` is accepted in that
+window. A final-turn read consumes one call and returns
+`Error: <name> is not allowed in the final turn; allowed: submit_plan`.
+With a positive reserve, requests after the first include a warning when one read call
+remains and a final-turn note within the reserve. These notes appear only in the current
+request. If a batch of calls reaches the reserve during an earlier turn, further reads
+in that batch consume no budget. When multiple calls are left, the response reads
+`Error: read budget exhausted; the remaining calls are reserved for submit_plan.`
+If the SDK returns no structured tool calls, the coordinator
 can recover one call in `_call` from a tool name followed by a JSON argument object
 or a JSON object with `name` and `args` or `arguments`. If that JSON fails to parse,
 recovery retries by appending one or two missing closing braces when the text ends
@@ -733,20 +735,30 @@ Wake thread loop:
    messages addressed to `coordinator` (`bus.receive("coordinator")`), and the
    coordinator's own previous messages. The observation does not contain the trigger
    reason, the candidate kind or the policy name (required for Section 6).
-3. Run a tool loop with `wake_max_tool_calls` = 6 and `wake_time_limit_s` = 90. The second
-   message contains the opening plan and `tool_call_budget`. The first request ends
+3. Run a tool loop with `wake_max_tool_calls` (default 6), `wake_time_limit_s` (default
+   90 seconds), and `wake_reserve` (default 2). The second message contains the
+   opening plan, `tool_call_budget`, and `reserved_tool_calls`. The first request ends
    with the wake observation. Reads default to `base_sha` and accept an explicit
-   snapshot SHA. Every request in the wake uses the same tool list. With two or fewer
-   calls remaining, the coordinator accepts only `send_message` and `end_wake`. A read
+   snapshot SHA. Every request in the wake uses the same tool list. When the remaining
+   budget reaches the reserve, the coordinator accepts only `send_message` and `end_wake`. A read
    in a final turn consumes one unit and returns
    `Error: <name> is not allowed in the final turn; allowed: end_wake, send_message`.
-   The same SDK fallback as in the opening applies. After the first turn, a warning
-   appears at three remaining calls and a final-turn note appears at two or fewer. The notes are
-   part of the current request only. Once a batch reaches the reserve, further
-   reads in that turn consume no budget and return
+   The same SDK fallback and budget note rules as in the opening apply. Once a batch
+   reaches the reserve, further reads in that turn consume no budget. When multiple
+   calls are left, the response reads
    `Error: read budget exhausted; the remaining calls are reserved for send_message and end_wake.`
    Each wake allows at most two `send_message` calls.
-4. Emit `wake_end` with tool counts, messages sent and usage.
+4. Emit `wake_end` with tool counts, messages sent, usage, and the outcome.
+
+| Outcome | Condition |
+| --- | --- |
+| `ended` | A valid `end_wake` executed. |
+| `stopped` | The coordinator stopped before completing the wake. |
+| `timeout` | The wake hit its deadline. |
+| `error` | An exception ended the wake. |
+| `sent` | The budget ran out or the model returned no tool calls after the wake delivered at least one message. |
+| `exhausted` | The budget ran out before the wake delivered a message. |
+| `no_call` | The model returned no tool calls before the wake delivered a message. |
 
 Message delivery uses `bus.send(sender="coordinator", to=<worker>, content=...)`, the same
 path as peer messages. `BusComm.receive` traces `message_delivered` for each delivery, so
@@ -777,6 +789,19 @@ The default `AgentComplete` calls `openai.OpenAI(...).chat.completions.create`, 
 each request through `trajectory.record_call` under actor `coordinator`, and records
 `usage.prompt_tokens`, `usage.prompt_tokens_details.cached_tokens` and
 `usage.completion_tokens`.
+
+System 2 allows `max_retries` retries per request, with a default of 2. It retries SDK
+connection, rate-limit, and internal-server errors. The first delay comes from
+`retry_base_delay_s` (default 0.5 seconds) and doubles for each subsequent retry.
+A retry must fit inside the phase deadline, and stopping interrupts the wait. The
+SDK's own retries are disabled. A coordinator timeout and other errors outside the
+retryable classes end the call.
+
+The built-in client sends the configured `reasoning_effort` for each System-2 phase,
+with a default of `"medium"`. Set `--agent-coordinator-reasoning-effort inherit` to
+use `COOPER_REASONING_EFFORT` when present. Worker requests read
+`COOPER_REASONING_EFFORT` independently. The `spec_check_time_limit_s` deadline
+defaults to 150 seconds and applies to all attempts for a verdict.
 
 The default `DecisionComplete` is the OpenRouter client of Section 4.3.2. Each call is
 recorded through `trajectory.record_call` under actor `coordinator_gate` with: `model`,
@@ -1009,6 +1034,15 @@ Emitted through the existing `Trajectory.emit(actor, event, **data)` when
 | `coordinator_gate` | `signal`; `gate_decision` with the full `GateState` and the `GateDecision` fields of Section 4.2 (`probabilities`, `threshold`, `model`, token counts); `request`/response rows for `DecisionGate` calls (Section 5.5), with `tool_calls=[]` |
 | worker IDs | Unchanged |
 
+`agent_coordinator_start` records `reasoning_effort` and `max_retries`. The
+`opening_plan` event records `exit_reason` as `done`, `no_calls`, `stopped`,
+`deadline`, or `budget` when the tool loop returns. It records `error` when an
+exception ended the phase and null when the opening was disabled.
+System-2 `request`, `error`, and `response` rows include a zero-based `attempt`
+for the current model call. Each attempt counts toward model usage.
+`pair_start` records the configured System-2 settings with an `agent_` prefix,
+including `agent_reasoning_effort`.
+
 ### 8.3 Completion-time percentiles
 
 `src/cooperagents/metrics.py` gains:
@@ -1069,6 +1103,8 @@ polar-ext repository and are outside the cooperagents PR plan.
 | Actor rules | Worker-lifetime check skips `coordinator` and `integrator*` (`audit.py:419`) | Also skip `coordinator_gate` |
 | Coordinator tool allowlist | `{"send_message", "update_notebook", "finish_planning"}` (`audit.py:730-737`) | Agent variants: `{"list_dir", "read_file", "search_code", "git_show", "send_message", "submit_plan", "spec_verdict", "end_wake"}` for `coordinator`. For `coordinator_gate`: the allowlist is the empty set; every response row must have `tool_calls == []` and a `probabilities` object whose keys equal the requested options (`WAKE`, `SKIP`) and whose values sum to 1 within `1e-3`; `completion_tokens == 0` |
 | Request model identity | Every request must use the frozen `MODEL` (`audit.py:617`) | Per-actor model identity: actor `coordinator_gate` must use the frozen `GATE_MODEL` at the frozen `GATE_BASE_URL` (scheme, host, path); every other actor keeps the `MODEL` check. `GATE_MODEL = "liquid/d1.2-ultra"`, `GATE_BASE_URL = "https://openrouter.ai/api/alpha"` and `GATE_THRESHOLD = 0.5` are study constants next to `MODEL` and are checked against the launch flags and `metrics.agent_coordinator.config.gate`. `agent_rule_` and `agent_rand_` variants must have no `coordinator_gate` request rows |
+| System-2 reasoning effort | Criterion 6 requires `reasoning_effort == "high"` for all applicable request rows (`audit.py:752-754`) | Check effort per actor. Worker actors (`agent*`, `integrator*`) require `"high"`. The `coordinator` actor requires the study constant `COORDINATOR_REASONING_EFFORT = "medium"`, matching the explicit `--agent-coordinator-reasoning-effort medium` launch flag and `agent_coordinator_start.reasoning_effort`. Exclude `coordinator_gate` from criteria 5 and 6. Render `COOPER_REASONING_EFFORT = "high"` in `sampling.json`. Match the reasoning flag between the model-gate and random arms. |
+| System-2 tool choice | Criterion 9 forbids `tool_choice` on wire rows (`audit.py:755-780`) | The built-in client sends `tool_choice="auto"`. An exception for the `coordinator` actor in the agent variant audit is an open item. |
 | Pricing | `PriceSnapshot` prices `MODEL` (`study/contract.py`) | Add a `GATE_MODEL` entry: input $0.042 per 1M tokens, output $0.00 per 1M tokens (OpenRouter page for `liquid/d1.2-ultra`, 2026-11-22). `completion_tokens == 0` is asserted per row. `LedgerEntry` for actor `coordinator_gate` uses that entry; a difference above 5% between the computed cost and the summed `usage.cost` is reported |
 | Credentials | The runner passes worker endpoint variables to `bench_compare` | Also pass the variable named by `--agent-gate-api-key-env`; the audit checks that no recorded row or launch record contains its value |
 | Containers and timing | Team arm reserves 2 container slots (`Variant.slots`); `timing.json` worker container identities must match the journal (`audit.py:431-476`) | The coordinator container is an extra container, as the integrator already is; timing audit excludes `coordinator` like `integrator*`; slot accounting adds one container |
@@ -1109,12 +1145,13 @@ by Q7 and Q8 (Section 12.1).
 | Q6 | `agent_rule_main` (`--agent-gate rule`) is an explicit arm next to `agent_main` and `agent_rand_main` | 6.1, PR plan PR 4 |
 | Q7 | Decision model `liquid/d1.2-ultra` through OpenRouter (`https://openrouter.ai/liquid/d1.2-ultra`), OpenRouter Decisions API `POST https://openrouter.ai/api/alpha/decisions`; default base URL `https://openrouter.ai/api/alpha`, default key variable `OPENROUTER_API_KEY` | 4.3.2, 4.3.3, 10 |
 | Q8 | Price $0.042 per 1M input tokens (weighted average $0.0419), $0.00 per 1M output tokens (`output_tokens = 0`). Context window 65,536 tokens. Median latency 0.22 s (provider Liquid), which is below the 3 s timeout | 4.3.2, 4.5, 8.1, 10 |
-| D1 | Reserve one tool call for the opening and two for each wake. Send budget notes only in the last two turns after the initial request. | 5.3, 5.4 |
+| D1 | The opening and each wake reserve two tool calls by default. Send budget notes after the initial request when one read call remains or the loop is within a positive reserve. | 5.3, 5.4 |
 | D2 | Wake reads default to `base_sha`. Use the optional `rev` to read worker snapshot SHAs listed in `git_evidence`. | 5.2, 5.4 |
 | D3 | The AWS Phase A2 report lists pairs where the default `make` target fails because the task image lacks `ruff`. Any later build-discovery change applies to all arms and includes a new `det_main` control. | 5.6, fix and AWS plan §5 |
 | D4 | AWS Phase A2 uses the polar-ext limits `--step-limit 1000 --agent-time-limit 3600`. | Fix and AWS plan §5 |
 | D5 | Installing an arm64 binfmt handler on the x86_64 host requires operator approval. Without approval, run affected pairs elsewhere and report them separately. | Fix and AWS plan §5 |
 | D6 | After AWS Phase A2, name concrete coordination triggers in `WAKE_CRITERION` and keep the default wake threshold at 0.5. Compare gate scores by prompt ID. | 4.6 |
+| D7 | System 2 defaults to two retries with an initial delay of 0.5 seconds and coordinator reasoning effort `"medium"`. The benchmark CLI exposes these settings and the phase budgets, reserves, and deadlines. | 5.3, 5.4, 5.5 |
 
 ### 12.2 Open questions
 

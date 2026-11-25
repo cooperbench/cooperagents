@@ -55,13 +55,25 @@ and API key variable.
 | `--agent-gate-timeout` | `3.0` | Decision timeout in seconds, greater than 0 and at most 10. |
 | `--agent-wake-budget` | `8` | Maximum wakes per pair. |
 | `--agent-opening {draft,none}` | `draft` | Deliver a proposed plan before workers start, or skip the opening. |
+| `--agent-opening-max-tool-calls` | `16` | Maximum tool calls in the opening. |
+| `--agent-opening-time-limit` | `180.0` | Opening deadline in seconds, including transport retries. |
+| `--agent-opening-reserve` | `2` | Opening calls reserved for `submit_plan`. Use `0` to allow reads throughout the budget. |
+| `--agent-wake-max-tool-calls` | `6` | Maximum tool calls per wake. |
+| `--agent-wake-time-limit` | `90.0` | Deadline per wake in seconds, including transport retries. |
+| `--agent-wake-reserve` | `2` | Wake calls reserved for `send_message` and `end_wake`. Use `0` to allow reads throughout the budget. |
 | `--no-agent-spec-check` | Off | Disable the coordinator's pre-submit spec check. |
+| `--agent-spec-check-time-limit` | `150.0` | Spec-check deadline in seconds, including transport retries. |
+| `--agent-coordinator-max-retries` | `2` | Maximum transport retries per coordinator request. Use `0` for a single attempt. |
+| `--agent-coordinator-retry-delay` | `0.5` | Initial retry delay in seconds. The delay doubles after each retry. |
+| `--agent-coordinator-reasoning-effort` | `medium` | Reasoning effort for the opening, wakes, and spec checks. Use `inherit` to read `COOPER_REASONING_EFFORT`. |
 | `--agent-random-match` | Unset | Required for the random gate. Names the matched model-gate run under `--log-dir`. Each selected pair needs a matching result. |
 | `--agent-random-seed` | `0` | Seed offset for the matched random schedule. |
 
 The model ID, base URL, API key variable, threshold, and timeout flags
 apply only to the model gate. Each run writes `summary.json` with pair
 durations, worker costs, and agent coordinator totals when available.
+
+The matched random arm should use the same coordinator reasoning effort as its model-gate run.
 
 ## Per-iteration reproduction
 
