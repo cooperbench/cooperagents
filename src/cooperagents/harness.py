@@ -43,6 +43,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from cooperagents.agent import Agent
+from cooperagents.agent_coordination_types import AgentComplete, AgentCoordinatorConfig, DecisionComplete
+from cooperagents.agent_coordinator import (
+    AgentCoordinator,
+    AgentCoordinatorPoller,
+    DecisionCallRecorder,
+    composed_completion_gate,
+)
+from cooperagents.agent_coordinator_prompts import GATE_INSTRUCTIONS
 from cooperagents.bus.base import TeamBus
 from cooperagents.bus.memory import InMemoryBus
 from cooperagents.coordination_prompts import (
@@ -80,6 +88,8 @@ from cooperagents.llm import LLMClient
 from cooperagents.metrics import coordination_metrics, spawn_metrics
 from cooperagents.patching import strip_test_sections
 from cooperagents.planner import ancestors, plan_decomposition, topo_levels
+from cooperagents.structural_signals import DiffProbe, SignalTracker, overlap_signals, parse_steps
+from cooperagents.system1_gate import DecisionGate, HttpDecisionClient, RandomGate, RuleGate, WakeBudget
 from cooperagents.types import AgentResult, Assignment, RunResult, SubTask, TeamSpec
 
 if TYPE_CHECKING:
@@ -2083,9 +2093,19 @@ class UnifiedHarness:
         coordinator_completion: CompletionBinding | None = None,
         worker_completion: CompletionBinding | None = None,
         planning_only: bool = False,
+        agent_coordinator_config: AgentCoordinatorConfig | None = None,
+        agent_coordinator_complete: AgentComplete | None = None,
+        agent_gate_complete: DecisionComplete | None = None,
     ) -> None:
         if coordinator_complete is not None and not callable(coordinator_complete):
             raise TypeError("coordinator_complete must be callable")
+        if agent_coordinator_complete is not None and not callable(agent_coordinator_complete):
+            raise TypeError("agent_coordinator_complete must be callable")
+        if agent_gate_complete is not None and not callable(agent_gate_complete):
+            raise TypeError("agent_gate_complete must be callable")
+        self.agent_coordinator_config = agent_coordinator_config
+        self.agent_coordinator_complete = agent_coordinator_complete
+        self.agent_gate_complete = agent_gate_complete
         if coordinator_completion is not None and coordinator_complete is not None:
             raise ValueError("Choose one coordinator completion interface")
         if (
@@ -2209,6 +2229,7 @@ class UnifiedHarness:
             monitor=None,
             deterministic_monitor=None,
             on_start=None,
+            completion_gate: Callable[[Environment], str | None] | None = None,
         ) -> AgentResult:
             """Run one agent (mini-swe or builtin worker) on the shared tree."""
             if spec.spec_fidelity:  # S8: team injects spec-fidelity policy into the agent prompt
@@ -2246,7 +2267,7 @@ class UnifiedHarness:
                     git_share=spec.git_share,
                     on_start=on_start,
                     completion=self.repair_completion if role == "integrator" else self.worker_completion,
-                    completion_gate=spec.completion_gate,
+                    completion_gate=completion_gate if completion_gate is not None else spec.completion_gate,
                     trace=partial(self.trajectory.emit, agent_id) if self.trajectory else None,
                 )
             agent = Agent(
@@ -2285,6 +2306,8 @@ class UnifiedHarness:
         gate_discards: list[str] = []  # agents whose delta the do_no_harm gate rejected
         coordinator = None  # set in the coop branch when spec.coordinator
         deterministic = None
+        agent_coord = None
+        agent_config = (self.agent_coordinator_config or AgentCoordinatorConfig()) if spec.agent_coordinator else None
         start = time.time()
         integrated_patch = ""  # cumulative diff across the team so far (seed mode)
         raw_worker_patches: dict[str, str] = {}
@@ -2400,6 +2423,9 @@ class UnifiedHarness:
                     env = env_factory(assignment.agent_id)
                     register_cleanup(env.cleanup)
                     coop_envs[assignment.agent_id] = env
+                coord_env = env_factory("coordinator") if agent_config is not None else None
+                if coord_env is not None:
+                    register_cleanup(coord_env.cleanup)
                 if spec.deterministic_coordinator:
                     deterministic = _DeterministicCoordinator(
                         coop_envs, interval=self.deterministic_coordinator_interval_s, complete=self.coordinator_complete,
@@ -2409,10 +2435,11 @@ class UnifiedHarness:
                     register_cleanup(deterministic.finish, monitor_thread)
                 gitsync = None
                 if spec.git_share:
+                    observe = coordinator is not None or spec.agent_coordinator
                     first = True
                     initial_heads, published = {}, set()
                     for _aid, _e in coop_envs.items():
-                        if coordinator is not None:
+                        if observe:
                             try:
                                 head = _e.execute("git rev-parse HEAD", timeout=5)
                                 initial_heads[_aid] = head.stdout.strip() if head.exit_code == 0 else ""
@@ -2425,9 +2452,10 @@ class UnifiedHarness:
                         push = _e.execute(f"git push -q shared HEAD:refs/heads/{_aid} 2>/dev/null")
                         if push.exit_code == 0:
                             published.add(_aid)
-                    gitsync = _GitShareSync(coop_envs, observe=coordinator is not None)
-                    if coordinator is not None:
+                    gitsync = _GitShareSync(coop_envs, observe=observe)
+                    if observe:
                         gitsync.initialize(initial_heads, published)
+                    if coordinator is not None:
                         coordinator._git_sync = gitsync
                     gitsync_thread = threading.Thread(target=gitsync.run, daemon=True)
                     register_cleanup(gitsync.finish, gitsync_thread)
@@ -2455,6 +2483,35 @@ class UnifiedHarness:
                     coordinator_thread.start()
                     register_cleanup(coordinator.finish, coordinator_thread)
 
+                if agent_config is not None and coord_env is not None:
+                    gate_config = agent_config.gate
+                    budget = WakeBudget(gate_config, started_at=time.monotonic())
+                    instructions = (agent_config.prompts or {}).get("gate", GATE_INSTRUCTIONS)
+                    recorder = None
+                    gate: RuleGate
+                    if gate_config.policy == "model":
+                        complete = self.agent_gate_complete
+                        if complete is None:
+                            complete = HttpDecisionClient(gate_config)
+                        recorder = DecisionCallRecorder(complete, gate_config, self.trajectory)
+                        gate = DecisionGate(gate_config, recorder, budget=budget, instructions=instructions)
+                    elif gate_config.policy == "random":
+                        gate = RandomGate(
+                            gate_config, budget=budget, repo=spec.repo, task_id=spec.task_id,
+                            features=",".join(map(str, sorted(spec.features))), rollout_index=0,
+                        )
+                    else:
+                        gate = RuleGate(gate_config, budget, instructions=instructions)
+                    agent_coord = AgentCoordinator(
+                        coord_env, bus, assignments, config=agent_config, gate=gate,
+                        trackers={aid: SignalTracker(aid, agent_config.signals) for aid in roster},
+                        evidence=gitsync.evidence if gitsync is not None else GitEvidence,
+                        overlap_signals=overlap_signals, decision_recorder=recorder,
+                        complete=self.agent_coordinator_complete, model=spec.model, trajectory=self.trajectory,
+                        presub_merge=spec.select_integration is not None, step_limit=self.step_limit, time_limit_s=spec.agent_time_limit,
+                    )
+                    register_cleanup(agent_coord.finish)
+                    agent_coord.start()
 
                 def recover_shared_diff(env, aid: str, base: str) -> tuple[str, str]:
                     """Read the shared bare repository independently of the worker tree."""
@@ -2617,6 +2674,18 @@ class UnifiedHarness:
                             poller.watch_board(bus)
                         if poller is not None and (coordinator or deterministic):
                             poller.watch_coordinator(coordinator or deterministic)
+                        if agent_coord is not None:
+                            assert poller is not None  # Agent mode requires Git sharing.
+                            agent_poller = AgentCoordinatorPoller(
+                                agent_coord, a.agent_id, env, poller, parse_steps=parse_steps, probe=DiffProbe.run,
+                            )
+                            r = run_on_shared(
+                                env, a.agent_id, a.role, task, a.feature_id, poller=agent_poller,
+                                time_limit_s=spec.agent_time_limit, on_start=agent_poller.attach,
+                                completion_gate=composed_completion_gate(agent_coord, a.agent_id, spec.completion_gate),
+                            )
+                            agent_coord.worker_finished(a.agent_id, r.status)
+                            return a.agent_id, r, collect_diff(env, a.agent_id, r)
                         r = run_on_shared(
                             env, a.agent_id, a.role, task, a.feature_id, poller=poller, monitor=coordinator,
                             time_limit_s=spec.agent_time_limit, deterministic_monitor=deterministic,
@@ -2914,6 +2983,7 @@ class UnifiedHarness:
                     else {}
                 ),
                 **({"coordinator_events": deterministic.events()} if deterministic is not None else {}),
+                **({"agent_coordinator": agent_coord.metrics()} if agent_coord is not None else {}),
             },
         )
 
@@ -3342,6 +3412,40 @@ class UnifiedHarness:
         selector: Callable[[list[RunResult]], int] | None = None,
         planner: Planner | None = None,
     ) -> RunResult:
+        if spec.agent_coordinator:
+            if not spec.shared_workspace or not spec.coop_tools or spec.worker != "mini_swe" or spec.seed_prior or not spec.git_share:
+                raise ValueError("Agent coordinator requires a no-seed mini_swe coop-tools team with Git sharing")
+            ids = [a.agent_id for a in self._build_assignments(spec)]
+            if len(ids) < 2 or len(set(ids)) != len(ids) or "" in ids or "coordinator" in ids:
+                raise ValueError("Agent coordinator requires at least two workers with unique nonempty IDs excluding 'coordinator'")
+            if (
+                spec.team_roles or spec.adaptive or spec.decompose or spec.best_of_n != 1 or spec.contract_first
+                or spec.allow_spawn_tool or spec.task_board or spec.claim_mode or spec.wait_protocol
+            ):
+                raise ValueError(
+                    "Agent coordinator is incompatible with team_roles, adaptive, decompose, best-of-N, contract_first, "
+                    "helpers, task_board, claim_mode, or wait_protocol"
+                )
+            if (
+                self.coordinator_complete is not None or self.coordinator_completion is not None
+                or self.worker_completion is not None or self.planning_only
+            ):
+                raise ValueError("Agent coordinator requires its own completion callbacks and does not support planning_only")
+            agent_config = self.agent_coordinator_config or AgentCoordinatorConfig()
+            gate_config = agent_config.gate
+            gate_config.validate()
+            if gate_config.wake_budget < 0:
+                raise ValueError("Agent wake budget must be nonnegative")
+            if gate_config.policy == "random":
+                wakes, horizon = gate_config.random_wakes, gate_config.random_step_horizon
+                if wakes is None or horizon is None:
+                    raise ValueError("random gate requires a matched agent_main result")
+                if type(wakes) is not int or type(horizon) is not int or not 0 <= wakes <= horizon:
+                    raise ValueError("random wakes must be between zero and the matched step horizon")
+        elif any(value is not None for value in (
+            self.agent_coordinator_config, self.agent_coordinator_complete, self.agent_gate_complete,
+        )):
+            raise ValueError("Agent coordinator settings require agent_coordinator")
         if spec.deterministic_coordinator and spec.coordinator:
             raise ValueError("Coordinator families are mutually exclusive")
         if spec.deterministic_coordinator and (
@@ -3406,7 +3510,9 @@ class UnifiedHarness:
         if self.coordination_variant == "human-prompt" and not (spec.coordinator and spec.coordinator_notebook):
             raise ValueError("Human-prompt coordination requires coordinator and notebook")
         if (
-            spec.coordinator or (self.coordinator_complete is not None and not spec.deterministic_coordinator)
+            spec.coordinator or (
+                self.coordinator_complete is not None and not spec.deterministic_coordinator and not spec.agent_coordinator
+            )
             or self.coordinator_completion is not None
             or self.worker_completion is not None or self.planning_only
         ) and (

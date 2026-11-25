@@ -335,8 +335,10 @@ class TeamSpec:
     deterministic_coordinator: bool = False
     """Monitor workers for repeated commands, errors, and overlapping edits."""
 
+    agent_coordinator: bool = False
+
     def __post_init__(self) -> None:
-        if self.coordinator and self.deterministic_coordinator:
+        if sum((self.coordinator, self.deterministic_coordinator, self.agent_coordinator)) > 1:
             raise ValueError("Coordinator families are mutually exclusive")
 
     def seed_count(self) -> int:

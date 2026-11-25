@@ -24,16 +24,19 @@ import tempfile
 import time
 import uuid
 from contextlib import nullcontext
+from dataclasses import replace
 from functools import partial
 from pathlib import Path
 
 from cooperagents import verification as _verification
+from cooperagents.agent_coordination_types import AgentCoordinatorConfig, GateConfig
 from cooperagents.bus.memory import InMemoryBus
 from cooperagents.env.runtime import task_environment
 from cooperagents.eval.cooperbench import run_eval, write_run_outputs
 from cooperagents.eval.dataset import WorkItem, image_name, load_subset, read_feature
 from cooperagents.harness import UnifiedHarness
 from cooperagents.initial_plan import InitialPlan, initial_plan_path
+from cooperagents.metrics import completion_time_summary
 from cooperagents.types import Assignment, TeamSpec
 
 
@@ -209,7 +212,10 @@ def _planning_completion(model_name: str, *, worker: bool):
                     worker_sampling=worker,
                     verify_wire=True,
                     timeout=request.settings.timeout,
-                    **({"tool_choice": request.tool_choice} if request.tool_choice and os.getenv("COOPER_SEND_TOOL_CHOICE", "true").lower() != "false" else {}),
+                    **(
+                        {"tool_choice": request.tool_choice}
+                        if request.tool_choice and os.getenv("COOPER_SEND_TOOL_CHOICE", "true").lower() != "false" else {}
+                    ),
                     **request.settings.generation,
                 )
 
@@ -253,6 +259,8 @@ def run_team(
     team_roles: bool = False,
     coordinator: bool = False,
     deterministic_coordinator: bool = False,
+    agent_coordinator: bool = False,
+    agent_coordinator_config: AgentCoordinatorConfig | None = None,
     coordinator_notebook: bool = True,
     coordination_variant: str = "auto-prompt",
     coordination_mode: str = "direct",
@@ -343,6 +351,7 @@ def run_team(
         team_roles=team_roles,
         coordinator=coordinator,
         deterministic_coordinator=deterministic_coordinator,
+        agent_coordinator=agent_coordinator,
         coordinator_notebook=coordinator_notebook,
         focused_repair=focused_repair,
         repair_time_limit=repair_time or None,
@@ -357,13 +366,16 @@ def run_team(
             lambda patches: max(range(len(patches)), key=lambda i: len(patches[i]))
         ) if presub_merge else None,
     )
-    pair_dir = logs_dir / run_name / "team" / item.repo / str(item.task_id) / "_".join(f"f{f}" for f in sorted(feats))
+    pair_dir = _pair_dir(logs_dir / run_name, "team", item)
     notebook_path = (pair_dir / "coordination" / run_id / "notebook.md").resolve() if coordinator and coordinator_notebook else None
+    if agent_coordinator and agent_coordinator_config is None:
+        agent_coordinator_config = AgentCoordinatorConfig()
     harness = UnifiedHarness(
         bus=None if checkpoint_repair or capture_merged_state else InMemoryBus(run_id),
         step_limit=step_limit,
         command_timeout=300,
         coordinator_notebook_path=notebook_path,
+        agent_coordinator_config=agent_coordinator_config,
         coordination_variant=coordination_variant,
         langfuse=langfuse,
         coordination_mode=coordination_mode,
@@ -390,6 +402,27 @@ def run_team(
     from cooperagents.trajectory import Trajectory
 
     trajectory = None
+    agent_fields = {}
+    if agent_coordinator_config is not None:
+        gate = agent_coordinator_config.gate
+        agent_fields = dict(
+            agent_gate=gate.policy, agent_gate_model=gate.model, agent_gate_base_url=gate.base_url,
+            agent_gate_threshold=gate.wake_threshold, agent_gate_timeout=gate.timeout_s,
+            agent_wake_budget=gate.wake_budget, agent_opening=agent_coordinator_config.opening,
+            agent_spec_check=agent_coordinator_config.spec_check,
+            agent_reasoning_effort=agent_coordinator_config.reasoning_effort,
+            agent_max_retries=agent_coordinator_config.max_retries,
+            agent_retry_base_delay_s=agent_coordinator_config.retry_base_delay_s,
+            agent_opening_max_tool_calls=agent_coordinator_config.opening_max_tool_calls,
+            agent_opening_time_limit_s=agent_coordinator_config.opening_time_limit_s,
+            agent_opening_reserve=agent_coordinator_config.opening_reserve,
+            agent_wake_max_tool_calls=agent_coordinator_config.wake_max_tool_calls,
+            agent_wake_time_limit_s=agent_coordinator_config.wake_time_limit_s,
+            agent_wake_reserve=agent_coordinator_config.wake_reserve,
+            agent_spec_check_time_limit_s=agent_coordinator_config.spec_check_time_limit_s,
+            agent_random_seed=gate.random_seed if gate.policy == "random" else None,
+            agent_random_wakes=gate.random_wakes, agent_random_step_horizon=gate.random_step_horizon,
+        )
     if record_trajectory or checkpoint_repair:
         if best_of_n != 1 or decompose or adaptive or (not coop_tools and not capture_merged_state):
             raise ValueError("Trajectory collection requires a single coop-tools team or merged-state capture")
@@ -404,6 +437,8 @@ def run_team(
             features=feats,
             coordinator=coordinator,
             deterministic_coordinator=deterministic_coordinator,
+            agent_coordinator=agent_coordinator,
+            **agent_fields,
             coordinator_notebook=coordinator and coordinator_notebook,
             coordination_variant=coordination_variant,
             coordination_mode=coordination_mode,
@@ -432,14 +467,30 @@ def run_team(
     return {"duration": res.duration_seconds, "steps": res.total_steps, "tokens": 0, "helpers": len(res.helpers)}
 
 
+def _pair_dir(run_dir: Path, setting: str, item: WorkItem) -> Path:
+    features = "_".join(f"f{f}" for f in sorted(item.features))
+    return run_dir / setting / item.repo / str(item.task_id) / features
+
+
+def _matched_gate(gate: GateConfig, match_dir: Path, item: WorkItem) -> GateConfig:
+    result = _pair_dir(match_dir, "team", item) / "result.json"
+    try:
+        metrics = json.loads(result.read_text())["metrics"]["agent_coordinator"]
+        wakes, horizon = metrics["gate"]["wake"], metrics["team_worker_steps"]
+        if type(wakes) is not int or type(horizon) is not int or not 0 <= wakes <= horizon:
+            raise ValueError
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise ValueError("random gate requires a matched agent_main result") from exc
+    return replace(gate, random_wakes=wakes, random_step_horizon=horizon)
+
+
 def read_eval(logs_dir: Path, run_name: str, setting: str, item: WorkItem) -> tuple[bool, int] | None:
     """Return (both_passed, n_features_passed) for a scored pair, or None if unscored.
 
     Feature-level counts double the measurement resolution — essential in
     low-pass-rate regimes (small models) where pair-level deltas drown in noise.
     """
-    feature_str = "_".join(f"f{f}" for f in sorted(item.features))
-    p = logs_dir / run_name / setting / item.repo / str(item.task_id) / feature_str / "eval.json"
+    p = _pair_dir(logs_dir / run_name, setting, item) / "eval.json"
     if not p.is_file():
         return None
     e = json.loads(p.read_text())
@@ -447,10 +498,66 @@ def read_eval(logs_dir: Path, run_name: str, setting: str, item: WorkItem) -> tu
     return bool(e.get("both_passed")), nfeat
 
 
+def _write_summaries(logs_dir: Path, items: list[WorkItem], arms: list[tuple[str, str, int | None, int | None]]) -> None:
+    by_run: dict[str, dict] = {}
+    for setting, name, pairs_passed, features_passed in arms:
+        run_dir = logs_dir / name
+        durations = []
+        cost = 0.0
+        coordinator_metrics = []
+        for item in items:
+            result_path = _pair_dir(run_dir, setting, item) / "result.json"
+            if not result_path.is_file():
+                continue
+            result = json.loads(result_path.read_text())
+            durations.append(result["duration_seconds"])
+            cost += result["total_cost"]
+            agent_metrics = result.get("metrics", {}).get("agent_coordinator")
+            if agent_metrics is not None:
+                coordinator_metrics.append(agent_metrics)
+        times = completion_time_summary(durations)
+        summary = dict(completion_time=times, pairs_passed=pairs_passed, features_passed=features_passed, total_worker_cost=cost)
+        if coordinator_metrics:
+            usage = {
+                actor: {
+                    key: sum(metrics["usage"][actor][key] for metrics in coordinator_metrics)
+                    for key in ("calls", "prompt_tokens", "cached_tokens", "completion_tokens")
+                }
+                for actor in ("coordinator", "coordinator_gate")
+            }
+            usage["coordinator_gate"]["reported_cost_usd"] = sum(
+                metrics["usage"]["coordinator_gate"].get("reported_cost_usd", 0.0) for metrics in coordinator_metrics
+            )
+            summary["agent_coordinator"] = dict(
+                wakes=sum(metrics["gate"]["wake"] for metrics in coordinator_metrics),
+                skips=sum(metrics["gate"]["skip"] for metrics in coordinator_metrics),
+                usage=usage,
+            )
+        by_run.setdefault(name, {})[setting] = summary
+        if pairs_passed is not None:
+            percentiles = " ".join(f"{key}={times[key]:.2f}s" if times[key] is not None else f"{key}=n/a"
+                                   for key in ("p50", "p90", "p95", "p99"))
+            print(f"  {setting} completion time (n={times['n']}): {percentiles}")
+            print(f"  {setting} total worker cost: ${cost:.6f}")
+            if agent := summary.get("agent_coordinator"):
+                coordinator, gate = agent["usage"]["coordinator"], agent["usage"]["coordinator_gate"]
+                print(
+                    f"  {setting} agent coordinator: wakes={agent['wakes']} skips={agent['skips']} "
+                    f"coordinator calls={coordinator['calls']} tokens={coordinator['prompt_tokens'] + coordinator['completion_tokens']} "
+                    f"gate calls={gate['calls']} tokens={gate['prompt_tokens'] + gate['completion_tokens']}"
+                    f" gate reported_cost=${gate['reported_cost_usd']:.6f}"
+                )
+    for name, summary_by_arm in by_run.items():
+        run_dir = logs_dir / name
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / "summary.json").write_text(json.dumps(summary_by_arm, indent=2) + "\n")
+
+
 def main() -> None:
     _load_env()
     global MODEL
     MODEL = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-5.5-hao")
+    agent_defaults = AgentCoordinatorConfig()
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=None, help="cap number of pairs (default: no limit)")
     ap.add_argument("--subset", default="flash",
@@ -482,6 +589,39 @@ def main() -> None:
                     help="tool-call coordinator: initial and ongoing coordination, messages and a read-only shared notebook")
     coordinator_family.add_argument("--deterministic-coordinator", action="store_true",
                                     help="monitor repeated commands, errors, and overlapping edits; requires --coop-tools --no-seed")
+    coordinator_family.add_argument("--agent-coordinator", action="store_true",
+                                    help="event-driven coordinator; requires --coop-tools --no-seed --git-share")
+    ap.add_argument("--agent-gate", choices=("model", "rule", "random"), default="model", help="wake policy (default: model)")
+    ap.add_argument("--agent-gate-model", help="decision model (model gate only)")
+    ap.add_argument("--agent-gate-base-url", help="Decisions API base URL (model gate only)")
+    ap.add_argument("--agent-gate-api-key-env", help="name of the decision API key variable (model gate only)")
+    ap.add_argument("--agent-gate-threshold", type=float, help="minimum WAKE probability (model gate only)")
+    ap.add_argument("--agent-gate-timeout", type=float, help="decision timeout in seconds (model gate only)")
+    ap.add_argument("--agent-wake-budget", type=int, default=8, help="maximum wakes per pair (default: 8)")
+    ap.add_argument("--agent-opening", choices=("draft", "none"), default="draft", help="opening plan policy (default: draft)")
+    ap.add_argument("--agent-coordinator-reasoning-effort", default=argparse.SUPPRESS,
+                    help=f'System-2 reasoning effort. "inherit" uses COOPER_REASONING_EFFORT (default: {agent_defaults.reasoning_effort})')
+    ap.add_argument("--agent-coordinator-max-retries", type=int, default=agent_defaults.max_retries,
+                    help="maximum System-2 transport retries per request (default: %(default)s)")
+    ap.add_argument("--agent-coordinator-retry-delay", type=float, default=agent_defaults.retry_base_delay_s,
+                    help="initial System-2 retry delay in seconds (default: %(default)s)")
+    ap.add_argument("--agent-opening-max-tool-calls", type=int, default=agent_defaults.opening_max_tool_calls,
+                    help="maximum tool calls in the opening (default: %(default)s)")
+    ap.add_argument("--agent-opening-time-limit", type=float, default=agent_defaults.opening_time_limit_s,
+                    help="opening deadline in seconds (default: %(default)s)")
+    ap.add_argument("--agent-opening-reserve", type=int, default=agent_defaults.opening_reserve,
+                    help="opening calls reserved for submit_plan (default: %(default)s)")
+    ap.add_argument("--agent-wake-max-tool-calls", type=int, default=agent_defaults.wake_max_tool_calls,
+                    help="maximum tool calls per wake (default: %(default)s)")
+    ap.add_argument("--agent-wake-time-limit", type=float, default=agent_defaults.wake_time_limit_s,
+                    help="deadline per wake in seconds (default: %(default)s)")
+    ap.add_argument("--agent-wake-reserve", type=int, default=agent_defaults.wake_reserve,
+                    help="wake calls reserved for send_message and end_wake (default: %(default)s)")
+    ap.add_argument("--agent-spec-check-time-limit", type=float, default=agent_defaults.spec_check_time_limit_s,
+                    help="spec-check deadline in seconds (default: %(default)s)")
+    ap.add_argument("--no-agent-spec-check", action="store_true", help="disable the coordinator's pre-submit spec check")
+    ap.add_argument("--agent-random-match", help="matched agent_main run name under --log-dir (required for the random gate)")
+    ap.add_argument("--agent-random-seed", type=int, default=0, help="matched schedule seed (default: 0)")
     ap.add_argument("--initial-plan-dir", type=Path, help="Reviewed plan/history checkpoint; start directly in implementation")
     ap.add_argument("--no-implementation-coordinator", action="store_true",
                     help="skip coordinator model decisions during implementation; keep planning, group chat and notebook delivery")
@@ -569,6 +709,58 @@ def main() -> None:
         ap.error("--no-implementation-coordinator requires --coordinator")
     if args.deterministic_coordinator and (not args.coop_tools or not args.no_seed):
         ap.error("--deterministic-coordinator requires --coop-tools and --no-seed")
+    agent_config = None
+    decision_model_options = dict(
+        model=args.agent_gate_model, base_url=args.agent_gate_base_url, api_key_env=args.agent_gate_api_key_env,
+        wake_threshold=args.agent_gate_threshold, timeout_s=args.agent_gate_timeout,
+    )
+    effort = getattr(args, "agent_coordinator_reasoning_effort", agent_defaults.reasoning_effort)
+    coordinator_options = dict(
+        reasoning_effort=None if effort == "inherit" else effort,
+        max_retries=args.agent_coordinator_max_retries,
+        retry_base_delay_s=args.agent_coordinator_retry_delay,
+        opening_max_tool_calls=args.agent_opening_max_tool_calls,
+        opening_time_limit_s=args.agent_opening_time_limit,
+        opening_reserve=args.agent_opening_reserve,
+        wake_max_tool_calls=args.agent_wake_max_tool_calls,
+        wake_time_limit_s=args.agent_wake_time_limit,
+        wake_reserve=args.agent_wake_reserve,
+        spec_check_time_limit_s=args.agent_spec_check_time_limit,
+    )
+    if args.agent_coordinator:
+        if not (args.coop_tools and args.no_seed and args.git_share) or args.solo_only:
+            ap.error("--agent-coordinator requires a team with --coop-tools, --no-seed, and --git-share")
+        if (
+            args.team_roles or args.adaptive or args.decompose or args.best_of_n != 1 or args.contract_first
+            or args.allow_spawn or args.task_board or args.claim_mode or args.wait_protocol
+        ):
+            ap.error(
+                "--agent-coordinator excludes --team-roles, --adaptive, --decompose, --best-of-n other than 1, "
+                "--contract-first, --allow-spawn, --task-board, --claim-mode, and --wait-protocol"
+            )
+        if args.agent_wake_budget < 0:
+            ap.error("--agent-wake-budget must be nonnegative")
+        gate = GateConfig(
+            policy=args.agent_gate, wake_budget=args.agent_wake_budget, random_seed=args.agent_random_seed, **decision_model_options,
+        )
+        agent_config = AgentCoordinatorConfig(
+            gate=gate, opening=args.agent_opening, spec_check=not args.no_agent_spec_check, **coordinator_options,
+        )
+        try:
+            agent_config.validate()
+            gate.validate()
+        except ValueError as exc:
+            ap.error(str(exc))
+        if args.agent_gate == "random" and not args.agent_random_match:
+            ap.error("random gate requires a matched agent_main result (--agent-random-match)")
+    elif (
+        args.agent_gate != "model" or any(value is not None for value in decision_model_options.values())
+        or args.agent_wake_budget != 8 or args.agent_opening != "draft" or args.no_agent_spec_check
+        or args.agent_random_match is not None or args.agent_random_seed != 0
+        or hasattr(args, "agent_coordinator_reasoning_effort")
+        or any(value != getattr(agent_defaults, name) for name, value in coordinator_options.items())
+    ):
+        ap.error("agent coordinator flags require --agent-coordinator")
     if args.worker_reminder_interval < 0:
         ap.error("Worker reminder interval must be nonnegative")
     if args.planning_step_limit < 1 or args.planning_time_limit < 1:
@@ -611,10 +803,21 @@ def main() -> None:
             plan.validate_assignments(item.repo, item.task_id, roster)
 
     logs_dir = Path(args.log_dir).resolve()
+    configs = {}
+    if agent_config is not None:
+        for item in items:
+            if len(item.features) < 2:
+                ap.error("--agent-coordinator requires at least two feature assignments per pair")
+            config = agent_config
+            if config.gate.policy == "random":
+                try:
+                    config = replace(config, gate=_matched_gate(config.gate, logs_dir / args.agent_random_match, item))
+                except ValueError as exc:
+                    ap.error(f"{exc} for {item.repo}/{item.task_id} {sorted(item.features)}")
+            configs[_pair_dir(logs_dir / args.team_name, "team", item)] = config
 
     def _result_exists(run_name: str, setting: str, item: WorkItem) -> bool:
-        feature_str = "_".join(f"f{f}" for f in sorted(item.features))
-        return (logs_dir / run_name / setting / item.repo / str(item.task_id) / feature_str / "result.json").is_file()
+        return (_pair_dir(logs_dir / run_name, setting, item) / "result.json").is_file()
 
     def do_pair(item):
         tag = f"{item.repo}/{item.task_id} {sorted(item.features)}"
@@ -668,6 +871,8 @@ def main() -> None:
                     langfuse=args.langfuse,
                     coordinator=args.coordinator,
                     deterministic_coordinator=args.deterministic_coordinator,
+                    agent_coordinator=args.agent_coordinator,
+                    agent_coordinator_config=configs.get(_pair_dir(logs_dir / args.team_name, "team", item)),
                     coordinator_notebook=not args.no_coordinator_notebook,
                     coordination_variant=args.coordination_variant,
                     coordination_mode=args.coordination_mode,
@@ -713,6 +918,13 @@ def main() -> None:
         raise RuntimeError(f"Incomplete generation: {len(rows)}/{len(items)} pairs completed")
     if args.skip_eval:
         print("generation complete; official evaluation not run")
+        _write_summaries(logs_dir, items, [
+            (setting, name, None, None)
+            for enabled, setting, name in (
+                (not args.team_only, "solo", args.solo_name), (not args.solo_only, "team", args.team_name)
+            )
+            if enabled
+        ])
         return
 
     print("\nscoring with CooperBench (this builds/pulls images + runs tests)...")
@@ -741,6 +953,14 @@ def main() -> None:
     print(f"\n  pass-rate:  solo {solo_pass}/{n}   team {team_pass}/{n}")
     print(f"  features :  solo {solo_feats}/{2 * n}   team {team_feats}/{2 * n}")
     print(f"  avg time :  solo {sum(r[1]['duration'] for r in rows) / n:.0f}s   team {sum(r[2]['duration'] for r in rows) / n:.0f}s")
+    _write_summaries(logs_dir, items, [
+        (setting, name, passed, features)
+        for enabled, setting, name, passed, features in (
+            (not args.team_only, "solo", args.solo_name, solo_pass, solo_feats),
+            (not args.solo_only, "team", args.team_name, team_pass, team_feats),
+        )
+        if enabled
+    ])
 
 
 if __name__ == "__main__":

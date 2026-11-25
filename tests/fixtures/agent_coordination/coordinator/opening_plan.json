@@ -1,0 +1,11 @@
+{
+  "schema": "opening-plan/1",
+  "version": 1,
+  "workers": {
+    "agent1": {"owns": ["src/core.py"], "avoid": ["src/view.py"], "interfaces": ["parse"], "notes": "Inspect parsing first."},
+    "agent2": {"owns": ["src/view.py"], "avoid": ["src/core.py"], "interfaces": ["render"], "notes": "Use parse from agent1."}
+  },
+  "shared_interfaces": [{"name": "parse", "owner": "agent1", "definition": "parse(text)", "location": "src/core.py"}],
+  "risks": [{"path": "src/__init__.py", "reason": "Both features may export names."}],
+  "evidence": [{"tool": "read_file", "path": "src/core.py", "lines": "1-2"}]
+}

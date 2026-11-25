@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agentic Coordinator Architecture</title>
+<style>
+:root{
+  --bg:#f7f7f5;--panel:#ffffff;--ink:#1d1d1f;--muted:#5f6368;--line:#c9ccd1;--edge:#8a9099;
+  --s1:#2f6fdb;--s2:#1a8f5a;--s3:#b26a00;--s4:#8b3fc7;--warn:#c0392b;--sel:#ffb020;
+  --fill1:#e8f0fd;--fill2:#e5f5ec;--fill3:#fbf0e0;--fill4:#f2e9fa;--fillx:#f0f1f3;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#141518;--panel:#1d1f23;--ink:#e8e9eb;--muted:#9aa0a6;--line:#3a3e45;--edge:#7b818a;
+  --s1:#6ea0ff;--s2:#4fc98c;--s3:#e0a040;--s4:#bb86f5;--warn:#ff6b5b;--sel:#ffc24d;
+  --fill1:#1b2740;--fill2:#16301f;--fill3:#33280f;--fill4:#2a1d38;--fillx:#25282d;}}
+:root[data-theme="dark"]{
+  --bg:#141518;--panel:#1d1f23;--ink:#e8e9eb;--muted:#9aa0a6;--line:#3a3e45;--edge:#7b818a;
+  --s1:#6ea0ff;--s2:#4fc98c;--s3:#e0a040;--s4:#bb86f5;--warn:#ff6b5b;--sel:#ffc24d;
+  --fill1:#1b2740;--fill2:#16301f;--fill3:#33280f;--fill4:#2a1d38;--fillx:#25282d;}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+header{padding:16px 16px 8px;max-width:1500px;margin:0 auto}
+h1{font-size:20px;margin:0 0 4px}
+.sub{color:var(--muted);font-size:13px}
+code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px}
+main{display:grid;grid-template-columns:minmax(0,1fr) 420px;gap:16px;padding:8px 16px 24px;max-width:1500px;margin:0 auto}
+@media (max-width:1000px){main{grid-template-columns:minmax(0,1fr)}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:8px}
+.fam{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;padding:10px;margin-bottom:12px}
+@media (max-width:640px){.fam{grid-template-columns:1fr}}
+.fam button{all:unset;cursor:pointer;border:1px solid var(--line);border-radius:6px;padding:8px 10px;background:var(--fillx)}
+.fam button.on{border-color:var(--s2);background:var(--fill2)}
+.fam button:focus-visible{outline:2px solid var(--sel)}
+.fam b{display:block;font-family:ui-monospace,Menlo,monospace;font-size:12px}
+.fam span{color:var(--muted);font-size:12px}
+.famnote{grid-column:1/-1;color:var(--muted);font-size:12px}
+#diagram{width:100%;height:auto;display:block}
+.node rect{stroke-width:1.5;rx:6}
+.node{cursor:pointer}
+.node text{fill:var(--ink);font-size:12px;pointer-events:none}
+.node text.k{font-family:ui-monospace,Menlo,monospace;font-size:11px;fill:var(--muted)}
+.node:hover rect,.node:focus rect{stroke-width:2.5}
+.node.sel rect{stroke:var(--sel)!important;stroke-width:3}
+.node:focus{outline:none}
+.edge path.v{fill:none;stroke:var(--edge);stroke-width:1.6;marker-end:url(#arr)}
+.edge path.hit{fill:none;stroke:transparent;stroke-width:14;cursor:pointer}
+.edge text{fill:var(--muted);font-size:10.5px;font-family:ui-monospace,Menlo,monospace;pointer-events:none}
+.edge.dash path.v{stroke-dasharray:5 4}
+.edge.sel path.v{stroke:var(--sel);stroke-width:3}
+.edge:hover path.v{stroke:var(--ink)}
+.lane rect{fill:none;stroke:var(--line);stroke-dasharray:3 4}
+.lane text{font-size:13px;font-weight:600;cursor:pointer}
+.smoke circle{fill:var(--warn)}
+.smoke text{fill:#fff;font-size:11px;font-weight:700;pointer-events:none}
+.dim{opacity:.25}
+#panel{padding:14px;position:sticky;top:12px;align-self:start;max-height:calc(100vh - 24px);overflow:auto}
+#panel h2{font-size:16px;margin:0 0 2px}
+#panel .where{color:var(--muted);font-size:12px;margin-bottom:10px}
+.tabs{display:flex;flex-wrap:wrap;gap:4px;margin:8px 0 10px;border-bottom:1px solid var(--line)}
+.tabs button{all:unset;cursor:pointer;padding:6px 8px;font-size:12px;color:var(--muted);border-bottom:2px solid transparent}
+.tabs button.on{color:var(--ink);border-bottom-color:var(--s1)}
+.tabs button:focus-visible{outline:2px solid var(--sel)}
+table{border-collapse:collapse;width:100%;font-size:12px}
+td,th{border-bottom:1px solid var(--line);padding:5px 4px;text-align:left;vertical-align:top}
+th{color:var(--muted);font-weight:500}
+td.v{font-family:ui-monospace,Menlo,monospace;white-space:nowrap}
+td.src{font-family:ui-monospace,Menlo,monospace;font-size:10.5px;color:var(--muted);word-break:break-all}
+.badge{display:inline-block;font-size:10.5px;padding:1px 6px;border-radius:9px;background:var(--fillx);border:1px solid var(--line);color:var(--muted)}
+.badge.ext{border-color:var(--s3);color:var(--s3)}
+.callout{border-left:3px solid var(--warn);background:var(--fillx);padding:8px 10px;margin:8px 0;font-size:12.5px}
+.empty{color:var(--muted);font-size:12.5px}
+ul{padding-left:18px;margin:6px 0}
+.legend{display:flex;flex-wrap:wrap;gap:12px;padding:8px 10px;font-size:12px;color:var(--muted)}
+.legend i{display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:-2px;margin-right:4px}
+.tools{display:flex;gap:8px;align-items:center;padding:0 10px 8px;flex-wrap:wrap}
+.tools button{all:unset;cursor:pointer;font-size:12px;border:1px solid var(--line);border-radius:5px;padding:4px 8px}
+.tools button:focus-visible{outline:2px solid var(--sel)}
+</style>
+</head>
+<body>
+<header>
+  <h1>Method 2.1 · Event-Driven Agent-Mode Coordinator</h1>
+  <div class="sub">Architecture at <code>ac202dd</code> (branch <code>cameron-chen/goal-agentic-coordinator</code>). Click any stage label, node or arrow to inspect it. Values link to the source line that defines them.</div>
+</header>
+<main>
+<section>
+  <div class="card fam" id="fam" role="group" aria-label="Coordinator family">
+    <button data-fam="coordinator"><b>--coordinator</b><span><code>_Coordinator</code> · tool-call LLM coordinator, polled</span></button>
+    <button data-fam="deterministic"><b>--deterministic-coordinator</b><span><code>_DeterministicCoordinator</code> · string triggers every 20 s</span></button>
+    <button data-fam="agent" class="on"><b>--agent-coordinator</b><span><code>AgentCoordinator</code> · Method 2.1 (this diagram)</span></button>
+    <div class="famnote" id="famnote"></div>
+  </div>
+  <div class="card">
+    <div class="legend">
+      <span><i style="background:var(--s1)"></i>Stage 1 Opening</span>
+      <span><i style="background:var(--s2)"></i>Stage 2 Execution</span>
+      <span><i style="background:var(--s3)"></i>Stage 3 Pre-Submit</span>
+      <span><i style="background:var(--s4)"></i>Stage 4 Merge / Repair</span>
+      <span><i style="background:var(--warn);border-radius:50%"></i>1-pair smoke observation</span>
+      <span>dashed arrow = optional / fallback path</span>
+    </div>
+    <div class="tools"><button id="bsmoke">Show smoke observations</button><button id="ball">Overview</button><button id="btheme">Toggle theme</button></div>
+    <svg id="diagram" viewBox="0 0 1180 1010" role="img" aria-label="Agent coordinator flowchart">
+      <defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--edge)"/></marker></defs>
+      <g id="lanes"></g><g id="edges"></g><g id="nodes"></g><g id="smokes"></g>
+    </svg>
+  </div>
+</section>
+<aside class="card" id="panel" aria-live="polite"></aside>
+</main>
+<script>
+"use strict";
+const AC="src/cooperagents/agent_coordinator.py", T="src/cooperagents/agent_coordination_types.py",
+  SS="src/cooperagents/structural_signals.py", G="src/cooperagents/system1_gate.py",
+  V="src/cooperagents/verification.py", W="src/cooperagents/workers/mini_swe_worker.py",
+  B="scripts/bench_compare.py", SP="docs/AGENTIC_COORDINATOR_SPEC.md", TY="src/cooperagents/types.py",
+  H="src/cooperagents/harness.py", GS="src/cooperagents/git_snapshots.py", M="scripts/measure.sh", EXT="coordinator brief (polar-ext / smoke; not in this repo)";
+const C={1:["--s1","--fill1"],2:["--s2","--fill2"],3:["--s3","--fill3"],4:["--s4","--fill4"],0:["--edge","--fillx"]};
+
+/* budgets: [name, value, source]; smoke: list of strings */
+const STAGES={
+ s1:{stage:1,title:"Stage 1 · Opening (run_opening)",y:10,h:150,
+  ov:"Before workers start, the System-2 coordinator model inspects the base checkout through read-only Git object queries and submits one OpeningPlan. The plan (owns / avoid / interfaces / notes per worker, shared interfaces, risks, evidence) is delivered to workers over the bus. `--agent-opening none` skips this stage."},
+ s2:{stage:2,title:"Stage 2 · Execution (workers + Tier 1 + Tier 2 + System 2)",y:175,h:450,
+  ov:"Each worker is the vendored mini-swe DefaultAgent in its own container. After every executed step the team_poller hook calls AgentCoordinatorPoller.poll(), which runs one DiffProbe and derives Tier 1 structural signals. Candidates are enqueued (workers never wait on the gate); a gate thread applies WakeBudget then the Tier 2 System-1 gate; a wake thread runs bounded System-2 wakes that reply via send_message."},
+ s3:{stage:3,title:"Stage 3 · Pre-Submit (composed_completion_gate)",y:640,h:170,
+  ov:"When a worker submits, MiniSweEnvAdapter calls the composed completion gate: the base check (verification.validate, enabled by --completion-gate or --presub-merge) runs first; if it passes, the frozen spec_check reviews the frozen diff against the feature text. A non-None return rejects the submission and the worker continues."},
+ s4:{stage:4,title:"Stage 4 · Merge / Repair",y:825,h:175,
+  ov:"After workers finish, --presub-merge selects the integration (longest patch / 3-way merge of teammate branches through select_integration), and the optional --repair-integrator runs a bounded repair agent on the merged tree. Output patches go to CooperBench's expected layout for `cooperbench eval`."}
+};
+
+const N=[
+ /* Stage 1 */
+ {id:"base",s:1,x:20,y:50,w:190,h:58,t:"Base checkout",k:"base_sha (read-only)",
+  ov:"The coordinator gets its own environment from env_factory(\"coordinator\"), created with the worker environments in _run_isolated. It is never diffed, merged or submitted. Queries run against the base SHA or an exported worker snapshot SHA.",
+  tools:[["Environment","env_factory(\"coordinator\")","Same volumes as workers (/cbshared for Git sharing); no /coordination mount."]]},
+ {id:"opening",s:1,x:250,y:40,w:300,h:78,t:"run_opening",k:"System-2 model + ReadOnlyGit",
+  ov:"Tool-using loop with list_dir, read_file, search_code, git_show and submit_plan. Every tool maps to a fixed git command template; arguments are validated and shlex-quoted, the model never supplies a shell string.",
+  b:[["opening_max_tool_calls","16",T+":291"],["opening_time_limit_s","180 s",T+":292"],["list_dir","≤ 400 entries",AC+":204"],["read_file","≤ 400 lines, ≤ 16000 chars",AC+":211-212"],["search_code","≤ 200 lines, --max-count=20",AC+":219-221"],["ReadOnlyGit default timeout","60 s",AC+":180"],["tool-output folding in history","args clipped to 300 chars",AC+":563"]],
+  tools:[["list_dir","{path}","git ls-tree --name-only <rev> -- <path>"],["read_file","{path,start≥1,end}","git show <rev>:<path> | sed -n start,min(end,start+399)p"],["search_code","{pattern,path_glob}","git grep -n -F -I --max-count=20 -e <pattern> <rev> -- :(glob)<glob>"],["git_show","{rev,path?}","git show --stat <rev> | git diff <base> <rev> -- <path>"]],
+  tel:["metrics.opening (tool calls, outcome)","metrics.timeline.opening_end_s","usage.coordinator (system-2 tokens)"],
+  smoke:["Opening used 16/16 tool calls: the loop reached the cap, leaving no call for a deliberate wrap-up before submit_plan.","search_code uses `git grep -F` (fixed string). Regex-style patterns from the model (e.g. `def foo|class Bar`) match literally and return nothing."]},
+ {id:"plan",s:1,x:590,y:40,w:230,h:78,t:"submit_plan → OpeningPlan",k:"schema-validated JSON",
+  ov:"Exactly one submit_plan call ends the opening phase. The plan is validated against OPENING_PLAN_SCHEMA (version const 1).",
+  tools:[["submit_plan","schema, version=1, workers{owns,avoid,interfaces,notes}, shared_interfaces[{name,owner,definition,location}], risks[{path,reason}], evidence[{tool,path,lines}]",T+":337"]]},
+ {id:"bus1",s:1,x:860,y:40,w:290,h:78,t:"Bus delivery to workers",k:"BusComm message per worker",
+  ov:"The per-worker part of the plan is sent as a bus message before workers start; workers receive it as an inbox message through the existing BusComm channel. No change to mini-swe."},
+
+ /* Stage 2 */
+ {id:"workers",s:2,x:20,y:215,w:230,h:110,t:"Workers A / B (mini-swe)",k:"DefaultAgent · bash + send_message",
+  ov:"The agent loop is held constant: configured exactly as in det_main. Coordination reaches it only through three existing channels: bus messages (BusComm), the per-step team_poller hook, and the completion_gate callable.",
+  b:[["step_limit","50 (measure.sh) · 30 (bench_compare default)",M+":35, "+B+":552"],["step_limit (polar-ext)","1000",EXT],["agent_time_limit","1200 s (smoke) · 3600 s (polar-ext) · 0 = disabled default",B+":553, "+EXT],["command_timeout","300 s (bench_compare) · worker default 240",B+":376, "+W+":394"],["gate_max_rejections","3 (shared by validate + spec_check)",W+":70"]],
+  tools:[["bash","command","mini-swe action, executed in worker container"],["send_message","recipient, content","BusComm to teammate or coordinator (PEER_MESSAGE signal)"]]},
+ {id:"gitsync",s:2,x:20,y:370,w:230,h:62,t:"GitShareSync",k:"shared remote /cbshared",
+  ov:"Background thread that pushes/fetches worker branches to the shared Git remote, providing worker snapshot SHAs for PEER_OVERLAP and for ReadOnlyGit queries.",
+  b:[["sync interval","45 s",GS+":279"],["per-fetch timeout","45 s",H+":1771"]]},
+ {id:"poller",s:2,x:300,y:215,w:220,h:62,t:"AgentCoordinatorPoller.poll()",k:"team_poller hook, per step",
+  ov:"Called after every executed step. Only records the step and enqueues candidates; its latency is the probe latency. Workers never wait on the gate."},
+ {id:"probe",s:2,x:300,y:305,w:220,h:62,t:"DiffProbe",k:"one env.execute per step",
+  ov:"Fingerprint of `git diff` plus added/deleted line counts, used for progress and churn detection.",
+  b:[["probe_timeout_s","10 s",T+":224"]],
+  tel:["metrics.probe.calls / errors","metrics.probe.latency_ms p50/p95","PROBE_ERROR info signal on timeout / execution_failed"]},
+ {id:"tier1",s:2,x:570,y:215,w:260,h:152,t:"Tier 1 · structural signals",k:"$0, no model call",
+  ov:"Signals derived from exit codes, diff fingerprints and Git snapshot hunks. Severity hard/warn/info. Candidate kinds: signal, peer_message, heartbeat.",
+  b:[["history_steps","24",T+":218"],["no_progress_window","5",T+":219"],["no_progress_min_failures","3",T+":220"],["churn_min_steps","3",T+":221"],["churn_window","10",T+":222"],["cooldown_steps","6",T+":223"],["heartbeat_steps","15 (in GateConfig)",T+":240"]],
+  tools:[["NO_PROGRESS_FAILING","hard if test command else warn",SS+":302"],["HUNK_CHURN","same hunks rewritten",SS],["TEST_REGRESSION","hard",SS+":406"],["PEER_OVERLAP","hard on overlapping region, info if unknown",SS+":465-468"],["SUBMIT_REJECTED","warn on 1st, hard after",SS+":442"],["PEER_MESSAGE / SUBMIT_ATTEMPT / WORKER_FINISHED / PROBE_ERROR","info",SS+":431-459"],["heartbeat","candidate every heartbeat_steps without signal",G+":58"]],
+  tel:["metrics.signals.by_kind","metrics.signals.by_worker"]},
+ {id:"queue",s:2,x:870,y:215,w:280,h:62,t:"Candidate queue (coalesced)",k:"latest state per target wins",
+  ov:"While a candidate for a target is queued, a newer candidate for the same target replaces it. A WAKE for a target with a queued wake merges its signal ids into that wake."},
+ {id:"budget",s:2,x:870,y:305,w:280,h:96,t:"WakeBudget",k:"constraints before any model call",
+  ov:"One wake budget shared across all workers in a run. A budget-blocked candidate makes no DecisionComplete call. Target status must be running.",
+  b:[["wake_budget","8",T+":236"],["per_worker_wake_cap","4",T+":237"],["min_steps_between_wakes","4",T+":238"],["min_seconds_between_wakes","30 s",T+":239"]],
+  tel:["metrics.gate.budget / budget_remaining"]},
+ {id:"gate",s:2,x:870,y:430,w:280,h:110,t:"Tier 2 · System-1 DecisionGate",k:"liquid/d1.2-ultra · p_wake ≥ 0.5",
+  ov:"Default policy `model`: GateState is sent to an independent decision model via OpenRouter /api/alpha/decisions; one call returns probabilities over {WAKE, SKIP}, no generated text, zero retries. WAKE iff p_wake ≥ wake_threshold. On timeout / transport error / non-2xx / invalid response, the RuleGate decision is used with source=\"fallback\".",
+  b:[["model","liquid/d1.2-ultra",T+":248"],["base_url","https://openrouter.ai/api/alpha (+/decisions)",T+":249, "+G+":225"],["api_key_env","OPENROUTER_API_KEY",T+":250"],["wake_threshold","0.5",T+":251"],["timeout_s","3.0 s (valid range (0,10])",T+":252, 282"],["GateState size","≤ 3 KB canonical JSON",SP+":259"],["GateState history","last 6 step records",G+":167"],["command text in state","≤ 160 chars",G+":161"]],
+  tools:[["DecisionGate","policy=model",G+":389"],["RuleGate","policy=rule; WAKE iff non-heartbeat and (peer_message, any hard signal, HUNK_CHURN or PEER_MESSAGE)",G+":303-309"],["RandomGate","policy=random; seeded schedule of random_wakes over random_step_horizon (matched-count ablation)",G+":490-510"]],
+  tel:["metrics.gate.candidates / wake / skip","by_reason, by_source (model/fallback/rule/random), by_candidate_kind","model_calls, fallbacks","p_wake n/mean/p50/p90","latency_ms p50/p95","usage.coordinator_gate.prompt_tokens / completion_tokens / reported_cost_usd"],
+  smoke:["liquid/d1.2-ultra decision latency p50 = 385 ms (OpenRouter page reports 0.22 s median; 3 s timeout bounds the tail).","completion_tokens = 0 on every decision row, as the spec expects."]},
+ {id:"wake",s:2,x:300,y:430,w:530,h:110,t:"System-2 wake loop",k:"ReadOnlyGit + send_message + end_wake",
+  ov:"A wake thread runs one bounded tool-using intervention per WAKE. A long wake does not delay gate decisions. A WAKE older than the staleness limit is re-checked against the constraints only (no second decision-model call).",
+  b:[["wake_max_tool_calls","6",T+":293"],["wake_time_limit_s","90 s",T+":294"],["staleness re-check","60 s",AC+":849"],["send_message calls per wake","≤ 2",AC+":898"],["message length","≤ 1500 chars",AC+":902"],["tool-output folding in history","args clipped to 300 chars",AC+":563"],["coordinator tick_s","1.0 s",T+":296"]],
+  tools:[["list_dir / read_file / search_code / git_show","as in opening; rev may be a worker snapshot SHA",AC+":169"],["send_message","{recipient, content}","bus message to target worker"],["end_wake","{note}",T+":384"]],
+  tel:["metrics.wakes.total / tool_calls / messages_sent","metrics.wakes.seconds p50/p95","usage.coordinator"],
+  smoke:["Wake used 6/6 tool calls: as in the opening, the cap was reached with no call left for end_wake or a final message (wrap-up gap)."]},
+ {id:"metrics",s:2,x:20,y:470,w:230,h:70,t:"Metrics block",k:"AGENT_COORDINATOR_METRICS_SCHEMA",
+  ov:"Written once per pair; consumed by bench_compare summaries and polar-ext cost accounting.",
+  tel:["config.gate (policy, model, threshold, timeout, budgets), opening, spec_check, prompt_ids","opening, signals, gate, wakes, spec_check, probe","usage.coordinator + usage.coordinator_gate","team_worker_steps","timeline: opening_end_s, first_worker_edit_s, worker_end_s"]},
+
+ /* Stage 3 */
+ {id:"submit",s:3,x:20,y:690,w:200,h:62,t:"Worker submits",k:"MiniSweEnvAdapter",
+  ov:"Submission calls the completion_gate callable while rejections < gate_max_rejections. Each attempt emits SUBMIT_ATTEMPT; a rejection emits SUBMIT_REJECTED.",
+  b:[["gate_max_rejections","3",W+":70"]]},
+ {id:"validate",s:3,x:270,y:675,w:280,h:92,t:"verification.validate()",k:"--completion-gate / --presub-merge",
+  ov:"Base check in the worker's own container. With merged=True (presub-merge) it first merges every teammate branch from the shared remote; conflicts go back to the agent. Then the discovered build must succeed.",
+  b:[["merge step timeout","300 s",V+":140"],["build step timeout","600 s",V+":61"],["build-log evidence in repair brief","last 3000 chars",V+":238"]]},
+ {id:"spec",s:3,x:600,y:675,w:300,h:92,t:"Frozen spec_check",k:"empty_diff · conflict_marker · feature",
+  ov:"Runs only if the base check passed. The diff is frozen (sha256 recorded); deterministic REJECT on empty diff or conflict markers; otherwise one spec_verdict call compares the frozen diff to the feature text (and teammate features under presub-merge). Each finding must quote the supplied feature text. Errors yield ERROR (submission allowed).",
+  b:[["spec_gate_max_rejections","1",T+":295"],["frozen_diff clip","12000 chars (head/tail)",AC+":973"],["spec_check deadline","60 s",AC+":979"],["freeze-diff command timeout","60 s",AC+":955"],["findings","≤ 3, quote ≤ 300 chars",T+":360, 375"]],
+  tools:[["spec_verdict","{verdict: ACCEPT|REJECT, findings[{kind,feature_id,quote,path?}]}",T+":354"],["finding kinds","missing_requirement, api_mismatch, unrelated_edit, lost_teammate_change, empty_diff, conflict_marker",T+":176"]],
+  tel:["metrics.spec_check.checked / accepted / rejected / errors"]},
+ {id:"accept",s:3,x:950,y:690,w:200,h:62,t:"Accepted patch",k:"worker done",
+  ov:"Gate returned None: the worker's submission stands and WORKER_FINISHED is recorded."},
+
+ /* Stage 4 */
+ {id:"merge",s:4,x:20,y:870,w:300,h:92,t:"--presub-merge integration",k:"select_integration",
+  ov:"Selects the integration candidate: longest patch or a 3-way merge of the teammate branches. Under presub-merge every worker already merged teammates inside validate()."},
+ {id:"repair",s:4,x:370,y:870,w:300,h:92,t:"--repair-integrator (optional)",k:"bounded repair agent",
+  ov:"Runs a repair agent on the merged tree for up to repair_attempts attempts. --focused-repair adds harness-gathered merge-damage evidence to the brief.",
+  b:[["repair_attempts","1 default · 2 (polar-ext)",TY+":177, "+EXT],["repair_step_limit","25",TY+":174, "+B+":251"]]},
+ {id:"eval",s:4,x:720,y:870,w:430,h:92,t:"CooperBench output + eval",k:"logs/<run>/team/<repo>/<task>/<f1>_<f2>/",
+  ov:"Per-feature agent{fid}.patch written in CooperBench's expected layout; scored unmodified by `cooperbench eval`. CooperBench is never edited."}
+];
+
+const E=[
+ {f:"base",t:"opening",p:"210,79 250,79",l:"git objects",d:"Read-only queries against base_sha. No shell string from the model."},
+ {f:"opening",t:"plan",p:"550,79 590,79",l:"1 call",d:"Exactly one submit_plan ends the opening. Cap: 16 tool calls / 180 s.",smoke:1},
+ {f:"plan",t:"bus1",p:"820,79 860,79",l:"",d:"Validated OpeningPlan is split per worker."},
+ {f:"bus1",t:"workers",p:"1005,118 1005,150 135,150 135,215",l:"plan message",d:"Workers start after the opening; each gets its plan part as an inbox message."},
+ {f:"workers",t:"poller",p:"250,246 300,246",l:"each step",d:"team_poller hook after every executed step (exception_info ≠ \"action was not executed\")."},
+ {f:"poller",t:"probe",p:"410,277 410,305",l:"",d:"One DiffProbe per step, timeout 10 s."},
+ {f:"probe",t:"tier1",p:"520,336 570,336",l:"diff fp",d:"Diff fingerprint + exit code feed the signal detectors."},
+ {f:"gitsync",t:"tier1",p:"250,412 700,412 700,367",l:"snapshot hunks · every 45 s",d:"Snapshot SHAs from GitShareSync drive PEER_OVERLAP.",dash:1},
+ {f:"tier1",t:"queue",p:"830,246 870,246",l:"candidate",d:"Candidate kinds: signal, peer_message, heartbeat (every 15 steps)."},
+ {f:"queue",t:"budget",p:"1010,277 1010,305",l:"gate thread",d:"Gate daemon thread consumes candidates."},
+ {f:"budget",t:"gate",p:"1010,401 1010,430",l:"allowed",d:"Budget-blocked candidates SKIP with no model call. wake_budget 8, per-worker cap 4, ≥4 steps and ≥30 s between wakes."},
+ {f:"gate",t:"wake",p:"870,485 830,485",l:"WAKE p≥0.5",d:"WAKE iff p_wake ≥ 0.5 (model) / RuleGate (fallback, rule) / schedule (random). Wake thread picks it up; >60 s stale → constraint re-check."},
+ {f:"wake",t:"workers",p:"300,500 280,500 280,300 250,300",l:"send_message ≤2",lp:"276,463",la:"end",d:"At most 2 send_message calls per wake, each ≤ 1500 chars, delivered via BusComm.",smoke:1},
+ {f:"workers",t:"metrics",p:"135,325 135,370",l:"",d:"",hide:1},
+ {f:"workers",t:"submit",p:"60,325 60,345 10,345 10,721 20,721",l:"submit",lp:"66,358",d:"Worker submits: completion_gate is called while rejections < 3."},
+ {f:"submit",t:"validate",p:"220,721 270,721",l:"",d:"Base check first (if --completion-gate or --presub-merge)."},
+ {f:"validate",t:"spec",p:"550,721 600,721",l:"pass",d:"Only a passing base check reaches spec_check."},
+ {f:"spec",t:"accept",p:"900,721 950,721",l:"ACCEPT / ERROR",d:"ACCEPT, ERROR, or spec rejections exhausted (1) → submission stands."},
+ {f:"spec",t:"workers",p:"750,675 750,600 290,600 290,345 200,345 200,325",l:"REJECT → continue",lp:"520,595",d:"REJECT message returned to the worker; shared rejection counter (3) and spec cap (1).",dash:1},
+ {f:"accept",t:"merge",p:"1050,752 1050,830 170,830 170,870",l:"all workers done",d:"After every worker settles, integration runs."},
+ {f:"merge",t:"repair",p:"320,916 370,916",l:"optional",d:"Only with --repair-integrator.",dash:1},
+ {f:"repair",t:"eval",p:"670,916 720,916",l:"patches",d:"Patches written for cooperbench eval."}
+];
+E.forEach((e,i)=>e.id="e"+i);
+
+const FAM={
+ coordinator:"`--coordinator` runs the existing tool-call coordinator `_Coordinator` (polled LLM with send_message / update_notebook / finish_planning). None of the Method 2.1 nodes below run. The three family flags are a mutually exclusive argparse group ("+B+":573-577).",
+ deterministic:"`--deterministic-coordinator` runs `_DeterministicCoordinator`: string-pattern triggers (LOOP, STALL, COLLISION) evaluated every 20 s, ≤ 3 nudges per worker. None of the Method 2.1 nodes below run.",
+ agent:"`--agent-coordinator` runs AgentCoordinator with its own injection arguments (agent_coordinator_complete, agent_gate_complete). Passing coordinator_complete together with it raises ValueError; the existing families are unchanged. Worker loop, --completion-gate, --presub-merge and --repair-integrator are shared by all families."
+};
+
+const svgNS="http://www.w3.org/2000/svg";
+const $=(s)=>document.querySelector(s);
+function el(tag,attrs,parent){const n=document.createElementNS(svgNS,tag);for(const k in attrs)n.setAttribute(k,attrs[k]);parent&&parent.appendChild(n);return n;}
+function css(v){return "var("+v+")";}
+const byId={};N.forEach(n=>byId[n.id]=n);
+
+/* lanes */
+for(const id in STAGES){const s=STAGES[id];const g=el("g",{class:"lane"},$("#lanes"));
+ el("rect",{x:4,y:s.y,width:1172,height:s.h,rx:8},g);
+ const t=el("text",{x:14,y:s.y+18,fill:css(C[s.stage][0]),tabindex:0,role:"button"},g);t.textContent=s.title;
+ t.addEventListener("click",()=>select("stage",id));t.addEventListener("keydown",ev=>{if(ev.key==="Enter")select("stage",id)});}
+
+/* edges */
+E.forEach(e=>{if(e.hide)return;const g=el("g",{class:"edge"+(e.dash?" dash":""),"data-id":e.id},$("#edges"));
+ const pts=e.p.split(" ").map(p=>p.split(",").map(Number));const d="M"+pts.map(p=>p.join(",")).join(" L");
+ el("path",{d,class:"v"},g);el("path",{d,class:"hit"},g);
+ if(e.l){let x,y;const a=pts[Math.floor((pts.length-1)/2)],b=pts[Math.floor((pts.length-1)/2)+1];
+  if(e.lp)[x,y]=e.lp.split(",").map(Number);
+  else if(Math.hypot(b[0]-a[0],b[1]-a[1])>=70){x=(a[0]+b[0])/2+4;y=(a[1]+b[1])/2-4;}
+  /* ponytail: short arrows carry no inline label; the label is shown in the panel on click */
+  if(x!==undefined){const t=el("text",{x,y,"text-anchor":e.la||"start"},g);t.textContent=e.l;}}
+ g.addEventListener("click",()=>select("edge",e.id));e.g=g;});
+
+/* nodes */
+N.forEach(n=>{const g=el("g",{class:"node",tabindex:0,role:"button","aria-label":n.t,"data-id":n.id},$("#nodes"));
+ el("rect",{x:n.x,y:n.y,width:n.w,height:n.h,rx:6,fill:css(C[n.s][1]),stroke:css(C[n.s][0])},g);
+ const t1=el("text",{x:n.x+10,y:n.y+22,"font-weight":600},g);t1.textContent=n.t;
+ const t2=el("text",{x:n.x+10,y:n.y+40,class:"k"},g);t2.textContent=n.k||"";
+ if(n.b){const t3=el("text",{x:n.x+10,y:n.y+n.h-10,class:"k"},g);t3.textContent=n.b.length+" budgets · click";}
+ g.addEventListener("click",()=>select("node",n.id));g.addEventListener("keydown",ev=>{if(ev.key==="Enter"||ev.key===" "){ev.preventDefault();select("node",n.id)}});
+ n.g=g;
+ if(n.smoke){const sg=el("g",{class:"smoke"},$("#smokes"));el("circle",{cx:n.x+n.w-4,cy:n.y+4,r:9},sg);
+  const st=el("text",{x:n.x+n.w-4,y:n.y+8,"text-anchor":"middle"},sg);st.textContent="!";
+  sg.style.cursor="pointer";sg.addEventListener("click",()=>{select("node",n.id);tab="smoke";render();});}});
+
+/* panel */
+let cur={type:"all"},tab="ov";
+const TABS=[["ov","Overview"],["b","Budgets & Thresholds"],["tools","Tools & Schemas"],["tel","Telemetry & Metrics"],["smoke","1-Pair Smoke Observations"]];
+function esc(s){return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
+function md(s){return esc(s).replace(/`([^`]+)`/g,"<code>$1</code>");}
+function srcCell(s){return '<td class="src">'+esc(s)+(s===EXT||s.includes(EXT)?' <span class="badge ext">external</span>':'')+'</td>';}
+function bTable(rows){return rows&&rows.length?'<table><tr><th>Parameter</th><th>Value</th><th>Source</th></tr>'+rows.map(r=>'<tr><td><code>'+esc(r[0])+'</code></td><td class="v">'+esc(r[1])+'</td>'+srcCell(r[2])+'</tr>').join("")+'</table>':'<p class="empty">No budgets on this element.</p>';}
+function toolTable(rows){return rows&&rows.length?'<table><tr><th>Name</th><th>Arguments / rule</th><th>Command / source</th></tr>'+rows.map(r=>'<tr><td><code>'+esc(r[0])+'</code></td><td>'+esc(r[1])+'</td><td class="src">'+esc(r[2])+'</td></tr>').join("")+'</table>':'<p class="empty">No tools or schemas on this element.</p>';}
+function list(a,empty){return a&&a.length?'<ul>'+a.map(x=>'<li>'+md(x)+'</li>').join("")+'</ul>':'<p class="empty">'+empty+'</p>';}
+function smokeBox(a){return a&&a.length?a.map(x=>'<div class="callout">'+md(x)+'</div>').join("")+'<p class="empty">Source: 1-pair live flash smoke reported in the coordinator brief; raw logs are not in this repo.</p>':'<p class="empty">No smoke observation recorded for this element.</p>';}
+function collect(nodes){const o={b:[],tools:[],tel:[],smoke:[]};nodes.forEach(n=>{(n.b||[]).forEach(r=>o.b.push([n.t+" · "+r[0],r[1],r[2]]));(n.tools||[]).forEach(r=>o.tools.push(r));(n.tel||[]).forEach(r=>o.tel.push(r));(n.smoke||[]).forEach(r=>o.smoke.push(n.t+": "+r));});return o;}
+
+function render(){
+ let title,where,ov,data;
+ if(cur.type==="node"){const n=byId[cur.id];title=n.t;where=STAGES["s"+n.s].title;ov=n.ov;data={b:n.b,tools:n.tools,tel:n.tel,smoke:n.smoke};}
+ else if(cur.type==="edge"){const e=E.find(x=>x.id===cur.id);title=byId[e.f].t+" → "+byId[e.t].t;where="Arrow"+(e.l?" · "+e.l:"");ov=e.d;
+  data={b:[],tools:[],tel:[],smoke:e.smoke?collect([byId[e.f],byId[e.t]]).smoke:[]};}
+ else if(cur.type==="stage"){const s=STAGES[cur.id];title=s.title;where="Stage";ov=s.ov;data=collect(N.filter(n=>n.s===s.stage));}
+ else{title="Method 2.1 overview";where="All stages · "+N.length+" components";ov="Four stages around an unchanged mini-swe worker loop. Tier 1 signals cost no model call; Tier 2 costs one decision-model call with zero completion tokens; System 2 runs only on WAKE under a shared budget. Select an element, or browse every budget in the tabs below.";data=collect(N);}
+ const body={ov:'<p>'+md(ov)+'</p>',b:bTable(data.b),tools:toolTable(data.tools),tel:list(data.tel,"No telemetry fields on this element."),smoke:smokeBox(data.smoke)}[tab];
+ $("#panel").innerHTML='<h2>'+esc(title)+'</h2><div class="where">'+esc(where)+'</div><div class="tabs" role="tablist">'+
+  TABS.map(t=>'<button role="tab" data-tab="'+t[0]+'" class="'+(t[0]===tab?"on":"")+'">'+t[1]+((t[0]==="smoke"&&data.smoke&&data.smoke.length)?' <span class="badge" style="color:var(--warn)">'+data.smoke.length+'</span>':'')+'</button>').join("")+'</div>'+body;
+ document.querySelectorAll(".tabs button").forEach(b=>b.addEventListener("click",()=>{tab=b.dataset.tab;render();}));
+ N.forEach(n=>n.g.classList.toggle("sel",cur.type==="node"&&cur.id===n.id));
+ E.forEach(e=>e.g&&e.g.classList.toggle("sel",cur.type==="edge"&&cur.id===e.id));
+}
+function select(type,id){cur={type,id};if(type!=="all"&&tab!=="ov"&&tab!=="smoke"&&type==="edge")tab="ov";render();}
+
+/* family toggle */
+function setFam(f){document.querySelectorAll("#fam button").forEach(b=>b.classList.toggle("on",b.dataset.fam===f));
+ $("#famnote").innerHTML=md(FAM[f]);
+ const shared=new Set(["workers","gitsync","submit","validate","accept","merge","repair","eval"]);
+ N.forEach(n=>n.g.classList.toggle("dim",f!=="agent"&&!shared.has(n.id)));
+ E.forEach(e=>e.g&&e.g.classList.toggle("dim",f!=="agent"&&!(shared.has(e.f)&&shared.has(e.t))));
+ document.querySelectorAll(".smoke").forEach(s=>s.classList.toggle("dim",f!=="agent"));}
+document.querySelectorAll("#fam button").forEach(b=>b.addEventListener("click",()=>setFam(b.dataset.fam)));
+$("#bsmoke").addEventListener("click",()=>{cur={type:"all"};tab="smoke";render();});
+$("#ball").addEventListener("click",()=>{cur={type:"all"};tab="ov";render();});
+$("#btheme").addEventListener("click",()=>{const r=document.documentElement;const dark=r.dataset.theme?r.dataset.theme==="dark":matchMedia("(prefers-color-scheme: dark)").matches;r.dataset.theme=dark?"light":"dark";});
+setFam("agent");render();
+</script>
+</body>
+</html>
