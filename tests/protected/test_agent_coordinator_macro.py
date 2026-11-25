@@ -64,6 +64,13 @@ def tool(name, **arguments):
     return {"name": name, "arguments": json.dumps(arguments)}
 
 
+def latest_result(messages):
+    """Return the newest message before a trailing coordinator budget notice."""
+    if messages[-1]["role"] == "user" and messages[-1]["content"].startswith("[remaining_tool_calls: "):
+        return messages[-2]
+    return messages[-1]
+
+
 def opening_plan():
     return tool("submit_plan", **asdict(OpeningPlan(
         version=1, workers={aid: WorkerPlan([f"{aid}.txt"], [], [], OPENING_NOTE) for aid in WORKERS},
@@ -268,8 +275,8 @@ def episode(tmp_path, monkeypatch):
 def test_a1_opening_plan_precedes_worker_requests(episode):
     def coordinator(messages, tools):
         assert {"read_file", "submit_plan"} <= tool_names(tools)
-        if messages[-1]["role"] == "tool":
-            assert messages[-1]["content"] == "base two\n"
+        if latest_result(messages)["role"] == "tool":
+            assert latest_result(messages)["content"] == "base two\n"
             return [opening_plan()]
         return [tool("read_file", path="shared.txt", start=2, end=2)]
 
@@ -307,8 +314,8 @@ def test_a2_rejected_read_file_paths_execute_no_commands(episode, monkeypatch):
     def coordinator(messages, _tools):
         # Opening runs before either worker and before the snapshot timer's first tick.
         if attempts:
-            assert messages[-1]["role"] == "tool"
-            assert messages[-1]["content"] == "Error: invalid repository path"
+            assert latest_result(messages)["role"] == "tool"
+            assert latest_result(messages)["content"] == "Error: invalid repository path"
             assert executed == attempts[-1][1], f"Command executed for rejected path {attempts[-1][0]}"
         if len(attempts) == len(paths):
             return [opening_plan()]
