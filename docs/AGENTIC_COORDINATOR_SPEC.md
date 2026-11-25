@@ -560,8 +560,9 @@ that a later prompt optimizer needs:
    gate prompt ID. The default wake threshold is 0.5.
    The coordinator records two additional IDs at startup and in
    `metrics.agent_coordinator.config.prompt_ids`. The `tools` ID hashes the tool schemas
-   as compact JSON with sorted keys. The `budget-notes` ID hashes the compact JSON list
-   `[OPENING_BUDGET_WARNING, OPENING_FINAL_TURN, WAKE_BUDGET_WARNING, WAKE_FINAL_TURN]`.
+   as compact JSON with sorted keys. The `budget-notes` ID hashes the compact JSON list of
+   `OPENING_BUDGET_STATUS`, `OPENING_BUDGET_WARNING`, `OPENING_FINAL_TURN`,
+   `WAKE_BUDGET_STATUS`, `WAKE_BUDGET_WARNING`, and `WAKE_FINAL_TURN`, in that order.
 2. `AgentCoordinatorConfig.prompts: dict[str, str] | None` overrides any prompt by name for
    offline experiments. The CLI exposes no override flag in this method.
 3. Every `GateDecision` is emitted with its full `GateState` (trajectory event
@@ -670,10 +671,14 @@ provider can keep its tool-call state and reuse cached context. The final window
 when the remaining budget reaches the reserve. Only `submit_plan` is accepted in that
 window. A final-turn read consumes one call and returns
 `Error: <name> is not allowed in the final turn; allowed: submit_plan`.
-With a positive reserve, requests after the first include a warning when one read call
-remains and a final-turn note within the reserve. These notes appear only in the current
-request. If a batch of calls reaches the reserve during an earlier turn, further reads
-in that batch consume no budget. When multiple calls are left, the response reads
+Each request after the first ends with a user message that starts with
+`[remaining_tool_calls: N]`, where `N` is the number of tool calls left. If at least two
+read calls remain, the notice gives the read count and uses the configured reserve in
+`When {reserve} or fewer calls remain, only submit_plan is accepted.` The notice warns
+when one read call remains and gives final-turn instructions at or below the reserve.
+The coordinator adds each notice to the current request only. If a batch of calls
+reaches the reserve during an earlier turn, further reads in that batch consume no
+budget. When multiple calls are left, the response reads
 `Error: read budget exhausted; the remaining calls are reserved for submit_plan.`
 If the SDK returns no structured tool calls, the coordinator
 can recover one call in `_call` from a tool name followed by a JSON argument object
@@ -743,9 +748,12 @@ Wake thread loop:
    budget reaches the reserve, the coordinator accepts only `send_message` and `end_wake`. A read
    in a final turn consumes one unit and returns
    `Error: <name> is not allowed in the final turn; allowed: end_wake, send_message`.
-   The same SDK fallback and budget note rules as in the opening apply. Once a batch
-   reaches the reserve, further reads in that turn consume no budget. When multiple
-   calls are left, the response reads
+   The same SDK fallback as in the opening applies. Each request after the first ends
+   with a `[remaining_tool_calls: N]` notice using the same tiers as the opening. The
+   status notice uses the configured reserve in `When {reserve} or fewer calls remain,
+   only send_message and end_wake are accepted.` Once a batch reaches the reserve,
+   further reads in that turn consume no budget. When multiple calls are left, the
+   response reads
    `Error: read budget exhausted; the remaining calls are reserved for send_message and end_wake.`
    Each wake allows at most two `send_message` calls.
 4. Emit `wake_end` with tool counts, messages sent, usage, and the outcome.
@@ -1145,7 +1153,7 @@ by Q7 and Q8 (Section 12.1).
 | Q6 | `agent_rule_main` (`--agent-gate rule`) is an explicit arm next to `agent_main` and `agent_rand_main` | 6.1, PR plan PR 4 |
 | Q7 | Decision model `liquid/d1.2-ultra` through OpenRouter (`https://openrouter.ai/liquid/d1.2-ultra`), OpenRouter Decisions API `POST https://openrouter.ai/api/alpha/decisions`; default base URL `https://openrouter.ai/api/alpha`, default key variable `OPENROUTER_API_KEY` | 4.3.2, 4.3.3, 10 |
 | Q8 | Price $0.042 per 1M input tokens (weighted average $0.0419), $0.00 per 1M output tokens (`output_tokens = 0`). Context window 65,536 tokens. Median latency 0.22 s (provider Liquid), which is below the 3 s timeout | 4.3.2, 4.5, 8.1, 10 |
-| D1 | The opening and each wake reserve two tool calls by default. Send budget notes after the initial request when one read call remains or the loop is within a positive reserve. | 5.3, 5.4 |
+| D1 | The opening and each wake reserve two tool calls by default. Every request after the first ends with a budget notice. Status notices use the configured reserve for that phase. | 5.3, 5.4 |
 | D2 | Wake reads default to `base_sha`. Use the optional `rev` to read worker snapshot SHAs listed in `git_evidence`. | 5.2, 5.4 |
 | D3 | The AWS Phase A2 report lists pairs where the default `make` target fails because the task image lacks `ruff`. Any later build-discovery change applies to all arms and includes a new `det_main` control. | 5.6, fix and AWS plan §5 |
 | D4 | AWS Phase A2 uses the polar-ext limits `--step-limit 1000 --agent-time-limit 3600`. | Fix and AWS plan §5 |

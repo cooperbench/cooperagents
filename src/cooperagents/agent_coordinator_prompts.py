@@ -24,6 +24,7 @@ OPENING_PLAN_PROMPT = (
     "The user message gives tool_call_budget and reserved_tool_calls. Calls use one unit each, "
     "except reads beyond the read budget in an earlier batch. The tool list stays the same. "
     "When the remaining budget is at or below reserved_tool_calls, only submit_plan is accepted. "
+    "Each request after the first ends with `[remaining_tool_calls: N]`. "
     "When the evidence is incomplete, submit the plan with the evidence collected so far and record the gaps in risks."
 )
 WAKE_PROMPT = (
@@ -32,12 +33,21 @@ WAKE_PROMPT = (
     + TOOL_RULES + "\n"
     "The second message gives tool_call_budget and reserved_tool_calls. At most 2 send_message calls per wake. "
     "The tool list stays the same. When the remaining budget is at or below reserved_tool_calls, "
-    "only send_message and end_wake are accepted."
+    "only send_message and end_wake are accepted. "
+    "Each request after the first ends with `[remaining_tool_calls: N]`."
+)
+OPENING_BUDGET_STATUS = (
+    "[remaining_tool_calls: {remaining}] {reads} read calls remain. "
+    "When {reserve} or fewer calls remain, only submit_plan is accepted."
 )
 OPENING_BUDGET_WARNING = "[remaining_tool_calls: {remaining}] One read call remains. After that, only submit_plan is accepted."
 OPENING_FINAL_TURN = (
     "[remaining_tool_calls: {remaining}] Final turn: only submit_plan is accepted. "
     "Call submit_plan now with the evidence collected so far."
+)
+WAKE_BUDGET_STATUS = (
+    "[remaining_tool_calls: {remaining}] {reads} read calls remain. "
+    "When {reserve} or fewer calls remain, only send_message and end_wake are accepted."
 )
 WAKE_BUDGET_WARNING = "[remaining_tool_calls: {remaining}] One read call remains. After that, only send_message and end_wake are accepted."
 WAKE_FINAL_TURN = (
@@ -68,6 +78,7 @@ OPENING_PLAN_PROMPT_ID = prompt_id("opening-plan", OPENING_PLAN_PROMPT)
 WAKE_PROMPT_ID = prompt_id("wake", WAKE_PROMPT)
 SPEC_CHECK_PROMPT_ID = prompt_id("spec-check", SPEC_CHECK_PROMPT)
 BUDGET_NOTES_PROMPT_ID = prompt_id("budget-notes", json.dumps(
-    [OPENING_BUDGET_WARNING, OPENING_FINAL_TURN, WAKE_BUDGET_WARNING, WAKE_FINAL_TURN],
+    [OPENING_BUDGET_STATUS, OPENING_BUDGET_WARNING, OPENING_FINAL_TURN,
+     WAKE_BUDGET_STATUS, WAKE_BUDGET_WARNING, WAKE_FINAL_TURN],
     ensure_ascii=False, separators=(",", ":"),
 ))
