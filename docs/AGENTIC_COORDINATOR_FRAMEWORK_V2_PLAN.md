@@ -114,11 +114,11 @@ New constants in `src/cooperagents/agent_coordinator_prompts.py`:
 ```python
 OPENING_BUDGET_STATUS = (
     "[remaining_tool_calls: {remaining}] {reads} read calls remain. "
-    "When two calls remain, only submit_plan is accepted."
+    "When {reserve} or fewer calls remain, only submit_plan is accepted."
 )
 WAKE_BUDGET_STATUS = (
     "[remaining_tool_calls: {remaining}] {reads} read calls remain. "
-    "When two calls remain, only send_message and end_wake are accepted."
+    "When {reserve} or fewer calls remain, only send_message and end_wake are accepted."
 )
 ```
 
@@ -130,29 +130,26 @@ if run.turns:
     status, warning, final_turn = _BUDGET_NOTES[phase]
     reads = remaining - reserve
     text = final_turn if final else warning if reads == 1 else status
-    note = [{"role": "user", "content": text.format(remaining=remaining, reads=reads)}]
+    note = [{"role": "user", "content": text.format(remaining=remaining, reads=reads, reserve=reserve)}]
 ```
 
 `_BUDGET_NOTES` becomes a 3-tuple per phase. `str.format` ignores the unused `reads`
-argument for the existing texts.
+and `reserve` arguments for the existing texts. With `reserve = 0`, the last request
+receives the one-read warning if it follows an earlier request.
 
 `BUDGET_NOTES_PROMPT_ID` hashes the 6 constants in this order: `OPENING_BUDGET_STATUS`,
 `OPENING_BUDGET_WARNING`, `OPENING_FINAL_TURN`, `WAKE_BUDGET_STATUS`,
 `WAKE_BUDGET_WARNING`, `WAKE_FINAL_TURN`.
 
-Prompt text additions. In each case, the sentence goes after the existing `Budget:` sentence:
-
-- `OPENING_PLAN_PROMPT`: "Each request after the first ends with `[remaining_tool_calls: N]`."
-  Also change "When one call remains, read tools are rejected" to "When two or fewer
-  calls remain, read tools are rejected" (this change belongs to PR-C1).
-- `WAKE_PROMPT`: "Each request after the first ends with `[remaining_tool_calls: N]`."
+After describing the reserve, `OPENING_PLAN_PROMPT` and `WAKE_PROMPT` each add
+"Each request after the first ends with `[remaining_tool_calls: N]`."
 
 Example opening sequence (`opening_max_tool_calls` = 16, `reserve` = 2):
 
 | Request | `remaining` | Last message |
 | --- | --- | --- |
 | 1 | 16 | User message with `tool_call_budget: 16` |
-| 2 | 15 | `[remaining_tool_calls: 15] 13 read calls remain. When two calls remain, only submit_plan is accepted.` |
+| 2 | 15 | `[remaining_tool_calls: 15] 13 read calls remain. When 2 or fewer calls remain, only submit_plan is accepted.` |
 | 13 | 4 | `[remaining_tool_calls: 4] 2 read calls remain. ...` |
 | 14 | 3 | `OPENING_BUDGET_WARNING` with `remaining=3` |
 | 15 | 2 | `OPENING_FINAL_TURN` with `remaining=2` |
@@ -415,7 +412,7 @@ turns. The other v2 items are unaffected.
 | --- | --- | --- | --- | --- |
 | 1 (parallel with 2) | PR-T | `test: read agent macro tool results before a trailing budget notice` | `tests/protected/test_agent_coordinator_macro.py` only | User approval before merge (CLAUDE.md, protected tests) |
 | 2 | PR-C1 | `fix: reserve two opening calls, report wake exit outcomes, retry system-2 calls, and set coordinator reasoning effort` | `src/cooperagents/agent_coordinator.py`, `agent_coordination_types.py`, `agent_coordinator_prompts.py`, `scripts/bench_compare.py`, `tests/test_agent_coordinator.py`, `tests/test_agent_coordinator_harness.py`, `tests/test_agent_coordination_contract.py` (only if needed), both qualification JSON files, `docs/AGENTIC_COORDINATOR_SPEC.md` (§5.3, §5.4, §5.5, §8.2, §10, §12.1), this plan | None |
-| 3 | PR-C2 | `feat: send coordinator budget notice on every turn after the first` | `agent_coordinator.py` (notice condition, 3-tuple selection), `agent_coordinator_prompts.py` (two constants, prompt sentences, `BUDGET_NOTES_PROMPT_ID`), `tests/test_agent_coordinator.py`, both qualification JSON files, spec §5.3, §5.4 and D1 | PR-T and PR-C1 merged |
+| 3 | PR-C2 | `feat: send coordinator budget notice on every turn after the first` | `agent_coordinator.py` (notice condition, 3-tuple selection), `agent_coordinator_prompts.py` (two constants, prompt sentences, `BUDGET_NOTES_PROMPT_ID`), `tests/test_agent_coordinator.py`, both qualification JSON files, spec §4.6, §5.3, §5.4 and D1, this plan | PR-T and PR-C1 merged |
 
 Notes:
 
@@ -424,9 +421,9 @@ Notes:
 - PR-C1 and PR-C2 each regenerate `reader_qualification.json` and
   `direct_capture_qualification.json`, because the hashes of the three coordinator
   modules change.
-- Spec D1 becomes: "Reserve two tool calls for the opening and two for each wake. Every
-  request after the first ends with a budget notice." PR-C1 writes the reserve part.
-  PR-C2 writes the notice part.
+- Spec D1 records the default reserve of two tool calls for the opening and each wake.
+  PR-C2 records that every request after the first ends with a budget notice and that
+  status notices use the configured reserve for that phase.
 - No PR edits `CooperBench/`, `src/cooperagents/vendor/**`, `src/cooperagents/workers/**`,
   `scripts/check_protected_tests.py`, `RandomGate`, or the `Makefile`.
 
@@ -463,8 +460,10 @@ PR-C1 updates to existing tests:
 
 | Test | Assertions |
 | --- | --- |
-| `test_budget_notice_every_turn` (parametrized over opening with 16 calls and wake with 6 calls) | Request 1 has no message that starts with `[remaining_tool_calls:`. For each request `k ≥ 2`, `messages[-1]` is exactly the Section 2.2 tier text with `remaining = max - (k - 1)`, and no earlier message in that request starts with `[remaining_tool_calls:`. |
+| `test_budget_notice_every_turn` (opening with 16 calls and reserve 2, 3, or 0, and wake with 6 calls and reserve 2) | Request 1 has no message that starts with `[remaining_tool_calls:`. For each request `k ≥ 2`, `messages[-1]` is exactly the Section 2.2 tier text with `remaining = max - (k - 1)` and the configured reserve, and no earlier message in that request starts with `[remaining_tool_calls:`. |
 | `test_wake_reserves_message_turn` | Requests 2 and 3 end with `WAKE_BUDGET_STATUS` (5, reads 3) and (4, reads 2). Request 4 ends with `WAKE_BUDGET_WARNING` (3), and request 5 with `WAKE_FINAL_TURN` (2). The existing line 467 check stays. |
+| `test_opening_delivers_a_valid_plan_once` | Find the read result by its tool role because the budget notice ends the request. |
+| `test_wake_uses_configured_reserve` | The last request with a zero reserve ends with the one-read warning. With a positive reserve, it ends with the final-turn notice. |
 | `test_opening_reserves_submit_plan_turn`, `test_opening_batched_reads_keep_reserve` | Unchanged from PR-C1 (their notice indexes are already final or warning tiers). |
 | Prompt ID test (`:278`) | `ids["budget-notes"] == BUDGET_NOTES_PROMPT_ID`, which is recomputed over 6 constants. |
 

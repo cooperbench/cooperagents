@@ -42,8 +42,10 @@ from cooperagents.agent_coordinator import (
 from cooperagents.agent_coordinator_prompts import (
     BUDGET_NOTES_PROMPT_ID,
     GATE_PROMPT_ID,
+    OPENING_BUDGET_STATUS,
     OPENING_BUDGET_WARNING,
     OPENING_FINAL_TURN,
+    WAKE_BUDGET_STATUS,
     WAKE_BUDGET_WARNING,
     WAKE_FINAL_TURN,
     gate_prompt_id,
@@ -284,6 +286,11 @@ def test_tool_schema_descriptions():
 def test_prompt_ids_cover_tools_and_notes(coordinators, monkeypatch):
     ids = coordinators().metrics()["config"]["prompt_ids"]
     assert ids["tools"] == prompt_id("tools", json.dumps(TOOL_SCHEMAS, sort_keys=True, separators=(",", ":")))
+    budget_notes = [
+        OPENING_BUDGET_STATUS, OPENING_BUDGET_WARNING, OPENING_FINAL_TURN,
+        WAKE_BUDGET_STATUS, WAKE_BUDGET_WARNING, WAKE_FINAL_TURN,
+    ]
+    assert BUDGET_NOTES_PROMPT_ID == prompt_id("budget-notes", json.dumps(budget_notes, ensure_ascii=False, separators=(",", ":")))
     assert ids["budget-notes"] == BUDGET_NOTES_PROMPT_ID
     monkeypatch.setitem(TOOL_SCHEMAS[0]["function"], "description", "A changed tool description.")
     assert coordinators().metrics()["config"]["prompt_ids"]["tools"] != ids["tools"]
@@ -342,7 +349,8 @@ def test_opening_delivers_a_valid_plan_once(coordinators, journal):
     opening_event = events(journal, "opening_plan")[0]["data"]
     assert opening_event["prompt_id"] == prompt_id("opening-plan", config.prompts["opening-plan"])
     assert opening_event["exit_reason"] == "done"
-    assert complete.inputs[1][0][-1]["content"] == "alpha\nbeta\n"
+    result, = [message for message in complete.inputs[1][0] if message["role"] == "tool"]
+    assert result["content"] == "alpha\nbeta\n"
 
 
 @pytest.mark.parametrize(("lines", "expected"), [
@@ -456,6 +464,49 @@ def test_opening_failure_is_passive(coordinators, journal, response, exit_reason
     assert events(journal, "opening_plan")[0]["data"]["exit_reason"] == exit_reason
 
 
+@pytest.mark.parametrize(("phase", "max_calls", "reserve"), [
+    ("opening", 16, 2),
+    ("wake", 6, 2),
+    ("opening", 16, 3),
+    ("opening", 16, 0),
+])
+def test_budget_notice_every_turn(coordinators, journal, phase, max_calls, reserve):
+    config = AgentCoordinatorConfig(gate=RULE, tick_s=0.01)
+    if phase == "opening":
+        config = replace(config, opening_max_tool_calls=max_calls, opening_reserve=reserve)
+        finish = call("submit_plan", **json.loads((FIXTURES / "opening_plan.json").read_text()))
+        warning, final_turn = OPENING_BUDGET_WARNING, OPENING_FINAL_TURN
+        accepted = "only submit_plan is accepted."
+    else:
+        config = replace(config, opening="none", wake_max_tool_calls=max_calls, wake_reserve=reserve)
+        finish = call("end_wake", note="No coordination needed.")
+        warning, final_turn = WAKE_BUDGET_WARNING, WAKE_FINAL_TURN
+        accepted = "only send_message and end_wake are accepted."
+
+    read = call("read_file", path="src/core.py", start=1, end=1)
+    complete = CompletionStub(*([[read]] * (max_calls - 1)), [finish])
+    coordinator = coordinators(complete=complete, config=config, trajectory=journal)
+    if phase == "opening":
+        assert coordinator.run_opening() is not None
+    else:
+        assert run_wake(coordinator, journal)["outcome"] == "ended"
+
+    assert len(complete.inputs) == max_calls
+    prefix = "[remaining_tool_calls:"
+    assert all(not row.get("content", "").startswith(prefix) for row in complete.inputs[0][0])
+    for calls_used, (messages, _) in enumerate(complete.inputs[1:], start=1):
+        remaining = max_calls - calls_used
+        reads = remaining - reserve
+        if reads <= 0:
+            expected = final_turn.format(remaining=remaining)
+        elif reads == 1:
+            expected = warning.format(remaining=remaining)
+        else:
+            expected = f"{prefix} {remaining}] {reads} read calls remain. When {reserve} or fewer calls remain, {accepted}"
+        assert messages[-1] == {"role": "user", "content": expected}
+        assert all(not row.get("content", "").startswith(prefix) for row in messages[:-1])
+
+
 def test_wake_reserves_message_turn(coordinators, journal, repo, tmp_path):
     read = call("read_file", path="src/core.py", start=1, end=1)
     complete = CompletionStub(
@@ -482,6 +533,8 @@ def test_wake_reserves_message_turn(coordinators, journal, repo, tmp_path):
     assert [msg["content"] for msg in coordinator.bus.message_log()] == ["Confirm the parser interface."]
     assert json.loads(complete.inputs[0][0][1]["content"])["tool_call_budget"] == 6
     assert any(row.get("content") == "alpha\n" for row in complete.inputs[1][0])
+    assert complete.inputs[1][0][-1] == {"role": "user", "content": WAKE_BUDGET_STATUS.format(remaining=5, reads=3, reserve=2)}
+    assert complete.inputs[2][0][-1] == {"role": "user", "content": WAKE_BUDGET_STATUS.format(remaining=4, reads=2, reserve=2)}
     assert complete.inputs[3][0][-1] == {"role": "user", "content": WAKE_BUDGET_WARNING.format(remaining=3)}
     messages, tools = complete.inputs[4]
     assert messages[-1] == {"role": "user", "content": WAKE_FINAL_TURN.format(remaining=2)}
@@ -552,8 +605,8 @@ def test_wake_uses_configured_reserve(coordinators, journal, reserve):
     results = [message["content"] for message in messages if message["role"] == "tool"]
     refused = "Error: read_file is not allowed in the final turn; allowed: end_wake, send_message"
     assert results == ([refused, refused] if reserve == 3 else ["alpha\n", "alpha\n"])
-    if reserve == 0:
-        assert not any(message["content"].startswith("[remaining_tool_calls:") for message in messages if message["role"] == "user")
+    last_notice = WAKE_BUDGET_WARNING if reserve == 0 else WAKE_FINAL_TURN
+    assert messages[-1] == {"role": "user", "content": last_notice.format(remaining=1)}
 
 
 def test_wake_limits_blind_observation_and_compacts_prior_tools(coordinators, journal):

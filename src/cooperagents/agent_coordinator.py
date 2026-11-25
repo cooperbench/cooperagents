@@ -52,10 +52,12 @@ from cooperagents.agent_coordination_types import (
 from cooperagents.agent_coordinator_prompts import (
     BUDGET_NOTES_PROMPT_ID,
     GATE_INSTRUCTIONS,
+    OPENING_BUDGET_STATUS,
     OPENING_BUDGET_WARNING,
     OPENING_FINAL_TURN,
     OPENING_PLAN_PROMPT,
     SPEC_CHECK_PROMPT,
+    WAKE_BUDGET_STATUS,
     WAKE_BUDGET_WARNING,
     WAKE_FINAL_TURN,
     WAKE_PROMPT,
@@ -77,8 +79,8 @@ _SNAPSHOT_REPO = "/cbshared/repo.git"
 _READ_TOOLS = [LIST_DIR_TOOL, READ_FILE_TOOL, SEARCH_CODE_TOOL, GIT_SHOW_TOOL]
 _READ_NAMES = {tool["function"]["name"] for tool in _READ_TOOLS}
 _BUDGET_NOTES = {
-    "opening-plan": (OPENING_BUDGET_WARNING, OPENING_FINAL_TURN),
-    "wake": (WAKE_BUDGET_WARNING, WAKE_FINAL_TURN),
+    "opening-plan": (OPENING_BUDGET_STATUS, OPENING_BUDGET_WARNING, OPENING_FINAL_TURN),
+    "wake": (WAKE_BUDGET_STATUS, WAKE_BUDGET_WARNING, WAKE_FINAL_TURN),
 }
 _READ_EXHAUSTED = {
     "opening-plan": "Error: read budget exhausted; the remaining {calls} reserved for submit_plan.",
@@ -661,10 +663,11 @@ class AgentCoordinator:
             remaining = max_calls - run.calls
             final = remaining <= reserve
             note = []
-            if run.turns and reserve and remaining <= reserve + 1:
-                warning, final_turn = _BUDGET_NOTES[phase]
-                text = final_turn if final else warning
-                note = [{"role": "user", "content": text.format(remaining=remaining)}]
+            if run.turns:
+                status, warning, final_turn = _BUDGET_NOTES[phase]
+                reads = remaining - reserve
+                text = final_turn if final else warning if reads == 1 else status
+                note = [{"role": "user", "content": text.format(remaining=remaining, reads=reads, reserve=reserve)}]
             # Keep the provider's tool-call state by sending the same schema on every turn.
             calls = self._call(messages + run.turns + note, tools, phase, deadline, run.usage)
             if self._stop.is_set() or time.monotonic() >= deadline:
