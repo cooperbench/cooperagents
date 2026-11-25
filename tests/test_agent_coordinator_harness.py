@@ -27,6 +27,18 @@ WORKERS = ("agent1", "agent2")
 SUBMIT = "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
 ADVICE = "Use the existing interface."
 AGENT_FLAGS = ["--team-only", "--coop-tools", "--no-seed", "--git-share", "--agent-coordinator"]
+SYSTEM2_OVERRIDES = [
+    ("--agent-coordinator-reasoning-effort", "inherit", "reasoning_effort", None, ""),
+    ("--agent-coordinator-max-retries", "0", "max_retries", 0, "-1"),
+    ("--agent-coordinator-retry-delay", "0.2", "retry_base_delay_s", 0.2, "nan"),
+    ("--agent-opening-max-tool-calls", "8", "opening_max_tool_calls", 8, "0"),
+    ("--agent-opening-time-limit", "45", "opening_time_limit_s", 45.0, "0"),
+    ("--agent-opening-reserve", "1", "opening_reserve", 1, "-1"),
+    ("--agent-wake-max-tool-calls", "5", "wake_max_tool_calls", 5, "0"),
+    ("--agent-wake-time-limit", "30", "wake_time_limit_s", 30.0, "inf"),
+    ("--agent-wake-reserve", "0", "wake_reserve", 0, "-1"),
+    ("--agent-spec-check-time-limit", "70", "spec_check_time_limit_s", 70.0, "0"),
+]
 
 
 def team_spec(**changes):
@@ -293,6 +305,9 @@ def test_cli_gate_validation(compare, monkeypatch, tmp_path, capsys, flags, key,
     (["--no-agent-spec-check"], "agent coordinator flags require --agent-coordinator"),
     (["--agent-coordinator", "--coop-tools", "--no-seed"], "requires a team with --coop-tools, --no-seed, and --git-share"),
     ([*AGENT_FLAGS, "--task-board"], "--agent-coordinator excludes"),
+    (["--agent-coordinator-reasoning-effort", "medium"], "agent coordinator flags require --agent-coordinator"),
+    *[([flag, value], "agent coordinator flags require --agent-coordinator") for flag, value, *_ in SYSTEM2_OVERRIDES],
+    *[([*AGENT_FLAGS, "--agent-gate", "rule", flag, bad], name) for flag, _, name, _, bad in SYSTEM2_OVERRIDES],
 ])
 def test_cli_family_validation(compare, monkeypatch, capsys, flags, error):
     monkeypatch.setattr(compare, "_load_env", lambda: None)
@@ -302,6 +317,27 @@ def test_cli_family_validation(compare, monkeypatch, capsys, flags, error):
         compare.main()
     assert exc.value.code == 2
     assert error in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("use_overrides", [False, True])
+def test_cli_system2_settings(compare, monkeypatch, tmp_path, use_overrides):
+    configs = []
+
+    def run_team(item, **options):
+        configs.append(options["agent_coordinator_config"])
+        return {"duration": 0.0}
+
+    monkeypatch.setattr(compare, "_load_env", lambda: None)
+    monkeypatch.setattr(compare, "run_team", run_team)
+    flags = [token for flag, value, *_ in SYSTEM2_OVERRIDES for token in (flag, value)] if use_overrides else []
+    monkeypatch.setattr(sys, "argv", [
+        "bench_compare.py", "--pairs", "fixture:1:2,1", "--log-dir", str(tmp_path), *AGENT_FLAGS,
+        "--agent-gate", "rule", "--skip-eval", *flags,
+    ])
+    compare.main()
+    defaults = AgentCoordinatorConfig(gate=GateConfig(policy="rule"))
+    overrides = {name: value for _, _, name, value, _ in SYSTEM2_OVERRIDES} if use_overrides else {}
+    assert configs == [replace(defaults, **overrides)]
 
 
 def test_cli_resolves_random_matches_per_pair(compare, monkeypatch, tmp_path):
@@ -329,10 +365,13 @@ def test_cli_resolves_random_matches_per_pair(compare, monkeypatch, tmp_path):
     }
 
 
-def test_runner_records_agent_settings_and_mounts_shared_git(compare, monkeypatch, tmp_path):
+@pytest.mark.parametrize("use_overrides", [False, True])
+def test_runner_records_agent_settings_and_mounts_shared_git(compare, monkeypatch, tmp_path, use_overrides):
     from cooperagents.types import RunResult
 
-    config = AgentCoordinatorConfig(gate=GateConfig(policy="rule", wake_budget=3), opening="none", spec_check=False)
+    defaults = AgentCoordinatorConfig(gate=GateConfig(policy="rule", wake_budget=3), opening="none", spec_check=False)
+    overrides = {name: value for _, _, name, value, _ in SYSTEM2_OVERRIDES} if use_overrides else {}
+    config = replace(defaults, **overrides)
     mounts = []
 
     def run(harness, spec, *, env_factory, **kwargs):
@@ -361,3 +400,6 @@ def test_runner_records_agent_settings_and_mounts_shared_git(compare, monkeypatc
     assert start["agent_gate"] == "rule"
     assert start["agent_gate_model"] is None and start["agent_gate_base_url"] is None
     assert start["agent_wake_budget"] == 3 and start["agent_opening"] == "none" and start["agent_spec_check"] is False
+    for _, _, name, _, _ in SYSTEM2_OVERRIDES:
+        assert start[f"agent_{name}"] == getattr(config, name)
+    assert start["agent_reasoning_effort"] == (None if use_overrides else "medium")

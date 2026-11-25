@@ -410,6 +410,16 @@ def run_team(
             agent_gate_threshold=gate.wake_threshold, agent_gate_timeout=gate.timeout_s,
             agent_wake_budget=gate.wake_budget, agent_opening=agent_coordinator_config.opening,
             agent_spec_check=agent_coordinator_config.spec_check,
+            agent_reasoning_effort=agent_coordinator_config.reasoning_effort,
+            agent_max_retries=agent_coordinator_config.max_retries,
+            agent_retry_base_delay_s=agent_coordinator_config.retry_base_delay_s,
+            agent_opening_max_tool_calls=agent_coordinator_config.opening_max_tool_calls,
+            agent_opening_time_limit_s=agent_coordinator_config.opening_time_limit_s,
+            agent_opening_reserve=agent_coordinator_config.opening_reserve,
+            agent_wake_max_tool_calls=agent_coordinator_config.wake_max_tool_calls,
+            agent_wake_time_limit_s=agent_coordinator_config.wake_time_limit_s,
+            agent_wake_reserve=agent_coordinator_config.wake_reserve,
+            agent_spec_check_time_limit_s=agent_coordinator_config.spec_check_time_limit_s,
             agent_random_seed=gate.random_seed if gate.policy == "random" else None,
             agent_random_wakes=gate.random_wakes, agent_random_step_horizon=gate.random_step_horizon,
         )
@@ -547,6 +557,7 @@ def main() -> None:
     _load_env()
     global MODEL
     MODEL = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-5.5-hao")
+    agent_defaults = AgentCoordinatorConfig()
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=None, help="cap number of pairs (default: no limit)")
     ap.add_argument("--subset", default="flash",
@@ -588,6 +599,26 @@ def main() -> None:
     ap.add_argument("--agent-gate-timeout", type=float, help="decision timeout in seconds (model gate only)")
     ap.add_argument("--agent-wake-budget", type=int, default=8, help="maximum wakes per pair (default: 8)")
     ap.add_argument("--agent-opening", choices=("draft", "none"), default="draft", help="opening plan policy (default: draft)")
+    ap.add_argument("--agent-coordinator-reasoning-effort", default=argparse.SUPPRESS,
+                    help=f'System-2 reasoning effort. "inherit" uses COOPER_REASONING_EFFORT (default: {agent_defaults.reasoning_effort})')
+    ap.add_argument("--agent-coordinator-max-retries", type=int, default=agent_defaults.max_retries,
+                    help="maximum System-2 transport retries per request (default: %(default)s)")
+    ap.add_argument("--agent-coordinator-retry-delay", type=float, default=agent_defaults.retry_base_delay_s,
+                    help="initial System-2 retry delay in seconds (default: %(default)s)")
+    ap.add_argument("--agent-opening-max-tool-calls", type=int, default=agent_defaults.opening_max_tool_calls,
+                    help="maximum tool calls in the opening (default: %(default)s)")
+    ap.add_argument("--agent-opening-time-limit", type=float, default=agent_defaults.opening_time_limit_s,
+                    help="opening deadline in seconds (default: %(default)s)")
+    ap.add_argument("--agent-opening-reserve", type=int, default=agent_defaults.opening_reserve,
+                    help="opening calls reserved for submit_plan (default: %(default)s)")
+    ap.add_argument("--agent-wake-max-tool-calls", type=int, default=agent_defaults.wake_max_tool_calls,
+                    help="maximum tool calls per wake (default: %(default)s)")
+    ap.add_argument("--agent-wake-time-limit", type=float, default=agent_defaults.wake_time_limit_s,
+                    help="deadline per wake in seconds (default: %(default)s)")
+    ap.add_argument("--agent-wake-reserve", type=int, default=agent_defaults.wake_reserve,
+                    help="wake calls reserved for send_message and end_wake (default: %(default)s)")
+    ap.add_argument("--agent-spec-check-time-limit", type=float, default=agent_defaults.spec_check_time_limit_s,
+                    help="spec-check deadline in seconds (default: %(default)s)")
     ap.add_argument("--no-agent-spec-check", action="store_true", help="disable the coordinator's pre-submit spec check")
     ap.add_argument("--agent-random-match", help="matched agent_main run name under --log-dir (required for the random gate)")
     ap.add_argument("--agent-random-seed", type=int, default=0, help="matched schedule seed (default: 0)")
@@ -683,6 +714,19 @@ def main() -> None:
         model=args.agent_gate_model, base_url=args.agent_gate_base_url, api_key_env=args.agent_gate_api_key_env,
         wake_threshold=args.agent_gate_threshold, timeout_s=args.agent_gate_timeout,
     )
+    effort = getattr(args, "agent_coordinator_reasoning_effort", agent_defaults.reasoning_effort)
+    coordinator_options = dict(
+        reasoning_effort=None if effort == "inherit" else effort,
+        max_retries=args.agent_coordinator_max_retries,
+        retry_base_delay_s=args.agent_coordinator_retry_delay,
+        opening_max_tool_calls=args.agent_opening_max_tool_calls,
+        opening_time_limit_s=args.agent_opening_time_limit,
+        opening_reserve=args.agent_opening_reserve,
+        wake_max_tool_calls=args.agent_wake_max_tool_calls,
+        wake_time_limit_s=args.agent_wake_time_limit,
+        wake_reserve=args.agent_wake_reserve,
+        spec_check_time_limit_s=args.agent_spec_check_time_limit,
+    )
     if args.agent_coordinator:
         if not (args.coop_tools and args.no_seed and args.git_share) or args.solo_only:
             ap.error("--agent-coordinator requires a team with --coop-tools, --no-seed, and --git-share")
@@ -699,17 +743,22 @@ def main() -> None:
         gate = GateConfig(
             policy=args.agent_gate, wake_budget=args.agent_wake_budget, random_seed=args.agent_random_seed, **decision_model_options,
         )
+        agent_config = AgentCoordinatorConfig(
+            gate=gate, opening=args.agent_opening, spec_check=not args.no_agent_spec_check, **coordinator_options,
+        )
         try:
+            agent_config.validate()
             gate.validate()
         except ValueError as exc:
             ap.error(str(exc))
         if args.agent_gate == "random" and not args.agent_random_match:
             ap.error("random gate requires a matched agent_main result (--agent-random-match)")
-        agent_config = AgentCoordinatorConfig(gate=gate, opening=args.agent_opening, spec_check=not args.no_agent_spec_check)
     elif (
         args.agent_gate != "model" or any(value is not None for value in decision_model_options.values())
         or args.agent_wake_budget != 8 or args.agent_opening != "draft" or args.no_agent_spec_check
         or args.agent_random_match is not None or args.agent_random_seed != 0
+        or hasattr(args, "agent_coordinator_reasoning_effort")
+        or any(value != getattr(agent_defaults, name) for name, value in coordinator_options.items())
     ):
         ap.error("agent coordinator flags require --agent-coordinator")
     if args.worker_reminder_interval < 0:

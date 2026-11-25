@@ -16,7 +16,7 @@ from functools import cached_property, partial
 from hashlib import sha256
 from queue import Empty, Queue
 from statistics import quantiles
-from typing import Any, Protocol, TypeVar, cast
+from typing import Any, Literal, Protocol, TypeVar, cast
 from urllib.parse import urlsplit, urlunsplit
 
 from cooperagents.agent_coordination_types import (
@@ -81,9 +81,10 @@ _BUDGET_NOTES = {
     "wake": (WAKE_BUDGET_WARNING, WAKE_FINAL_TURN),
 }
 _READ_EXHAUSTED = {
-    "opening-plan": "Error: read budget exhausted; the remaining call is reserved for submit_plan.",
-    "wake": "Error: read budget exhausted; the remaining calls are reserved for send_message and end_wake.",
+    "opening-plan": "Error: read budget exhausted; the remaining {calls} reserved for submit_plan.",
+    "wake": "Error: read budget exhausted; the remaining {calls} reserved for send_message and end_wake.",
 }
+_RETRYABLE = {"APIConnectionError", "RateLimitError", "InternalServerError"}
 _WAKING_SIGNALS = {"NO_PROGRESS_FAILING", "HUNK_CHURN", "TEST_REGRESSION", "PEER_OVERLAP", "SUBMIT_REJECTED"}
 _SHA = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
 _CONFLICT = re.compile(r"^\+(?:<<<<<<< |=======\r?$|>>>>>>> )", re.MULTILINE)
@@ -364,10 +365,11 @@ class DecisionCallRecorder:
 
 
 class _OpenAIComplete:
-    def __init__(self, model: str | None, base_url: str | None, api_key: str | None) -> None:
+    def __init__(self, model: str | None, base_url: str | None, api_key: str | None, reasoning_effort: str | None) -> None:
         self.model = model or os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-5.5-hao")
         self.base_url = base_url or os.getenv("AZURE_OPENAI_BASE_URL") or os.getenv("OPENAI_BASE_URL") or ""
         self.api_key = api_key or os.getenv("AZURE_OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY") or ""
+        self.reasoning_effort = reasoning_effort
 
     @cached_property
     def client(self) -> Any:
@@ -377,6 +379,8 @@ class _OpenAIComplete:
 
     def request(self, messages: list[dict], tools: list[dict]) -> dict:
         options = sampling_kwargs()
+        if self.reasoning_effort is not None:
+            options["reasoning_effort"] = self.reasoning_effort
         if "max_tokens" not in options:
             options.setdefault("max_completion_tokens", 2000)
         return dict(model=self.model, messages=messages, tools=tools, tool_choice="auto", **options)
@@ -470,6 +474,7 @@ class AgentCoordinator:
         snapshot_repo: str = _SNAPSHOT_REPO,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
+        config.validate()
         self.env, self.bus, self.config = env, bus, config
         self.trackers, self.gate = trackers, gate
         self.evidence, self.overlap_signals = evidence, overlap_signals
@@ -478,7 +483,7 @@ class AgentCoordinator:
         self.assignments = {assignment.agent_id: assignment for assignment in assignments}
         self.presub_merge, self.step_limit, self.time_limit_s = presub_merge, step_limit, time_limit_s
         self._snapshot_repo = snapshot_repo
-        self._openai = _OpenAIComplete(model, base_url, api_key)
+        self._openai = _OpenAIComplete(model, base_url, api_key, config.reasoning_effort)
         self._prompts = {
             "opening-plan": OPENING_PLAN_PROMPT, "wake": WAKE_PROMPT, "spec-check": SPEC_CHECK_PROMPT,
             "gate": GATE_INSTRUCTIONS,
@@ -564,7 +569,32 @@ class AgentCoordinator:
         return output
 
     def _call(self, messages: list[dict], tools: list[dict], phase: str, deadline: float, usage: Counter[str]) -> list[dict]:
-        trace = partial(self._emit, _COORDINATOR, prompt_id=self._prompt_ids[phase], phase=phase) if self.trajectory else None
+        delay = self.config.retry_base_delay_s
+        attempt = 0
+        while True:
+            try:
+                return self._call_once(messages, tools, phase, deadline, usage, attempt)
+            except Exception as exc:
+                if (
+                    attempt == self.config.max_retries
+                    or isinstance(exc, (TimeoutError, ValueError, RuntimeError))
+                    or not any(cls.__name__ in _RETRYABLE for cls in type(exc).__mro__)
+                    or self._stop.is_set()
+                    or time.monotonic() + delay >= deadline
+                ):
+                    raise
+                if self._stop.wait(delay) or time.monotonic() >= deadline:
+                    raise TimeoutError("coordinator call cancelled or out of time") from exc
+                attempt += 1
+                delay *= 2
+
+    def _call_once(
+        self, messages: list[dict], tools: list[dict], phase: str, deadline: float, usage: Counter[str], attempt: int,
+    ) -> list[dict]:
+        trace = (
+            partial(self._emit, _COORDINATOR, prompt_id=self._prompt_ids[phase], phase=phase, attempt=attempt)
+            if self.trajectory else None
+        )
         usage["calls"] += 1
         with self._ready:
             self._system2_usage["calls"] += 1
@@ -624,31 +654,33 @@ class AgentCoordinator:
         deadline: float,
         max_calls: int,
         execute: Callable[[str, dict], tuple[str, bool]],
-    ) -> None:
+    ) -> Literal["done", "no_calls", "stopped", "deadline", "budget"]:
         # A budget-refused read still needs a unique tool call ID in the transcript.
         call_number = 0
         while run.calls < max_calls and not self._stop.is_set() and time.monotonic() < deadline:
             remaining = max_calls - run.calls
             final = remaining <= reserve
             note = []
-            if run.turns and remaining <= reserve + 1:
+            if run.turns and reserve and remaining <= reserve + 1:
                 warning, final_turn = _BUDGET_NOTES[phase]
                 text = final_turn if final else warning
                 note = [{"role": "user", "content": text.format(remaining=remaining)}]
             # Keep the provider's tool-call state by sending the same schema on every turn.
             calls = self._call(messages + run.turns + note, tools, phase, deadline, run.usage)
-            if not isinstance(calls, list) or not calls:
-                return
             if self._stop.is_set() or time.monotonic() >= deadline:
-                return
+                break
+            if not isinstance(calls, list) or not calls:
+                return "no_calls"
             assistant: dict = {"role": "assistant", "tool_calls": []}
             run.turns.append(assistant)
             allowed = {tool["function"]["name"] for tool in (finish if final else tools)}
-            for call in calls[:remaining]:
+            for call in calls:
+                if run.calls >= max_calls:
+                    break
                 if self._stop.is_set() or time.monotonic() >= deadline:
                     if not assistant["tool_calls"]:
                         run.turns.pop()
-                    return
+                    break
                 call_number += 1
                 call_id = f"call_{phase}_{len(messages)}_{call_number}"
                 name, raw = "invalid", "{}"
@@ -663,7 +695,8 @@ class AgentCoordinator:
                         else:
                             result = f"Error: {name} is not offered in this turn; offered: {names}"
                     elif name in _READ_NAMES and run.calls >= max_calls - reserve:
-                        result = _READ_EXHAUSTED[phase]
+                        calls_left = "call is" if max_calls - run.calls == 1 else "calls are"
+                        result = _READ_EXHAUSTED[phase].format(calls=calls_left)
                         counted = False
                     else:
                         result, done = execute(name, args)
@@ -678,17 +711,26 @@ class AgentCoordinator:
                 run.summaries.append((len(run.turns), f"{name} {summary_args} -> {len(result)} chars"))
                 run.turns.append({"role": "tool", "tool_call_id": call_id, "content": result})
                 if done:
-                    return
+                    return "done"
+        if self._stop.is_set():
+            return "stopped"
+        if time.monotonic() >= deadline:
+            return "deadline"
+        return "budget"
 
     def run_opening(self) -> OpeningPlan | None:
         """Deliver a single proposal to every worker before any worker starts."""
         if self._opening_done:
             return self.opening_plan
         self._opening_done = True
-        self._emit(_COORDINATOR, "agent_coordinator_start", run_id=self.bus.run_id, prompt_ids=self._prompt_ids)
+        self._emit(
+            _COORDINATOR, "agent_coordinator_start", run_id=self.bus.run_id, prompt_ids=self._prompt_ids,
+            reasoning_effort=self.config.reasoning_effort, max_retries=self.config.max_retries,
+        )
         start = self._clock()
         run = _ToolLoop()
         outcome = "disabled"
+        exit_reason: str | None = None
         if self.config.opening == "draft":
             outcome = "failed"
             deadline = time.monotonic() + self.config.opening_time_limit_s
@@ -731,22 +773,24 @@ class AgentCoordinator:
                         return "Plan delivered", True
                     return self._read_tool(name, args, GitEvidence(git.base_sha), deadline), False
 
-                self._run_tools(
+                exit_reason = self._run_tools(
                     "opening-plan",
                     [
                         {"role": "system", "content": self._prompts["opening-plan"]},
                         self._user({
                             "roster": [asdict(a) for a in self.assignments.values()], "base_sha": git.base_sha,
                             "tool_call_budget": self.config.opening_max_tool_calls,
+                            "reserved_tool_calls": self.config.opening_reserve,
                         }),
                     ],
-                    run, tools=[*_READ_TOOLS, SUBMIT_PLAN_TOOL], finish=[SUBMIT_PLAN_TOOL], reserve=1, deadline=deadline,
+                    run, tools=[*_READ_TOOLS, SUBMIT_PLAN_TOOL], finish=[SUBMIT_PLAN_TOOL],
+                    reserve=self.config.opening_reserve, deadline=deadline,
                     max_calls=self.config.opening_max_tool_calls, execute=execute,
                 )
                 if self.opening_plan is not None:
                     outcome = "delivered"
             except Exception:
-                pass
+                exit_reason = "error"
         self._opening_end = self._clock() - self._started
         self._opening = dict(
             outcome=outcome, tool_calls=run.calls, seconds=self._clock() - start,
@@ -754,7 +798,7 @@ class AgentCoordinator:
         )
         self._emit(
             _COORDINATOR, "opening_plan", **self._opening, prompt_id=self._prompt_ids["opening-plan"],
-            plan=self.opening_plan, usage=dict(run.usage),
+            plan=self.opening_plan, usage=dict(run.usage), exit_reason=exit_reason,
         )
         return self.opening_plan
 
@@ -1016,18 +1060,16 @@ class AgentCoordinator:
         run = _ToolLoop()
         started = self._clock()
         deadline = time.monotonic() + self.config.wake_time_limit_s
-        outcome = "exhausted"
+        outcome = "error"
         event = dict(
             run_id=self.bus.run_id, target=target, candidate_id=wake.candidate.id, candidate_ids=wake.decisions,
             signal_ids=wake.signal_ids, prompt_id=self._prompt_ids["wake"],
         )
 
         def execute(name: str, args: dict) -> tuple[str, bool]:
-            nonlocal outcome
             if name == "end_wake":
                 if not isinstance(args.get("note"), str):
                     raise ValueError("end_wake requires a note")
-                outcome = "ended"
                 return "Wake ended", True
             if name == "send_message":
                 if run.send_calls >= 2:
@@ -1056,15 +1098,26 @@ class AgentCoordinator:
                 self._user({
                     "opening_plan": asdict(self.opening_plan) if self.opening_plan else None,
                     "tool_call_budget": self.config.wake_max_tool_calls,
+                    "reserved_tool_calls": self.config.wake_reserve,
                 }),
                 *self._history,
                 self._user(observation),
             ]
-            self._run_tools(
+            exit_reason = self._run_tools(
                 "wake", messages, run, tools=[*_READ_TOOLS, SEND_MESSAGE_TOOL, END_WAKE_TOOL],
-                finish=[SEND_MESSAGE_TOOL, END_WAKE_TOOL], reserve=2, deadline=deadline,
+                finish=[SEND_MESSAGE_TOOL, END_WAKE_TOOL], reserve=self.config.wake_reserve, deadline=deadline,
                 max_calls=self.config.wake_max_tool_calls, execute=execute,
             )
+            if exit_reason == "done":
+                outcome = "ended"
+            elif exit_reason == "stopped":
+                outcome = "stopped"
+            elif exit_reason == "deadline":
+                outcome = "timeout"
+            elif run.sent:
+                outcome = "sent"
+            else:
+                outcome = "exhausted" if exit_reason == "budget" else "no_call"
         except TimeoutError:
             outcome = "stopped" if self._stop.is_set() else "timeout"
         except Exception:
@@ -1115,7 +1168,7 @@ class AgentCoordinator:
         try:
             calls = self._call(
                 [{"role": "system", "content": self._prompts["spec-check"]}, self._user(observation)],
-                [SPEC_VERDICT_TOOL], "spec-check", time.monotonic() + 150, used,
+                [SPEC_VERDICT_TOOL], "spec-check", time.monotonic() + self.config.spec_check_time_limit_s, used,
             )
             if len(calls) != 1:
                 raise ValueError("expected exactly one spec verdict")

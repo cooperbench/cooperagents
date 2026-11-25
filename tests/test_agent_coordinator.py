@@ -12,6 +12,7 @@ from typing import Any, cast
 
 import pytest
 
+from cooperagents import agent_coordinator as coordinator_module
 from cooperagents.agent_coordination_types import (
     TOOL_SCHEMAS,
     AgentComplete,
@@ -53,6 +54,7 @@ from cooperagents.env.base import Environment, ExecResult
 from cooperagents.env.local import LocalEnv
 from cooperagents.git_snapshots import GitEvidence, Snapshot
 from cooperagents.harness import _TeammatePoller
+from cooperagents.sampling import sampling_kwargs
 from cooperagents.trajectory import Trajectory, replay
 from cooperagents.types import Assignment
 
@@ -171,6 +173,13 @@ def events(journal: Trajectory, event: str) -> list[dict]:
         row for line in journal.path.read_text().splitlines()
         if (row := json.loads(line))["event"] == event
     ]
+
+
+def run_wake(coordinator, journal):
+    coordinator.enqueue("agent1", "heartbeat")
+    coordinator.start()
+    wait_for(lambda: len(events(journal, "wake_end")) == 1)
+    return events(journal, "wake_end")[0]["data"]
 
 
 def test_read_only_git_reads_objects_and_bounds_output(repo, tmp_path):
@@ -329,7 +338,10 @@ def test_opening_delivers_a_valid_plan_once(coordinators, journal):
     assert opening["outcome"] == "delivered"
     assert opening["tool_calls"] == 2
     assert opening["plan_sha256"] == sha256(to_json(plan).encode()).hexdigest()
-    assert events(journal, "opening_plan")[0]["data"]["prompt_id"] == prompt_id("opening-plan", config.prompts["opening-plan"])
+    assert set(opening) == {"outcome", "tool_calls", "seconds", "plan_sha256"}
+    opening_event = events(journal, "opening_plan")[0]["data"]
+    assert opening_event["prompt_id"] == prompt_id("opening-plan", config.prompts["opening-plan"])
+    assert opening_event["exit_reason"] == "done"
     assert complete.inputs[1][0][-1]["content"] == "alpha\nbeta\n"
 
 
@@ -363,49 +375,60 @@ def test_opening_reserves_submit_plan_turn(coordinators):
     opening_tools = inputs[0][1]
     assert {tool["function"]["name"] for tool in opening_tools} == {"list_dir", "read_file", "search_code", "git_show", "submit_plan"}
     assert [tools for _, tools in inputs] == [opening_tools] * 4
-    assert json.loads(inputs[0][0][-1]["content"])["tool_call_budget"] == 4
-    assert inputs[1][0][-1]["role"] == "tool"
-    assert inputs[2][0][-1] == {"role": "user", "content": OPENING_BUDGET_WARNING.format(remaining=2)}
+    observation = json.loads(inputs[0][0][-1]["content"])
+    assert observation["tool_call_budget"] == 4
+    assert observation["reserved_tool_calls"] == 2
+    assert inputs[1][0][-1] == {"role": "user", "content": OPENING_BUDGET_WARNING.format(remaining=3)}
+    assert inputs[2][0][-1] == {"role": "user", "content": OPENING_FINAL_TURN.format(remaining=2)}
     assert inputs[3][0][-1] == {"role": "user", "content": OPENING_FINAL_TURN.format(remaining=1)}
+    assert inputs[3][0][-2]["content"] == "Error: read_file is not allowed in the final turn; allowed: submit_plan"
     assert coordinator.metrics()["opening"]["outcome"] == "delivered"
     assert coordinator.metrics()["opening"]["tool_calls"] == 4
 
 
-def test_opening_batched_reads_keep_reserve(coordinators):
+@pytest.mark.parametrize("reserve", [1, 2])
+def test_opening_batched_reads_keep_reserve(coordinators, reserve):
     data = json.loads((FIXTURES / "opening_plan.json").read_text())
     read = call("read_file", path="src/core.py", start=1, end=1)
     complete = CompletionStub([read] * 6, [call("submit_plan", **data)])
-    config = AgentCoordinatorConfig(gate=RULE, opening_max_tool_calls=4)
+    config = AgentCoordinatorConfig(gate=RULE, opening_max_tool_calls=4, opening_reserve=reserve)
     coordinator = coordinators(complete=complete, config=config)
     assert coordinator.run_opening() is not None
     (_, opening_tools), (messages, tools) = complete.inputs
     assert tools == opening_tools
     results = [message for message in messages if message["role"] == "tool"]
-    assert [result["content"] for result in results] == ["alpha\n"] * 3 + [
-        "Error: read budget exhausted; the remaining call is reserved for submit_plan.",
-    ]
+    reads = 4 - reserve
+    calls = "call is" if reserve == 1 else "calls are"
+    assert [result["content"] for result in results] == ["alpha\n"] * reads + [
+        f"Error: read budget exhausted; the remaining {calls} reserved for submit_plan.",
+    ] * (6 - reads)
     assert len({result["tool_call_id"] for result in results}) == len(results)
-    assert messages[-1]["content"] == OPENING_FINAL_TURN.format(remaining=1)
-    assert coordinator.metrics()["opening"]["tool_calls"] == 4
+    assert messages[-1]["content"] == OPENING_FINAL_TURN.format(remaining=reserve)
+    assert coordinator.metrics()["opening"]["tool_calls"] == reads + 1
 
 
-def test_opening_invalid_plan_retries(coordinators):
+def test_opening_retries_invalid_plan_on_last_call(coordinators, journal):
     data = json.loads((FIXTURES / "opening_plan.json").read_text())
     invalid = data | {"workers": {"agent3": data["workers"]["agent1"]}}
-    complete = CompletionStub([call("submit_plan", **invalid)], [call("submit_plan", **data)])
-    config = AgentCoordinatorConfig(gate=RULE, opening_max_tool_calls=2)
-    coordinator = coordinators(complete=complete, config=config)
+    read = call("read_file", path="src/core.py", start=1, end=1)
+    complete = CompletionStub(*([[read]] * 14), [call("submit_plan", **invalid)], [call("submit_plan", **data)])
+    coordinator = coordinators(complete=complete, config=AgentCoordinatorConfig(gate=RULE), trajectory=journal)
     assert coordinator.run_opening() is not None
-    messages, tools = complete.inputs[1]
+    assert len(complete.inputs) == 16
+    assert complete.inputs[14][0][-1]["content"] == OPENING_FINAL_TURN.format(remaining=2)
+    messages, tools = complete.inputs[15]
     assert tools == complete.inputs[0][1]
+    assert messages[-1]["content"] == OPENING_FINAL_TURN.format(remaining=1)
     assert messages[-2]["content"] == "Error: opening plan must cover the worker roster: expected agent1, agent2, received agent3"
     assert [message["to"] for message in coordinator.bus.message_log()] == ["agent1", "agent2"]
+    row = events(journal, "opening_plan")[0]["data"]
+    assert (row["outcome"], row["tool_calls"], row["exit_reason"]) == ("delivered", 16, "done")
 
 
 def test_unoffered_tool_is_counted_error(coordinators):
     data = json.loads((FIXTURES / "opening_plan.json").read_text())
     complete = CompletionStub([call("send_message", recipient="agent1", content="Unallowed")], [call("submit_plan", **data)])
-    config = AgentCoordinatorConfig(gate=RULE, opening_max_tool_calls=2)
+    config = AgentCoordinatorConfig(gate=RULE, opening_max_tool_calls=4)
     coordinator = coordinators(complete=complete, config=config)
     assert coordinator.run_opening() is not None
     messages, tools = complete.inputs[1]
@@ -416,18 +439,21 @@ def test_unoffered_tool_is_counted_error(coordinators):
     assert coordinator.metrics()["opening"]["tool_calls"] == 2
 
 
-@pytest.mark.parametrize("response", [
-    [call("list_dir", path=".")],
-    [{"name": "submit_plan", "arguments": "{invalid"}],
-    TimeoutError("test timeout"),
+@pytest.mark.parametrize(("response", "exit_reason"), [
+    ([call("list_dir", path=".")], "budget"),
+    ([{"name": "submit_plan", "arguments": "{invalid"}], "budget"),
+    ([], "no_calls"),
+    (TimeoutError("test timeout"), "error"),
 ])
-def test_opening_failure_is_passive(coordinators, response):
+def test_opening_failure_is_passive(coordinators, journal, response, exit_reason):
     complete = CompletionStub(response)
-    coordinator = coordinators(complete=complete, config=AgentCoordinatorConfig(gate=RULE, opening_max_tool_calls=1))
+    config = AgentCoordinatorConfig(gate=RULE, opening_max_tool_calls=1)
+    coordinator = coordinators(complete=complete, config=config, trajectory=journal)
     assert coordinator.run_opening() is None
     assert coordinator.metrics()["opening"]["outcome"] == "failed"
     assert coordinator.bus.message_log() == []
     assert len(complete.inputs) == 1
+    assert events(journal, "opening_plan")[0]["data"]["exit_reason"] == exit_reason
 
 
 def test_wake_reserves_message_turn(coordinators, journal, repo, tmp_path):
@@ -469,6 +495,65 @@ def test_wake_reserves_message_turn(coordinators, journal, repo, tmp_path):
     assert messages[-2]["content"] == "Error: read_file is not allowed in the final turn; allowed: end_wake, send_message"
     assert messages[-1]["content"] == WAKE_FINAL_TURN.format(remaining=1)
     assert events(journal, "wake_end")[1]["data"]["outcome"] == "ended"
+
+
+@pytest.mark.parametrize(("scenario", "outcome", "sent", "tool_calls"), [
+    ("budget_sent", "sent", 2, 6),
+    ("budget_empty", "exhausted", 0, 6),
+    ("no_calls_sent", "sent", 1, 1),
+    ("no_calls_empty", "no_call", 0, 0),
+    ("stop", "stopped", 0, 0),
+    ("deadline", "timeout", 0, 0),
+])
+def test_wake_outcome(coordinators, journal, monkeypatch, scenario, outcome, sent, tool_calls):
+    read = [call("read_file", path="src/core.py", start=1, end=1)]
+    send = [call("send_message", recipient="agent1", content="Confirm the parser interface.")]
+    invalid_end = [call("end_wake")]
+    responses = {
+        "budget_sent": [read] * 4 + [send, send],
+        "budget_empty": [read] * 4 + [invalid_end, invalid_end],
+        "no_calls_sent": [send, []],
+        "no_calls_empty": [[]],
+        "stop": [send],
+        "deadline": [send],
+    }
+    coordinator = coordinators(complete=CompletionStub(*responses[scenario]), trajectory=journal)
+    if scenario in {"stop", "deadline"}:
+        now = 10.0
+        monkeypatch.setattr(coordinator_module, "time", SimpleNamespace(monotonic=lambda: now))
+        original_call = coordinator._call
+
+        def call_then_interrupt(*args):
+            nonlocal now
+            reply = original_call(*args)
+            if scenario == "stop":
+                coordinator.stop()
+            else:
+                now += coordinator.config.wake_time_limit_s
+            return reply
+
+        monkeypatch.setattr(coordinator, "_call", call_then_interrupt)
+    row = run_wake(coordinator, journal)
+    assert (row["outcome"], row["messages_sent"], row["tool_calls"]) == (outcome, sent, tool_calls)
+    assert len(coordinator.bus.message_log()) == sent
+    assert len(coordinator.metrics()["wakes"]) == 4
+
+
+@pytest.mark.parametrize("reserve", [0, 1, 3])
+def test_wake_uses_configured_reserve(coordinators, journal, reserve):
+    read = [call("read_file", path="src/core.py", start=1, end=1)]
+    complete = CompletionStub(read, read, [call("end_wake", note="Finished.")])
+    config = AgentCoordinatorConfig(gate=RULE, opening="none", wake_max_tool_calls=3, wake_reserve=reserve, tick_s=0.01)
+    coordinator = coordinators(config=config, complete=complete, trajectory=journal)
+    row = run_wake(coordinator, journal)
+    assert (row["outcome"], row["tool_calls"]) == ("ended", 3)
+    assert json.loads(complete.inputs[0][0][1]["content"])["reserved_tool_calls"] == reserve
+    messages, _ = complete.inputs[-1]
+    results = [message["content"] for message in messages if message["role"] == "tool"]
+    refused = "Error: read_file is not allowed in the final turn; allowed: end_wake, send_message"
+    assert results == ([refused, refused] if reserve == 3 else ["alpha\n", "alpha\n"])
+    if reserve == 0:
+        assert not any(message["content"].startswith("[remaining_tool_calls:") for message in messages if message["role"] == "user")
 
 
 def test_wake_limits_blind_observation_and_compacts_prior_tools(coordinators, journal):
@@ -551,9 +636,10 @@ def test_spec_check_freezes_untracked_and_strips_tests(coordinators, repo, journ
     assert repo.execute("git diff --cached --stat").stdout == ""
 
 
-def test_spec_check_passes_extended_deadline(coordinators, repo, monkeypatch, journal):
+@pytest.mark.parametrize("time_limit", [150.0, 47.0])
+def test_spec_check_passes_configured_deadline(coordinators, repo, monkeypatch, journal, time_limit):
     repo.write_file("src/core.py", "different\n")
-    coordinator = coordinators(trajectory=journal)
+    coordinator = coordinators(trajectory=journal, config=AgentCoordinatorConfig(gate=RULE, spec_check_time_limit_s=time_limit))
     timeouts = []
 
     def complete(messages, tools, phase, deadline, usage):
@@ -565,7 +651,7 @@ def test_spec_check_passes_extended_deadline(coordinators, repo, monkeypatch, jo
 
     assert coordinator.spec_check("agent1", repo) is None
     timeout, = timeouts
-    assert 60 < timeout <= 150
+    assert time_limit - 1 < timeout <= time_limit
     row, = events(journal, "spec_check")
     assert row["data"]["verdict"] == "ACCEPT"
 
@@ -821,7 +907,120 @@ def test_gate_model_request_rows_and_metrics(coordinators, journal):
     }
 
 
-def test_default_completion_uses_sdk_and_records_usage(coordinators, journal, monkeypatch):
+@pytest.mark.parametrize("phase", ["opening-plan", "wake", "spec-check"])
+def test_system2_retries_transient_errors(coordinators, journal, repo, monkeypatch, phase):
+    openai = pytest.importorskip("openai")
+    httpx = pytest.importorskip("httpx")
+    request = httpx.Request("POST", "https://example.test")
+    plan = json.loads((FIXTURES / "opening_plan.json").read_text())
+    finish = {
+        "opening-plan": call("submit_plan", **plan),
+        "wake": call("end_wake", note="Finished."),
+        "spec-check": call("spec_verdict", verdict="ACCEPT", findings=[]),
+    }
+    complete = CompletionStub(openai.APIConnectionError(request=request), openai.APITimeoutError(request), [finish[phase]])
+    config = AgentCoordinatorConfig(gate=RULE, opening="draft" if phase == "opening-plan" else "none")
+    coordinator = coordinators(complete=complete, config=config, trajectory=journal)
+    delays = []
+
+    def wait(delay):
+        delays.append(delay)
+        return False
+
+    monkeypatch.setattr(coordinator._stop, "wait", wait)
+    if phase == "opening-plan":
+        assert coordinator.run_opening() is not None
+    elif phase == "wake":
+        assert run_wake(coordinator, journal)["outcome"] == "ended"
+    else:
+        repo.write_file("src/core.py", "changed\n")
+        assert coordinator.spec_check("agent1", repo) is None
+        assert events(journal, "spec_check")[0]["data"]["verdict"] == "ACCEPT"
+
+    requests = [row["data"] for row in events(journal, "request")]
+    errors = [row["data"] for row in events(journal, "error")]
+    response, = events(journal, "response")
+    assert [(row["phase"], row["attempt"]) for row in requests] == [(phase, 0), (phase, 1), (phase, 2)]
+    assert [(row["attempt"], row["error_type"]) for row in errors] == [(0, "APIConnectionError"), (1, "APITimeoutError")]
+    assert response["data"]["attempt"] == 2
+    assert complete.inputs[0] == complete.inputs[1] == complete.inputs[2]
+    assert coordinator.metrics()["usage"]["coordinator"]["calls"] == len(requests)
+    assert delays == [0.5, 1.0]
+
+
+@pytest.mark.parametrize(("scenario", "phase", "attempts", "delays", "outcome"), [
+    ("exhausted", "opening-plan", 3, [0.25, 0.5], "failed"),
+    ("exhausted", "wake", 3, [0.25, 0.5], "error"),
+    ("runtime", "opening-plan", 1, [], "failed"),
+    ("timeout", "wake", 1, [], "timeout"),
+    ("value", "opening-plan", 1, [], "failed"),
+    ("no_retries", "opening-plan", 1, [], "failed"),
+    ("deadline", "opening-plan", 1, [], "failed"),
+    ("stop", "wake", 1, [0.25], "stopped"),
+])
+def test_system2_retry_limits(coordinators, journal, monkeypatch, scenario, phase, attempts, delays, outcome):
+    class APIConnectionError(Exception):
+        pass
+
+    failure = {
+        "runtime": RuntimeError("permanent"),
+        "timeout": TimeoutError("out of time"),
+        "value": ValueError("invalid"),
+    }.get(scenario, APIConnectionError("transient"))
+    complete = CompletionStub(failure, failure, failure)
+    config = AgentCoordinatorConfig(
+        gate=RULE, opening="draft" if phase == "opening-plan" else "none",
+        max_retries=0 if scenario == "no_retries" else 2, retry_base_delay_s=0.25,
+        opening_time_limit_s=0.25 if scenario == "deadline" else 180.0,
+    )
+    coordinator = coordinators(config=config, complete=complete, trajectory=journal)
+    waited = []
+
+    def wait(delay):
+        waited.append(delay)
+        if scenario == "stop":
+            coordinator.stop()
+        return coordinator._stop.is_set()
+
+    monkeypatch.setattr(coordinator._stop, "wait", wait)
+    if scenario == "deadline":
+        monkeypatch.setattr(coordinator_module, "time", SimpleNamespace(monotonic=lambda: 10.0))
+    if phase == "opening-plan":
+        assert coordinator.run_opening() is None
+        row = events(journal, "opening_plan")[0]["data"]
+        assert row["exit_reason"] == "error"
+    else:
+        row = run_wake(coordinator, journal)
+    assert row["outcome"] == outcome
+    assert [row["data"]["attempt"] for row in events(journal, "request")] == list(range(attempts))
+    assert len(complete.inputs) == coordinator.metrics()["usage"]["coordinator"]["calls"] == attempts
+    assert waited == delays
+
+
+@pytest.mark.parametrize(("name", "value"), [
+    ("opening_reserve", -1),
+    ("wake_reserve", 1.5),
+    ("spec_check_time_limit_s", 0),
+    ("max_retries", -1),
+    ("max_retries", True),
+    ("retry_base_delay_s", -0.5),
+    ("retry_base_delay_s", float("inf")),
+    ("opening_max_tool_calls", 0),
+    ("wake_max_tool_calls", 0),
+    ("opening_time_limit_s", float("nan")),
+    ("wake_time_limit_s", -1),
+    ("reasoning_effort", ""),
+    ("reasoning_effort", 1),
+])
+def test_config_validation(coordinators, name, value):
+    with pytest.raises(ValueError, match=name):
+        coordinators(config=replace(AgentCoordinatorConfig(gate=RULE), **{name: value}))
+
+
+@pytest.mark.parametrize(("effort_options", "expected"), [({}, "medium"), ({"reasoning_effort": None}, "high"), (
+    {"reasoning_effort": "low"}, "low",
+)])
+def test_default_completion_uses_sdk_and_records_usage(coordinators, journal, monkeypatch, effort_options, expected):
     requests = []
     clients = []
 
@@ -843,15 +1042,25 @@ def test_default_completion_uses_sdk_and_records_usage(coordinators, journal, mo
         return SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
 
     monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=client))
-    coordinator = coordinators(trajectory=journal, model="test-model", base_url="https://example.test", api_key="test-key")
+    monkeypatch.setenv("COOPER_REASONING_EFFORT", "high")
+    config = AgentCoordinatorConfig(gate=RULE, opening="none", **effort_options)
+    coordinator = coordinators(config=config, trajectory=journal, model="test-model", base_url="https://example.test", api_key="test-key")
+    coordinator.run_opening()
     repo = coordinator.env
     repo.write_file("src/core.py", "different\n")
     assert coordinator.spec_check("agent1", repo) is None
     assert clients[0]["max_retries"] == 0 and requests[0]["model"] == "test-model"
+    assert requests[0]["reasoning_effort"] == expected
+    assert sampling_kwargs(worker=True)["reasoning_effort"] == "high"
     assert 60 < requests[0]["timeout"] <= 150
     assert coordinator.metrics()["usage"]["coordinator"] == {"calls": 1, "prompt_tokens": 17, "cached_tokens": 8, "completion_tokens": 5}
     row, = events(journal, "request")
     assert row["actor"] == "coordinator" and row["data"]["phase"] == "spec-check"
+    assert row["data"]["request"]["reasoning_effort"] == expected
+    start, = events(journal, "agent_coordinator_start")
+    assert start["data"]["reasoning_effort"] == config.reasoning_effort
+    assert start["data"]["max_retries"] == 2
+    assert events(journal, "opening_plan")[0]["data"]["exit_reason"] is None
     assert "test-key" not in journal.path.read_text()
 
 
