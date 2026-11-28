@@ -736,10 +736,11 @@ class AgentCoordinator:
         overrides = {}
         if self._overrides_sha256 is not None:
             overrides = {"overrides_sha256": self._overrides_sha256, "overrides_schema": OVERRIDES_SCHEMA}
+        config_json = json.dumps(asdict(self.config), sort_keys=True, separators=(",", ":"), allow_nan=False)
         self._emit(
             _COORDINATOR, "agent_coordinator_start", run_id=self.bus.run_id, prompt_ids=self._prompt_ids,
             reasoning_effort=self.config.reasoning_effort, max_retries=self.config.max_retries,
-            wake_budget=self.config.gate.wake_budget, config_sha256=sha256(to_json(self.config).encode("utf-8")).hexdigest(),
+            wake_budget=self.config.gate.wake_budget, config_sha256=sha256(config_json.encode("utf-8")).hexdigest(),
             **overrides,
         )
         start = self._clock()

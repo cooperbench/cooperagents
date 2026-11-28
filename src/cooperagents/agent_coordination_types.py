@@ -516,6 +516,10 @@ def to_json(value: Any) -> str:
     data = asdict(value)
     if isinstance(value, GateDecision) and value.error is None:
         del data["error"]
+    if isinstance(value, AgentCoordinatorConfig):
+        for name in ("gate_criteria", "playbook"):
+            if data[name] is None:
+                del data[name]
     return json.dumps(data, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
 

@@ -4,7 +4,7 @@ from hashlib import sha256
 
 import pytest
 
-from cooperagents.agent_coordination_types import AgentCoordinatorConfig, GateConfig
+from cooperagents.agent_coordination_types import AgentCoordinatorConfig, GateConfig, from_json, to_json
 from cooperagents.agent_overrides import OVERRIDES_SCHEMA, apply_overrides, load_overrides
 
 
@@ -54,8 +54,9 @@ def test_all_overrides_round_trip_and_hash_raw_bytes(tmp_path, monkeypatch):
     assert digest == sha256(raw).hexdigest()
     fields["signals"]["test_command_prefixes"] = ("pytest", "go test")
     assert asdict(overrides) == fields
-    effective = asdict(apply_overrides(gate, config, overrides, {}))
-    assert effective == asdict(config) | {
+    effective = apply_overrides(gate, config, overrides, {})
+    assert from_json(AgentCoordinatorConfig, to_json(effective)) == effective
+    assert asdict(effective) == asdict(config) | {
         "gate": asdict(gate) | fields["gate"],
         "signals": fields["signals"],
         **fields["system2"],
