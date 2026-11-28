@@ -64,6 +64,7 @@ from cooperagents.agent_coordinator_prompts import (
     gate_prompt_id,
     prompt_id,
 )
+from cooperagents.agent_overrides import OVERRIDES_SCHEMA
 from cooperagents.bus.base import TeamBus
 from cooperagents.checkpoint import complete_output
 from cooperagents.env.base import Environment
@@ -475,6 +476,7 @@ class AgentCoordinator:
         time_limit_s: float | None = None,
         snapshot_repo: str = _SNAPSHOT_REPO,
         clock: Callable[[], float] = time.monotonic,
+        overrides_sha256: str | None = None,
     ) -> None:
         config.validate()
         self.env, self.bus, self.config = env, bus, config
@@ -482,6 +484,7 @@ class AgentCoordinator:
         self.evidence, self.overlap_signals = evidence, overlap_signals
         self.decision_recorder = decision_recorder
         self.complete, self.trajectory = complete, trajectory
+        self._overrides_sha256 = overrides_sha256
         self.assignments = {assignment.agent_id: assignment for assignment in assignments}
         self.presub_merge, self.step_limit, self.time_limit_s = presub_merge, step_limit, time_limit_s
         self._snapshot_repo = snapshot_repo
@@ -491,7 +494,11 @@ class AgentCoordinator:
             "gate": GATE_INSTRUCTIONS,
         } | (config.prompts or {})
         self._prompt_ids = {name: prompt_id(name, self._prompts[name]) for name in ("opening-plan", "wake", "spec-check")}
-        self._prompt_ids["gate"] = gate_prompt_id(self._prompts["gate"])
+        self._prompt_ids["gate"] = gate_prompt_id(self._prompts["gate"], **(config.gate_criteria or {}))
+        if config.playbook is not None:
+            self._prompt_ids["playbook"] = prompt_id("playbook", config.playbook)
+            for phase in ("opening-plan", "wake", "spec-check"):
+                self._prompts[phase] += f"\n\nPlaybook (static, task-independent):\n{config.playbook}"
         self._prompt_ids["tools"] = prompt_id("tools", json.dumps(TOOL_SCHEMAS, sort_keys=True, separators=(",", ":")))
         self._prompt_ids["budget-notes"] = BUDGET_NOTES_PROMPT_ID
         self._clock = clock
@@ -726,9 +733,14 @@ class AgentCoordinator:
         if self._opening_done:
             return self.opening_plan
         self._opening_done = True
+        overrides = {}
+        if self._overrides_sha256 is not None:
+            overrides = {"overrides_sha256": self._overrides_sha256, "overrides_schema": OVERRIDES_SCHEMA}
         self._emit(
             _COORDINATOR, "agent_coordinator_start", run_id=self.bus.run_id, prompt_ids=self._prompt_ids,
             reasoning_effort=self.config.reasoning_effort, max_retries=self.config.max_retries,
+            wake_budget=self.config.gate.wake_budget, config_sha256=sha256(to_json(self.config).encode("utf-8")).hexdigest(),
+            **overrides,
         )
         start = self._clock()
         run = _ToolLoop()

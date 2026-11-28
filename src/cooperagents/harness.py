@@ -2096,6 +2096,7 @@ class UnifiedHarness:
         agent_coordinator_config: AgentCoordinatorConfig | None = None,
         agent_coordinator_complete: AgentComplete | None = None,
         agent_gate_complete: DecisionComplete | None = None,
+        agent_overrides_sha256: str | None = None,
     ) -> None:
         if coordinator_complete is not None and not callable(coordinator_complete):
             raise TypeError("coordinator_complete must be callable")
@@ -2106,6 +2107,7 @@ class UnifiedHarness:
         self.agent_coordinator_config = agent_coordinator_config
         self.agent_coordinator_complete = agent_coordinator_complete
         self.agent_gate_complete = agent_gate_complete
+        self.agent_overrides_sha256 = agent_overrides_sha256
         if coordinator_completion is not None and coordinator_complete is not None:
             raise ValueError("Choose one coordinator completion interface")
         if (
@@ -2487,6 +2489,7 @@ class UnifiedHarness:
                     gate_config = agent_config.gate
                     budget = WakeBudget(gate_config, started_at=time.monotonic())
                     instructions = (agent_config.prompts or {}).get("gate", GATE_INSTRUCTIONS)
+                    criteria = agent_config.gate_criteria or {}
                     recorder = None
                     gate: RuleGate
                     if gate_config.policy == "model":
@@ -2494,14 +2497,15 @@ class UnifiedHarness:
                         if complete is None:
                             complete = HttpDecisionClient(gate_config)
                         recorder = DecisionCallRecorder(complete, gate_config, self.trajectory)
-                        gate = DecisionGate(gate_config, recorder, budget=budget, instructions=instructions)
+                        gate = DecisionGate(gate_config, recorder, budget=budget, instructions=instructions, **criteria)
                     elif gate_config.policy == "random":
                         gate = RandomGate(
                             gate_config, budget=budget, repo=spec.repo, task_id=spec.task_id,
                             features=",".join(map(str, sorted(spec.features))), rollout_index=0,
+                            instructions=instructions, **criteria,
                         )
                     else:
-                        gate = RuleGate(gate_config, budget, instructions=instructions)
+                        gate = RuleGate(gate_config, budget, instructions=instructions, **criteria)
                     agent_coord = AgentCoordinator(
                         coord_env, bus, assignments, config=agent_config, gate=gate,
                         trackers={aid: SignalTracker(aid, agent_config.signals) for aid in roster},
@@ -2509,6 +2513,7 @@ class UnifiedHarness:
                         overlap_signals=overlap_signals, decision_recorder=recorder,
                         complete=self.agent_coordinator_complete, model=spec.model, trajectory=self.trajectory,
                         presub_merge=spec.select_integration is not None, step_limit=self.step_limit, time_limit_s=spec.agent_time_limit,
+                        overrides_sha256=self.agent_overrides_sha256,
                     )
                     register_cleanup(agent_coord.finish)
                     agent_coord.start()
@@ -3443,7 +3448,7 @@ class UnifiedHarness:
                 if type(wakes) is not int or type(horizon) is not int or not 0 <= wakes <= horizon:
                     raise ValueError("random wakes must be between zero and the matched step horizon")
         elif any(value is not None for value in (
-            self.agent_coordinator_config, self.agent_coordinator_complete, self.agent_gate_complete,
+            self.agent_coordinator_config, self.agent_coordinator_complete, self.agent_gate_complete, self.agent_overrides_sha256,
         )):
             raise ValueError("Agent coordinator settings require agent_coordinator")
         if spec.deterministic_coordinator and spec.coordinator:

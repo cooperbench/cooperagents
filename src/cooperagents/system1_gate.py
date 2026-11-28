@@ -312,9 +312,18 @@ def _rule_decision(state: GateState) -> Decision:
 class RuleGate:
     """Decide from the structural signals after applying the shared constraints."""
 
-    def __init__(self, config: GateConfig, budget: WakeBudget | None = None, *, instructions: str = GATE_INSTRUCTIONS) -> None:
+    def __init__(
+        self,
+        config: GateConfig,
+        budget: WakeBudget | None = None,
+        *,
+        instructions: str = GATE_INSTRUCTIONS,
+        question: str = DECISION_QUESTION_INSTRUCTIONS,
+        wake: str = WAKE_CRITERION,
+        skip: str = SKIP_CRITERION,
+    ) -> None:
         self.budget = budget if budget is not None else WakeBudget(config)
-        self.prompt_id = gate_prompt_id(instructions)
+        self.prompt_id = gate_prompt_id(instructions, question, wake, skip)
         self._candidate_number = 0
 
     def _decision(
@@ -396,14 +405,20 @@ class DecisionGate(RuleGate):
         *,
         budget: WakeBudget | None = None,
         instructions: str = GATE_INSTRUCTIONS,
+        question: str = DECISION_QUESTION_INSTRUCTIONS,
+        wake: str = WAKE_CRITERION,
+        skip: str = SKIP_CRITERION,
     ) -> None:
-        super().__init__(config, budget, instructions=instructions)
+        super().__init__(config, budget, instructions=instructions, question=question, wake=wake, skip=skip)
         if not config.model or config.wake_threshold is None or config.timeout_s is None:
             raise ValueError("model gate requires a model, threshold, and timeout")
         self.model = config.model
         self.threshold = config.wake_threshold
         self.timeout_s = config.timeout_s
         self.instructions = instructions
+        self.question = question
+        self.wake = wake
+        self.skip = skip
         self.complete = complete if complete is not None else HttpDecisionClient(config)
 
     def _complete_before_timeout(self, request: DecisionRequest) -> DecisionResult:
@@ -440,7 +455,7 @@ class DecisionGate(RuleGate):
                 source="budget",
                 started=started,
             )
-        question = DecisionQuestion("decision", DECISION_QUESTION_INSTRUCTIONS, {"WAKE": WAKE_CRITERION, "SKIP": SKIP_CRITERION})
+        question = DecisionQuestion("decision", self.question, {"WAKE": self.wake, "SKIP": self.skip})
         request = DecisionRequest(f"{self.instructions}\n\n{to_json(state)}", (question,), self.prompt_id)
         result: DecisionResult | None = None
         probabilities: dict[str, float] | None = None
@@ -499,8 +514,12 @@ class RandomGate(RuleGate):
         features: str | tuple[int, ...] | list[int],
         rollout_index: int,
         budget: WakeBudget | None = None,
+        instructions: str = GATE_INSTRUCTIONS,
+        question: str = DECISION_QUESTION_INSTRUCTIONS,
+        wake: str = WAKE_CRITERION,
+        skip: str = SKIP_CRITERION,
     ) -> None:
-        super().__init__(config, budget)
+        super().__init__(config, budget, instructions=instructions, question=question, wake=wake, skip=skip)
         wakes, horizon = config.random_wakes, config.random_step_horizon
         if wakes is None or horizon is None:
             raise ValueError("random gate requires a matched agent_main result")

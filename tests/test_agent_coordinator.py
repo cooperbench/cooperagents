@@ -41,13 +41,17 @@ from cooperagents.agent_coordinator import (
 )
 from cooperagents.agent_coordinator_prompts import (
     BUDGET_NOTES_PROMPT_ID,
+    GATE_INSTRUCTIONS,
     GATE_PROMPT_ID,
     OPENING_BUDGET_STATUS,
     OPENING_BUDGET_WARNING,
     OPENING_FINAL_TURN,
+    OPENING_PLAN_PROMPT,
+    SPEC_CHECK_PROMPT,
     WAKE_BUDGET_STATUS,
     WAKE_BUDGET_WARNING,
     WAKE_FINAL_TURN,
+    WAKE_PROMPT,
     gate_prompt_id,
     prompt_id,
 )
@@ -294,6 +298,43 @@ def test_prompt_ids_cover_tools_and_notes(coordinators, monkeypatch):
     assert ids["budget-notes"] == BUDGET_NOTES_PROMPT_ID
     monkeypatch.setitem(TOOL_SCHEMAS[0]["function"], "description", "A changed tool description.")
     assert coordinators().metrics()["config"]["prompt_ids"]["tools"] != ids["tools"]
+
+
+@pytest.mark.parametrize("playbook", [None, "Playbook fixture"])
+def test_effective_system_prompts_and_start_event(coordinators, journal, repo, playbook):
+    complete = CompletionStub(
+        [call("submit_plan", **json.loads((FIXTURES / "opening_plan.json").read_text()))],
+        [call("end_wake", note="Wake fixture")],
+        [call("spec_verdict", verdict="ACCEPT", findings=[])],
+    )
+    criteria = {"question": "Question fixture", "wake": "Wake fixture", "skip": "Skip fixture"} if playbook else None
+    config = AgentCoordinatorConfig(gate=RULE, gate_criteria=criteria, playbook=playbook, tick_s=0.01)
+    digest = sha256(b"overrides fixture").hexdigest() if playbook else None
+    coordinator = coordinators(config=config, complete=complete, trajectory=journal, overrides_sha256=digest, api_key="secret-fixture")
+    assert coordinator.run_opening() is not None
+    assert run_wake(coordinator, journal)["outcome"] == "ended"
+    repo.write_file("src/core.py", "changed fixture\n")
+    assert coordinator.spec_check("agent1", repo) is None
+
+    suffix = f"\n\nPlaybook (static, task-independent):\n{playbook}" if playbook else ""
+    assert [messages[0] for messages, _ in complete.inputs] == [
+        {"role": "system", "content": prompt + suffix} for prompt in (OPENING_PLAN_PROMPT, WAKE_PROMPT, SPEC_CHECK_PROMPT)
+    ]
+    start, = events(journal, "agent_coordinator_start")
+    start = start["data"]
+    ids = start["prompt_ids"]
+    assert ids["gate"] == gate_prompt_id(GATE_INSTRUCTIONS, **(criteria or {}))
+    assert start["wake_budget"] == RULE.wake_budget
+    canonical = json.dumps(asdict(config), sort_keys=True, separators=(",", ":"))
+    assert start["config_sha256"] == sha256(canonical.encode()).hexdigest()
+    assert "secret-fixture" not in journal.path.read_text()
+    if playbook:
+        assert start["overrides_sha256"] == digest
+        assert start["overrides_schema"] == "agent-overrides/1"
+        assert ids["playbook"] == prompt_id("playbook", playbook)
+    else:
+        assert {"overrides_sha256", "overrides_schema"}.isdisjoint(start)
+        assert "playbook" not in ids
 
 
 @pytest.mark.parametrize("bad_path", [

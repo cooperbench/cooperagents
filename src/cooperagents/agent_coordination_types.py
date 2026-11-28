@@ -301,6 +301,8 @@ class AgentCoordinatorConfig:
     max_retries: int = 2
     retry_base_delay_s: float = 0.5
     reasoning_effort: str | None = "medium"
+    gate_criteria: dict[str, str] | None = None
+    playbook: str | None = None
 
     def validate(self) -> None:
         for name in ("opening_reserve", "wake_reserve", "max_retries"):

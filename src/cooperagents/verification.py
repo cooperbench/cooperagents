@@ -31,32 +31,71 @@ repair(env)    None = integrated tree healthy, else a complete repair-agent
 from __future__ import annotations
 
 import re
+import shlex
 
 # -- mechanical build discovery ---------------------------------------------
 
-_DISCOVER = (
+_JS_BASE_RC = "/tmp/.v_js_base_rc"
+_TSC_AVAILABLE = "[ -f tsconfig.json ] && [ -x node_modules/.bin/tsc ]"
+_TSC = "node_modules/.bin/tsc --noEmit -p ."
+# Node checks one file per invocation. Batch argument transport through a shell loop.
+_JS_CHECK = (
+    f'(if {_TSC_AVAILABLE} && [ "$(cat {_JS_BASE_RC} 2>/dev/null)" != 1 ]; then {_TSC}; '
+    'else files=$(mktemp) || exit 1; trap \'rm -f "$files"\' 0; '
+    "git ls-files -z '*.js' '*.mjs' '*.cjs' ':!:node_modules/**' ':!:dist/**' >\"$files\" && "
+    "xargs -0 -r -n 50 sh -c 'for file do [ ! -f \"$file\" ] || node --check \"./$file\" || exit 1; done' sh <\"$files\"; fi)"
+)
+
+_DISCOVER_START = (
     'if [ -f ./compile.sh ]; then echo "bash ./compile.sh"; '
     'elif { [ -f Makefile ] || [ -f makefile ]; } && command -v make >/dev/null 2>&1; then echo "make"; '
     'elif [ -f Cargo.toml ]; then echo "cargo build --release --offline"; '
     'elif [ -f go.mod ] || ls ./*.go >/dev/null 2>&1; then echo "go build ./..."; '
+)
+_DISCOVER_END = (
     'elif [ -f pyproject.toml ] || [ -f setup.py ]; then echo "python3 -m compileall -q ."; '
     'fi'
 )
 
 
-def discover_build(env) -> str:
+def discovery_script(js: bool) -> str:
+    js_branch = (
+        "elif [ -f package.json ] && command -v node >/dev/null 2>&1; "
+        f"then printf '%s\\n' {shlex.quote(_JS_CHECK)}; "
+    ) if js else ""
+    return _DISCOVER_START + js_branch + _DISCOVER_END
+
+
+_DISCOVER = discovery_script(False)
+
+
+def discover_build(env, *, js_build: bool = False) -> str:
     """The workspace's build command, or "" when none is recognizable."""
-    return env.execute(_DISCOVER, timeout=30).stdout.strip()
+    return env.execute(discovery_script(True) if js_build else _DISCOVER, timeout=30).stdout.strip()
 
 
-def _build(env, artifact: str | None) -> str | None:
+def prepare_js_build(env) -> None:
+    """Cache the base TypeScript result in a fresh container before its tree changes."""
+    if discover_build(env, js_build=True) == _JS_CHECK:
+        # Assume failure until tsc returns successfully so a timeout also falls back.
+        env.execute(
+            f"if [ ! -f {_JS_BASE_RC} ] && {_TSC_AVAILABLE}; then "
+            f"printf 1 >{_JS_BASE_RC} && {_TSC} && printf 0 >{_JS_BASE_RC}; fi",
+            timeout=600,
+        )
+
+
+def _build(env, artifact: str | None, *, js_build: bool = False) -> str | None:
     """Run the discovered build; None = success, else evidence text.
 
     With an artifact declared, the build must (re)produce it fresh — a
     build that exits 0 without producing its artifact is a failure."""
-    cmd = discover_build(env)
+    cmd = discover_build(env, js_build=js_build)
     if not cmd:
-        return "No build entrypoint found (expected one of: compile.sh, Makefile, Cargo.toml, go.mod, pyproject.toml)."
+        expected = "compile.sh, Makefile, Cargo.toml, go.mod, "
+        if js_build:
+            expected += "package.json, "
+        return f"No build entrypoint found (expected one of: {expected}pyproject.toml)."
     marker = "touch /tmp/.v_marker; " if artifact else ""
     r = env.execute(f"{marker}{cmd} >/tmp/v_build.log 2>&1", timeout=600)
     if r.exit_code != 0:
@@ -130,12 +169,15 @@ def _flag_outputs(env, ref: str) -> list[str]:
 
 # -- the three verification functions ---------------------------------------
 
-def validate(env, *, merged: bool = False, build_artifact: str | None = None) -> str | None:
+def validate(env, *, merged: bool = False, build_artifact: str | None = None, js_build: bool = False) -> str | None:
     """Pre-submission check in the agent's own container.
 
     merged=True first integrates every teammate branch from the shared git
     remote (conflicts go back to the agent); then the discovered build must
-    succeed (and refresh build_artifact when declared)."""
+    succeed (and refresh build_artifact when declared).
+
+    With js_build enabled, prepare_js_build can cache the base type check
+    before workers edit the tree."""
     if merged:
         out = env.execute(_MERGE, timeout=300).stdout
         if "MERGED_OK" not in out:
@@ -146,7 +188,7 @@ def validate(env, *, merged: bool = False, build_artifact: str | None = None) ->
                 "contributions where possible), remove the <<<<<<< ======= "
                 ">>>>>>> markers, `git add -A`, then rebuild and submit again."
             )
-    err = _build(env, build_artifact)
+    err = _build(env, build_artifact, js_build=js_build)
     if err is None:
         return None
     return (err + "\nReminder: there is NO network access during builds — "
@@ -156,7 +198,7 @@ def validate(env, *, merged: bool = False, build_artifact: str | None = None) ->
 
 
 def score(image: str, patch: str, *, env_factory, build_artifact: str | None = None,
-          reference_binary: str | None = None) -> tuple:
+          reference_binary: str | None = None, js_build: bool = False) -> tuple:
     """Rank one candidate patch in a fresh container.
 
     Always: (-2,)+pad empty, (-1,)+pad unbuildable, (1, ...) builds. With a
@@ -168,6 +210,8 @@ def score(image: str, patch: str, *, env_factory, build_artifact: str | None = N
         return (-2, *pad)
     env = env_factory()
     try:
+        if js_build:
+            prepare_js_build(env)
         ref_state = None
         if reference_binary:
             ref_state = (_flag_outputs(env, reference_binary),
@@ -181,7 +225,7 @@ def score(image: str, patch: str, *, env_factory, build_artifact: str | None = N
         )
         if build_artifact:
             env.execute(f"rm -f ./{build_artifact}")
-        if _build(env, build_artifact) is not None:
+        if _build(env, build_artifact, js_build=js_build) is not None:
             return (-1, *pad)
         if ref_state is None or reference_binary is None:
             return (1, min(len(patch), 100_000), 0, 0)
@@ -228,12 +272,12 @@ Do not start over; repair what exists."""
 
 
 def repair(env, *, build_artifact: str | None = None,
-           reference_binary: str | None = None) -> str | None:
+           reference_binary: str | None = None, js_build: bool = False) -> str | None:
     """Inspect an integrated tree: None = healthy, else a repair prompt.
 
     Reference output rate is compared against /tmp/.ref_rate when present
     (captured by env setup before any build overwrote the reference)."""
-    err = _build(env, build_artifact)
+    err = _build(env, build_artifact, js_build=js_build)
     if err is not None:
         return _REPAIR_BUILD.format(evidence=err[-3000:])
     if reference_binary:
