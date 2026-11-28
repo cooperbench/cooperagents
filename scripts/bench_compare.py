@@ -30,6 +30,7 @@ from pathlib import Path
 
 from cooperagents import verification as _verification
 from cooperagents.agent_coordination_types import AgentCoordinatorConfig, GateConfig
+from cooperagents.agent_overrides import apply_overrides, load_overrides
 from cooperagents.bus.memory import InMemoryBus
 from cooperagents.env.runtime import task_environment
 from cooperagents.eval.cooperbench import run_eval, write_run_outputs
@@ -277,6 +278,7 @@ def run_team(
     n_agents: int = 2,
     completion_gate: bool = False,
     presub_merge: bool = False,
+    verification_js_build: bool = False,
     repair_attempts: int = 1,
     langfuse: bool = False,
     record_trajectory: bool = False,
@@ -286,6 +288,7 @@ def run_team(
     persist_worker_patches: bool = False,
     only_first_repair_checkpoint: bool = False,
     collect_source_conflicts: bool = False,
+    agent_overrides_sha256: str | None = None,
 ) -> dict:
     feats = sorted(item.features)
     if reverse_order:
@@ -360,7 +363,8 @@ def run_team(
         allow_spawn_tool=allow_spawn,
         repair_attempts=repair_attempts,
         completion_gate=(
-            partial(_verification.validate, merged=presub_merge, build_artifact=None)
+            partial(_verification.validate, merged=presub_merge, build_artifact=None,
+                    **({"js_build": True} if verification_js_build else {}))
         ) if (completion_gate or presub_merge) else None,
         select_integration=(
             lambda patches: max(range(len(patches)), key=lambda i: len(patches[i]))
@@ -376,6 +380,7 @@ def run_team(
         command_timeout=300,
         coordinator_notebook_path=notebook_path,
         agent_coordinator_config=agent_coordinator_config,
+        agent_overrides_sha256=agent_overrides_sha256,
         coordination_variant=coordination_variant,
         langfuse=langfuse,
         coordination_mode=coordination_mode,
@@ -454,10 +459,21 @@ def run_team(
             volumes = [f"{share_dir or f'cbs{run_id}'}:/cbshared"] if git_share else []
             if team_roles:
                 volumes.append(f"cbt{run_id}:/workspace/shared")
-            res = harness.run(spec, env_factory=lambda _id: task_environment(
-                img, volumes=volumes or None,
-                coordinator_dir=notebook_path.parent if notebook_path is not None and _id in worker_ids else None,
-            ), selector=selector)
+
+            def make_env(actor_id: str):
+                env = task_environment(
+                    img, volumes=volumes or None,
+                    coordinator_dir=notebook_path.parent if notebook_path is not None and actor_id in worker_ids else None,
+                )
+                if verification_js_build and spec.completion_gate is not None and actor_id in worker_ids:
+                    try:
+                        _verification.prepare_js_build(env)
+                    except BaseException:
+                        env.cleanup()
+                        raise
+                return env
+
+            res = harness.run(spec, env_factory=make_env, selector=selector)
         if trajectory:
             trajectory.emit("harness", "pair_end", agents={k: {"status": v.status, "steps": v.steps} for k, v in res.seeds.items()})
     finally:
@@ -553,6 +569,22 @@ def _write_summaries(logs_dir: Path, items: list[WorkItem], arms: list[tuple[str
         (run_dir / "summary.json").write_text(json.dumps(summary_by_arm, indent=2) + "\n")
 
 
+_OVERRIDE_GATE_FLAGS = {
+    "wake_budget": "--agent-wake-budget",
+    "wake_threshold": "--agent-gate-threshold",
+    "timeout_s": "--agent-gate-timeout",
+}
+_OVERRIDE_SYSTEM2_FLAGS = {
+    "opening_max_tool_calls": "--agent-opening-max-tool-calls",
+    "opening_time_limit_s": "--agent-opening-time-limit",
+    "opening_reserve": "--agent-opening-reserve",
+    "wake_max_tool_calls": "--agent-wake-max-tool-calls",
+    "wake_time_limit_s": "--agent-wake-time-limit",
+    "wake_reserve": "--agent-wake-reserve",
+    "spec_check_time_limit_s": "--agent-spec-check-time-limit",
+}
+
+
 def main() -> None:
     _load_env()
     global MODEL
@@ -591,6 +623,7 @@ def main() -> None:
                                     help="monitor repeated commands, errors, and overlapping edits; requires --coop-tools --no-seed")
     coordinator_family.add_argument("--agent-coordinator", action="store_true",
                                     help="event-driven coordinator; requires --coop-tools --no-seed --git-share")
+    ap.add_argument("--agent-overrides-file", type=Path, help="agent-overrides/1 JSON settings; requires --agent-coordinator")
     ap.add_argument("--agent-gate", choices=("model", "rule", "random"), default="model", help="wake policy (default: model)")
     ap.add_argument("--agent-gate-model", help="decision model (model gate only)")
     ap.add_argument("--agent-gate-base-url", help="Decisions API base URL (model gate only)")
@@ -654,6 +687,8 @@ def main() -> None:
     ap.add_argument("--completion-gate", action="store_true",
                     help="Reject each agent's finish until verification.validate() passes in the agent's own container "
                          "(equivalent to ProgramBench --completion-gate; up to 3 rejections per agent)")
+    ap.add_argument("--verification-js-build", action="store_true",
+                    help="enable offline JS/TS discovery in the completion gate")
     ap.add_argument("--presub-merge", action="store_true",
                     help="Before finishing, each agent merges all teammate branches and the completion gate checks the "
                          "merged tree; integration then selects the best member patch instead of re-merging "
@@ -710,6 +745,7 @@ def main() -> None:
     if args.deterministic_coordinator and (not args.coop_tools or not args.no_seed):
         ap.error("--deterministic-coordinator requires --coop-tools and --no-seed")
     agent_config = None
+    agent_overrides_sha256 = None
     decision_model_options = dict(
         model=args.agent_gate_model, base_url=args.agent_gate_base_url, api_key_env=args.agent_gate_api_key_env,
         wake_threshold=args.agent_gate_threshold, timeout_s=args.agent_gate_timeout,
@@ -747,9 +783,21 @@ def main() -> None:
             gate=gate, opening=args.agent_opening, spec_check=not args.no_agent_spec_check, **coordinator_options,
         )
         try:
-            agent_config.validate()
-            gate.validate()
-        except ValueError as exc:
+            if args.agent_overrides_file is None:
+                agent_config.validate()
+                gate.validate()
+            else:
+                overrides, agent_overrides_sha256 = load_overrides(args.agent_overrides_file)
+                gate_defaults = GateConfig(policy=args.agent_gate)
+                cli_explicit = {
+                    field: flag for field, flag in _OVERRIDE_GATE_FLAGS.items()
+                    if getattr(gate, field) != getattr(gate_defaults, field)
+                } | {
+                    field: flag for field, flag in _OVERRIDE_SYSTEM2_FLAGS.items()
+                    if coordinator_options[field] != getattr(agent_defaults, field)
+                }
+                agent_config = apply_overrides(gate, agent_config, overrides, cli_explicit)
+        except (OSError, ValueError) as exc:
             ap.error(str(exc))
         if args.agent_gate == "random" and not args.agent_random_match:
             ap.error("random gate requires a matched agent_main result (--agent-random-match)")
@@ -757,6 +805,7 @@ def main() -> None:
         args.agent_gate != "model" or any(value is not None for value in decision_model_options.values())
         or args.agent_wake_budget != 8 or args.agent_opening != "draft" or args.no_agent_spec_check
         or args.agent_random_match is not None or args.agent_random_seed != 0
+        or args.agent_overrides_file is not None
         or hasattr(args, "agent_coordinator_reasoning_effort")
         or any(value != getattr(agent_defaults, name) for name, value in coordinator_options.items())
     ):
@@ -873,6 +922,7 @@ def main() -> None:
                     deterministic_coordinator=args.deterministic_coordinator,
                     agent_coordinator=args.agent_coordinator,
                     agent_coordinator_config=configs.get(_pair_dir(logs_dir / args.team_name, "team", item)),
+                    agent_overrides_sha256=agent_overrides_sha256,
                     coordinator_notebook=not args.no_coordinator_notebook,
                     coordination_variant=args.coordination_variant,
                     coordination_mode=args.coordination_mode,
@@ -888,6 +938,7 @@ def main() -> None:
                     allow_spawn=args.allow_spawn,
                     n_agents=args.agents,
                     completion_gate=args.completion_gate,
+                    verification_js_build=args.verification_js_build,
                     presub_merge=args.presub_merge,
                     repair_attempts=args.repair_attempts,
                     record_trajectory=args.record_trajectory,

@@ -2,7 +2,9 @@ import importlib.util
 import json
 import os
 import sys
+from dataclasses import asdict
 from functools import partial
+from hashlib import sha256
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -350,6 +352,122 @@ def test_standard_completion_gate_partial_preserves_defaults():
 
     defaults = inspect.signature(validate).parameters
     assert defaults["merged"].default is False and defaults["build_artifact"].default is None
+    assert defaults["js_build"].default is False
+
+
+@pytest.fixture
+def cd_agent_cli(compare, monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-fixture")
+    monkeypatch.setattr(compare, "_load_env", lambda: None)
+    monkeypatch.setattr(compare, "run_team", lambda *a, **kw: calls.append(kw) or {"duration": 0, "steps": 0})
+    monkeypatch.setattr(compare, "run_eval", lambda *a, **kw: pytest.fail("test must skip evaluation"))
+    argv = [
+        "bench_compare.py", "--team-only", "--max-agents", "2", "--no-seed", "--coop-tools", "--agent-coordinator",
+        "--agent-gate", "model", "--agent-gate-model", "liquid/d1.2-ultra", "--agent-gate-base-url", "https://openrouter.ai/api/alpha",
+        "--agent-gate-api-key-env", "OPENROUTER_API_KEY", "--agent-gate-threshold", "0.5", "--agent-coordinator-reasoning-effort", "medium",
+        "--git-share", "--repair-integrator", "--focused-repair", "--repair-attempts", "2", "--completion-gate", "--presub-merge",
+        "--step-limit", "1000", "--agent-time-limit", "3600", "--concurrency", "1", "--record-trajectory", "--persist-worker-patches",
+        "--team-name", "cbc", "--pairs", "go_chi_task:26:1,2", "--log-dir", str(tmp_path), "--skip-eval",
+    ]
+    return argv, calls
+
+
+def test_cd_agent_cli_matches_base_config_snapshot(compare, cd_agent_cli, monkeypatch):
+    argv, calls = cd_agent_cli
+    monkeypatch.setattr(sys, "argv", argv)
+    compare.main()
+    run, = calls
+    config = asdict(run["agent_coordinator_config"])
+    assert config.pop("gate_criteria") is config.pop("playbook") is None
+    # asdict() from 6e2976f for the cd_agent_dev protocol arguments.
+    assert config == {
+        "gate": {
+            "policy": "model", "model": "liquid/d1.2-ultra", "base_url": "https://openrouter.ai/api/alpha",
+            "api_key_env": "OPENROUTER_API_KEY", "wake_threshold": 0.5, "timeout_s": 3.0, "wake_budget": 8,
+            "per_worker_wake_cap": 4, "min_steps_between_wakes": 4, "min_seconds_between_wakes": 30.0, "heartbeat_steps": 15,
+            "random_wakes": None, "random_step_horizon": None, "random_seed": 0,
+        },
+        "signals": {
+            "history_steps": 24, "no_progress_window": 5, "no_progress_min_failures": 3, "churn_min_steps": 3,
+            "churn_window": 10, "cooldown_steps": 6, "probe_timeout_s": 10.0,
+            "test_command_prefixes": (
+                "pytest", "python -m pytest", "python3 -m pytest", "python -m unittest", "tox", "nox", "go test", "cargo test", "npm test",
+                "npm run test", "yarn test", "pnpm test", "npx jest", "jest", "vitest", "mvn test", "gradle test", "./gradlew test",
+                "make test", "ctest", "rspec", "bundle exec rspec", "phpunit", "dotnet test",
+            ),
+        },
+        "opening": "draft", "spec_check": True, "opening_max_tool_calls": 16, "opening_time_limit_s": 180.0,
+        "wake_max_tool_calls": 6, "wake_time_limit_s": 90.0, "spec_gate_max_rejections": 1, "tick_s": 1.0, "prompts": None,
+        "opening_reserve": 2, "wake_reserve": 2, "spec_check_time_limit_s": 150.0, "max_retries": 2, "retry_base_delay_s": 0.5,
+        "reasoning_effort": "medium",
+    }
+    assert run["agent_overrides_sha256"] is None
+    assert run["verification_js_build"] is False
+
+
+@pytest.mark.parametrize(("extra", "message"), [
+    (["--agent-wake-budget", "3"], "overrides file and --agent-wake-budget both set wake_budget"),
+    (["--agent-gate-threshold", "0.6"], "overrides file and --agent-gate-threshold both set wake_threshold"),
+    (["--agent-opening-reserve", "1"], "overrides file and --agent-opening-reserve both set opening_reserve"),
+    (["--agent-wake-budget", "8", "--agent-opening-reserve", "2", "--agent-gate-timeout", "3"], None),
+])
+def test_cli_overrides_conflict_only_with_nondefault_values(compare, cd_agent_cli, tmp_path, monkeypatch, capsys, extra, message):
+    argv, calls = cd_agent_cli
+    path = tmp_path / "overrides.json"
+    raw = b'{"schema":"agent-overrides/1","gate":{"wake_budget":5,"wake_threshold":0.7,"timeout_s":4},"system2":{"opening_reserve":3}}'
+    path.write_bytes(raw)
+    monkeypatch.setattr(sys, "argv", [*argv, "--agent-overrides-file", str(path), "--verification-js-build", *extra])
+    if message:
+        with pytest.raises(SystemExit) as exc:
+            compare.main()
+        assert exc.value.code == 2
+        assert message in capsys.readouterr().err
+        assert calls == []
+    else:
+        compare.main()
+        run, = calls
+        config = run["agent_coordinator_config"]
+        assert (config.gate.wake_budget, config.gate.wake_threshold, config.gate.timeout_s, config.opening_reserve) == (5, 0.7, 4, 3)
+        assert run["agent_overrides_sha256"] == sha256(raw).hexdigest()
+        assert run["verification_js_build"] is True
+
+
+def test_overrides_file_requires_agent_coordinator(compare, cd_agent_cli, tmp_path, monkeypatch, capsys):
+    _, calls = cd_agent_cli
+    monkeypatch.setattr(sys, "argv", ["bench_compare.py", "--agent-overrides-file", str(tmp_path / "unused.json")])
+    with pytest.raises(SystemExit) as exc:
+        compare.main()
+    assert exc.value.code == 2
+    assert "agent coordinator flags require --agent-coordinator" in capsys.readouterr().err
+    assert calls == []
+
+
+@pytest.mark.parametrize("js_build", [False, True])
+def test_benchmark_prepares_js_baseline_before_worker_completion_gate(compare, monkeypatch, tmp_path, js_build):
+    worker_env, coordinator_env = object(), object()
+    events = []
+    monkeypatch.setattr(compare._verification, "prepare_js_build", lambda env: events.append(("prepare", env)))
+    monkeypatch.setattr(compare._verification, "validate", lambda env, **kw: events.append(("validate", kw)))
+    monkeypatch.setattr(compare, "task_environment", lambda *a, **kw: worker_env if not events else coordinator_env)
+    monkeypatch.setattr(compare, "read_feature", lambda *a: "feature")
+    monkeypatch.setattr(compare, "write_run_outputs", lambda *a, **kw: None)
+
+    def run(self, team, *, env_factory, **kwargs):
+        env = env_factory("agent1")
+        team.completion_gate(env)
+        env_factory("coordinator")
+        return SimpleNamespace(duration_seconds=0, total_steps=0, helpers={}, seeds={})
+
+    monkeypatch.setattr(compare.UnifiedHarness, "run", run)
+    compare.run_team(compare.WorkItem("go_chi_task", 26, [1, 2]), run_name="js", logs_dir=tmp_path,
+                     step_limit=10, max_agents=2, completion_gate=True, verification_js_build=js_build)
+    expected = [("prepare", worker_env)] if js_build else []
+    validate_args = {"merged": False, "build_artifact": None}
+    if js_build:
+        validate_args["js_build"] = True
+    expected.append(("validate", validate_args))
+    assert events == expected
 
 
 @pytest.mark.parametrize("missing", ["--checkpoint-repair", "--repair-integrator", "--team-only"])

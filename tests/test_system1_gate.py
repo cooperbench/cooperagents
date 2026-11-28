@@ -12,7 +12,7 @@ import pytest
 
 from cooperagents import system1_gate
 from cooperagents.agent_coordination_types import DecisionResult, GateConfig, Signal, SignalConfig, to_json
-from cooperagents.agent_coordinator_prompts import GATE_INSTRUCTIONS, GATE_PROMPT_ID
+from cooperagents.agent_coordinator_prompts import GATE_INSTRUCTIONS, GATE_PROMPT_ID, gate_prompt_id
 from cooperagents.structural_signals import parse_steps
 from cooperagents.system1_gate import DecisionGate, HttpDecisionClient, RandomGate, RuleGate, WakeBudget, build_gate_state, reason_code
 
@@ -151,6 +151,24 @@ def test_model_receives_all_candidate_kinds_without_rule_filter_or_cache():
         assert score.probabilities == {"WAKE": 0.49, "SKIP": 0.51}
     assert [request.state_text for request in calls] == [f"{GATE_INSTRUCTIONS}\n\n{to_json(item)}" for item in [*states, states[2]]]
     assert all(request.prompt_id == GATE_PROMPT_ID for request in calls)
+
+
+def test_custom_gate_texts_reach_decision_request_and_prompt_ids():
+    config = GateConfig()
+    budget = running_budget(config)
+    calls = []
+    texts = dict(instructions="Gate fixture", question="Question fixture", wake="Wake fixture", skip="Skip fixture")
+    gate = DecisionGate(config, lambda request: calls.append(request) or result(0.49), budget=budget, **texts)
+    candidate = state(budget, "heartbeat")
+    decision = gate.decide(candidate, 100)
+    (request,) = calls
+    (question,) = request.questions
+    assert request.state_text == f"Gate fixture\n\n{to_json(candidate)}"
+    assert question.instructions == "Question fixture"
+    assert question.criteria == {"WAKE": "Wake fixture", "SKIP": "Skip fixture"}
+    assert request.prompt_id == decision.prompt_id == gate_prompt_id(**texts)
+    assert RuleGate(RULE, **texts).prompt_id == request.prompt_id
+    assert RuleGate(RULE).prompt_id == GATE_PROMPT_ID
 
 
 @pytest.mark.parametrize(("threshold", "probability", "decision"), [(0.5, 0.49, "SKIP"), (0.5, 0.50, "WAKE"), (0.0, 0.0, "WAKE")])
